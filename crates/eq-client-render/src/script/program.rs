@@ -296,29 +296,6 @@ impl Program {
         self.statements
     }
 
-    /// Validate authored actions against the session's local-only command gate.
-    ///
-    /// Only the `gm` fixture forms are gated. Chat, emotes, rolls, socials and
-    /// other `gm` lines run on any server, since a script may do whatever the
-    /// player can (Adam, 11-23).
-    ///
-    /// # Errors
-    /// A `gm` fixture step anywhere in the source needs a local test session.
-    pub fn check_local_commands(&self, local: bool) -> Result<(), ParseError> {
-        if !local
-            && let Some(instruction) = self.instructions.iter().find(
-                |instruction| matches!(instruction.step(), Step::Gm(command) if super::parse::gm_fixture(command)),
-            )
-        {
-            return Err(ParseError {
-                line: Some(instruction.line()),
-                span: None,
-                message: "gm fixture steps require a network-enforced local test session.".into(),
-            });
-        }
-        Ok(())
-    }
-
     /// Converts a linear program to its action list.
     ///
     /// # Errors
@@ -967,44 +944,17 @@ mod tests {
     }
 
     #[test]
-    fn restricted_actions_in_skipped_branches_keep_their_gate() {
-        let source = "if False:\n    gm(\"stun 8000\")\nelse:\n    report(\"safe\")\n";
-        let program = Program::parse(source, Path::new(".")).unwrap();
-        assert_eq!(
-            program.check_local_commands(false).unwrap_err().line,
-            Some(2)
-        );
-        assert!(program.check_local_commands(true).is_ok());
-        assert_eq!(program.into_steps().unwrap_err().line, Some(1));
-    }
-
-    #[test]
-    fn a_gm_show_query_runs_on_any_session() {
-        let program =
-            Program::parse("report(\"before\")\ngm(\"show buffs\")\n", Path::new(".")).unwrap();
-        assert!(program.check_local_commands(false).is_ok());
-        assert!(program.check_local_commands(true).is_ok());
-    }
-
-    #[test]
-    fn chat_emote_random_social_and_plain_gm_steps_run_on_any_session() {
+    fn any_gm_line_a_user_could_type_parses_on_any_session() {
+        // Nothing is checked against the session: the server decides what a
+        // `#` line does, as it does for a typed one (6.584).
         for source in [
-            "slash(\"afk\")\nslash(\"emote waves\")\n",
-            "slash(\"assist\")\nslash(\"random 1 6\")\n",
-            "chat(\"say Hail\")\n",
-            "social(\"play Test\")\n",
+            "gm(\"show zone_status\")\n",
+            "gm(\"set invulnerable on\")\n",
+            "if False:\n    gm(\"stun 8000\")\nelse:\n    report(\"safe\")\n",
+            "chat(\"say #time\")\n",
         ] {
-            let program = Program::parse(source, Path::new(".")).unwrap();
-            assert!(program.check_local_commands(false).is_ok(), "{source}");
-            assert!(program.check_local_commands(true).is_ok(), "{source}");
+            assert!(Program::parse(source, Path::new(".")).is_ok(), "{source}");
         }
-        let program = Program::parse("gm(\"heal\")\ngm(\"stun 8000\")\n", Path::new(".")).unwrap();
-        let refused = program.check_local_commands(false).unwrap_err();
-        assert_eq!(refused.line, Some(2));
-        assert_eq!(
-            refused.message,
-            "gm fixture steps require a network-enforced local test session."
-        );
     }
 
     #[test]

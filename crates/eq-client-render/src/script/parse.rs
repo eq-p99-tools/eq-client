@@ -13,106 +13,6 @@ const MAX_HOLD: Duration = Duration::from_secs(10);
 pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
-/// `EQEmu` GM commands a script may send, without the leading `#`.
-const GM_COMMANDS: &[&str] = &[
-    // The server's own view of the player's stats, weight and coins among
-    // them, said back in chat; reads only.
-    "showstats",
-    // The server's own view of the player's skills, said back in chat;
-    // reads only.
-    "showskills",
-    // GM mode on or off: off, the server lets the player go hungry. On, the
-    // book and gem commands below act on a player target instead of the GM.
-    "gm",
-    // A rule changed in this zone only, such as how fast hunger comes, or
-    // the zone's rules reloaded; never stored or reset.
-    "rules",
-    // The time of day, for every zone.
-    "time",
-    // A pet of a kind the server knows, such as an earth elemental.
-    "makepet",
-    "summon",
-    "summonitem",
-    // Searches the server's items by name, to find one to summon.
-    "finditem",
-    // Searches the server's tradeskill recipes by name, and lists one's
-    // container and components.
-    "findrecipe",
-    "viewrecipe",
-    // A temporary NPC at the GM's feet, and coins or items on the target.
-    "spawn",
-    // Removes only the selected NPC without starting a respawn timer.
-    "depop",
-    "npcloot",
-    "castspell",
-    "damage",
-    // A server-issued stun for a local test fixture; duration is milliseconds.
-    "stun",
-    "givemoney",
-    "zone",
-    "goto",
-    "level",
-    // The deployed SetLanguage alias, with bounded language ID/proficiency.
-    "setlanguage",
-    "heal",
-    "kill",
-    "repop",
-    "freeze",
-    "unfreeze",
-    // Shows the target (or the GM) in another material, without changing gear.
-    "wc",
-    // The targeted NPC says a line, as its quest dialogue would.
-    "npcsay",
-    // The targeted NPC casts a spell on its target, to bring about a
-    // spell's effect on the player as it would come from an NPC.
-    "npccast",
-    // Which of the server's log categories it writes, so a run can read
-    // what the server made of what it sent.
-    "logs",
-    // Readies another test character: every spell they can use up to a
-    // level scribed in their book, every skill at its most for their
-    // level, and an item onto their cursor, as summonitem puts one on the
-    // GM's.
-    "scribespells",
-    // Readies the learned discipline list for a local EQEmu fixture.
-    "traindisc",
-    // Disposable local EQEmu guild setup and cleanup, limited to create/delete/set.
-    "guild",
-    "maxskills",
-    "giveitem",
-    // Another test character's standing with a faction: `faction view` and
-    // `faction review` read it, `factionassociation <id> <amount>` raises
-    // it as a quest reward would, and `faction reset <id>` puts it back.
-    "faction",
-    "factionassociation",
-    // Puts them back as they were for another run: a spell taken out of
-    // their gems, and every buff taken off them.
-    "unmemspell",
-    "nukebuffs",
-    // The target's (or the GM's) PvP flag, `on` or `off`, so a GM's
-    // `castspell` can land a root or snare on another flagged test
-    // character, as the server lets no player's detrimental spell land on
-    // an unflagged one. The server keeps the flag; `pvp off` puts it back.
-    "pvp",
-    // The server's own view of a test character, said back in chat; reads
-    // only, and only the subcommands in `SHOW_QUERIES` and
-    // `SHOW_INVENTORY_SCOPES`.
-    "show",
-];
-
-/// `gm show` subcommands that take no argument and change nothing: the
-/// target's (or the GM's) buffs, currencies and timers, and the distance and
-/// line of sight to a target. Every other subcommand is refused, among them
-/// `zone_status`, which the zone hands to world and whose rows carry
-/// addresses and ports.
-const SHOW_QUERIES: [&str; 5] = ["buffs", "currencies", "distance", "line_of_sight", "timers"];
-
-/// The scopes `show inventory <scope>` reads, as the server compares them.
-const SHOW_INVENTORY_SCOPES: [&str; 13] = [
-    "all", "allbank", "bank", "cursor", "curlimbo", "equip", "gen", "limbo", "poss", "shbank",
-    "trade", "trib", "world",
-];
-
 /// A script's AA request (checklist 6.569). The session alone decides
 /// whether it goes; the client checks nothing about the rank or the points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -977,10 +877,6 @@ fn parse_slash(words: &[&str]) -> Result<Step, String> {
     Ok(Step::Slash(line))
 }
 
-fn character_name(name: &str) -> bool {
-    !name.is_empty() && name.len() <= 63 && name.bytes().all(|byte| byte.is_ascii_alphabetic())
-}
-
 /// A button by the slash command it runs: a Pet Info window button, by its
 /// `/pet` words, or a group or Raid window button, by its name. The group
 /// window's Decline is in Disband's place and runs the same command, so
@@ -1334,168 +1230,40 @@ fn coin_kind(word: &str) -> Result<eq_client_core::money::Coin, String> {
     })
 }
 
-/// `gm <command> [arguments]`: an allowed local test command without its `#`.
+/// `gm <line>`: a `#` line without its `#`, as a user types it.
 fn parse_gm(words: &[&str]) -> Result<Step, String> {
     gm_command(words).map(Step::Gm)
 }
 
-/// The `gm` forms that set up or clean up a test fixture: spawning, depop,
-/// guilds, stuns, languages and disciplines. They run only on a local test
-/// session; every other allowed `gm` line runs on any server, as a typed `#`
-/// line would (Adam, 11-23).
-const GM_FIXTURES: &[&str] = &[
-    "spawn",
-    "depop",
-    "guild",
-    "stun",
-    "setlanguage",
-    "traindisc",
-];
-
-/// Whether a `gm` step's text is a fixture form ([`GM_FIXTURES`]).
+/// The `gm` line whose local-test helper runs on a local test session: a
+/// bare `depop` removes the reconciled NPC selection through the session's
+/// fixture path. Anywhere else, and every other line, goes as a typed `#`
+/// line would (approved plan 6.584).
 pub(crate) fn gm_fixture(command: &str) -> bool {
-    command
-        .split_ascii_whitespace()
-        .next()
-        .is_some_and(|word| GM_FIXTURES.contains(&word))
+    command.trim() == "depop"
 }
 
-/// Validate the text for both parsed and programmatically constructed steps.
+/// Any line a user could type after `#`, with the chat line's own limits as
+/// a slash line has them: no control characters, and no longer than the chat
+/// line takes with its `#`. The server decides what the line does (6.584).
 pub(super) fn gm_command(words: &[&str]) -> Result<String, String> {
-    let [command, arguments @ ..] = words else {
+    let Some(first) = words.first() else {
         return Err("gm takes a command".into());
     };
-    if !GM_COMMANDS.contains(command) {
-        return Err(format!("gm allows only {}", GM_COMMANDS.join(", ")));
+    if first.starts_with('#') {
+        return Err("gm takes a command without its leading #".into());
     }
-    let plain = |argument: &&str| {
-        argument
-            .chars()
-            .all(|c| c.is_ascii_alphanumeric() || matches!(c, '-' | '.' | '_' | ':'))
-    };
-    if !arguments.iter().all(plain) {
-        return Err("gm takes plain arguments".into());
+    let text = words.join(" ");
+    let longest = crate::chat::MAX_TEXT;
+    if text.len() + 1 > longest {
+        return Err(format!(
+            "a gm line is at most {longest} bytes with its #, as the chat line is"
+        ));
     }
-    match *command {
-        "guild" if !guild_fixture(arguments) => {
-            return Err("gm guild takes create <character ID|name> <guild name>, delete <guild ID>, or set <character ID|name> <guild ID|0>".into());
-        }
-        "guild" => (),
-        "spawn" => match arguments {
-            [_, ..] if arguments.len() <= 4 => (),
-            _ if fixture_spawn(arguments) => (),
-            _ => return Err(concat!(
-                "gm spawn takes a name and up to three short arguments, or ",
-                "NAME RACE LEVEL TEXTURE HEALTH GENDER CLASS PRIMARY_MODEL SECONDARY_MODEL 0 BODY_TYPE"
-            ).into()),
-        },
-        "depop" if !arguments.is_empty() => return Err("gm depop takes no arguments".into()),
-        "setlanguage" => {
-            let valid = matches!(arguments, [id, value] if
-                id.parse::<u8>().is_ok_and(|id| id <= 27)
-                && value.parse::<u8>().is_ok_and(|value| value <= 100));
-            if !valid { return Err("gm setlanguage takes LANGUAGE_ID (0..27) PROFICIENCY (0..100)".into()); }
-        }
-        "traindisc" => {
-            // EQEmu compares class levels against these bounds. Keep the
-            // range below unavailable class levels such as 127 and 255.
-            let level = |word: &str| {
-                word.parse::<u8>()
-                    .ok()
-                    .filter(|value| word.len() <= 3 && (1..=126).contains(value))
-            };
-            let valid = match arguments {
-                [max] => level(max).is_some(),
-                [max, min] => level(max).zip(level(min)).is_some_and(|(max, min)| min <= max),
-                _ => false,
-            };
-            if !valid {
-                return Err("gm traindisc takes MAX [MIN] with 1 <= MIN <= MAX <= 126".into());
-            }
-        }
-        _ if arguments.len() > 4 => return Err("gm takes up to four plain arguments".into()),
-        _ => (),
+    if text.chars().any(char::is_control) {
+        return Err("a gm line takes no control characters".into());
     }
-    if *command == "rules" && !matches!(arguments, ["set", _, _] | ["reload"]) {
-        return Err("gm rules takes set <Category:Rule> <value> or reload".into());
-    }
-    if *command == "pvp" && !matches!(arguments, ["on" | "off"]) {
-        return Err("gm pvp takes on or off".into());
-    }
-    if *command == "show" {
-        let allowed = match arguments {
-            [query] => SHOW_QUERIES.contains(query),
-            ["inventory", scope] => SHOW_INVENTORY_SCOPES.contains(scope),
-            _ => false,
-        };
-        if !allowed {
-            return Err(format!(
-                "gm show takes one of {}, or inventory with one of {}",
-                SHOW_QUERIES.join(", "),
-                SHOW_INVENTORY_SCOPES.join(", ")
-            ));
-        }
-    }
-    Ok(words.join(" "))
-}
-
-/// Deployed `EQEmu` `command_guild` create/delete/set argument shapes. Names and
-/// IDs are deliberately narrower than a general GM command for fixture work.
-fn guild_fixture(arguments: &[&str]) -> bool {
-    let id = |word: &str| {
-        word.parse::<u32>()
-            .ok()
-            .filter(|value| *value < u32::MAX && word.bytes().all(|byte| byte.is_ascii_digit()))
-    };
-    let character = |word: &str| character_name(word) || id(word).is_some_and(|value| value > 0);
-    match arguments {
-        ["create", owner, name @ ..] if character(owner) && !name.is_empty() => {
-            let text = name.join(" ");
-            text.len() <= 63
-                && name.iter().all(|word| {
-                    !word.is_empty() && word.bytes().all(|byte| byte.is_ascii_alphanumeric())
-                })
-        }
-        ["delete", guild] => id(guild).is_some_and(|value| value > 0),
-        ["set", member, guild] => character(member) && id(guild).is_some(),
-        _ => false,
-    }
-}
-
-/// The complete `EQEmu` temporary NPC form uses explicit decimal fields.
-/// Keep the merchant unset so the fixture cannot expose merchant stock.
-fn fixture_spawn(arguments: &[&str]) -> bool {
-    let [
-        name,
-        race,
-        level,
-        texture,
-        health,
-        gender,
-        class,
-        primary,
-        secondary,
-        "0",
-        body,
-    ] = arguments
-    else {
-        return false;
-    };
-    let within = |word: &str, low, high| {
-        word.parse::<u32>()
-            .is_ok_and(|value| (low..=high).contains(&value))
-    };
-    (1..=60).contains(&name.len())
-        && name.bytes().all(|byte| byte.is_ascii_alphabetic())
-        && within(race, 1, u32::from(u16::MAX))
-        && within(level, 1, u32::from(u8::MAX))
-        && within(texture, 0, u32::from(u8::MAX))
-        && within(health, 1, 2_100_000_000)
-        && within(gender, 0, 2)
-        && within(class, 1, u32::from(u8::MAX))
-        && within(primary, 0, u32::MAX)
-        && within(secondary, 0, u32::MAX)
-        && within(body, 0, u32::from(u8::MAX))
+    Ok(text)
 }
 
 /// A window's key, such as `skills`, as the window registry spells it.
@@ -1591,8 +1359,8 @@ fn screen_id(id: &str) -> Result<&'static str, String> {
 }
 
 /// `chat <say|ooc|shout|auction|group|guild|raid> <words>` or `chat tell
-/// <Name> <words>`: a line as a player types it. The words are printable
-/// ASCII and never a `#` command, which only a `gm` step sends.
+/// <Name> <words>`: a line as a player types it, in printable ASCII. Words
+/// starting with `#` go as typing them would (6.584).
 fn parse_chat(words: &[&str]) -> Result<Step, String> {
     use eq_client_core::OutboundChat;
     let usage = || {
@@ -1603,11 +1371,9 @@ fn parse_chat(words: &[&str]) -> Result<Step, String> {
     };
     let text = |words: &[&str]| {
         let text = words.join(" ");
-        (!text.is_empty()
-            && !text.starts_with('#')
-            && text.chars().all(|c| c.is_ascii_graphic() || c == ' '))
-        .then_some(text)
-        .ok_or_else(usage)
+        (!text.is_empty() && text.chars().all(|c| c.is_ascii_graphic() || c == ' '))
+            .then_some(text)
+            .ok_or_else(usage)
     };
     let [channel, rest @ ..] = words else {
         return Err(usage());
@@ -1945,44 +1711,6 @@ mod tests {
     }
 
     #[test]
-    fn language_fixture_recipe_uses_only_bounded_supported_gm_commands() {
-        let base = Path::new("private");
-        for command in [
-            "level 2",
-            "setlanguage 5 20",
-            "setlanguage 5 0",
-            "setlanguage 5 100",
-            "givemoney 0 0 0 20",
-            "spawn LaneLanguageTrainer 1 1 0 100 0 20 0 0 0 1",
-            "depop",
-        ] {
-            assert_eq!(
-                parse(&format!("gm(\"{command}\")"), base).unwrap(),
-                [Step::Gm(command.into())]
-            );
-        }
-        for command in [
-            "setlanguage",
-            "setlanguage 5",
-            "setlanguage 28 20",
-            "setlanguage 5 101",
-            "setlanguage -1 20",
-            "setlanguage 5 -1",
-            "setlanguage 256 20",
-            "setlanguage 5 0 extra",
-            "set language 5 20",
-            "set level 2",
-            "set other 1",
-            "spawn LaneLanguageTrainer 1 1 0 100 0 20",
-        ] {
-            assert!(
-                parse(&format!("gm(\"{command}\")"), base).is_err(),
-                "{command}"
-            );
-        }
-    }
-
-    #[test]
     fn training_language_selects_a_bounded_offered_row_without_sending_a_numeric_request() {
         let base = Path::new("private");
         assert_eq!(
@@ -2272,21 +2000,19 @@ mod tests {
             "walk(8, 90000)",
             "walk(0, 1000)",
             "gm(\"\")",
-            "gm(\"shutdown\")",
-            "gm(\"SUMMON\")",
-            "gm(\"zone a b c d e\")",
-            "gm(\"goto 1;2\")",
-            "gm(\"summon Name,Other\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
         // A `#` after a call starts a comment. Inside a text argument it is
-        // plain text, so the gm check refuses it there (chat is tested below).
+        // plain text, and goes with the line.
         assert_eq!(
             parse("gm(\"zone qeynos\") #givemoney 999", base).unwrap(),
             [Step::Gm("zone qeynos".into())]
         );
-        assert!(parse("gm(\"zone qeynos #givemoney 999\")", base).is_err());
+        assert_eq!(
+            parse("gm(\"zone qeynos #givemoney 999\")", base).unwrap(),
+            [Step::Gm("zone qeynos #givemoney 999".into())]
+        );
     }
 
     #[test]
@@ -2771,257 +2497,63 @@ mod tests {
     }
 
     #[test]
-    fn a_gm_may_ready_another_test_character_and_put_them_back() {
-        assert_eq!(
-            parse(
-                "gm(\"gm on\")\n\
-                 gm(\"scribespells 10\")\n\
-                 gm(\"maxskills\")\n\
-                 gm(\"giveitem 1001 1\")\n\
-                 gm(\"unmemspell 200\")\n\
-                 gm(\"nukebuffs\")\n",
-                Path::new("private")
-            )
-            .unwrap(),
-            [
-                Step::Gm("gm on".into()),
-                Step::Gm("scribespells 10".into()),
-                Step::Gm("maxskills".into()),
-                Step::Gm("giveitem 1001 1".into()),
-                Step::Gm("unmemspell 200".into()),
-                Step::Gm("nukebuffs".into()),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_gm_may_flag_test_characters_for_pvp_and_put_the_flag_back() {
-        assert_eq!(
-            parse(
-                "gm(\"pvp on\")\ngm(\"castspell 230\")\ngm(\"pvp off\")\n",
-                Path::new("private")
-            )
-            .unwrap(),
-            [
-                Step::Gm("pvp on".into()),
-                Step::Gm("castspell 230".into()),
-                Step::Gm("pvp off".into()),
-            ]
-        );
-        for bad in [
-            "gm(\"pvp\")",
-            "gm(\"pvp yes\")",
-            "gm(\"pvp on off\")",
-            "gm(\"pvp ON\")",
-        ] {
-            assert!(parse(bad, Path::new("private")).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn gm_show_reads_only_the_listed_queries_and_inventory_scopes() {
+    fn gm_takes_any_line_a_user_could_type_after_the_hash() {
+        // No word list and no argument filter: the server decides what a
+        // `#` line does, for a GM and anyone else (6.584). Lines the old
+        // list refused go too.
         let base = Path::new("private");
         for command in [
-            "show buffs",
-            "show currencies",
-            "show distance",
-            "show line_of_sight",
-            "show timers",
-            "show inventory all",
-            "show inventory allbank",
-            "show inventory bank",
-            "show inventory cursor",
-            "show inventory curlimbo",
-            "show inventory equip",
-            "show inventory gen",
-            "show inventory limbo",
-            "show inventory poss",
-            "show inventory shbank",
-            "show inventory trade",
-            "show inventory trib",
-            "show inventory world",
-        ] {
-            assert_eq!(
-                parse(&format!("gm(\"{command}\")"), base).unwrap(),
-                [Step::Gm(command.into())]
-            );
-        }
-        for bad in [
-            "gm(\"show\")",
-            "gm(\"show buffs extra\")",
-            "gm(\"show BUFFS\")",
-            "gm(\"show nukebuffs\")",
-            "gm(\"show zone_status\")",
-            "gm(\"show aggro\")",
-            "gm(\"show stats\")",
-            "gm(\"show inventory\")",
-            "gm(\"show inventory pockets\")",
-            "gm(\"show inventory curlim\")",
-            "gm(\"show inventory EQUIP\")",
-            "gm(\"show inventory equip gen\")",
-            "gm(\"show buffs inventory\")",
-        ] {
-            let error = parse(bad, base).unwrap_err();
-            assert!(
-                error.contains("gm show takes one of buffs"),
-                "{bad}: {error}"
-            );
-        }
-    }
-
-    #[test]
-    fn gm_traindisc_requires_a_bounded_max_then_optional_min() {
-        let base = Path::new("private");
-        for command in [
-            "traindisc 1",
-            "traindisc 55 52",
-            "traindisc 52 52",
-            "traindisc 126 1",
-        ] {
-            assert_eq!(
-                parse(&format!("gm(\"{command}\")"), base).unwrap(),
-                [Step::Gm(command.into())]
-            );
-        }
-        for arguments in [
-            "", "0", "-1", "127", "256", "00055", "55.5", "52 55", "55 0", "55 -1", "55 none",
-            "55 52 50",
-        ] {
-            assert!(
-                parse(&format!("gm(\"traindisc {arguments}\")"), base).is_err(),
-                "{arguments}"
-            );
-        }
-    }
-
-    #[test]
-    fn a_gm_may_read_raise_and_reset_another_test_characters_faction() {
-        assert_eq!(
-            parse(
-                "gm(\"faction view\")\ngm(\"factionassociation 406 1500\")\ngm(\"faction reset 406\")\n",
-                Path::new("private")
-            )
-            .unwrap(),
-            [
-                Step::Gm("faction view".into()),
-                Step::Gm("factionassociation 406 1500".into()),
-                Step::Gm("faction reset 406".into()),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_zone_rule_may_change_for_now_but_never_be_stored_or_reset() {
-        let base = Path::new("private");
-        assert_eq!(
-            parse(
-                "gm(\"rules set Character:FoodLossPerUpdate 4000\")\ngm(\"rules reload\")\n",
-                base
-            )
-            .unwrap(),
-            [
-                Step::Gm("rules set Character:FoodLossPerUpdate 4000".into()),
-                Step::Gm("rules reload".into())
-            ]
-        );
-        for bad in [
-            "gm(\"rules reset\")",
-            "gm(\"rules setdb Character:FoodLossPerUpdate 32\")",
-            "gm(\"rules set Character:FoodLossPerUpdate\")",
-        ] {
-            assert!(parse(bad, base).is_err(), "{bad}");
-        }
-    }
-
-    #[test]
-    fn gm_fixture_commands_validate_the_complete_spawn_and_bare_depop() {
-        let base = Path::new("private");
-        for command in [
-            "spawn ScriptFixture",
-            "spawn ScriptFixture 1 1 0",
-            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 3",
-            "depop",
-        ] {
-            assert_eq!(
-                parse(&format!("gm(\"{command}\")"), base).unwrap(),
-                [Step::Gm(command.into())]
-            );
-        }
-        for command in [
-            "spawn",
+            "gm on",
+            "scribespells 10",
+            "giveitem 1001 1",
+            "pvp ON",
+            "show zone_status",
+            "show inventory equip gen",
+            "set invulnerable on",
+            "set language 5 20",
+            "setlanguage 28 20",
+            "traindisc 52 55",
+            "faction reset 406",
+            "rules reset",
+            "rules setdb Character:FoodLossPerUpdate 32",
             "spawn ScriptFixture 60 1 0 200",
-            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0",
-            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 3 extra",
-            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 undead",
-            "spawn ScriptFixture 60 1 0 - 2 1 0 0 0 3",
-            "spawn ScriptFixture 60 1 0 0 2 1 0 0 0 3",
-            "spawn ScriptFixture 60 1 0 2100000001 2 1 0 0 0 3",
-            "spawn ScriptFixture 60 1 0 200 3 1 0 0 0 3",
-            "spawn ScriptFixture 60 1 0 200 2 1 -1 0 0 3",
-            "spawn ScriptFixture 60 1 0 200 2 1 0 0 1 3",
-            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 256",
-            "spawn ScriptFixture2 60 1 0 200 2 1 0 0 0 3",
-            "depop ScriptFixture",
-            "depop 1",
-            "depopall",
+            "depop",
             "depopzone",
-            "damage 1 2 3 4 5",
-        ] {
-            assert!(
-                parse(&format!("gm(\"{command}\")"), base).is_err(),
-                "{command}"
-            );
-        }
-    }
-
-    #[test]
-    fn guild_fixture_commands_allow_only_bounded_create_delete_and_set() {
-        let base = Path::new("private");
-        for command in [
-            "guild create Example Synthetic Guild",
-            "guild create 12 Fixture",
-            "guild delete 3",
-            "guild set Example 3",
-            "guild set 12 0",
+            "guild rename 3 Renamed",
+            "guild create Example Fixture-Name",
+            "goto 1;2",
+            "summon Name,Other",
+            "SUMMON",
+            "shutdown",
+            "zone qeynos #givemoney 999",
         ] {
             assert_eq!(
                 parse(&format!("gm(\"{command}\")"), base).unwrap(),
-                [Step::Gm(command.into())]
-            );
-        }
-        for command in [
-            "guild",
-            "guild create",
-            "guild create 0 Fixture",
-            "guild create 1",
-            "guild create Ex4mple Fixture",
-            "guild create Example Fixture-Name",
-            "guild delete",
-            "guild delete 0",
-            "guild delete 4294967295",
-            "guild delete 3 extra",
-            "guild set Example",
-            "guild set Example -1",
-            "guild set Example 4294967296",
-            "guild set 0 3",
-            "guild set Example 3 extra",
-            "guild rename 3 Renamed",
-            "guild setleader 3 Example",
-            "guild setrank Example 1",
-            "guild list",
-            "guild CREATE Example Fixture",
-        ] {
-            assert!(
-                parse(&format!("gm(\"{command}\")"), base).is_err(),
+                [Step::Gm(command.into())],
                 "{command}"
             );
         }
-        assert!(
-            parse(
-                &format!("gm(\"guild create Example {}\")", "a".repeat(64)),
-                base
-            )
-            .is_err()
+        // Only the chat line's own limits: its length with the `#`, and no
+        // control characters; and the `#` is the step's own.
+        let longest = "a".repeat(crate::chat::MAX_TEXT - 1);
+        assert_eq!(
+            parse(&format!("gm(\"{longest}\")"), base).unwrap(),
+            [Step::Gm(longest.clone())]
+        );
+        for bad in [
+            format!("gm(\"{longest}a\")"),
+            "gm(\"\")".to_owned(),
+            "gm(\"#summon\")".to_owned(),
+            "gm(\"say bad\u{0007}\")".to_owned(),
+        ] {
+            assert!(parse(&bad, base).is_err(), "{bad}");
+        }
+        // `chat say #...` says what typing it would.
+        assert_eq!(
+            parse("chat(\"say #time\")", base).unwrap(),
+            [Step::Chat(eq_client_core::OutboundChat::Say(
+                "#time".into()
+            ))]
         );
     }
 
@@ -3063,14 +2595,13 @@ mod tests {
                 }),
             ]
         );
-        // Never an empty line or a `#` command, which only a gm step sends.
+        // Never an empty line. A `#` line goes, as typing it would (6.584).
         for bad in [
             "chat()",
             "chat(\"say\")",
             "chat(\"yell hi\")",
             "chat(\"tell Friend\")",
             "chat(\"tell Fr1end hi\")",
-            "chat(\"say #summon\")",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }

@@ -519,7 +519,7 @@ fn start_request(
     commands: &mut Commands,
     focus: Option<&mut InputFocus>,
 ) -> Receipt {
-    let program = match prepare(source, &bridge.root, settings.local_session) {
+    let program = match prepare(source, &bridge.root) {
         Ok(program) => program,
         Err(error) => {
             let mut receipt = Receipt::rejected(request_id, "invalid_program");
@@ -563,11 +563,7 @@ fn stop_request(
     }
 }
 
-fn prepare(
-    source: &str,
-    base: &std::path::Path,
-    local: bool,
-) -> Result<Program, super::ParseError> {
+fn prepare(source: &str, base: &std::path::Path) -> Result<Program, super::ParseError> {
     let program = Program::parse(source, base)?;
     if program.statement_count() == 0 {
         return Err(super::ParseError {
@@ -576,7 +572,6 @@ fn prepare(
             message: "Add a statement before running".into(),
         });
     }
-    program.check_local_commands(local)?;
     Ok(program)
 }
 

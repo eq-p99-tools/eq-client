@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- A script's `gm` line is a user's typed `#` line (6.584, scripts are
+  users). `gm` takes any line a player could type after `#`, on any server,
+  with only the chat line's own limits (no control characters, the chat
+  length counting the `#`), and it goes the typed way under the same chat
+  pace. The server decides what a `#` line does; a player who is not a GM
+  gets the server's answer. The old word list, argument filters and the
+  local-session and generation gates are gone, and `chat("say #...")` is no
+  longer refused. The `gm("depop")` helper for a selected NPC stays a local
+  Titanium test convenience; elsewhere `#depop` goes as typed. Breaking for
+  scripts that relied on the old refusals: those lines now send.
 - Petitions and reports as the Titanium program takes them (read R49-23,
   checklist 6.511, C1a), on eq-network #414.
   - **`/petition`** sends its words and echoes them in the installed line
