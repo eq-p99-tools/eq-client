@@ -2,6 +2,19 @@
 
 ## Unreleased
 
+- Keep server filters per character and give them to the session (parity
+  item 6, recording checklist 6.494). Options gains a Filters page with one
+  row per kind the generation's packet has a word for (24 on Titanium, 16 on
+  Mac-era servers): a button steps through the kind's modes and a label says
+  the current one. The modes are kept as `filter_<kind>` lines in the
+  character's options file; a mode no generation can say keeps the default,
+  which is the packet sent before. The character list gives the session the
+  chosen character's saved set, so the first zone-in carries it; a change in
+  play is sent at once where the session offers it (EQEmu) and otherwise
+  goes with the next zone-in, as the page's note says. The kinds, words and
+  page are this client's own until the official options, ini keys and
+  `/filter` forms are read (6.494a to c); `/filter` answers that it is not
+  taken that way yet.
 - `/guildstatus` is offered, as read R49-6k reads it (checklist 6.575).
   - The Titanium program answers it itself and sends nothing: for the player a typed name finds (`/guildstatus Name`, ignoring case), or else for the target.
   - Lines 12256, 12257 and 12258 give the rank (member, officer, leader) with the name and the guild. 12259 gives the name alone for any other rank, and 12260 refuses a missing spawn, one that isn't a player, or a game master. All come in message type 0x111.

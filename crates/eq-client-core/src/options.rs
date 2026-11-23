@@ -406,6 +406,8 @@ pub struct Options {
     /// official client's Options window chooses them (inferred, R49-44a);
     /// none by default.
     pub luclin_models: LuclinModels,
+    /// The server filters, per character ([`crate::chat_filters`]).
+    pub chat_filters: crate::chat_filters::ChatFilters,
 }
 
 impl Default for Options {
@@ -445,6 +447,7 @@ impl Default for Options {
             sound_volume: 100,
             music_volume: 100,
             luclin_models: LuclinModels::NONE,
+            chat_filters: crate::chat_filters::ChatFilters::default(),
         }
     }
 }
@@ -627,6 +630,9 @@ impl Options {
                 }
                 continue;
             }
+            if options.chat_filters.read(key.trim(), value) {
+                continue;
+            }
             if let Some(level) = Level::ALL
                 .into_iter()
                 .find(|level| level.key() == key.trim())
@@ -675,6 +681,7 @@ impl Options {
         for part in [LUCLIN_MODELS, " = ", &self.luclin_models.words(), "\n"] {
             text.push_str(part);
         }
+        text.push_str(&self.chat_filters.text());
         text
     }
 }
@@ -692,6 +699,10 @@ mod tests {
         options.show_names = ShowNames::Last;
         options.loot_no_drop = LootNoDrop::AskUnusable;
         options.luclin_models.set(6, 1, true);
+        options.chat_filters.set(
+            eq_network_game::filters::FilterCategory::Auctions,
+            eq_network_game::filters::FilterMode::Hide,
+        );
         let text = options.text();
         assert!(text.contains("luclin_models = DAF\n"));
         assert!(text.starts_with(HEADER));
@@ -701,6 +712,7 @@ mod tests {
         assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
         assert!(text.contains("loot_no_drop = 1\n"));
+        assert!(text.contains("filter_auctions = hide\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // A file from before the QoL page keeps its choices there.
         let before = Options::read(
