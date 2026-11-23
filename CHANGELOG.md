@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Keep the latest title list (checklist 6.516), lifted onto main from #574. Where the session offers titles (stock EQEmu only), the core keeps the list the server last sent in this zone (`ClientWorld::titles`), forgotten on a zone change; elsewhere a list is ignored. Nothing asks for the list or chooses a title yet. Read R49-14 has now read the program's title window, but titles are outside Project 1999 and Quarm, so the window waits under Adam's 11-23 priority rule.
+
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers

@@ -6773,3 +6773,62 @@ fn the_players_own_report_prints_its_amount_then_its_record_line() {
         []
     );
 }
+
+/// An admission whose session offers one capability.
+fn offering(session_id: u64, capability: crate::Capability) -> WorldEvent {
+    let WorldEvent::Entered {
+        choices,
+        zone,
+        player,
+        far_clip,
+        spell_landing_flag,
+        zone_id,
+        ..
+    } = entered(session_id)
+    else {
+        unreachable!("an admission")
+    };
+    WorldEvent::Entered {
+        capabilities: vec![capability],
+        choices,
+        session_id,
+        zone,
+        player,
+        far_clip,
+        spell_landing_flag,
+        zone_id,
+    }
+}
+
+#[test]
+fn the_latest_title_list_is_kept_where_offered_until_the_zone_changes() {
+    use eq_network_game::names::TitleChoice;
+    let list = |prefix: &str| {
+        WorldEvent::TitleList(vec![TitleChoice {
+            id: 7,
+            prefix: prefix.into(),
+            suffix: String::new(),
+        }])
+    };
+    // Where the session does not offer titles, a list changes nothing.
+    let mut world = admitted();
+    assert!(game(&mut world, list("Lord")).ignored);
+    assert!(world.titles().is_none());
+
+    let mut world = ClientWorld::default();
+    game(&mut world, offering(1, crate::Capability::Titling));
+    connection(&mut world, true, false);
+    assert!(world.titles().is_none());
+    let changes = game(&mut world, list("Lord"));
+    assert!(!changes.ignored && changes.notices.is_empty());
+    // The latest list replaces the one before.
+    game(&mut world, list("Lady"));
+    assert_eq!(
+        world.titles().map(|titles| titles[0].prefix.as_str()),
+        Some("Lady")
+    );
+    // A new zone forgets it.
+    game(&mut world, offering(2, crate::Capability::Titling));
+    connection(&mut world, true, false);
+    assert!(world.titles().is_none());
+}

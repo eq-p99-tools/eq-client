@@ -606,6 +606,15 @@ impl ClientWorld {
         }
     }
 
+    /// The titles and suffixes the player may choose from, as the latest
+    /// list in this zone named them; none until the server sends one. No
+    /// window asks for it yet: the title window is read (R49-14) but waits,
+    /// as titles are outside Project 1999 and Quarm (Adam, 11-23).
+    #[must_use]
+    pub fn titles(&self) -> Option<&[eq_network_game::names::TitleChoice]> {
+        self.zone.titles.as_deref()
+    }
+
     /// The player closed the book or note they were reading.
     pub fn close_reading(&mut self) {
         self.reading = None;
@@ -1036,10 +1045,8 @@ impl ClientWorld {
             // The server filters the session kept: the filters slice (6.494).
             | WorldEvent::ServerFiltersKept { .. }
             | WorldEvent::ServerFiltersRefused { .. }
-            // A last name's answer and the title list: the surname and
-            // titles slices (titles 6.516).
+            // A last name's answer: the surname slice (6.507).
             | WorldEvent::SurnameAnswer { .. }
-            | WorldEvent::TitleList(_)
             // The bandolier sets and potion belt, unknown sets and the
             // session's refusals: their windows' slice (6.559, 6.573).
             | WorldEvent::Bandoliers(_)
@@ -1232,6 +1239,16 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
+            // The titles the player may choose: kept, the latest replacing
+            // the one before, only where the session offers them, until the
+            // zone changes.
+            WorldEvent::TitleList(titles) => {
+                if self.in_world() && self.can(crate::Capability::Titling) {
+                    self.zone.titles = Some(titles.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
                 // A first standing, as the session reports a player at zone
