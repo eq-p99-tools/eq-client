@@ -172,6 +172,8 @@ pub(super) struct ChatState {
     /// A Ranger's tracking option typed by another class, for
     /// [`super::tracking::say_rangers_only`] to answer.
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
+    /// A `/loadskin` typed, for [`super::skin`] to load and answer.
+    pub(crate) load_skin: Option<super::skin::LoadSkin>,
     draft: draft::Draft,
     /// The lines this character sent, for recalling into the draft. Memory
     /// only: never saved, reported or logged.
@@ -426,6 +428,7 @@ impl ChatState {
             boat_interacted,
             follow_asked,
             rangers_only,
+            load_skin,
             contacts,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
@@ -461,6 +464,7 @@ impl ChatState {
         *boat_interacted = None;
         *follow_asked = None;
         *rangers_only = None;
+        *load_skin = None;
         contacts.asked = None;
     }
 
@@ -2044,8 +2048,8 @@ pub(super) fn run_game_command(
 
 /// A slash command the client answers itself, noted for the system that
 /// answers it: `/target Name`, a plain `/who`, `/loc`, `/time`, `/log`,
-/// `/shownames`, `/uiscale`, guild requests, `/follow` or `/raidwindow`. None for any
-/// other line.
+/// `/shownames`, `/uiscale`, `/loadskin`, guild requests, `/follow` or
+/// `/raidwindow`. None for any other line.
 #[cfg(test)]
 pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Result<(), String>> {
     client_request_in_scope(input, state, None)
@@ -2092,6 +2096,10 @@ pub(super) fn client_request_in_scope(
     }
     if input.eq_ignore_ascii_case("/log") {
         state.log_toggle = true;
+        return Some(Ok(()));
+    }
+    if let Some(request) = super::skin::LoadSkin::typed(input) {
+        state.load_skin = Some(request);
         return Some(Ok(()));
     }
     // The Raid window opens or closes whatever words follow; what the
