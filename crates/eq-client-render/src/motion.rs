@@ -2610,8 +2610,11 @@ pub(super) fn input(
     }
     if entering {
         // The program keeps the velocity a body enters water with and damps
-        // it; here it starts from this sample's, held to the water's caps
-        // at the next (the slower side, recording checklist 6.483).
+        // it (read R33): a falling body brings its fall's velocity in, so a
+        // wall that stopped the move doesn't stop it; otherwise this
+        // sample's travel. The next stroke holds it to the water's caps,
+        // where the program would damp it down instead (recording
+        // checklists 6.483 and 6.483b).
         let moved = (position - origin) / span.max(f32::EPSILON);
         let (across, up) = entry_velocity.unwrap_or((moved, moved.y));
         controls.wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
@@ -2964,7 +2967,7 @@ pub(super) fn walking(
             // edges at all. A body whose origin has just left the water,
             // the soles still in it, passes over what its walk would climb:
             // the program's sweep has no lower test, and a swimmer pops out
-            // over a rim that way (inferred, recording checklist 6.483).
+            // over a rim that way (inferred, recording checklist 6.483b).
             airborne_clear: match (raised && falls.edge_climb.is_some(), leaving_water) {
                 (true, true) => edge_climb.max(physics.climb),
                 (true, false) => physics.climb,

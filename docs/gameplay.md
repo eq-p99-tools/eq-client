@@ -52,7 +52,7 @@ A swimmer whose rise takes the origin out of the water, the feet still in
 it, passes over what the walk would climb, so swimming forward with the
 view pitched up at a pool's rim up to about 1.25 above the water pops the
 swimmer out onto it, as the official client does (inferred, recording
-checklist 6.483). A body that falls back into the water keeps the speed it
+checklist 6.483b). A body that falls back into the water keeps the speed it
 fell with, so a wall that stopped it doesn't stop the stroke.
 
 A local movement proposal completes when the worker returns a result for

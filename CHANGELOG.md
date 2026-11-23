@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- A swimmer climbs out of a pool over a rim a little above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483):
+- A swimmer climbs out of a pool over a rim a little above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483b):
   - The walk loses its edge climb only with the origin in water or lava, the program's deep liquid (+0xad of 5 or more, R40), not whenever the feet are wet. Wading with the origin dry climbs edges.
   - A fall whose origin has just left the water, the soles still in it, passes over what the walk would climb (origin + 1.25) and lands on it, inside the announced climb reach.
   - A body falling back into water keeps the fall's velocity, so a wall that stopped the move no longer stops the next stroke's forward speed.
