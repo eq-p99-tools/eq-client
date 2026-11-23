@@ -649,6 +649,10 @@ impl Panels<'_> {
         chat: &mut super::chat::ChatState,
     ) {
         use super::notices::Place;
+        // A running script whose chat the pace held fails (6.523).
+        if let eq_client_core::world::Notice::ChatRefused { reason } = notice {
+            chat.paced = Some((std::time::Instant::now(), reason.clone()));
+        }
         for (place, said) in super::notices::wording(notice, messages) {
             match place {
                 Place::Chat => {

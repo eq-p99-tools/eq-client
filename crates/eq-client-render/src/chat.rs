@@ -133,6 +133,9 @@ pub(super) struct ChatState {
     pub requested_target: Option<String>,
     /// A plain `/who`, waiting to list the zone's players.
     pub zone_who: Option<eq_client_core::who::WhoFilter>,
+    /// When the session's chat pace last held a line, and its words
+    /// (6.523): a running script that sent chat before then fails.
+    pub(crate) paced: Option<(std::time::Instant, String)>,
     /// A `/loc` or `/time`, waiting to be answered.
     pub asked: Option<super::whereabouts::Asked>,
     /// A `/yell` or `/stopcast` waiting for its line and send.

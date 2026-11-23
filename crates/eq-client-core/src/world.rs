@@ -1142,7 +1142,16 @@ impl ClientWorld {
             | WorldEvent::ApplyPoisonRefused { .. }
             | WorldEvent::DuelOffer(_)
             | WorldEvent::DuelRefused { .. }
-            | WorldEvent::SurnameAnswer { .. } => {}
+            | WorldEvent::SurnameAnswer { .. }
+            // Other works' news this pin brings, each shown by its own
+            // client PR: titles (eq-network #346, 6.516), the bind zone
+            // (#353, 6.524) and the chat server's channels (#341, 6.509,
+            // eq-client #569).
+            | WorldEvent::TitleList(_)
+            | WorldEvent::BoundIn { .. }
+            | WorldEvent::Channel(_)
+            | WorldEvent::ChannelLink(_)
+            | WorldEvent::ChatChannelRefused { .. } => {}
             // A report to the staff went or was refused (6.511).
             WorldEvent::ReportSent {
                 session_id,
@@ -1150,6 +1159,16 @@ impl ClientWorld {
             } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::ReportSent(*report));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The session's chat pace held a line (6.523).
+            WorldEvent::ChatRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ChatRefused {
+                        reason: reason.clone(),
+                    });
                 } else {
                     news.ignored = true;
                 }
