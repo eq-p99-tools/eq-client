@@ -1377,9 +1377,10 @@ fn lacks_headroom(
 }
 
 /// Whether a buff the player holds is known to summon a mount (effect 113).
-/// It stands in for the program's mount state in the headroom test, which
-/// is unread; a buff whose effects the spell data can't name doesn't count
-/// (checklist 6.496).
+/// It stands in for the program's mount state in the headroom test: race
+/// 0xd8 or 0x1d8 with a mount at actor +0x160 (0x4899d3, read R49-9 c),
+/// which this client doesn't hold. A buff whose effects the spell data
+/// can't name doesn't count (checklist 6.496).
 fn on_mount(world: &ClientWorld, spells: Option<&crate::spellbook::SpellNames>) -> bool {
     use eq_client_core::world::SpellCatalog;
     const SUMMON_MOUNT: u32 = 113;
