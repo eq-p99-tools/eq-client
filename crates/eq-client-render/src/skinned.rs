@@ -839,6 +839,28 @@ pub(crate) fn frame_tab(
     });
 }
 
+/// Shows the Options window on its Filters page when `/filter` asks, as the
+/// original's `/filter` shows the window and chooses its filter page
+/// (eqgame.exe 0x46a245).
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn open_filters(
+    mut chat: ResMut<crate::chat::ChatState>,
+    (mut shown, mut stack): (ResMut<crate::windows::Shown>, ResMut<crate::windows::Stack>),
+    mut chosen: ResMut<Tabs>,
+    pages: Query<&SkinPage, With<filters::FiltersPage>>,
+) {
+    if chat.filter_page.take().is_none() {
+        return;
+    }
+    shown.open(WindowId::Options);
+    stack.raise(WindowId::Options);
+    for SkinPage(tab) in &pages {
+        chosen
+            .0
+            .insert((tab.window, tab.tab_box.clone()), tab.index);
+    }
+}
+
 /// Shows the page each tabbed window has chosen, and its tab lit; a clicked
 /// tab chooses its page.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
