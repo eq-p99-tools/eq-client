@@ -7,10 +7,12 @@
 //! The emitters follow the Titanium program's loader (read R49-7 a, first
 //! pass; recording checklist 6.503): each record is one emitter or a day
 //! and a night one, with its own sound, delay and volume. A music record's
-//! sequence is its id, counted from 0 [I: 0x44b502 negates the sound
-//! number the loader stored for music (engine follow-up to R49-7, section
-//! 2), and the installation's music ids run from 0 within the sequence
-//! count]; how the program chooses among regions, fades and switches
+//! sound number, 0 or more, is the sequence of `<zone>.xmi` it plays:
+//! 0x44c1bc loads the file through 0x44b33b, and the type-1 branch
+//! 0x44bc19 to 0x4c6a99 plays the record's value as its sequence (read on
+//! the music sign). A negative number -N names entry N of the
+//! `mp3index.txt` list (0x44a8df, 0x44b502), which this client does not
+//! play yet; how the program chooses among regions, fades and switches
 //! music is not read (the follow-up reads only the 20000 clamp and the
 //! 1500 it passes to the music start); every
 //! inferred rule is a named constant or function here, marked \[I\]. The instruments are the
@@ -279,11 +281,10 @@ fn distance(emitter: &Emitter, at: [f32; 3]) -> f32 {
 }
 
 /// The music region the player stands in, nearest centre first, and the
-/// sequence it plays: the day or night id, counted from 0 [I: 0x44b502
-/// negates the number the loader stored (engine follow-up to R49-7,
-/// section 2), and the installation's ids run from 0 within the file's
-/// sequence count]; None where no region holds the player or its id names
-/// no sequence.
+/// sequence it plays: the day or night sound number, counted from 0, as
+/// 0x4c6a99 plays `<zone>.xmi` (read on the music sign); None where no
+/// region holds the player, or its number is negative (the mp3 list, not
+/// played yet) or names no sequence.
 /// Which region wins where they overlap is this client's choice [I].
 fn choose_music(
     emitters: &[Emitter],
@@ -521,7 +522,7 @@ pub(super) fn update(
         let unplayed = match emitter.kind {
             EmitterKind::Unknown(kind) => Some(format!("kind {kind}")),
             kind if kind.is_music() && emitter.ids.iter().any(|id| *id < 0) => {
-                Some(format!("music id {:?}", emitter.ids))
+                Some(format!("music id {:?} (the mp3 list)", emitter.ids))
             }
             _ => None,
         };

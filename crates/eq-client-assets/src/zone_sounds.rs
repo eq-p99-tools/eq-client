@@ -82,8 +82,10 @@ pub enum ZoneSoundError {
 pub enum EmitterKind {
     /// A bank sound (0), at [`TYPE_ZERO_VOLUME`] unless attenuated.
     DayNightEffect,
-    /// A region of music (1): the loader stores its sound number negated and
-    /// 0x44b502 negates it back (engine follow-up to R49-7).
+    /// A region of music (1): a sound number of 0 or more is that sequence
+    /// of `<zone>.xmi`, and a negative one -N is entry N of the
+    /// `mp3index.txt` list (read on the music sign, 0x44ba79, 0x4c6a99,
+    /// 0x44b502).
     Music,
     /// A sound with the first distance setting (2): the program gives it a
     /// minimum of 3 and 100 beside its +0x4c value; always one emitter.

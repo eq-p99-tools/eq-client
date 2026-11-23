@@ -91,7 +91,9 @@ unread. An installation may ship `.sf2` files of its own, but this client's
 synthesizer refuses them as they stand, so name another, such as a General
 MIDI SoundFont. Without one, or with a file that is missing, unreadable,
 refused or larger than 512 MB, music is silent and the log says why once.
-A music region plays its zone's sequence by number, counted from 0.
+A music region plays its zone's sequence by number, counted from 0, as the
+original program does. A region that names an entry of the installation's mp3
+list (a negative number) plays nothing yet.
 
 These options are saved for each character, under Options → General where the
 skin has the controls. A character with no choice of their own starts from the
