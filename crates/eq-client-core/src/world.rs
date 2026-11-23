@@ -1060,7 +1060,9 @@ impl ClientWorld {
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
-            | WorldEvent::SystemInfoReported { .. } => (),
+            | WorldEvent::SystemInfoReported { .. }
+            // The Titanium session's duel news: the duel slice (R49-6).
+            | WorldEvent::DuelNews(_) => (),
 
             // The zone and what is in it.
             WorldEvent::BoatControl(packet) => {
@@ -1690,13 +1692,19 @@ impl ClientWorld {
                     _ => news.ignored = true,
                 }
             }
-            WorldEvent::StatsChanged(change) => {
-                if self.in_world() {
-                    news.notices.push(Notice::StatsChanged(*change));
-                } else {
-                    news.ignored = true;
+            // The program adds the player's own rise to the base stat with
+            // no line, which this client does not keep apart from the
+            // profile yet (a follow-up to read R49-6f); another spawn's is
+            // told with a line that names no one.
+            WorldEvent::StatsChanged(change) => match u16::try_from(change.spawn_id) {
+                Ok(id) if self.in_world() && !self.is_player(id) => {
+                    news.notices.push(Notice::OthersStatChanged {
+                        lowered: change.amount < 0,
+                    });
                 }
-            }
+                Ok(id) if self.in_world() && self.is_player(id) => {}
+                _ => news.ignored = true,
+            },
             WorldEvent::Reward(reward) => {
                 // Only the coins: the items and the experience come with
                 // the server's own lines.
@@ -1899,7 +1907,14 @@ impl ClientWorld {
             {
                 DuelNotice::Challenged(name(self, from))
             }
-            DuelUpdate::Challenge { .. } => return,
+            // A Titanium session tells what the program makes of its own
+            // refusal ([`WorldEvent::DuelNews`]).
+            DuelUpdate::Challenge { .. } | DuelUpdate::AutoDeclined { .. } => return,
+            // The Titanium program has no case for an incoming 0x1b09 (read
+            // R49-6); its session tells the duel's start.
+            DuelUpdate::Accepted { .. } if self.generation == crate::GameDialect::Titanium => {
+                return;
+            }
             DuelUpdate::Accepted {
                 challenger,
                 accepter,

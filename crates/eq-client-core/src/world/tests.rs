@@ -40,6 +40,7 @@ fn player(spawn_id: u16) -> PlayerState {
         skills: None,
         practice_points: None,
         languages: None,
+        intoxication: None,
         disciplines: None,
         spell_refresh_ms: None,
         memorized_spells: [None; 8],
@@ -5823,7 +5824,7 @@ fn a_duel_question_follows_its_admission_and_closes_once() {
 
 #[test]
 fn a_yell_stats_and_coins_are_told_as_they_come() {
-    use crate::{Coins, stats::StatChange};
+    use crate::{Coins, stats::StatIncrease};
     use eq_network_game::rewards::Reward;
     let mut world = admitted();
     assert_eq!(
@@ -5835,15 +5836,26 @@ fn a_yell_stats_and_coins_are_told_as_they_come() {
         game(&mut world, WorldEvent::YellForHelp { spawn_id: 44 }).notices,
         Vec::<Notice>::new()
     );
-    let change = StatChange {
-        strength: 5,
-        wisdom: 2,
-        ..StatChange::default()
+    // Another spawn's increase is told with a line that names no one; the
+    // player's own says nothing (read R49-6f).
+    let increase = |spawn_id, amount| {
+        WorldEvent::StatsChanged(StatIncrease {
+            spawn_id,
+            stat: 1,
+            amount,
+        })
     };
     assert_eq!(
-        game(&mut world, WorldEvent::StatsChanged(change)).notices,
-        [Notice::StatsChanged(change)]
+        game(&mut world, increase(5, -2)).notices,
+        [Notice::OthersStatChanged { lowered: true }]
     );
+    assert_eq!(
+        game(&mut world, increase(5, 3)).notices,
+        [Notice::OthersStatChanged { lowered: false }]
+    );
+    let own = game(&mut world, increase(9, 3));
+    assert_eq!(own.notices, []);
+    assert!(!own.ignored);
     let coins = Coins {
         platinum: 1,
         gold: 0,

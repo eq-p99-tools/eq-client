@@ -566,7 +566,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::Raid(notice) => in_chat(raid_lines(notice, messages)),
         Notice::Duel(notice) => chat(Said::own(duel_line(notice))),
         Notice::YellForHelp(name) => chat(Said::own(format!("{name} yells for help!"))),
-        Notice::StatsChanged(change) => in_chat(stat_lines(*change)),
+        Notice::OthersStatChanged { lowered } => chat(others_stat_line(*lowered, messages)),
         Notice::Reward(coins) => chat(Said::own(reward_line(*coins))),
     }
 }
@@ -588,24 +588,17 @@ fn duel_line(notice: &eq_client_core::world::DuelNotice) -> String {
     }
 }
 
-/// A quest's change to the player's base stats: a line for each stat it
-/// named, with no number, since the record does not say whether it is the
-/// new value or the rise. This client's words (checklist 6.492, pending
-/// R49-6f).
-fn stat_lines(change: eq_client_core::stats::StatChange) -> Vec<Said> {
-    [
-        ("Strength", change.strength),
-        ("Stamina", change.stamina),
-        ("Agility", change.agility),
-        ("Dexterity", change.dexterity),
-        ("Intelligence", change.intelligence),
-        ("Wisdom", change.wisdom),
-        ("Charisma", change.charisma),
-    ]
-    .into_iter()
-    .filter(|(_, value)| *value != 0)
-    .map(|(stat, _)| Said::own(format!("Your {stat} has changed.")))
-    .collect()
+/// Another spawn's stat increase, as the Titanium program tells it: a line
+/// that names no one (read R49-6f, 0x455fff), 0x3273 for an amount below
+/// zero and 0x3274 otherwise, in colour 15. The fallbacks are this
+/// client's words.
+fn others_stat_line(lowered: bool, messages: Option<&Messages>) -> Said {
+    let (id, fallback) = if lowered {
+        (0x3273, "A stat was lowered.")
+    } else {
+        (0x3274, "A stat was raised.")
+    };
+    official(Some(id), &[], fallback, messages).typed(15)
 }
 
 /// The coins a quest or task gave, largest first, naming only those it
@@ -1368,7 +1361,7 @@ mod tests {
 
     #[test]
     fn duel_yell_stat_and_coin_news_read_in_this_clients_words() {
-        use eq_client_core::{Coins, socials::DuelRefusal, stats::StatChange, world::DuelNotice};
+        use eq_client_core::{Coins, socials::DuelRefusal, world::DuelNotice};
         let said = |notice: Notice| {
             wording(&notice, None)
                 .into_iter()
@@ -1395,15 +1388,12 @@ mod tests {
             [Said::own("Friend yells for help!")]
         );
         assert_eq!(
-            said(Notice::StatsChanged(StatChange {
-                strength: 5,
-                charisma: 1,
-                ..StatChange::default()
-            })),
-            [
-                Said::own("Your Strength has changed."),
-                Said::own("Your Charisma has changed.")
-            ]
+            said(Notice::OthersStatChanged { lowered: true }),
+            [Said::own("A stat was lowered.").typed(15)]
+        );
+        assert_eq!(
+            said(Notice::OthersStatChanged { lowered: false }),
+            [Said::own("A stat was raised.").typed(15)]
         );
         let coins = |platinum, gold, silver, copper| Coins {
             platinum,
