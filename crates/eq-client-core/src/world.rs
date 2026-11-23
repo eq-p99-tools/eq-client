@@ -36,9 +36,6 @@ mod who;
 mod zone;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
-
-/// The Bard's class number.
-const BARD: u32 = 8;
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
 pub use guild::GuildInvitation;
@@ -55,6 +52,9 @@ pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
 pub use vitals::{ReportedHp, Vitals};
 pub use who::{GuildStatus, ZonePlayer};
+
+/// The Bard's class number.
+const BARD: u32 = 8;
 
 use crate::{
     BookActionStatus, CharacterChoice, Death, PlayerState, PostureState, SpawnState, SpellBook,
@@ -484,7 +484,8 @@ impl ClientWorld {
         self.zone.pet_buffs.expire_early(now);
         self.casting.cooldowns.resolve(spells, now);
         // The global recast is the spell's recovery after the server's
-        // answer, and none for a Bard (read R49-34 m).
+        // answer, and none for a Bard (read R49-34 m, Titanium's; taken
+        // for the Mac-era and RoF2 programs too, inferred).
         if self.player.as_ref().and_then(|player| player.class) == Some(BARD) {
             self.casting.cooldowns.without_recovery();
         }
