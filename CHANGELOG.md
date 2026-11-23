@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Follow program reads R49-25 and R49-25b on Titanium for the walk's edge climb (checklist 6.482). The lift over the origin is now worked out per body: at least 1.9, half the stand height for barbarians, trolls and ogres, and none while ducking or in posture 120. The climb is the sphere's bottom, S + L − r. Until the models' radii are read from their files, no body climbs more than the 1.25 over its origin a human was seen to climb, so races 2, 9 and 10 gain nothing yet, and a taller body of another race climbs a little less (a Vah Shir of size 7: 5.52). The walk stops climbing only when its origin is in water or lava, not when its feet are, so wading out over a pool's rim climbs as on dry ground.
 - Show the session's chat pace (checklist 6.523, eq-network c951420). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
   the player's own line, and a script whose chat or social step the pace

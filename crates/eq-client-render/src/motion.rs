@@ -2144,13 +2144,15 @@ pub(super) fn input(
         // limit rather than replacing an already limited land speed.
         speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
     }
-    // A ducking or wet body is swept at its origin (L = 0, 0x489a32), so
-    // only the floor sweep's climb holds; else the walk climbs edges (6.482).
-    let raised = raised_walk(world, feet, posture);
+    // A ducking body, or one with its origin in liquid, is swept at its
+    // origin (L = 0, 0x489a32), so only the floor sweep's climb holds; else
+    // the walk climbs edges (6.482).
+    let raised = raised_walk(world, feet, body.feet_offset, posture);
     let physics = walking(
         physics(client, online.world().zone_gravity()),
         client,
         body,
+        online.world().player().map_or(0, |player| player.race),
         raised,
     );
     // A hurt or burdened player jumps at the share of the speed the session
@@ -2933,22 +2935,28 @@ pub(super) fn climbing(
 /// `physics` for the player's own walking body: [`climbing`] for the floor
 /// sweep, which a falling, alighting or placed body keeps, and for the walk
 /// on the ground the climb the generation's horizontal move gives an edge it
-/// runs into (`ClientFalls::walk_climb`) unless `raised` is false
-/// ([`raised_walk`]). The session's guard hears the higher of the two
-/// (`VerticalPhysics::reach`, sent as `ClimbReach`), so the walk and the
-/// guard read one climb.
+/// runs into (`ClientFalls::walk_climb`), by the body's `race`, unless
+/// `raised` is false ([`raised_walk`]). The session's guard hears the higher
+/// of the two (`VerticalPhysics::reach`, sent as `ClimbReach`), so the walk
+/// and the guard read one climb.
 pub(super) fn walking(
     physics: VerticalPhysics,
     client: InstalledClient,
     body: &PlayerBody,
+    race: u32,
     raised: bool,
 ) -> VerticalPhysics {
     let physics = climbing(physics, client, body);
     client.falls().map_or(physics, |falls| VerticalPhysics {
-        edge_climb: Some(falls.walk_climb(body.feet_offset, body.size, raised)),
+        edge_climb: Some(falls.walk_climb(eq_client_assets::falls::EdgeBody {
+            race,
+            stand_height: body.feet_offset,
+            size: body.size,
+            lifted: raised,
+        })),
         // A raised jump or fall passes over an edge its floor sweep reaches
         // and lands on it (R42, 6.484); where the walk climbs edges at all.
-        airborne_clear: if raised && falls.edge_climb.is_some() {
+        airborne_clear: if raised && falls.edge_lift.is_some() {
             physics.climb
         } else {
             0.0
@@ -2958,16 +2966,24 @@ pub(super) fn walking(
 }
 
 /// Whether the player's walk is swept raised over the origin, so it climbs
-/// edges ([`walking`]): not while ducking, nor with the feet in liquid, where
-/// the program sweeps at the origin itself (L = 0 in 0x489a32; its deep
-/// liquid threshold, +0xad of 5 or more, isn't mapped here, so any liquid
-/// at the feet counts).
+/// edges ([`walking`]): not while ducking or in posture 120 (0x78), nor with
+/// the origin, `stand_height` over the feet, in a liquid region, where the
+/// program sweeps at the origin itself (L = 0 in 0x489a32). The program
+/// tests the region level its origin probe keeps (+0xad, 0x47cae6, R33) at
+/// 5 or more, every liquid kind; its dry hazard levels 3 and 4 are under it.
+/// A body wading with its origin over the water is still lifted.
 pub(super) fn raised_walk(
     world: &eq_client_core::movement::CollisionWorld,
     feet: Vec3,
+    stand_height: f32,
     posture: Option<eq_client_core::PostureState>,
 ) -> bool {
-    posture != Some(eq_client_core::PostureState::Ducking) && !world.in_liquid(feet)
+    use eq_client_core::PostureState;
+    let swept_at_origin = matches!(
+        posture,
+        Some(PostureState::Ducking | PostureState::Unknown(0x78))
+    );
+    !swept_at_origin && world.liquid_at(feet + Vec3::Y * stand_height).is_none()
 }
 
 /// Asks the session to change the player's stance.
@@ -4660,6 +4676,7 @@ pub(super) mod tests {
             physics(InstalledClient::Titanium, None),
             InstalledClient::Titanium,
             body,
+            1,
             raised,
         );
         let mut triangles = vec![
@@ -4707,6 +4724,54 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_guard_hears_the_bodys_own_edge_climb_and_the_mesh_asks_no_more() {
+        use eq_client_assets::falls::{EdgeBody, TITANIUM};
+        // An ogre of size 9 and a gnome of size 3: the reach the session's
+        // guard hears (`ClimbReach`) is the walk's own climb for that body.
+        for (race, size) in [(10, 9.0_f32), (12, 3.0), (1, 6.0)] {
+            let body = super::PlayerBody {
+                feet_offset: eq_client_core::drawn_feet_offset(size / 5.0),
+                height: size,
+                size,
+            };
+            let physics = walking(
+                physics(InstalledClient::Titanium, None),
+                InstalledClient::Titanium,
+                &body,
+                race,
+                true,
+            );
+            let climb = TITANIUM.walk_climb(EdgeBody {
+                race,
+                stand_height: body.feet_offset,
+                size,
+                lifted: true,
+            });
+            assert!((physics.reach() - climb).abs() < 1e-5, "{race}: {climb}");
+            // The zone's mesh, shared by every body, never asks a step past
+            // what the body walks up.
+            assert!(
+                eq_client_core::movement::MAX_GROUNDED_STEP <= climb,
+                "{race}: {climb}"
+            );
+            // Unlifted, a body keeps the floor sweep's climb, which for a
+            // small one is under the mesh's step: the mesh may offer a ducking
+            // or deep-water gnome an edge its walk refuses (docs/gameplay.md).
+            let unlifted = TITANIUM.walk_climb(EdgeBody {
+                race,
+                stand_height: body.feet_offset,
+                size,
+                lifted: false,
+            });
+            assert_eq!(
+                eq_client_core::movement::MAX_GROUNDED_STEP <= unlifted,
+                size > 3.0,
+                "{race}: {unlifted}"
+            );
+        }
+    }
+
+    #[test]
     fn a_titanium_walk_stops_at_an_edge_past_the_measured_climb_or_a_wall() {
         let past = solid_box(Vec3::new(-20.0, 0.0, 4.0), Vec3::new(20.0, 5.3, 6.0));
         let wall = solid_box(Vec3::new(-20.0, 0.0, 4.0), Vec3::new(20.0, 7.0, 6.0));
@@ -4727,32 +4792,49 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_wading_walk_keeps_the_floor_sweeps_climb_at_a_block_4_high() {
+    fn a_walk_with_its_origin_in_liquid_keeps_the_floor_sweeps_climb_at_a_block_4_high() {
         use eq_client_core::movement::CollisionWorld;
-        // With the feet in liquid the program sweeps the walk at the origin
-        // (L = 0 in 0x489a32), so wading keeps the floor sweep's 3.375 and
-        // a block 4 high stops it; on dry ground beside the pool it climbs.
+        // The program sweeps the walk at the origin only when the origin's
+        // region is liquid (+0xad of 5 or more, L = 0 in 0x489a32): wading
+        // with the origin over the water still climbs a block 4 high, and
+        // deeper, with the origin under it, the floor sweep's 3.375 holds.
         let dry = CollisionWorld::new(flat_surface(0.0)).unwrap();
-        let wet = CollisionWorld::new(flat_surface(0.0))
-            .unwrap()
-            .with_liquids(Pool {
-                top: 1.5,
-                liquid: Liquid::Water,
-            });
+        let pool = |top| {
+            CollisionWorld::new(flat_surface(0.0))
+                .unwrap()
+                .with_liquids(Pool {
+                    top,
+                    liquid: Liquid::Water,
+                })
+        };
+        let (wading, deep) = (pool(1.5), pool(5.0));
         let feet = Vec3::ZERO;
-        assert!(raised_walk(&dry, feet, None));
-        assert!(raised_walk(&wet, feet + Vec3::Y * 2.0, None));
-        assert!(!raised_walk(&wet, feet, None));
-        assert!(!raised_walk(
-            &dry,
-            feet,
-            Some(eq_client_core::PostureState::Ducking)
-        ));
+        let origin = HUMAN.feet_offset;
+        assert!(raised_walk(&dry, feet, origin, None));
+        assert!(raised_walk(&wading, feet, origin, None));
+        assert!(!raised_walk(&deep, feet, origin, None));
+        assert!(raised_walk(&deep, feet + Vec3::Y * 2.0, origin, None));
+        for posture in [
+            eq_client_core::PostureState::Ducking,
+            eq_client_core::PostureState::Unknown(0x78),
+        ] {
+            assert!(!raised_walk(&dry, feet, origin, Some(posture)));
+        }
         let block = solid_box(Vec3::new(-20.0, 0.0, 4.0), Vec3::new(20.0, 4.0, 6.0));
-        let wading = run_into(block.clone(), &HUMAN, raised_walk(&wet, feet, None), 32.0);
-        assert!(wading.z < 4.0 && wading.y.abs() < 0.001, "{wading}");
-        let dry_run = run_into(block, &HUMAN, raised_walk(&dry, feet, None), 32.0);
-        assert!(dry_run.z > 4.5, "{dry_run}");
+        let swept = run_into(
+            block.clone(),
+            &HUMAN,
+            raised_walk(&deep, feet, origin, None),
+            32.0,
+        );
+        assert!(swept.z < 4.0 && swept.y.abs() < 0.001, "{swept}");
+        let waded = run_into(
+            block,
+            &HUMAN,
+            raised_walk(&wading, feet, origin, None),
+            32.0,
+        );
+        assert!(waded.z > 4.5, "{waded}");
     }
 
     /// Steps `body` from `start` over `triangles` (render frame) in 50 ms
@@ -4768,7 +4850,7 @@ pub(super) mod tests {
         input: impl Fn(usize, Vec3) -> (Vec3, bool),
     ) -> (Vec3, Vec<eq_client_core::movement::Landing>) {
         use eq_client_core::movement::{AirborneController, CollisionWorld};
-        let physics = walking(physics(client, None), client, body, raised);
+        let physics = walking(physics(client, None), client, body, 1, raised);
         let world = CollisionWorld::new(triangles).unwrap();
         let mut airborne = AirborneController::default();
         let mut feet = start;
@@ -4896,6 +4978,7 @@ pub(super) mod tests {
                 physics(InstalledClient::Titanium, None),
                 InstalledClient::Titanium,
                 &HUMAN,
+                1,
                 true,
             );
             let world = eq_client_core::movement::CollisionWorld::new(floor.clone()).unwrap();
@@ -5022,6 +5105,7 @@ pub(super) mod tests {
             physics(InstalledClient::Titanium, None),
             InstalledClient::Titanium,
             &HUMAN,
+            1,
             true,
         );
         let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
@@ -5982,6 +6066,16 @@ pub(super) mod tests {
         created
     }
 
+    /// The fixture body's Titanium walk climb: a human standing 3 high.
+    fn fixture_climb() -> f32 {
+        eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+            race: 1,
+            stand_height: 3.0,
+            size: 6.0,
+            lifted: true,
+        })
+    }
+
     pub(crate) fn fixture() -> (App, mpsc::Receiver<ClientCommand>) {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
@@ -6051,10 +6145,7 @@ pub(super) mod tests {
                 // The session has heard this body's Titanium walk climb
                 // a step, so the samples are the only commands these tests
                 // see ([`the_session_hears_the_bodys_climb_at_each_admission_and_change`]).
-                climb_sent: Some((
-                    11,
-                    eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
-                )),
+                climb_sent: Some((11, fixture_climb())),
                 ..Controls::default()
             });
         app.world_mut().spawn((
@@ -6262,7 +6353,12 @@ pub(super) mod tests {
         );
         app.world_mut().resource_mut::<Controls>().climb_sent = Some((
             12,
-            eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
+            eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+                race: 1,
+                stand_height: 3.0,
+                size: 6.0,
+                lifted: true,
+            }),
         ));
         app.update();
         let ClientCommand::Move(fall) = receiver.try_recv().unwrap() else {
@@ -6869,7 +6965,12 @@ pub(super) mod tests {
         }
         app.world_mut().resource_mut::<Controls>().climb_sent = Some((
             12,
-            eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
+            eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+                race: 1,
+                stand_height: 3.0,
+                size: 6.0,
+                lifted: true,
+            }),
         ));
         app.update();
         assert!(app.world().resource::<Controls>().following.is_none());
@@ -7248,7 +7349,12 @@ pub(super) mod tests {
                 .unwrap();
             controls.climb_sent = Some((
                 session,
-                eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
+                eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+                    race: 1,
+                    stand_height: 3.0,
+                    size: 6.0,
+                    lifted: true,
+                }),
             ));
         };
         let next_move = |app: &mut App, session| {
@@ -7370,7 +7476,12 @@ pub(super) mod tests {
             controls.airborne = Some(AirborneController::default());
             controls.climb_sent = Some((
                 12,
-                eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
+                eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+                    race: 1,
+                    stand_height: 3.0,
+                    size: 6.0,
+                    lifted: true,
+                }),
             ));
         }
         movement_choice(&mut app, Fix::JesusMode, true);
@@ -10136,7 +10247,14 @@ pub(super) mod tests {
         app.update();
         let climb = |feet: f32, size: f32| ClientCommand::ClimbReach {
             session_id: 11,
-            per_step: eq_client_assets::falls::TITANIUM.walk_climb(feet, size, true),
+            per_step: eq_client_assets::falls::TITANIUM.walk_climb(
+                eq_client_assets::falls::EdgeBody {
+                    race: 1,
+                    stand_height: feet,
+                    size,
+                    lifted: true,
+                },
+            ),
         };
         assert_eq!(receiver.try_recv().ok(), Some(climb(3.0, 6.0)));
         // Once is enough while the body stays the same.

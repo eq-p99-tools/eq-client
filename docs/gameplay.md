@@ -26,13 +26,21 @@ steps. The display interpolates accepted movement instead of waiting for each
 remote position update. Speed, elapsed time and admission checks constrain the
 outgoing requests; corrections replace the predicted position.
 
-A standing Titanium walk climbs onto an edge it runs into up to 1.25 above
-the body's origin, 5 units for a human of size 6, as the official client was
-seen to climb a pier rail and its posts. A ducking or wading walk climbs only
-what the floor sweep reaches, and so do feet that land, fall or are placed
-under a floor. The tallest edge the official client climbs is
-unmeasured, so a taller one stops here even where it might not there. The
-body's width is unchanged (recording checklist 6.482).
+A standing Titanium walk climbs onto an edge it runs into. The official
+client sweeps the body as a sphere lifted over its origin, so an edge under the
+sphere's bottom passes beneath it (program reads R49-25 and R49-25b). The lift
+is at least 1.9, and half the stand height for barbarians, trolls and ogres.
+The sphere's radius isn't yet taken from the model files, so no body climbs
+more than 1.25 above its origin here, as a human of size 6 was seen to climb
+a pier rail and its 5-unit posts. A body taller than that human and not of
+those races climbs a little less. A ducking walk, or one with the origin in
+water or lava, climbs only what the floor sweep reaches, and so do feet that
+land, fall or are placed under a floor. A walk wading with its origin over
+the water still climbs. The body's width is unchanged (recording checklist
+6.482). The zone's navigation mesh is shared by every body and steps up to 2
+units, under every standing body's climb; a small body ducking, or with its
+origin in water, climbs less than that, so a route may lead it to an edge
+its walk refuses until it stands or leaves the water.
 
 A standing Titanium jump or fall passes over an edge whose top the floor
 sweep reaches, 3.375 above the feet for a human of size 6, and lands on
