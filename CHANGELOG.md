@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Scripts can read the group window, the effects window and the last tell (checklist 6.593, O2).
+  - **Group:** `group.present`, `group.count`, and `group.member1.name` to `group.member5.hp_percent`.
+  - **Effects:** `buffs.count`, and `buff1.spell` to `buff50.spell` in the window's order.
+  - **Tells:** `chat.last_tell` and `chat.last_tell_from`. Like every field, each reads only what a window already shows.
+  - **Kept private:** a run that reads the tells writes neither to a log, a `report()` line, its events (which the control status and Runbook export carry) or a gap record, and a test checks it.
+
 - The player chooses how long a script run may go, on every server (checklist 6.594; Adam, 11-23: "If people want to script indefinitely, let them").
   - **Choices:** the default keeps today's bounds (15 minutes, 5,000 statements, 500 actions, loops of 100). A number of minutes from 1 to 1440 caps the time and lifts those counts, and no limit lifts them all.
   - **Where it's set:** only the workbench's length selector, which starts at the default on each launch, and the new `--script-run-length=default|MINUTES|none`. No statement or file line can set or raise it.
