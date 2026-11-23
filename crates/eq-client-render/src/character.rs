@@ -535,10 +535,11 @@ pub(super) fn animate(
         // Another spawn moves or stands by its latest report, as the program
         // picks from the spawn's own velocity (read R38); one the world has
         // no record of goes by its drawn motion.
-        let moving = match remote.and_then(|remote| world.spawn(remote.id)) {
-            Some(spawn) if !own => reports_moving(&spawn.state),
-            _ => drawn_moving,
+        let reported = match remote.and_then(|remote| world.spawn(remote.id)) {
+            Some(spawn) if !own => Some(reported(&spawn.state)),
+            _ => None,
         };
+        let moving = reported.map_or(drawn_moving, |reported| reported != Reported::Still);
         let dt = time.delta_secs().min(0.1);
         // The latest of the spawn's swing and its completed cast, which
         // plays its spell's casting gesture.
@@ -609,6 +610,12 @@ pub(super) fn animate(
             &character.asset,
             (world, id, own, controls.as_deref()),
         );
+        let selected = match reported {
+            Some(Reported::Airborne(clip)) => in_the_air(selected, clip, |clip| {
+                character.asset.clip_seconds(clip).is_some()
+            }),
+            _ => selected,
+        };
         let changed = selected != character.clip;
         if changed {
             character.clip = selected;
@@ -1090,24 +1097,64 @@ fn moved(previous: Footing, now: Footing) -> f32 {
     }
 }
 
-/// The least horizontal speed, in units a second, at which another spawn's
-/// report says it moves: the program's moving test is a squared speed of
-/// 0.01 in units a 50 ms tick (0x44fa8f, 0x435b36, read R38), so 0.1 a
-/// tick.
-const REPORTED_MOVING: f32 = 0.1 * 20.0;
+/// The program's speed unit is units a 50 ms tick, 20 of them a second.
+const TICKS_PER_SECOND: f32 = 20.0;
 
-/// Whether another spawn's latest report says it moves itself: a
-/// horizontal velocity of at least [`REPORTED_MOVING`] (read R38), or
-/// forward input. The picker reads only the velocity (R38); the movement
-/// step turns a spawn's input speed into that velocity (0x4bfe0f, read R39
-/// C), and servers that send no deltas move their spawns on the input alone,
-/// so the input counts too (inferred, recording checklist 6.481). A rider's
-/// report leaves out the boat it stands on, so one standing on a moving
-/// ferry stands. Velocity straight up or down alone is the program's fall
-/// pose, not drawn here, so it stands (inferred, 6.481).
-fn reports_moving(state: &eq_client_core::SpawnState) -> bool {
-    let [x, y, _] = state.velocity;
-    state.forward != 0.0 || x.hypot(y) >= REPORTED_MOVING
+/// What another spawn's latest report says it does, as the program's
+/// picker reads the spawn's own velocity (0x44fa8f, reads R38 and R49-27
+/// (b)), in units a tick: a squared speed under 0.01 is idle; at or over
+/// it, with x and y both under 0.001, it moves only up or down; else it
+/// moves. A rider's report leaves out the boat it stands on, so one
+/// standing on a moving ferry stands.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Reported {
+    Still,
+    Moving,
+    /// Only up or down, with the clip the picker plays for it.
+    Airborne(&'static str),
+}
+
+/// [`Reported`] for another spawn's latest report. Forward input counts
+/// as moving too: the movement step turns a spawn's input speed into its
+/// velocity (0x4bfe0f, read R39 C), and servers that send no deltas move
+/// their spawns on the input alone (inferred, recording checklist 6.481).
+/// Straight up or down plays the program's animation 0x15 below a vertical
+/// speed of -2.25 a tick and 0x14 otherwise, 0x13 for race 0x31; those
+/// numbers are taken as the models' L05, L04 and L03, counting 0x11 as L01
+/// (inferred, 6.611).
+fn reported(state: &eq_client_core::SpawnState) -> Reported {
+    let [x, y, z] = state.velocity.map(|speed| speed / TICKS_PER_SECOND);
+    if state.forward != 0.0 {
+        Reported::Moving
+    } else if x * x + y * y + z * z < 0.01 {
+        Reported::Still
+    } else if x.abs() < 0.001 && y.abs() < 0.001 {
+        Reported::Airborne(if z < -2.25 {
+            "L05"
+        } else if state.race == 0x31 {
+            "L03"
+        } else {
+            "L04"
+        })
+    } else {
+        Reported::Moving
+    }
+}
+
+/// The clip a spawn moving only up or down plays: `clip` in place of the
+/// walk or run it would otherwise play, or the stance where the model
+/// lacks it. A posture, a gesture or death keeps its clip. The rise plays
+/// once and holds its last frame; the fall repeats (inferred, 6.611).
+fn in_the_air(
+    selected: (&'static str, bool),
+    clip: &'static str,
+    has: impl Fn(&str) -> bool,
+) -> (&'static str, bool) {
+    match selected.0 {
+        "L01" | "L02" if has(clip) => (clip, clip != "L05"),
+        "L01" | "L02" => (STANDING_CLIP, false),
+        _ => selected,
+    }
 }
 
 /// The clip a character plays at its pace ([`paced_clip`]); a change into
@@ -1813,6 +1860,7 @@ mod tests {
 
     #[test]
     fn another_spawn_moves_by_its_report_not_by_where_it_is_drawn() {
+        use super::Reported::{Airborne, Moving, Still};
         let report = |velocity: [f32; 3], forward: f32| eq_client_core::SpawnState {
             body_type: None,
             spawn_id: 9,
@@ -1837,15 +1885,42 @@ mod tests {
             name_parts: eq_client_core::names::NameParts::default(),
         };
         // A rider standing on a moving ferry reports no motion of its own.
-        assert!(!reports_moving(&report([0.0; 3], 0.0)));
+        assert_eq!(reported(&report([0.0; 3], 0.0)), Still);
         // Servers that send no deltas move their spawns on the input alone.
-        assert!(reports_moving(&report([0.0; 3], 0.7)));
-        assert!(reports_moving(&report([0.0; 3], -0.7)));
-        // The program's 0.1 a tick, 2 units a second, across.
-        assert!(reports_moving(&report([1.5, 1.5, 0.0], 0.0)));
-        assert!(!reports_moving(&report([1.4, 1.4, 0.0], 0.0)));
-        // Straight up or down alone is the fall pose, not a walk.
-        assert!(!reports_moving(&report([0.0, 0.0, -30.0], 0.0)));
+        assert_eq!(reported(&report([0.0; 3], 0.7)), Moving);
+        assert_eq!(reported(&report([0.0; 3], -0.7)), Moving);
+        // The program's 0.1 a tick, 2 units a second, in any direction.
+        assert_eq!(reported(&report([1.5, 1.5, 0.0], 0.0)), Moving);
+        assert_eq!(reported(&report([1.4, 1.4, 0.0], 0.0)), Still);
+        assert_eq!(reported(&report([1.4, 0.0, 1.5], 0.0)), Moving);
+        // Straight up or down (under 0.001 a tick across): the rise, and
+        // the fall past 2.25 a tick, 45 units a second, down (R49-27 (b)).
+        assert_eq!(reported(&report([0.0, 0.0, 1.9], 0.0)), Still);
+        assert_eq!(reported(&report([0.0, 0.01, 30.0], 0.0)), Airborne("L04"));
+        assert_eq!(reported(&report([0.0, 0.0, -44.0], 0.0)), Airborne("L04"));
+        assert_eq!(reported(&report([0.0, 0.0, -46.0], 0.0)), Airborne("L05"));
+        assert_eq!(reported(&report([0.03, 0.0, -46.0], 0.0)), Moving);
+        let race_49 = eq_client_core::SpawnState {
+            race: 0x31,
+            ..report([0.0, 0.0, 30.0], 0.0)
+        };
+        assert_eq!(reported(&race_49), Airborne("L03"));
+        assert_eq!(
+            reported(&eq_client_core::SpawnState {
+                velocity: [0.0, 0.0, -46.0],
+                ..race_49
+            }),
+            Airborne("L05")
+        );
+        // In place of the walk or run only, and the stance where the model
+        // lacks the clip.
+        assert_eq!(in_the_air(("L02", false), "L04", |_| true), ("L04", true));
+        assert_eq!(in_the_air(("L01", false), "L05", |_| true), ("L05", false));
+        assert_eq!(
+            in_the_air(("L01", false), "L04", |_| false),
+            (STANDING_CLIP, false)
+        );
+        assert_eq!(in_the_air(("L08", true), "L04", |_| true), ("L08", true));
     }
 
     #[test]

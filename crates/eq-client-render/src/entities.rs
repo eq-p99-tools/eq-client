@@ -85,6 +85,14 @@ pub(super) struct RemoteEntity {
     /// by frame, as its program steps a spawn
     /// ([`eq_client_core::movement::carry`]).
     carried: Option<eq_client_core::movement::Carried>,
+    /// The boat it rides, linked at its latest report, with the boat's pose
+    /// then and as last drawn: `carried` is then in that boat's frame
+    /// ([`ride`]).
+    ride: Option<(
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+        eq_client_core::WorldPosition,
+    )>,
 }
 
 impl RemoteEntity {
@@ -99,6 +107,7 @@ impl RemoteEntity {
             feet,
             size,
             carried: None,
+            ride: None,
         }
     }
 }
@@ -498,6 +507,10 @@ fn draw(
 /// under it as it is first drawn and when a report moves it
 /// ([`eq_client_core::corpse_tilt`]), for [`character::lie`] to lay it by.
 #[allow(clippy::needless_pass_by_value)]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one spawn's step from its report, aboard a boat or not, its floor and its correction"
+)]
 pub(super) fn interpolate(
     (state, settings): (Res<OnlineState>, Res<crate::ViewerSettings>),
     time: Res<Time>,
@@ -558,21 +571,59 @@ pub(super) fn interpolate(
             entity.seen = Some(spawn.reported);
             entity.soles = None;
             entity.carried = None;
+            entity.ride = world.zip(entity.feet).and_then(|(world, feet)| {
+                ride(
+                    world,
+                    state.world().carriers(),
+                    &spawn.state,
+                    feet,
+                    spawn.reported,
+                )
+                .map(|(sample, pose)| (sample, pose, pose))
+            });
         }
+        // The boat it rides, as the boat is drawn now; a boat gone or
+        // replaced drops the link, and the spawn goes on in the world from
+        // where the boat last had it.
+        let boat = entity.ride.and_then(|(sample, _, last)| {
+            let report = state
+                .world()
+                .carriers()
+                .latest(sample.spawn_id)
+                .filter(|report| report.sample().incarnation == sample.incarnation);
+            if report.is_none()
+                && let Some(carried) = entity.carried.as_mut()
+            {
+                *carried = in_world(last, *carried);
+            }
+            report.map(|report| report.pose(now))
+        });
+        entity.ride = entity
+            .ride
+            .zip(boat)
+            .map(|((sample, then, _), pose)| (sample, then, pose));
         // Each generation's client steps a spawn on from each report, frame
-        // by frame, as its program does.
+        // by frame, as its program does: a rider in its boat's frame.
         // One drawn late is caught up as if it had been drawn all along.
+        let ride = entity.ride;
         let carried = entity.carried.get_or_insert_with(|| {
+            let reported = ride.map_or_else(
+                || spawn.state.clone(),
+                |(_, pose, _)| aboard(pose, &spawn.state),
+            );
             eq_client_core::entities::carried_since(
                 dialect,
-                &spawn.state,
+                &reported,
                 now.saturating_duration_since(spawn.reported),
             )
         });
         if !fresh {
             eq_client_core::movement::carry(dialect, carried, time.delta());
         }
-        let mut target = Vec3::from_array(render_position(carried.position));
+        let at = boat.map_or(carried.position, |pose| {
+            eq_client_core::movement::carrier_world(pose, carried.position)
+        });
+        let mut target = Vec3::from_array(render_position(at));
         let spawn = &spawn.state;
         let forward = spawn.forward;
         // A drawn model on the ground stands on the floor under it, whichever
@@ -616,10 +667,96 @@ pub(super) fn interpolate(
         } else {
             transform.translation = entity.correction.advance(target, time.delta_secs());
         }
+        // A rider turns with its boat.
+        let heading = if boat.is_some() {
+            at.heading
+        } else {
+            spawn.position.heading
+        };
         transform.rotation = transform.rotation.slerp(
-            Quat::from_rotation_y(eq_client_core::render_heading(spawn.position.heading)),
+            Quat::from_rotation_y(eq_client_core::render_heading(heading)),
             weight,
         );
+    }
+}
+
+/// The boat a spawn's latest report puts it on, and the boat's pose at that
+/// report: the program's floor sweep links a spawn to the first carrier
+/// below it, however far down, when it places and floor-snaps the spawn
+/// (0x48a0fc, 0x48c285, 0x479e37, read R49-27 (d)). Taken at every report
+/// here (inferred, 6.611), and only in a zone with a boat in it. The
+/// player's bound of 600 from the boat's origin holds here too (6.469).
+fn ride(
+    world: &eq_client_core::movement::CollisionWorld,
+    carriers: &eq_client_core::movement::Carriers,
+    spawn: &eq_client_core::SpawnState,
+    feet: f32,
+    reported: std::time::Instant,
+) -> Option<(
+    eq_client_core::movement::CarrierSample,
+    eq_client_core::WorldPosition,
+)> {
+    use eq_client_core::movement::{CARRIER_REACH, carrier_local};
+    carriers.reports().next()?;
+    let soles = Vec3::from_array(render_position(spawn.position)) - Vec3::Y * feet;
+    let id = world.ground_spawn(soles, 0.01, crate::motion::sweep_depth(soles))?;
+    let report = carriers.latest(id)?;
+    let pose = report.pose(reported);
+    let local = carrier_local(pose, spawn.position);
+    (local.x.hypot(local.y).hypot(local.z) <= CARRIER_REACH).then_some((report.sample(), pose))
+}
+
+/// `spawn`'s report in the frame of the boat at `pose`: its place, and its
+/// velocity turned with the boat, which a rider's own velocity is (it
+/// leaves out the boat's motion, 0x4bf9b2 / 0x4bfc71, read R49-27 (a), (e)).
+fn aboard(
+    pose: eq_client_core::WorldPosition,
+    spawn: &eq_client_core::SpawnState,
+) -> eq_client_core::SpawnState {
+    use eq_client_core::{WorldPosition, movement::carrier_local};
+    let [x, y, z] = spawn.velocity;
+    let turned = carrier_local(
+        WorldPosition {
+            heading: pose.heading,
+            ..WorldPosition::default()
+        },
+        WorldPosition {
+            x,
+            y,
+            z,
+            heading: 0.0,
+        },
+    );
+    eq_client_core::SpawnState {
+        position: carrier_local(pose, spawn.position),
+        velocity: [turned.x, turned.y, turned.z],
+        ..spawn.clone()
+    }
+}
+
+/// A rider carried in the frame of the boat at `pose`, back in the world.
+fn in_world(
+    pose: eq_client_core::WorldPosition,
+    carried: eq_client_core::movement::Carried,
+) -> eq_client_core::movement::Carried {
+    use eq_client_core::{WorldPosition, movement::carrier_world};
+    let [x, y, z] = carried.velocity;
+    let turned = carrier_world(
+        WorldPosition {
+            heading: pose.heading,
+            ..WorldPosition::default()
+        },
+        WorldPosition {
+            x,
+            y,
+            z,
+            heading: 0.0,
+        },
+    );
+    eq_client_core::movement::Carried {
+        position: carrier_world(pose, carried.position),
+        velocity: [turned.x, turned.y, turned.z],
+        ..carried
     }
 }
 
@@ -947,5 +1084,173 @@ mod tests {
         let lies = app.world().get::<Transform>(corpse).unwrap().translation;
         let lies = eq_client_core::world_position(lies.to_array(), 0.0);
         assert!((lies.x - fell.x).abs() < 1e-4, "{fell:?} then {lies:?}");
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "a boat, a rider and a swimmer, two reports and a despawn"
+    )]
+    fn a_rider_is_carried_with_its_boat_between_reports() {
+        use eq_client_core::movement::{
+            Carriers, CollisionMesh, CollisionWorld, carrier_local, carrier_world,
+        };
+        use eq_client_core::{GameDialect, WorldEvent, WorldPosition};
+        use std::time::{Duration, Instant};
+        // A boat sails 40 and turns; one spawn stands on its deck and one
+        // floats off its side, both last reported 2 s ago, with no motion
+        // of their own. The program carries a linked rider with the boat
+        // between reports (read R49-27 (d), (e), 6.611).
+        let reported = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut boat = testing::pet(8, 0);
+        boat.race = 72;
+        boat.pet_owner = None;
+        let mut rider = testing::pet(5, 0);
+        rider.pet_owner = None;
+        let mut swimmer = testing::pet(6, 0);
+        swimmer.pet_owner = None;
+        testing::spawns(&mut online, vec![boat.clone(), rider, swimmer]);
+        let at_report = WorldPosition::default();
+        let mut carriers = Carriers::default();
+        let mut updates = carriers.observe(
+            &WorldEvent::Spawns(vec![boat]),
+            GameDialect::Titanium,
+            reported,
+        );
+        let sailing = WorldEvent::Position {
+            spawn_id: 8,
+            position: at_report,
+            velocity: [20.0, 0.0, 0.0],
+            forward: 0.0,
+        };
+        updates.extend(carriers.observe(&sailing, GameDialect::Titanium, reported));
+        let standing = |spawn_id, x: f32| WorldEvent::Position {
+            spawn_id,
+            position: WorldPosition {
+                x,
+                y: 0.0,
+                z: 8.0,
+                heading: 0.0,
+            },
+            velocity: [0.0; 3],
+            forward: 0.0,
+        };
+        testing::news_at(
+            &mut online,
+            [
+                sailing,
+                WorldEvent::Carriers(updates),
+                standing(5, 3.0),
+                standing(6, 60.0),
+            ],
+            reported,
+        );
+        // The deck, 5 up, from x -20 to 20 in the world at the report,
+        // over the sea floor.
+        let deck = |x: f32| {
+            let low = eq_client_core::render_position(WorldPosition {
+                x: x - 20.0,
+                y: -20.0,
+                z: 5.0,
+                heading: 0.0,
+            });
+            let high = eq_client_core::render_position(WorldPosition {
+                x: x + 20.0,
+                y: 20.0,
+                z: 5.0,
+                heading: 0.0,
+            });
+            [
+                [low, [high[0], 5.0, low[2]], high],
+                [low, high, [low[0], 5.0, high[2]]],
+            ]
+        };
+        let mut collision = CollisionWorld::new([[
+            [-500.0, -30.0, -500.0],
+            [500.0, -30.0, -500.0],
+            [0.0, -30.0, 500.0],
+        ]])
+        .unwrap();
+        collision.set_spawn_obstacles(vec![(
+            8,
+            std::sync::Arc::new(CollisionMesh::new(deck(0.0)).unwrap()),
+        )]);
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .insert_resource(super::super::Collision(Some(collision)))
+            .init_resource::<Time>()
+            .add_systems(Update, interpolate);
+        let entity = |app: &mut App, id| {
+            app.world_mut()
+                .spawn((RemoteEntity::new(id, Some(3.0), 6.0), Transform::default()))
+                .id()
+        };
+        let (on_deck, off_side) = (entity(&mut app, 5), entity(&mut app, 6));
+        let drawn = |app: &App, entity| {
+            let at = app.world().get::<Transform>(entity).unwrap().translation;
+            eq_client_core::world_position(at.to_array(), 0.0)
+        };
+        app.update();
+        // The boat's next report puts it 40 on; the rider has no new one.
+        let sailed = WorldEvent::Position {
+            spawn_id: 8,
+            position: WorldPosition {
+                x: 40.0,
+                heading: 16.0,
+                ..at_report
+            },
+            velocity: [20.0, 0.0, 0.0],
+            forward: 0.0,
+        };
+        let updates = carriers.observe(&sailed, GameDialect::Titanium, Instant::now());
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [sailed, WorldEvent::Carriers(updates)],
+        );
+        app.update();
+        // Where the boat has carried the rider's point on its deck.
+        let now = Instant::now();
+        let pose = carriers.latest(8).unwrap().pose(now);
+        assert!(pose.x > 30.0, "{pose:?}");
+        let local = carrier_local(
+            at_report,
+            WorldPosition {
+                x: 3.0,
+                y: 0.0,
+                z: 8.0,
+                heading: 0.0,
+            },
+        );
+        let carried = carrier_world(pose, local);
+        let rider = drawn(&app, on_deck);
+        assert!(
+            (rider.x - carried.x).abs() < 0.5 && (rider.y - carried.y).abs() < 0.5,
+            "{rider:?} against {carried:?}"
+        );
+        // Off the side, nothing carries it.
+        let swimmer = drawn(&app, off_side);
+        assert!((swimmer.x - 60.0).abs() < 0.01, "{swimmer:?}");
+        // The boat is gone: the rider goes on in the world from where it
+        // last had it, and is not carried further.
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Carriers(carriers.observe(
+                &WorldEvent::Despawn(8),
+                GameDialect::Titanium,
+                Instant::now(),
+            ))],
+        );
+        app.update();
+        let left = drawn(&app, on_deck);
+        std::thread::sleep(Duration::from_millis(50));
+        app.update();
+        let still = drawn(&app, on_deck);
+        assert!(
+            (left.x - still.x).abs() < 0.01 && left.x > 30.0,
+            "{left:?} then {still:?}"
+        );
     }
 }

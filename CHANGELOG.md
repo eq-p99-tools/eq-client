@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Ride boats as the Titanium client does (read R49-27, checklist 6.611).
+  - **A jump on a moving boat comes down on its deck.** The link to the boat was the floor within 0.05 under the feet, so a jump on a moving ferry let go of it and the boat sailed out from under you. Now, as the program's floor sweep does, the first floor under the feet links you however far down it is: a body in the air over the deck stays with the boat, and one over the water or a dock doesn't. The link still ends 600 from the boat's origin, the session guard's bound (6.469), which is ours.
+  - **Other riders move with the boat between their reports.** Another player or NPC standing on a moving ferry was left standing in the water until its next report, then jumped on. Now a spawn whose report puts it over a boat's deck is carried with the boat, by its own motion across the deck. This is only in zones with a boat.
+  - **Jumps and falls of other spawns.** A spawn moving only up or down plays its jump (L04, L03 for race 49) or, faster than 45 a second down, its fall (L05), as the program's picker does, where it used to stand. Moving is now a speed of 2 a second in any direction.
+  - Our own sender still reports no vertical speed on a jump or fall; that is a separate row.
+
 - The Interface scale slider on the QoL page no longer swings between its ends while dragged.
   - **Cause:** each frame of a drag set the scale, which moved the Options window and the slider under a pointer that held still. The pointer then read near one end and then the other, so the scale flipped back and forth and could not be set back to 100%.
   - **Fix:** a setting that rescales the layout (`Level::rescales_layout`, the interface scale alone) is held on its slider while pressed. The thumb and value label show the held size, and the setting changes once as the press ends, by the mouse's release or a script's one-frame press. Closing the window mid-drag discards the held size. The other sliders still set as they move.

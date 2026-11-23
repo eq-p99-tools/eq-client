@@ -567,6 +567,15 @@ Camp uses timed preparation and acknowledgement where offered. The local
 `--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).
 
+A boat carries whoever stands or jumps over its deck. As in the Titanium
+program, the floor under the feet links the player to the boat however far
+down it is, so a jump on a moving ferry comes down on the deck where it
+left. Past 600 from the boat's origin the link ends, which is this
+client's bound, not the program's. Other players and NPCs on a moving boat
+are drawn moving with its deck between their reports, by their own motion
+across it, and one moving only up or down plays its jump or fall (read
+R49-27, recording checklist 6.611).
+
 On EQEmu, take a race-141 boat you stand on by right-clicking it, as the
 Titanium program does; right-click it again to let it go. A right-click on a
 boat you are not standing on does nothing, and considers nothing. `/boat
