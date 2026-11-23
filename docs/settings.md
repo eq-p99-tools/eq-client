@@ -77,6 +77,19 @@ Zero leaves pacing to vsync. `--camera-distance` sets the initial distance;
 the character's compatible installed skin/settings can be used. Missing or
 unsupported controls may use this client's own presentation.
 
+`/loadskin <name>` switches to another skin under `uifiles` in game, as the
+official client's command does, and the windows redraw at once. The trailing
+`0` or `1` the official client takes is accepted, and window placements stay
+either way. The choice is kept per character in this client's settings folder
+(`skin.v2-…txt`), never in the installation's `UI_<character>_<world>.ini`.
+It applies each time that character enters the world, unless `--ui-skin`
+names another skin for that run. A skin loaded in game wins over `--ui-skin`
+until the player camps or plays another character or world.
+Skins differ in what they show. The Velious skin's inventory holds the bags
+alone: its equipment sits in Hot Button window 1, and it shows no statistics or
+hit point and mana numbers anywhere. The default skin's inventory shows all of
+them.
+
 Sound enablement starts from the installation's `Sound` option. The Sound Volume
 slider uses this client's scale. Titanium sound assets are loaded on demand;
 Mac-era sound loading is not implemented. If no audio device is available the

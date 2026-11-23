@@ -8,6 +8,8 @@
   holds fails at that step's line with those words. The repin's other news
   (titles, the bind zone, the chat server's channels) is passed over until
   each one's own client work lands.
+- `/loadskin <name>` switches the UI skin in game (checklist 6.605), as the official client's command does. The windows redraw from the new skin at once, and the choice stays the character's for later runs. A name matches the installation's `uifiles` folder whatever its letter case. A skin that isn't installed changes nothing and says so, and an unreadable line gives the usage. The official client's trailing `0` or `1` is accepted, and this client keeps window placements either way. The choice is saved in this client's settings folder, not in the installation's files. A skin loaded in game wins over `--ui-skin` until the player camps or plays another character or world, when `--ui-skin` applies again. What the official client says in reply isn't read, so the replies are this client's own words. Why: the Velious skin's inventory shows the bags alone, with no paperdoll, statistics or hit point and mana numbers, and its equipment sits in Hot Button window 1. `/loadskin default` brings the full inventory back without restarting.
+
 - Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
   Titanium program's Destroy button does (read R49-11). With coins on the
   cursor and no item, **Destroy cursor item** asks first, with the
