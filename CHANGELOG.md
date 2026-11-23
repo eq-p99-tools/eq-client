@@ -3,12 +3,13 @@
 ## Unreleased
 
 - A Bard's item use now carries the song test from the installed spell data (gap 3.5, checklist 6.542, read R49-21b): the item's spell counts as the class's when the player's class level for it is neither 0 nor 255. The session uses it to choose, for an item's song it keeps, between sending the stop and ending it here. Without installed spell data, or without that spell's class levels, the session keeps its memorized test as before. Labelled: the program also needs the spell's byte +0x1c4 to be clear. That byte isn't mapped to a spells file field yet (read R49-48c), so a class spell with it set counts as a song here and not in the program.
-- Show the session's chat pace (checklist 6.523, eq-network c951420). Its
+- Show the session's chat pace (checklist 6.523, eq-network #354). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
-  the player's own line, and a script whose chat or social step the pace
-  holds fails at that step's line with those words. The repin's other news
-  (titles, the bind zone, the chat server's channels) is passed over until
-  each one's own client work lands.
+  the player's own line. A script fails at a step's line with those words
+  when the pace holds chat that step sent: a `chat`, `social` or `gm` step,
+  or a `slash` step whose typed line sent chat (`say`, `ooc` and the rest).
+  The pace is this client's own: the Titanium program paces no chat (read
+  R49-17), so it is a departure, not parity.
 - Follow program read R49-6 on Titanium (checklist 6.492). Each duel outcome the session tells is the program's line in its colour, and `/duel` sends the target as it stands, with the session wording the result. The **Duel Answer Card** is a quality-of-life setting, on by default: Yes accepts as `/duel` does, No sends nothing, and off there is no card, as in the program. Scripts can answer it. A quest's coins are said one line per coin with the giver's name, then the reward sound plays (also for EQEmu's fixed sound record). A yell for help names where the yeller stands from your heading. A level lost is said, and a level gained plays its sound. Another spawn's stat increase has the program's line. `/lfg on` and `off` say the program's lines, and any other form is its usage line. `/motd` says the kept message in the program's line, and `/charinfo` names the bind zone in it. The Mac-era and RoF2 programs are unread and keep this client's words. Repins eq-network to bf7a4db.
 - The Interface scale slider on the QoL page no longer swings between its ends while dragged.
   - **Cause:** each frame of a drag set the scale, which moved the Options window and the slider under a pointer that held still. The pointer then read near one end and then the other, so the scale flipped back and forth and could not be set back to 100%.
