@@ -360,6 +360,11 @@ pub(super) fn spawn_camera(
     fit_projection(&mut projection, radius, None);
     commands.spawn((
         Camera3d::default(),
+        // The original draws its colours as they are, with no tone curve:
+        // zones without a sky are coloured to the engine's own numbers
+        // (`docs/zone-lighting.md`), and the same holds on both sides of
+        // a zone line. Colour grading (the night's exposure) still applies.
+        bevy::core_pipeline::tonemapping::Tonemapping::None,
         projection,
         orbit_transform(&orbit),
         orbit,
@@ -910,6 +915,26 @@ pub(super) mod testing {
 mod tests {
     use super::*;
     use crate::keys::Act;
+
+    #[test]
+    fn the_scene_camera_draws_colours_without_a_tone_curve() {
+        let mut world = World::new();
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        let mut commands = Commands::new(&mut queue, &world);
+        spawn_camera(
+            &mut commands,
+            Transform::IDENTITY,
+            100.0,
+            crate::ProjectionStyle::Perspective,
+        );
+        queue.apply(&mut world);
+        let tone = world
+            .query_filtered::<&bevy::core_pipeline::tonemapping::Tonemapping, With<OrbitCamera>>()
+            .single(&world)
+            .copied()
+            .unwrap();
+        assert_eq!(tone, bevy::core_pipeline::tonemapping::Tonemapping::None);
+    }
 
     fn free_app() -> (App, Entity, Entity) {
         let mut app = App::new();

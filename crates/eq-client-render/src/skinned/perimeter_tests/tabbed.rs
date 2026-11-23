@@ -222,7 +222,7 @@ fn two_row_options() -> eq_client_assets::sidl::TabBox {
 }
 
 #[test]
-fn default_size_wrapped_qol_shows_the_heading_and_two_lines_down_the_speed_control() {
+fn default_size_wrapped_qol_shows_the_heading_and_three_lines_down_the_speed_control() {
     use crate::windows::pointer::{LINE_PIXELS, Wheel};
     use eq_client_core::options::Level;
 
@@ -293,12 +293,13 @@ fn default_size_wrapped_qol_shows_the_heading_and_two_lines_down_the_speed_contr
         };
         let max_scroll = (content + insets.top + insets.bottom - view.height()).max(0.0);
         // At the default size the opening view includes the heading, and
-        // run speed, under the Dangerous checkboxes, is two wheel lines down
-        // (one more since the Duel Answer Card's row).
+        // run speed, under the Dangerous checkboxes, is three wheel lines down
+        // (one more for each of the Duel Answer Card's and Typed Reports'
+        // rows).
         assert_visible(app.world(), &[heading]);
         *app.world_mut().resource_mut::<Wheel>() = Wheel {
             surface: Some(page),
-            pixels: -2.0 * LINE_PIXELS,
+            pixels: -3.0 * LINE_PIXELS,
             lines: 0.0,
         };
         app.update();
@@ -306,7 +307,7 @@ fn default_size_wrapped_qol_shows_the_heading_and_two_lines_down_the_speed_contr
         app.update();
         assert_visible(app.world(), &[speed]);
         let scroll = app.world().get::<ScrollPosition>(page).unwrap().y;
-        assert!((scroll - max_scroll.min(2.0 * LINE_PIXELS)).abs() < 0.01);
+        assert!((scroll - max_scroll.min(3.0 * LINE_PIXELS)).abs() < 0.01);
     }
 }
 
