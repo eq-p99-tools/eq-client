@@ -1988,6 +1988,7 @@ fn submit_draft(
                 .active(state.groups.owner())
                 .unwrap_or_default();
             let Some(mut wire) = crate::commands::spelled(wire.trim()) else {
+                say_unknown(wire.trim(), world, state);
                 return Ok(());
             };
             match targeted(&wire, world) {
@@ -2055,6 +2056,19 @@ fn typed_report(
     Ok(())
 }
 
+/// Says the Titanium program's line for a slash word with no command for
+/// this player (read R49-33 a, 0x498b78, checklist 6.634), where the
+/// program says it.
+fn say_unknown(line: &str, world: &eq_client_core::world::ClientWorld, state: &mut ChatState) {
+    if crate::commands::unknown(line, world) {
+        state.report_lines.push(super::reports::ReportLine::new(
+            crate::commands::UNKNOWN_LINE,
+            crate::commands::UNKNOWN_COLOUR,
+            crate::commands::UNKNOWN_WORDS,
+        ));
+    }
+}
+
 /// Apply an ordinary typed line without changing the chat editor or focus.
 fn submit_line(
     line: &str,
@@ -2064,8 +2078,9 @@ fn submit_line(
     outbox: &crate::outbox::Outbox,
     qol: &Settings,
 ) -> Result<(), Unsent> {
-    // A word that resolves to nothing is passed over without a line.
+    // A word that resolves to nothing gets the program's line (6.634).
     let Some(command) = crate::commands::spelled(line) else {
+        say_unknown(line, online.world(), state);
         return Ok(());
     };
     // A report to the staff goes from a typed line, whoever types it: the
@@ -2281,6 +2296,7 @@ pub(super) fn run_game_command(
     qol: &Settings,
 ) {
     let Some(command) = crate::commands::spelled(command) else {
+        say_unknown(command, online.world(), chat);
         return;
     };
     let command = command.as_ref();
@@ -4873,14 +4889,22 @@ mod tests {
             app.world_mut().resource_mut::<ChatState>().sharing_asked.take(),
             Some(super::super::sharing::Command::Split(coins)) if coins.platinum == 1
         ));
-        // A game master's command and a word that is no command are passed
-        // over: nothing is sent or said, and the line is spent.
-        let said = app.world().resource::<ChatState>().history.revision();
+        // A game master's command for a player who isn't one, and a word
+        // that is no command, send nothing and get the program's line
+        // 0x305c (6.634); the line is spent.
         for line in ["/zone qeynos", "/group hi", "/b"] {
             send_typed(&mut app, line);
             assert!(receiver.try_recv().is_err(), "{line}");
-            let chat = app.world().resource::<ChatState>();
-            assert_eq!(chat.history.revision(), said, "{line}");
+            let mut chat = app.world_mut().resource_mut::<ChatState>();
+            assert_eq!(
+                std::mem::take(&mut chat.report_lines),
+                [super::super::reports::ReportLine::new(
+                    crate::commands::UNKNOWN_LINE,
+                    crate::commands::UNKNOWN_COLOUR,
+                    crate::commands::UNKNOWN_WORDS,
+                )],
+                "{line}"
+            );
             assert!(chat.draft.text().is_empty(), "{line}");
         }
         // `/raid` is the Raid window's, which leaves the words aside.

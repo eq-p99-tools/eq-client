@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- A slash word with no command now gets the Titanium program's line 0x305c
+  (colour 0xd) instead of passing over silently (read R49-33 a, checklist
+  6.634), from the keyboard, a hotbutton, a social or a script's `slash`
+  step alike. A game master's command typed by a player who isn't one gets
+  the same line, as the program's search stops there. For a GM the program
+  runs it; those handlers aren't built here, so it still passes over
+  silently [I], and a GM's `#` line reaches the server. The command table
+  was checked against the program's table row by row (read R49-33e): same
+  names, order, game master rows and shared handlers, and no row has an
+  alias, so no prefix changes. Mac-era and RoF2 sessions stay silent, as
+  their program's answer is unread. Line 0x21a (a command run in character
+  states 3 or 4) waits on a read and isn't built.
 - Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
   - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
   - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.

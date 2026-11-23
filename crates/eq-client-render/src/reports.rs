@@ -127,7 +127,7 @@ pub(crate) struct ReportLine {
 }
 
 impl ReportLine {
-    const fn new(id: u32, colour: u32, fallback: &'static str) -> Self {
+    pub(crate) const fn new(id: u32, colour: u32, fallback: &'static str) -> Self {
         Self {
             id,
             arguments: Vec::new(),
