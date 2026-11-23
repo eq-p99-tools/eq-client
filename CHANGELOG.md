@@ -10,8 +10,8 @@
   category where it is one, else the line is the text under Other; it
   carries the player's place and heading and the selected entity. A typed
   line sends a report, whoever types it: the keyboard, a social's line or a
-  script's `slash()` step, since a script may do whatever the player can
-  (Adam, 11-23). A button's game command answers as before.
+  script's `slash()` step, since a script may do whatever the player can.
+  A button's game command answers as before.
   Stock EQEmu says nothing on success, so this client's own line says the
   petition or bug report was sent; feedback gets none. Refusals from the
   session show in chat. Repins eq-network to 66900af (#339), which also
