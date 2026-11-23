@@ -13,9 +13,8 @@
   even mid-cast, and does nothing and says nothing while a request is
   pending, where it was refused with this client's words. A Bard has no
   global recast: the spell's recovery, which every gem waits out after the
-  server's refresh, is no longer applied to a Bard (read R49-34 m,
-  Titanium's; taken for EqMac and RoF2 too, inferred). Not built yet,
-  labelled: the deity and level tests of the usability check
+  server's refresh, is no longer applied to a Bard (read R49-34 m). Not
+  built yet, labelled: the deity and level tests of the usability check
   (the item fields aren't decoded here); an Alt left click picking the gem
   up (read R49-34 n names the keys, but what 0x4ebe36 puts on the cursor
   isn't read, so ours keeps its hold); the global recast's 10 s hold from
