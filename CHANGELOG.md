@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Scripts may chat, emote, roll, run socials and send `gm` lines on any server (checklist 6.579), since a script may do whatever the player can (Adam, 11-23). `chat(...)`, `slash("emote ...")`, `slash("random ...")`, `social(...)` and plain `gm(...)` steps no longer need a local test session: a `gm` line goes as a typed `#` line would. They still need a character in the world, and the session's chat pace holds whatever sends a line. Only the `gm` fixture forms (spawn, depop, guild, stun, setlanguage, traindisc) keep the local test session. A synthetic chat submission or hotbar press of a social still points to the named `social` step.
+
 - Scripts can ask for AA requests (checklist 6.569). The new steps are `train_aa(RANK_ID)`, `activate_aa(RANK_ID)` and `aa_split(PERCENT)`, in this client's own words: the official `/alternateadv` subwords are unread (R49-40b), so they wait.
   - Each step posts one `TrainAlternateAdvancement`, `ActivateAlternateAdvancement` (no target) or `SetAlternateAdvancementSplit` command for the current admission, then moves on. It never waits for the server and never retries.
   - The client checks nothing about the rank or the points: the session decides, and its refusal is said in chat.

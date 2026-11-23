@@ -948,7 +948,7 @@ mod tests {
         assert!(background.script_background);
         // Input ownership grants no local-server or command permission.
         let allowed = Program::parse("face()", Path::new(".")).unwrap();
-        let restricted = Program::parse("gm(\"summon\")", Path::new(".")).unwrap();
+        let restricted = Program::parse("gm(\"stun 8000\")", Path::new(".")).unwrap();
         for provider in [ServerProtocol::Project1999, ServerProtocol::Quarm] {
             assert!(!script_session(Some(&allowed), false, Some(provider)).unwrap());
             assert!(script_session(Some(&restricted), false, Some(provider)).is_err());
@@ -1213,20 +1213,26 @@ mod tests {
     }
 
     #[test]
-    fn gm_chat_and_social_steps_are_refused_outside_a_local_session() {
+    fn only_gm_fixture_steps_are_refused_outside_a_local_session() {
+        let fixture = "if False:\n    for _ in range(1):\n        gm(\"stun 8000\")\n";
+        let program = Program::parse(fixture, Path::new(".")).unwrap();
+        let error =
+            script_session(Some(&program), false, Some(ServerProtocol::Project1999)).unwrap_err();
+        assert!(error.starts_with("script line 3:"), "{error}");
+        assert_eq!(
+            script_session(Some(&program), false, Some(ServerProtocol::EqEmu)),
+            Ok(true)
+        );
+        // A script may do whatever the player can, on any server.
         for action in [
             "gm(\"summon\")",
             "chat(\"say Hail\")",
             "social(\"play Example\")",
         ] {
-            let source = format!("if False:\n    for _ in range(1):\n        {action}\n");
-            let program = Program::parse(&source, Path::new(".")).unwrap();
-            let error = script_session(Some(&program), false, Some(ServerProtocol::Project1999))
-                .unwrap_err();
-            assert!(error.starts_with("script line 3:"), "{error}");
+            let program = Program::parse(action, Path::new(".")).unwrap();
             assert_eq!(
-                script_session(Some(&program), false, Some(ServerProtocol::EqEmu)),
-                Ok(true)
+                script_session(Some(&program), false, Some(ServerProtocol::Project1999)),
+                Ok(false)
             );
         }
         assert_eq!(script_session(None, false, None), Ok(false));

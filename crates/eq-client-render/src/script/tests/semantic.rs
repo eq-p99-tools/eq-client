@@ -328,36 +328,21 @@ fn scripted_item_inspection_refuses_unknown_and_stale_links() {
 }
 
 #[test]
-fn named_social_script_control_requires_a_local_session() {
+fn a_named_social_script_control_runs_on_any_session() {
     for local in [false, true] {
         let (mut app, rx) = app();
         let program = Program::parse("social(\"play Test\")", Path::new(".")).unwrap();
         app.insert_resource(Script::from_program(program).local_session(local));
         frame_at(&mut app, 0);
         frame_at(&mut app, 10);
-        if local {
-            assert!(matches!(
-                &app.world().resource::<ChatState>().socials.request,
-                Some(crate::socials::Queued { request: crate::socials::Request::Play(name), owner: Some(_) }) if name == "Test"
-            ));
-            assert_eq!(
-                app.world().resource::<RunStatus>().phase(),
-                Phase::Completed
-            );
-        } else {
-            refused(
-                &app,
-                1,
-                "social script steps need a local character in the world",
-            );
-            assert!(
-                app.world()
-                    .resource::<ChatState>()
-                    .socials
-                    .request
-                    .is_none()
-            );
-        }
+        assert!(matches!(
+            &app.world().resource::<ChatState>().socials.request,
+            Some(crate::socials::Queued { request: crate::socials::Request::Play(name), owner: Some(_) }) if name == "Test"
+        ));
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed
+        );
         assert!(rx.try_recv().is_err());
     }
 }
