@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Escape on the login screen quits the game when nothing is logging in, as the official client's does (checklist 6.601, Adam 11-23; the Mac-era client's the same, inferred). Anything else on the screen takes the press first: an open window or the corner menu closes, and a login under way stops. The Escape that brings character select back to the login screen never also quits; the next one does.
+
 - Scripts can read the gem bar and the time (checklist 6.592, O1b). `gem1.spell` to `gem8.spell` name each gem's spell, and `gem1.ready` to `gem8.ready` say whether the gem is lit by the gem bar's own rule. `time.hour`, `time.minute`, `time.day`, `time.month` and `time.year` read what `/time` tells, with the installed client's hour, and are unknown where `/time` says the time can't be told.
 
 - Scripts can order and delete spellbook entries (checklist 6.588): `click("book_edit", "earlier" | "later" | "delete" | "confirm" | "cancel")` presses the spellbook's own buttons for the chosen row. A button the session doesn't offer (deletion on P99) is refused with the greyed button's reason, and nothing is sent.
