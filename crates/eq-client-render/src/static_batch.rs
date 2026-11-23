@@ -67,8 +67,10 @@ pub(super) fn batch(models: &[Vec<ZonePrimitive>], objects: &[ZoneObject], cell:
                     indices: Vec::new(),
                     texture: source.texture,
                     material_mode: source.material_mode,
+                    light: Vec::new(),
                 });
             place.append(source, group);
+            group.light.extend(placement_light(object, source));
         }
     }
     Batched {
@@ -83,6 +85,23 @@ pub(super) fn batch(models: &[Vec<ZonePrimitive>], objects: &[ZoneObject], cell:
         apart,
     }
 }
+
+/// A placement's baked light over `source`'s vertices: its own colour
+/// track, else the model's, else none of its own at the full ambient
+/// weight (inferred).
+pub(super) fn placement_light(object: &ZoneObject, source: &ZonePrimitive) -> Vec<[u8; 4]> {
+    let count = source.positions.len();
+    object
+        .light
+        .as_ref()
+        .filter(|light| light.len() == count)
+        .or(Some(&source.light).filter(|light| light.len() == count))
+        .cloned()
+        .unwrap_or_else(|| vec![NO_LIGHT; count])
+}
+
+/// A vertex with no baked light of its own, taking the full ambient.
+pub(super) const NO_LIGHT: [u8; 4] = [0, 0, 0, 255];
 
 /// A placement's transform, as baked into vertices.
 struct Placement {
@@ -166,6 +185,7 @@ mod tests {
             indices: vec![0, 1, 2],
             texture: Some(3),
             material_mode: mode,
+            light: Vec::new(),
         }
     }
 
@@ -175,6 +195,7 @@ mod tests {
             translation,
             rotation: rotation.to_array(),
             scale,
+            light: None,
         }
     }
 
