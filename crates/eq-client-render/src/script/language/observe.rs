@@ -6,6 +6,11 @@ use super::{Kind, Value};
 
 /// The spell gems a player has, on every client the project supports.
 const GEMS: u8 = 8;
+/// The others a group holds besides the player.
+const GROUP_PLACES: u8 = 5;
+/// The most effects a script can name by place, more than any effects
+/// window shows.
+const BUFF_PLACES: u8 = 50;
 
 /// What the player's windows draw on: the world, the installation's spell
 /// names and linked timers, the installed client's clock and the moment.
@@ -14,6 +19,8 @@ pub(in crate::script) struct Sight<'a> {
     pub spells: Option<&'a crate::spellbook::SpellNames>,
     pub clock: eq_client_assets::clock::ClientClock,
     pub now: std::time::Instant,
+    /// The chat window's history, for the tells it shows.
+    pub chat: Option<&'a crate::chat::ChatState>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -51,6 +58,17 @@ pub(super) enum Field {
     GemReady(u8),
     // The time in Norrath as `/time` tells it.
     Time(TimePart),
+    // The group window, its others counted from 0 (6.593, O2).
+    GroupPresent,
+    GroupCount,
+    GroupName(u8),
+    GroupHpPercent(u8),
+    // The effects window, its icons counted from 0 in the order it draws them.
+    BuffCount,
+    BuffSpell(u8),
+    // The last tell the chat window shows. Never logged or reported (O-b).
+    LastTell,
+    LastTellFrom,
 }
 
 /// One part of the time `/time` tells.
@@ -107,8 +125,42 @@ impl Field {
             "time.day" => Some(Self::Time(TimePart::Day)),
             "time.month" => Some(Self::Time(TimePart::Month)),
             "time.year" => Some(Self::Time(TimePart::Year)),
-            _ => Self::gem(name),
+            "group.present" => Some(Self::GroupPresent),
+            "group.count" => Some(Self::GroupCount),
+            "buffs.count" => Some(Self::BuffCount),
+            "chat.last_tell" => Some(Self::LastTell),
+            "chat.last_tell_from" => Some(Self::LastTellFrom),
+            _ => Self::gem(name)
+                .or_else(|| Self::member(name))
+                .or_else(|| Self::buff(name)),
         }
+    }
+
+    /// `group.member1.name` to `group.member5.hp_percent`, the group
+    /// window's others from the top.
+    fn member(name: &str) -> Option<Self> {
+        let (place, part) = name.strip_prefix("group.member")?.split_once('.')?;
+        let place = numbered(place, GROUP_PLACES)?;
+        match part {
+            "name" => Some(Self::GroupName(place)),
+            "hp_percent" => Some(Self::GroupHpPercent(place)),
+            _ => None,
+        }
+    }
+
+    /// `buff1.spell` to `buff50.spell`, the effects window's icons in the
+    /// order it draws them.
+    fn buff(name: &str) -> Option<Self> {
+        let place = name.strip_prefix("buff")?.strip_suffix(".spell")?;
+        numbered(place, BUFF_PLACES).map(Self::BuffSpell)
+    }
+
+    /// Whether the field reads words someone sent the player. Its value
+    /// stays on the player's own screen: no log, report, Runbook export or
+    /// gap record carries it.
+    #[cfg(test)]
+    pub(super) const fn private(self) -> bool {
+        matches!(self, Self::LastTell | Self::LastTellFrom)
     }
 
     /// `gem1.spell` to `gem8.ready`, numbered as the gem bar's keys are.
@@ -136,14 +188,19 @@ impl Field {
             | Self::Casting
             | Self::Stunned
             | Self::PetPresent
-            | Self::GemReady(_) => Kind::Bool,
+            | Self::GemReady(_)
+            | Self::GroupPresent => Kind::Bool,
             Self::Zone
             | Self::TargetName
             | Self::Posture
             | Self::TargetCon
             | Self::TargetKind
             | Self::PetName
-            | Self::GemSpell(_) => Kind::Text,
+            | Self::GemSpell(_)
+            | Self::GroupName(_)
+            | Self::BuffSpell(_)
+            | Self::LastTell
+            | Self::LastTellFrom => Kind::Text,
             Self::Level
             | Self::ReportedHp
             | Self::ReportedHpMax
@@ -157,7 +214,10 @@ impl Field {
             | Self::Coin(_)
             | Self::TargetHpPercent
             | Self::PetHpPercent
-            | Self::Time(_) => Kind::Int,
+            | Self::Time(_)
+            | Self::GroupCount
+            | Self::GroupHpPercent(_)
+            | Self::BuffCount => Kind::Int,
         }
     }
 
@@ -198,6 +258,12 @@ impl Field {
             | Self::Coin(_) => self.player(world),
             Self::GemSpell(_) | Self::GemReady(_) => self.gem_of(sight),
             Self::Time(part) => time(part, sight),
+            Self::GroupPresent
+            | Self::GroupCount
+            | Self::GroupName(_)
+            | Self::GroupHpPercent(_) => self.group(world),
+            Self::BuffCount | Self::BuffSpell(_) => self.buff_of(sight),
+            Self::LastTell | Self::LastTellFrom => self.tell(sight),
         }
     }
 
@@ -244,6 +310,87 @@ fn time(part: TimePart, sight: &Sight) -> Value {
         TimePart::Month => i64::from(time.month),
         TimePart::Year => i64::from(time.year),
     })
+}
+
+/// A place number as a field names it, from 1 to `places`; counted from 0.
+fn numbered(place: &str, places: u8) -> Option<u8> {
+    if place.starts_with('0') || place.len() > 2 {
+        return None;
+    }
+    place
+        .parse::<u8>()
+        .ok()
+        .filter(|place| (1..=places).contains(place))
+        .map(|place| place - 1)
+}
+
+impl Field {
+    /// The group window: whether the player is in a group, how many others
+    /// it holds, and each other's name and health, unknown while they are
+    /// out of view.
+    fn group(self, world: &ClientWorld) -> Value {
+        let group = world.group();
+        match self {
+            Self::GroupPresent => Value::Bool(group.is_some()),
+            Self::GroupCount => Value::Int(group.map_or(0, |group| {
+                i64::try_from(group.members.len()).unwrap_or(i64::MAX)
+            })),
+            Self::GroupName(place) => world
+                .group_place(usize::from(place))
+                .map_or(Value::Unknown, |name| Value::Text(name.into())),
+            Self::GroupHpPercent(place) => world
+                .group_health(usize::from(place))
+                .map_or(Value::Unknown, |percent| Value::Int(i64::from(percent))),
+            _ => Value::Unknown,
+        }
+    }
+
+    /// The effects window: how many icons it draws, and each one's spell in
+    /// the order it draws them. Unknown before the server lists them.
+    fn buff_of(self, sight: &Sight) -> Value {
+        let tracker = sight.world.buffs();
+        let Some(slots) = tracker.slots() else {
+            return Value::Unknown;
+        };
+        let (slotted, unslotted) = crate::buffs::drawn_order(slots, tracker);
+        let spells = slotted
+            .iter()
+            .filter_map(|(slot, modelled)| {
+                modelled
+                    .map(u32::from)
+                    .or_else(|| slots.get(slot).map(|buff| buff.spell_id))
+            })
+            .chain(unslotted.iter().map(|spell| u32::from(*spell)));
+        match self {
+            Self::BuffSpell(place) => {
+                match (spells.clone().nth(usize::from(place)), sight.spells) {
+                    (Some(spell), Some(names)) => Value::Text(names.label(spell).into()),
+                    _ => Value::Unknown,
+                }
+            }
+            _ => Value::Int(i64::try_from(spells.count()).unwrap_or(i64::MAX)),
+        }
+    }
+
+    /// The last tell the chat window shows, and who sent it; unknown before
+    /// one arrives.
+    fn tell(self, sight: &Sight) -> Value {
+        let Some(chat) = sight.chat else {
+            return Value::Unknown;
+        };
+        let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
+        let last = lines.iter().rev().find_map(|(_, line)| {
+            (line.channel == eq_client_core::chat::ChannelName::Tell
+                && line.source == eq_client_core::chat::Source::Server)
+                .then_some(line)
+                .zip(line.sender.as_deref().filter(|sender| !sender.is_empty()))
+        });
+        match (self, last) {
+            (Self::LastTell, Some((line, _))) => Value::Text(line.message.text.as_str().into()),
+            (_, Some((_, sender))) => Value::Text(sender.into()),
+            _ => Value::Unknown,
+        }
+    }
 }
 
 impl Field {
@@ -416,6 +563,19 @@ mod tests {
                 spells,
                 clock,
                 now: std::time::Instant::now(),
+                chat: None,
+            })
+    }
+
+    fn read_chat(online: &OnlineState, name: &str, chat: &crate::chat::ChatState) -> Value {
+        Field::parse(name)
+            .unwrap_or_else(|| panic!("{name} is a field"))
+            .read(&Sight {
+                world: online.world(),
+                spells: None,
+                clock: TITANIUM,
+                now: std::time::Instant::now(),
+                chat: Some(chat),
             })
     }
 
@@ -634,5 +794,136 @@ mod tests {
         );
         assert_eq!(read(&online, "time.hour"), Value::Unknown);
         assert_eq!(read(&online, "time.minute"), Value::Unknown);
+    }
+
+    fn tell(sender: &str, text: &str) -> eq_client_core::chat::ChatLine {
+        use eq_client_core::chat::{ChannelName, ChatLine, Message, Source};
+        ChatLine {
+            channel: ChannelName::Tell,
+            message_type: None,
+            sender: Some(sender.into()),
+            target: None,
+            message: Message {
+                message: None,
+                message_hex: None,
+                text: text.into(),
+                item_links: Vec::new(),
+            },
+            source: Source::Server,
+        }
+    }
+
+    #[test]
+    fn group_fields_read_the_group_window() {
+        use eq_client_core::group::GroupUpdate;
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(PLAYER));
+        assert_eq!(read(&online, "group.present"), Value::Bool(false));
+        assert_eq!(read(&online, "group.count"), Value::Int(0));
+        assert_eq!(read(&online, "group.member1.name"), Value::Unknown);
+        let mut friend = session::pet(TARGET, 99);
+        friend.kind = SpawnKind::Player;
+        friend.pet_owner = None;
+        friend.name = "Friend".into();
+        session::spawn_entry(&mut online, TARGET, friend);
+        session::news(
+            &mut online,
+            [
+                WorldEvent::Group(GroupUpdate::Members {
+                    leader: "Friend".into(),
+                    members: vec!["Friend".into(), "Faraway".into()],
+                }),
+                WorldEvent::HealthPercent {
+                    spawn_id: TARGET,
+                    percent: 64,
+                },
+            ],
+        );
+        assert_eq!(read(&online, "group.present"), Value::Bool(true));
+        assert_eq!(read(&online, "group.count"), Value::Int(2));
+        assert_eq!(read(&online, "group.member1.name"), text("Friend"));
+        assert_eq!(read(&online, "group.member1.hp_percent"), Value::Int(64));
+        // A member out of view has a name but no health bar.
+        assert_eq!(read(&online, "group.member2.name"), text("Faraway"));
+        assert_eq!(read(&online, "group.member2.hp_percent"), Value::Unknown);
+        assert_eq!(read(&online, "group.member3.name"), Value::Unknown);
+        for name in [
+            "group.member0.name",
+            "group.member6.name",
+            "group.member01.name",
+            "group.member1.level",
+        ] {
+            assert_eq!(Field::parse(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn buff_fields_read_the_effects_window_in_its_order() {
+        use eq_client_core::Buff;
+        let buff = |spell_id| Buff {
+            spell_id,
+            caster_level: 1,
+            effect_type: 2,
+            bard_modifier: 10,
+            duration_ticks: 30,
+            counters: 0,
+            caster_id: u32::from(PLAYER),
+        };
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(PLAYER));
+        // Before the server lists the player's buffs, there is no count.
+        let names = crate::spellbook::SpellNames::default();
+        assert_eq!(read(&online, "buffs.count"), Value::Unknown);
+        session::buffs(
+            &mut online,
+            std::collections::BTreeMap::from([(0, buff(202)), (3, buff(278))]),
+        );
+        assert_eq!(read(&online, "buffs.count"), Value::Int(2));
+        // The window's icons in order: a hole in the slots is not a buff.
+        assert_eq!(
+            read_with(&online, "buff1.spell", Some(&names), TITANIUM),
+            text("Spell 202")
+        );
+        assert_eq!(
+            read_with(&online, "buff2.spell", Some(&names), TITANIUM),
+            text("Spell 278")
+        );
+        assert_eq!(
+            read_with(&online, "buff3.spell", Some(&names), TITANIUM),
+            Value::Unknown
+        );
+        assert_eq!(read(&online, "buff1.spell"), Value::Unknown);
+        for name in ["buff0.spell", "buff51.spell", "buff1.ticks", "buffs.spell"] {
+            assert_eq!(Field::parse(name), None, "{name}");
+        }
+    }
+
+    #[test]
+    fn tell_fields_read_the_last_tell_the_chat_window_shows() {
+        use eq_client_core::chat::ChannelName;
+        let mut online = OnlineState::new(true);
+        session::admit(&mut online, 1, session::player(PLAYER));
+        let mut chat = crate::chat::ChatState::default();
+        assert_eq!(read_chat(&online, "chat.last_tell", &chat), Value::Unknown);
+        chat.history.push(tell("Friend", "first words"));
+        chat.history.push(tell("Other", "later words"));
+        // A say is no tell, and the echo of the player's own tell is not one
+        // sent to them.
+        let mut say = tell("Third", "said aloud");
+        say.channel = ChannelName::Say;
+        chat.history.push(say);
+        let mut echo = tell("Third", "sent away");
+        echo.channel = ChannelName::TellEcho;
+        chat.history.push(echo);
+        assert_eq!(
+            read_chat(&online, "chat.last_tell", &chat),
+            text("later words")
+        );
+        assert_eq!(
+            read_chat(&online, "chat.last_tell_from", &chat),
+            text("Other")
+        );
+        assert!(Field::LastTell.private() && Field::LastTellFrom.private());
+        assert!(!Field::GroupName(0).private());
     }
 }

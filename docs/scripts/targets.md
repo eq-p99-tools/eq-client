@@ -115,6 +115,16 @@ merchant action.
 - `raid_row grouped row` or `raid_row ungrouped row`: a raid row counted from 1.
 - `pet command`: a supported Pet Info button, using the same words as its `/pet` command.
 
+## World
+
+These click things in the scene, as a person clicks them where they show. Take the ids from a fresh `report()`: the "Script surroundings" line gives `admission`, the nearest spawns as `spawn_clicks` (admission, id, revision), the ground objects and stations by drop id, and the doors by id.
+
+- `spawn admission id revision`: a spawn. `click` targets it, and offers it the item on the cursor if it is an NPC, as a person's click does. `right_click` uses it without changing the target: loot a corpse, open a merchant or banker, take a boat, or consider. `click_with` holds keys as for any click.
+- `object admission drop_id`: an item or world container on the ground. `click` picks it up, or opens the forge, oven or other container.
+- `door admission id`: a door or lift. `click` makes the two clicks a person makes, on the same point, to open, close or call it.
+
+The script pointer glides to the thing's middle on screen, and the click acts only where the scene's own pick names that same thing then. A thing behind a wall, behind the camera, off screen, out of drawing range, under a window or covered by another spawn refuses the step, and nothing is sent. A stale admission, a spawn that is gone or has a new revision, or an object or door not in the zone's list refuses it before the pointer moves. These targets take `click`, `right_click` and `click_with` only, not `hover` or `hold_click`. Reach, capability and pace are checked as for a person's click.
+
 ## Map controls
 
 - `map zoom_in`, `map zoom_out`, `map reset` or `map labels`: a map toolbar button.

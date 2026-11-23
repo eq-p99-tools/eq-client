@@ -1,7 +1,8 @@
 //! The login screen's keys and presses, and the client's own login window:
 //! the login servers to choose from, the account and password boxes,
 //! Connect and Quit, and a line saying what is happening. Tab moves between
-//! the boxes, Enter connects, and Escape stops a login under way. Where the
+//! the boxes, Enter connects, and Escape stops a login under way, or with
+//! none quits the game, as Quit does (6.601). Where the
 //! installation has its own login screen, that shows instead
 //! ([`super::official`]), and its controls do what this window's do.
 use super::{Availability, Connected, Field, FrontEnd, Link, Lit, Request, Screen};
@@ -77,7 +78,9 @@ pub(crate) fn form(
     if visible && !skip_input && keys.window_focused() && !keys.editing_script() {
         let pressed = buttons.iter().copied().collect::<Vec<_>>();
         let cancel = pressed.contains(&Action::Cancel);
-        if pressed.contains(&Action::Quit) || (cancel && !front.running()) {
+        // Escape on the idle screen quits as Cancel does there (6.601).
+        let escape_quits = *escape == crate::escape::Escape::Quit && !front.running();
+        if pressed.contains(&Action::Quit) || (cancel && !front.running()) || escape_quits {
             exit.write(AppExit::Success);
         }
         if front.running() {
@@ -474,13 +477,9 @@ mod tests {
     }
 
     #[test]
-    fn escape_stops_a_login_under_way_and_on_the_idle_screen_only_leaves_the_box() {
+    fn escape_stops_a_login_under_way_first_and_on_the_idle_screen_quits() {
         let (mut app, heard) = app(vec![server("Example", "remembered")]);
         app.update();
-        // Idle, Escape leaves the password box and never quits.
-        press(&mut app, KeyCode::Escape);
-        assert_eq!(app.world().resource::<FrontEnd>().field, Field::None);
-        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
         // Logging in, Escape stops it and the login screen waits again.
         app.world_mut().resource_mut::<FrontEnd>().request = Some(Request::Connect);
         app.update();
@@ -492,6 +491,48 @@ mod tests {
         assert!(super::super::Worker::finished(
             &heard.lock().unwrap().sessions[0].2
         ));
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        // Idle, the next Escape quits, as Cancel does there (6.601).
+        press(&mut app, KeyCode::Escape);
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 1);
+    }
+
+    #[test]
+    fn escape_on_the_idle_screen_closes_an_open_window_before_it_quits() {
+        let (mut app, _) = app(vec![server("Example", "remembered")]);
+        app.update();
+        let options = app
+            .world_mut()
+            .spawn((
+                crate::windows::WindowId::Options,
+                Node::default(),
+                crate::windows::Frame::default(),
+            ))
+            .id();
+        press(&mut app, KeyCode::Escape);
+        assert_eq!(
+            *app.world().resource::<crate::escape::Escape>(),
+            crate::escape::Escape::Close(crate::windows::WindowId::Options)
+        );
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
+        // Once it is closed, Escape quits.
+        app.world_mut().get_mut::<Node>(options).unwrap().display = Display::None;
+        press(&mut app, KeyCode::Escape);
+        assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 1);
+    }
+
+    #[test]
+    fn escape_on_the_idle_screen_closes_the_corner_menu_before_it_quits() {
+        let (mut app, _) = app(vec![server("Example", "remembered")]);
+        app.update();
+        app.world_mut()
+            .resource_mut::<crate::windows::menu::Menu>()
+            .open = true;
+        press(&mut app, KeyCode::Escape);
+        assert_eq!(
+            *app.world().resource::<crate::escape::Escape>(),
+            crate::escape::Escape::Close(crate::windows::WindowId::Selector)
+        );
         assert_eq!(app.world().resource::<Messages<AppExit>>().len(), 0);
     }
 
