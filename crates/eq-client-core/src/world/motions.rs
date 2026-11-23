@@ -65,6 +65,21 @@ impl ClientWorld {
         );
     }
 
+    /// Plays a one-shot motion the client itself starts, as a received one
+    /// plays: an emote's on the player's own model, which Titanium's emote
+    /// worker plays at once as it sends it (0x47c08e, read R47b).
+    pub fn play_motion(&mut self, spawn_id: u16, action: u16, speed: f32) {
+        let mut changes = Changes::default();
+        self.motion_news(
+            Animation {
+                spawn_id,
+                action,
+                speed,
+            },
+            &mut changes,
+        );
+    }
+
     /// Casts by anyone in view: a beginning starts one, replacing the
     /// caster's last, and an interruption ends it.
     pub(super) fn cast_news(&mut self, update: &SpellUpdate, now: Instant) {

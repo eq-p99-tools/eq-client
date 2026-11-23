@@ -126,6 +126,40 @@
   program's put-back does (read R42; inferred bound, checklist 6.484).
   Ducking, wet feet and the Mac-era generation are unchanged, and the
   landing sample stays inside the session's guard.
+- Take the 88 social emotes and disciplines as the Titanium client does
+  (reads R47 to R48c). An emote's first word picks its target: any spawn
+  whose name it begins, the shortest name winning, or the current target
+  with no word or the installed "my target" word. A target past 60 units
+  (flat, origin to origin) is refused, as is a still emote (`/wave`,
+  `/cheer`, `/frown`, `/gesture`) while moving or not standing. The text
+  goes out as OP_Emote, the player's own line prints in the emote colour,
+  and the animation is sent and played while standing still. Two or more
+  words after the target replace the emote's own words. `/discipline` (and
+  `/disc`) with no word lists the known disciplines whose timers run; with a
+  word it uses the first known discipline the word begins. The new Combat
+  Abilities window, opened from the EQ menu, lists the known disciplines with their time left: a click
+  uses one, and a hold or Ctrl and a number puts it on the action bar. The
+  typed command, the window, a hotkey and an Actions window button share one
+  use: a discipline you don't know, can't use at your level or class, or
+  that isn't flagged in the spell file is refused silently; one on its timer
+  prints the time left; a timed self discipline while one is running prints
+  its line; otherwise the cast goes out from slot 10 at the current target,
+  or none, and like a gem cast it waits while a cast is under way or not yet
+  acknowledged. Any discipline the server lists works, not only Evasive and
+  Defensive. The Actions window's picker no longer offers disciplines, which
+  have their own window now; a button that held one keeps it. Inferred parts
+  are under checklist 6.488. This client's words where the installation has
+  no line: "uses /NAME", "You use /NAME" (and "on TARGET"), "Stand still to
+  do that.", "Nobody by that name is near.", "Your target is too far away
+  for that.", "Your class has no disciplines.", "NAME can be used again in
+  Mm Ss." (with hours, "Hh Mm Ss"), "You can't use that discipline right
+  now." The Mac-era client keeps its earlier answers. Networking pinned to
+  2865334 (eq-network #319, #320, #321, #322), which also settles a
+  destroyed item on servers that confirm by silence; an emote goes out as
+  the program built it, spaces kept, and its own line prints once. A social may now run `/target`,
+  `/assist`, `/camp` and `/quit`, as the original's socials do; `/exit` and
+  `/social` stay refused inside one.
+
 - Take the Titanium slash forms socials and hotbuttons use (reads R45,
   R45b). Social lines run a tenth of a second apart, as the original's
   runner steps them, and `/pause` takes 1 to 600 tenths, larger or smaller

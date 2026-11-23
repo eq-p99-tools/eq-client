@@ -221,6 +221,8 @@ pub(super) fn schedule(app: &mut App) {
                 trade::input,
                 trade::no_drop::confirm,
                 trade::no_drop::command,
+                crate::emotes::run,
+                crate::disciplines::run,
                 speed::report,
             )
                 .chain(),
@@ -249,6 +251,7 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     abilities::picker::right_click,
                     abilities::input,
+                    crate::combat_abilities::input,
                     abilities::picker::choose,
                     abilities::picker::window,
                 )
@@ -389,6 +392,7 @@ pub(super) fn schedule(app: &mut App) {
                     tracking::frame,
                     abilities::picker::frame,
                     guild::roster::window,
+                    crate::combat_abilities::window,
                 ),
                 (
                     chat::reconcile,
@@ -416,7 +420,7 @@ pub(super) fn schedule(app: &mut App) {
                         spellbook::sets::ui::present,
                     ),
                     skinned::tabs,
-                    abilities::present,
+                    (abilities::present, crate::combat_abilities::present),
                     (
                         skinned::slide,
                         skinned::drop_downs,
@@ -428,7 +432,7 @@ pub(super) fn schedule(app: &mut App) {
                         (training::fill, tracking::fill, abilities::picker::fill),
                         skills::fill,
                         raid::fill,
-                        guild::roster::fill,
+                        (guild::roster::fill, crate::combat_abilities::fill),
                         confirm::show,
                         reading::show,
                         tradeskills::show,

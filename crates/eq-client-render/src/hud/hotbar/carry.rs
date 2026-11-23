@@ -300,7 +300,7 @@ impl Face {
                 words: match hotkey {
                     Action::Gem(gem) => format!("Spell gem {}", gem + 1),
                     Action::Item { .. } => "Item shortcut".into(),
-                    _ => super::caption_text(Some(hotkey), world),
+                    _ => super::caption_text(Some(hotkey), world, names),
                 },
             }
         }

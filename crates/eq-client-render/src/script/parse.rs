@@ -2333,11 +2333,19 @@ mod tests {
     }
 
     #[test]
-    fn discipline_slash_names_only_the_supported_set() {
+    fn discipline_slash_takes_any_words_as_the_command_does() {
         let base = std::path::Path::new(".");
         assert_eq!(
             parse("slash(\"discipline defensive\")\n", base).unwrap(),
             [Step::Slash("/discipline defensive".into())]
+        );
+        assert_eq!(
+            parse("slash(\"discipline evasive disc\")\n", base).unwrap(),
+            [Step::Slash("/discipline evasive disc".into())]
+        );
+        assert_eq!(
+            parse("slash(\"discipline\")\n", base).unwrap(),
+            [Step::Slash("/discipline".into())]
         );
     }
 

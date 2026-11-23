@@ -144,6 +144,12 @@ pub(super) struct ChatState {
     pub(crate) spell_set_asked: Option<String>,
     /// A `/lootnodrop`'s words, waiting to set or list the choices.
     pub(crate) loot_no_drop: Option<String>,
+    /// Social emotes, by case number, with the words after the command,
+    /// waiting in order to be said.
+    pub(crate) emotes: Vec<(u8, String)>,
+    /// Disciplines asked for, by `/discipline` or by a button or hotkey,
+    /// waiting in order to be used.
+    pub(crate) disciplines: Vec<super::disciplines::Asked>,
     /// A `/log`, waiting to turn the chat log on or off.
     pub log_toggle: bool,
     /// A `/toggleinspect`, waiting to turn letting others inspect the
@@ -2103,6 +2109,16 @@ pub(super) fn client_request_in_scope(
         state.loot_no_drop = Some(words.to_owned());
         return Some(Ok(()));
     }
+    if let Some(words) = command_words(input, "discipline") {
+        state
+            .disciplines
+            .push(super::disciplines::Asked::Typed(words.to_owned()));
+        return Some(Ok(()));
+    }
+    if let Some((emote, words)) = emote_words(input) {
+        state.emotes.push((emote.case, words.to_owned()));
+        return Some(Ok(()));
+    }
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
@@ -2134,6 +2150,19 @@ pub(super) fn client_request_in_scope(
         return Some(Ok(()));
     }
     None
+}
+
+/// The social emote a line runs, by its command's name as the command
+/// table spells it, and the words after it.
+fn emote_words(input: &str) -> Option<(&'static eq_client_core::emotes::Emote, &str)> {
+    let command = input.strip_prefix('/')?;
+    let (typed, words) = command
+        .split_once(char::is_whitespace)
+        .unwrap_or((command, ""));
+    Some((
+        eq_client_core::emotes::named(&typed.to_ascii_lowercase())?,
+        words,
+    ))
 }
 
 /// The words after `/NAME` when the line is that command, in any case.
@@ -2559,15 +2588,6 @@ fn class_command(
     stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
 ) -> Option<Result<ClientCommand, String>> {
     Some(match name {
-        "discipline" => {
-            if let Some(discipline) = eq_client_core::disciplines::Discipline::named(words.trim()) {
-                stamp().and_then(|stamp| {
-                    super::abilities::discipline_command(discipline, world, stamp)
-                })
-            } else {
-                Err("Use /discipline evasive or /discipline defensive".into())
-            }
-        }
         "harmtouch" | "layonhands" => {
             let ability = eq_client_core::knights::KnightAbility::named(name)?;
             if words.is_empty() {
