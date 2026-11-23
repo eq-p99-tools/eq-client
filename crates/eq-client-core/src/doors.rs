@@ -47,6 +47,12 @@ impl DoorTable {
         self.zone_id = zone_id;
     }
 
+    /// The zone's number, as the admission gave it; 0 before one.
+    #[must_use]
+    pub const fn zone_id(&self) -> u16 {
+        self.zone_id
+    }
+
     /// Applies a Titanium server update with its own motion and returns.
     pub fn apply(&mut self, update: &DoorUpdate, now: Instant) {
         self.apply_for(update, now, GameDialect::Titanium);

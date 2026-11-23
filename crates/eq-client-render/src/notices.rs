@@ -301,6 +301,29 @@ fn in_chat(lines: Vec<Said>) -> Vec<(Place, Said)> {
     lines.into_iter().map(|line| (Place::Chat, line)).collect()
 }
 
+/// The Titanium program's lines for environmental damage the player took:
+/// after its own report the amount line in its colour (`eqgame.exe`
+/// 0x41c905, read R49-3 e), then the record's line, built with the
+/// you-form text, in the record's colour (0x4a56e3, read R49-3b).
+fn environmental_lines(
+    messages: &Messages,
+    reported: Option<u32>,
+    record: Option<(u32, u32)>,
+) -> Vec<Said> {
+    use eq_client_core::environment::{REPORT_COLOR, REPORT_LINE, YOU_TEXT};
+    let amount = reported.map(|amount| {
+        messages
+            .said(REPORT_LINE, &[amount.to_string()])
+            .typed(REPORT_COLOR)
+    });
+    let record = record.map(|(line, color)| {
+        messages
+            .said(line, &[messages.format(YOU_TEXT, &[])])
+            .typed(color)
+    });
+    amount.into_iter().chain(record).collect()
+}
+
 /// How a notice reads, and where each part shows.
 #[allow(
     clippy::too_many_lines,
@@ -353,6 +376,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 )
             })
             .map_or_else(Vec::new, chat),
+        Notice::EnvironmentalDamage { reported, record } => messages
+            .map(|messages| environmental_lines(messages, *reported, *record))
+            .map_or_else(Vec::new, in_chat),
         Notice::Heading(point) => messages
             .map(|messages| heading(*point, messages))
             .map_or_else(Vec::new, chat),
@@ -935,6 +961,56 @@ const fn link_text(link: Link) -> &'static str {
 mod tests {
     use super::*;
     use eq_client_core::Coins;
+
+    #[test]
+    fn environmental_damage_prints_the_programs_lines_in_its_colours() {
+        // Synthetic stand-ins for 0x30c1, 0x2f9b, 0x2f60 and 0x2f63.
+        let messages = Messages::parse(
+            "EQST0002\n0 4\n12481 synthetic hurt for %1.\n12187 SYNTHETIC-YOU\n\
+             12128 %1 synthetic drown.\n12131 %1 synthetic burn.\n",
+        );
+        let lines = |reported, record| {
+            wording(
+                &Notice::EnvironmentalDamage { reported, record },
+                Some(&messages),
+            )
+        };
+        assert_eq!(
+            lines(Some(13), Some((12128, 266))),
+            [
+                (
+                    Place::Chat,
+                    Said::official("synthetic hurt for 13.").typed(283)
+                ),
+                (
+                    Place::Chat,
+                    Said::official("SYNTHETIC-YOU synthetic drown.").typed(266)
+                ),
+            ]
+        );
+        // No record went: the amount line alone.
+        assert_eq!(
+            lines(Some(13), None),
+            [(
+                Place::Chat,
+                Said::official("synthetic hurt for 13.").typed(283)
+            )]
+        );
+        // A record from the server: its line alone, in its colour.
+        assert_eq!(
+            lines(None, Some((12131, 329))),
+            [(
+                Place::Chat,
+                Said::official("SYNTHETIC-YOU synthetic burn.").typed(329)
+            )]
+        );
+        // Without the installation's strings nothing prints.
+        let unworded = Notice::EnvironmentalDamage {
+            reported: Some(13),
+            record: None,
+        };
+        assert_eq!(wording(&unworded, None), []);
+    }
 
     #[test]
     fn a_bearing_names_its_side_word_by_its_words() {
