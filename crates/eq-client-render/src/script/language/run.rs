@@ -34,6 +34,9 @@ pub(in crate::script) struct Run {
     pc: usize,
     next_action: Duration,
     yielded_actions: usize,
+    /// Whether the run keeps the default length's counts of statements,
+    /// actions and loop iterations; the player's longer length lifts them.
+    counted: bool,
     /// The `else` line just entered by a false condition, until the driver
     /// checks it for a breakpoint.
     edge: Option<usize>,
@@ -54,8 +57,9 @@ struct Frame {
 
 struct Iteration {
     header: usize,
-    number: u16,
-    limit: u16,
+    number: u64,
+    /// None for a `while` with no written cap.
+    limit: Option<u64>,
 }
 
 impl Run {
@@ -72,6 +76,7 @@ impl Run {
             pc: 0,
             next_action: Duration::ZERO,
             yielded_actions: 0,
+            counted: true,
             edge: None,
         };
         run.skip_jumps();
@@ -147,6 +152,12 @@ impl Run {
                 .ops
                 .get(self.pc)
                 .is_some_and(|located| matches!(located.op, Op::Action(_)))
+    }
+
+    /// Keeps or lifts the default length's counts, as the player's run
+    /// length says.
+    pub(in crate::script) const fn counted(&mut self, counted: bool) {
+        self.counted = counted;
     }
 
     pub(in crate::script) fn tick(
@@ -235,22 +246,22 @@ impl Run {
             .expect("structured run has flow status");
         // A return is the end of a call, not a statement of its own.
         if !matches!(located.op, Op::Return { .. }) {
-            if flow.statements == MAX_EXECUTED {
+            if self.counted && flow.statements >= MAX_EXECUTED {
                 return Err(format!(
                     "maximum of {MAX_EXECUTED} executed statements reached"
                 ));
             }
-            flow.statements += 1;
+            flow.statements = flow.statements.saturating_add(1);
         }
 
         let header = self.pc;
         self.pc += 1;
         let tick = match &located.op {
             Op::Action(index) => {
-                if self.yielded_actions == MAX_STEPS {
+                if self.counted && self.yielded_actions >= MAX_STEPS {
                     return Err(format!("maximum of {MAX_STEPS} executed actions reached"));
                 }
-                self.yielded_actions += 1;
+                self.yielded_actions = self.yielded_actions.saturating_add(1);
                 let action = &self.actions[*index];
                 self.next_action = now + ACTION_INTERVAL;
                 Tick::Action(QueuedStep {
@@ -299,13 +310,13 @@ impl Run {
                 {
                     iteration.limit
                 } else {
-                    repeat_count(&self.evaluate(count, read)?)?
+                    Some(repeat_count(&self.evaluate(count, read)?, self.counted)?)
                 };
                 self.iteration(progress, header, exit, limit, true);
                 if let Some(variable) = variable
                     && let Some(entry) = self.loops.last().filter(|entry| entry.header == header)
                 {
-                    let value = Value::Int(i64::from(entry.number) - 1);
+                    let value = Value::Int(i64::try_from(entry.number - 1).unwrap_or(i64::MAX));
                     self.store(variable, value);
                 }
                 Tick::Logic
@@ -336,12 +347,11 @@ impl Run {
                 limit,
                 exit,
             } => {
-                let exhausted = self
-                    .loops
-                    .last()
-                    .is_some_and(|entry| entry.header == header && entry.number == entry.limit);
+                let exhausted = self.loops.last().is_some_and(|entry| {
+                    entry.header == header && Some(entry.number) == entry.limit
+                });
                 let take = exhausted || boolean(&self.evaluate(condition, read)?)?;
-                self.iteration(progress, header, *exit, *limit, take);
+                self.iteration(progress, header, *exit, limit.map(u64::from), take);
                 Tick::Logic
             }
             Op::Call {
@@ -419,21 +429,21 @@ impl Run {
         progress: &mut RunStatus,
         header: usize,
         exit: usize,
-        limit: u16,
+        limit: Option<u64>,
         take: bool,
     ) {
         let mut entering = self.loops.last_mut().filter(|entry| entry.header == header);
         let finished = entering
             .as_ref()
-            .is_some_and(|entry| entry.number == entry.limit);
-        let event = if !take || limit == 0 || finished {
+            .is_some_and(|entry| Some(entry.number) == entry.limit);
+        let event = if !take || limit == Some(0) || finished {
             if entering.is_some() {
                 self.loops.pop();
             }
             self.pc = exit;
             match (take, limit, &self.code.ops[header].op) {
                 (false, _, _) => "While condition is false".into(),
-                (_, 0, _) => "Range count is zero".into(),
+                (_, Some(0), _) => "Range count is zero".into(),
                 (_, _, Op::While { .. }) => "While iteration limit reached".into(),
                 _ => "For loop finished".into(),
             }
@@ -449,7 +459,10 @@ impl Run {
                 });
                 1
             };
-            format!("Iteration {number}/{limit}")
+            match limit {
+                Some(limit) => format!("Iteration {number}/{limit}"),
+                None => format!("Iteration {number}"),
+            }
         };
         self.show_loops(progress);
         progress.event(event);
@@ -529,12 +542,16 @@ fn boolean(value: &Value) -> Result<bool, String> {
     }
 }
 
-fn repeat_count(value: &Value) -> Result<u16, String> {
+/// A `for` loop's count: up to 100 under the default length, any count that
+/// isn't negative under the player's longer one.
+fn repeat_count(value: &Value, counted: bool) -> Result<u64, String> {
     match value {
-        Value::Int(value) if (0..=MAX_ITERATIONS).contains(value) => {
-            Ok(u16::try_from(*value).expect("iteration count is bounded"))
+        Value::Int(value) if !counted || *value <= MAX_ITERATIONS => {
+            u64::try_from(*value).map_err(|_| "range count can't be negative".into())
         }
-        Value::Int(_) => Err(format!("range count must be from 0 to {MAX_ITERATIONS}")),
+        Value::Int(_) => Err(format!(
+            "range count must be from 0 to {MAX_ITERATIONS} under the default run length"
+        )),
         Value::Unknown | Value::Stale => Err(format!("range count is {value}")),
         _ => unreachable!("range count type was checked during compilation"),
     }
@@ -751,6 +768,110 @@ mod tests {
                     .is_some_and(|error| error.message.contains(message)),
                 "{source}: {errors:?}"
             );
+        }
+    }
+
+    /// Runs a program offline under the default length's counts or without
+    /// them, for at most `ticks` statements: its result, flow, reports and
+    /// whether it ended.
+    fn lengthened(
+        source: &str,
+        counted: bool,
+        ticks: usize,
+    ) -> (Result<(), String>, RunStatus, usize, bool) {
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        let (_, actions, code) = program.into_parts();
+        let mut run = Run::new(code.expect("a structured program"), actions);
+        run.counted(counted);
+        let mut status = RunStatus {
+            flow: Some(FlowStatus::default()),
+            ..RunStatus::default()
+        };
+        let mut reports = 0;
+        let mut now = Duration::ZERO;
+        for _ in 0..ticks {
+            if run.done() {
+                break;
+            }
+            now += Duration::from_secs(1);
+            match run.execute(&|_| Value::Unknown, &mut status, now) {
+                Ok(Tick::Action(_)) => reports += 1,
+                Ok(Tick::Logic) => (),
+                Err(error) => return (Err(error), status, reports, false),
+            }
+        }
+        let done = run.done();
+        (Ok(()), status, reports, done)
+    }
+
+    #[test]
+    fn only_the_default_length_counts_statements_actions_and_loops() {
+        // A while with no written cap: the default's 5,000 statements end it;
+        // a longer length lets it go, one statement a tick, until Stop.
+        let spin = "while True:\n    pass\n";
+        let (result, ..) = lengthened(spin, true, 20_000);
+        assert_eq!(
+            result.unwrap_err(),
+            "maximum of 5000 executed statements reached"
+        );
+        let (result, status, _, done) = lengthened(spin, false, 20_000);
+        assert!(result.is_ok() && !done);
+        assert_eq!(status.flow.as_ref().unwrap().statements(), 20_000);
+        // Nothing the run keeps grows with its length (L4).
+        assert!(status.events().len() <= 64);
+        assert!(status.flow.as_ref().unwrap().loops().len() <= 1);
+        // 600 actions: past the default's 500.
+        let many = "for i in range(600):\n    report(\"x\")\n";
+        let (result, ..) = lengthened(many, true, 5_000);
+        assert!(
+            result
+                .unwrap_err()
+                .contains("range count must be from 0 to 100")
+        );
+        let (result, _, reports, done) = lengthened(many, false, 5_000);
+        assert!(result.is_ok() && done);
+        assert_eq!(reports, 600);
+        let capped = "for i in range(100):\n    for j in range(6):\n        report(\"x\")\n";
+        let (result, ..) = lengthened(capped, true, 5_000);
+        assert_eq!(
+            result.unwrap_err(),
+            "maximum of 500 executed actions reached"
+        );
+        // A range past 100 is refused only under the default length.
+        let wide = "for i in range(101):\n    pass\n";
+        let (result, ..) = lengthened(wide, true, 1_000);
+        assert!(result.unwrap_err().contains("under the default run length"));
+        let (result, _, _, done) = lengthened(wide, false, 1_000);
+        assert!(result.is_ok() && done);
+        let (result, ..) = lengthened("for i in range(0 - 1):\n    pass\n", false, 10);
+        assert!(result.unwrap_err().contains("negative"));
+    }
+
+    #[test]
+    fn a_longer_length_keeps_the_action_pace() {
+        for counted in [true, false] {
+            let source = "n: int = 0\nreport(\"a\")\nreport(\"b\")\n";
+            let program = Program::parse(source, Path::new(".")).unwrap();
+            let (_, actions, code) = program.into_parts();
+            let mut run = Run::new(code.unwrap(), actions);
+            run.counted(counted);
+            let mut status = RunStatus {
+                flow: Some(FlowStatus::default()),
+                ..RunStatus::default()
+            };
+            let start = Duration::from_secs(1);
+            // The declaration is logic; the first report is the action.
+            assert!(matches!(
+                run.execute(&|_| Value::Unknown, &mut status, start),
+                Ok(Tick::Logic)
+            ));
+            assert!(matches!(
+                run.execute(&|_| Value::Unknown, &mut status, start),
+                Ok(Tick::Action(_))
+            ));
+            // The next action waits the same 100 ms under any length.
+            assert!(run.paced(start + ACTION_INTERVAL.saturating_sub(Duration::from_millis(1))));
+            assert!(!run.paced(start + ACTION_INTERVAL));
         }
     }
 }

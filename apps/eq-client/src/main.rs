@@ -220,6 +220,13 @@ struct Arguments {
     /// to the window cancels held script input. Requires --script or --script-control.
     #[arg(long, requires = "script_execution")]
     script_background: bool,
+
+    /// How long each script run may go: `default` (15 minutes, 5,000
+    /// statements, 500 actions, loops of 100), a number of minutes from 1 to
+    /// 1440 with no counts, or `none` for no limit. Paces, waits and Stop
+    /// stay the same. The workbench's length selector starts here.
+    #[arg(long, default_value = "default", value_parser = eq_client_render::script::RunLength::parse)]
+    script_run_length: eq_client_render::script::RunLength,
     /// Enable a local script request/status inbox in a new directory.
     /// Explicit new runs can be submitted after the previous run ends.
     #[arg(long, conflicts_with = "screenshot")]
@@ -758,6 +765,7 @@ fn viewer_config(
         } else {
             eq_client_render::script::InputMode::Attended
         },
+        script_run_length: arguments.script_run_length,
         script_control: arguments.script_control,
         script_editor: arguments.script_editor,
         script_path: arguments.script.clone(),
@@ -930,6 +938,30 @@ mod tests {
         let args = Arguments::try_parse_from(["eq-client", "--demo-weather"]).unwrap();
         assert_eq!(mode(&args, None), Ok(Mode::Offline));
         assert!(Arguments::try_parse_from(["eq-client", "--demo-weather", "--online"]).is_err());
+    }
+
+    #[test]
+    fn the_script_run_length_is_the_players_flag() {
+        use eq_client_render::script::RunLength;
+        let length = |extra: &[&str]| {
+            let mut words = vec!["eq-client"];
+            words.extend_from_slice(extra);
+            Arguments::try_parse_from(words).map(|args| args.script_run_length)
+        };
+        assert_eq!(length(&[]).unwrap(), RunLength::Default);
+        for (word, wanted) in [
+            ("default", RunLength::Default),
+            ("30", RunLength::Minutes(30)),
+            ("none", RunLength::Unlimited),
+        ] {
+            assert_eq!(length(&["--script-run-length", word]).unwrap(), wanted);
+        }
+        for refused in ["0", "1441", "forever"] {
+            assert!(
+                length(&["--script-run-length", refused]).is_err(),
+                "{refused}"
+            );
+        }
     }
 
     #[test]
