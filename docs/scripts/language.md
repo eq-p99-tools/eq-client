@@ -46,6 +46,7 @@ Each field below reads only what one of the client's windows or typed commands a
 - `group.present` is whether the player is in a group, and `group.count` how many others it holds. `group.member1.name` to `group.member5.name` are the group window's others from the top, and `group.member1.hp_percent` to `group.member5.hp_percent` their health bars, unknown while a member is out of view.
 - `buffs.count` is how many effects the effects window shows, and `buff1.spell` to `buff50.spell` their spells in the order the window draws them. They are unknown before the server lists the player's effects.
 - `chat.last_tell` is the text of the last tell the chat window shows, and `chat.last_tell_from` who sent it. A run that reads them keeps them on the player's own screen: no log, `report()` line, Runbook export or gap record carries them.
+- `filter.ooc`, `filter.shouts`, `filter.bard_songs` and the other Filters page rows, by each kind's stable name, are the mode the row's label shows: `show`, `hide`, `mine` or `group`. A row the playing server's page hides is unknown. Swarm pets' deaths have no row, so no field.
 
 Nothing on screen gives a target's distance, the player's carried weight or heading, or the target's level, so no field reads them.
 

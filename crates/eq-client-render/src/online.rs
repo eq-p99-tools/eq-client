@@ -10,6 +10,17 @@ use eq_client_core::{
 };
 use std::sync::{LazyLock, Mutex, mpsc::Receiver};
 
+/// How many of the session's updates the window takes at a time.
+const BATCH: usize = 256;
+
+/// How long the window keeps taking batches of a backlog in one frame,
+/// outside the loading screen, before it leaves the rest for the next.
+const CATCH_UP: std::time::Duration = std::time::Duration::from_millis(8);
+
+/// The same while the loading screen is up, or the new zone's admission
+/// waits for the player's casting gesture, when nothing on screen moves.
+const LOADING_CATCH_UP: std::time::Duration = std::time::Duration::from_millis(100);
+
 const SPELL_DATA_UNAVAILABLE_NOTICE: &str =
     "Spell data unavailable; spell-dependent actions are paused.";
 
@@ -830,118 +841,139 @@ pub(super) fn receive(
         return;
     };
     let mut ended = false;
-    let batch: Vec<_> = std::iter::from_fn(|| match receiver.try_recv() {
-        Ok(update) => Some(update),
-        Err(std::sync::mpsc::TryRecvError::Empty) => None,
-        Err(std::sync::mpsc::TryRecvError::Disconnected) => {
-            ended = true;
-            None
-        }
-    })
-    .take(256)
-    // Provider facts precede the admission/loading gate. The producer binding
-    // is retained verbatim, including for old queued Connecting notifications.
-    .filter(|update| {
-        if let WorldUpdate::SpellTable(fact) = update {
-            if spell_names
-                .as_deref_mut()
-                .is_some_and(|spells| spells.receive(fact))
-            {
-                chat.history
-                    .push(super::chat::system_line(SPELL_DATA_UNAVAILABLE_NOTICE));
+    // The window takes batches until it has spent its share of the frame,
+    // so it catches up after any stall without one frame taking too long.
+    // While the loading screen is up nothing on screen moves, so the share
+    // is larger: a busy zone's arrival is taken as it comes.
+    let waiting = loading.as_ref().is_some_and(|loading| loading.waiting());
+    let covered = loading
+        .as_ref()
+        .is_some_and(|loading| loading.waiting() || loading.covered());
+    let share = if covered { LOADING_CATCH_UP } else { CATCH_UP };
+    let started = std::time::Instant::now();
+    loop {
+        let mut taken = 0;
+        let batch: Vec<_> = std::iter::from_fn(|| match receiver.try_recv() {
+            Ok(update) => Some(update),
+            Err(std::sync::mpsc::TryRecvError::Empty) => None,
+            Err(std::sync::mpsc::TryRecvError::Disconnected) => {
+                ended = true;
+                None
             }
-            false
-        } else {
-            true
-        }
-    })
-    .collect();
-    if let Some(outbox) = outbox.as_deref() {
-        outbox.set_spell_ready(
-            spell_names
-                .as_deref()
-                .is_none_or(super::spellbook::SpellNames::ready),
-        );
-    }
-    // The installed client's spell data, when there is one.
-    let spells: &dyn SpellCatalog = match spell_names.as_deref() {
-        Some(names) => names,
-        None => &NoSpells,
-    };
-    // A worker that stopped without saying so (for example after a panic) ends
-    // the session here, instead of leaving it looking connected; once any
-    // held news has applied, so it is said once.
-    let lost = (ended && !state.world.ended() && state.held.is_empty())
-        .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
-    if lost.is_some() && vanished(front.as_deref()) {
-        warn!("The session stopped without saying why");
-    }
-    let waiting = loading.is_some_and(|loading| loading.waiting());
-    let news = state.news(batch.into_iter().chain(lost), waiting);
-    for update in news {
-        let (changes, before, old_gems) =
-            apply(&mut state.world, &update, spells, outbox.as_deref());
-        state.observe_server_placement(&changes);
-        trace(&update, &changes, &state.world);
-        panels.merchant_news(&update, &changes, &state.world);
-        if let Some(reason) = changes.reset {
-            chat.socials = super::socials::Inbox::default();
-            match reason {
-                Reset::Entered => chat.admit_links(&state),
-                Reset::Camped | Reset::Lost { ended: true, .. } => chat.end_session(),
-                _ => (),
-            }
-            state.reset_presentation((reason, old_gems), &mut panels, &mut scene, &mut commands);
-        }
-        panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
-        if let Some(moved) = &changes.moved {
-            panels.moved(
-                state.world.session_id(),
-                moved,
-                scene.player(),
-                state.world.carriers(),
-            );
-        }
-        // Offline, the zone on screen is the viewer's own, and the preview
-        // admits its player into it.
-        if changes.entered
-            && state.enabled
-            && let Some(directory) = &settings.0.eq_directory
-        {
-            // The session is this zone's even if its assets fail to load, so
-            // nothing of the previous zone stays on screen either.
-            scene.leave(&mut commands, &mut state.regions);
-            let luclin_models = own_luclin_models(state.world(), options.as_deref());
-            start_entry(
-                &mut state,
-                (&settings.0, luclin_models),
-                directory,
-                &mut chat,
-            );
-        }
-        if let Some(position) = changes.placed {
-            let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
-            info!(from = ?before.map(at), to = ?at(position), "Server corrected the player");
-            if changes.same_zone_relocation {
-                panels.motion.same_zone_landed();
+        })
+        .take(BATCH)
+        .inspect(|_| taken += 1)
+        // Provider facts precede the admission/loading gate. The producer binding
+        // is retained verbatim, including for old queued Connecting notifications.
+        .filter(|update| {
+            if let WorldUpdate::SpellTable(fact) = update {
+                if spell_names
+                    .as_deref_mut()
+                    .is_some_and(|spells| spells.receive(fact))
+                {
+                    chat.history
+                        .push(super::chat::system_line(SPELL_DATA_UNAVAILABLE_NOTICE));
+                }
+                false
             } else {
-                panels.motion.rebase();
+                true
             }
-            if let Some(sets) = panels.spell_sets.as_mut() {
-                sets.interrupt("The server moved the character.");
-            }
-            scene.place(&mut commands, super::zone::placement(position), None);
+        })
+        .collect();
+        if let Some(outbox) = outbox.as_deref() {
+            outbox.set_spell_ready(
+                spell_names
+                    .as_deref()
+                    .is_none_or(super::spellbook::SpellNames::ready),
+            );
         }
-        if let Some(pad) = changes.local_pad {
-            info!(entry = ?pad.entry, landing = ?pad.landing, "Crossed a local WLD pad");
-            panels.motion.same_zone_landed();
-            if let Some(sets) = panels.spell_sets.as_mut() {
-                sets.interrupt("The character crossed a pad.");
-            }
-            scene.place(&mut commands, super::zone::placement(pad.landing), None);
+        // The installed client's spell data, when there is one.
+        let spells: &dyn SpellCatalog = match spell_names.as_deref() {
+            Some(names) => names,
+            None => &NoSpells,
+        };
+        // A worker that stopped without saying so (for example after a panic) ends
+        // the session here, instead of leaving it looking connected; once any
+        // held news has applied, so it is said once.
+        let lost = (ended && !state.world.ended() && state.held.is_empty())
+            .then_some(WorldUpdate::Connection(eq_client_core::world::Link::Ended));
+        if lost.is_some() && vanished(front.as_deref()) {
+            warn!("The session stopped without saying why");
         }
-        if let WorldUpdate::Chat(line) = update {
-            chat.receive(line, &state);
+        let news = state.news(batch.into_iter().chain(lost), waiting);
+        for update in news {
+            let (changes, before, old_gems) =
+                apply(&mut state.world, &update, spells, outbox.as_deref());
+            state.observe_server_placement(&changes);
+            trace(&update, &changes, &state.world);
+            panels.merchant_news(&update, &changes, &state.world);
+            if let Some(reason) = changes.reset {
+                chat.socials = super::socials::Inbox::default();
+                match reason {
+                    Reset::Entered => chat.admit_links(&state),
+                    Reset::Camped | Reset::Lost { ended: true, .. } => chat.end_session(),
+                    _ => (),
+                }
+                state.reset_presentation(
+                    (reason, old_gems),
+                    &mut panels,
+                    &mut scene,
+                    &mut commands,
+                );
+            }
+            panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
+            if let Some(moved) = &changes.moved {
+                panels.moved(
+                    state.world.session_id(),
+                    moved,
+                    scene.player(),
+                    state.world.carriers(),
+                );
+            }
+            // Offline, the zone on screen is the viewer's own, and the preview
+            // admits its player into it.
+            if changes.entered
+                && state.enabled
+                && let Some(directory) = &settings.0.eq_directory
+            {
+                // The session is this zone's even if its assets fail to load, so
+                // nothing of the previous zone stays on screen either.
+                scene.leave(&mut commands, &mut state.regions);
+                let luclin_models = own_luclin_models(state.world(), options.as_deref());
+                start_entry(
+                    &mut state,
+                    (&settings.0, luclin_models),
+                    directory,
+                    &mut chat,
+                );
+            }
+            if let Some(position) = changes.placed {
+                let at = |p: eq_client_core::WorldPosition| [p.x, p.y, p.z];
+                info!(from = ?before.map(at), to = ?at(position), "Server corrected the player");
+                if changes.same_zone_relocation {
+                    panels.motion.same_zone_landed();
+                } else {
+                    panels.motion.rebase();
+                }
+                if let Some(sets) = panels.spell_sets.as_mut() {
+                    sets.interrupt("The server moved the character.");
+                }
+                scene.place(&mut commands, super::zone::placement(position), None);
+            }
+            if let Some(pad) = changes.local_pad {
+                info!(entry = ?pad.entry, landing = ?pad.landing, "Crossed a local WLD pad");
+                panels.motion.same_zone_landed();
+                if let Some(sets) = panels.spell_sets.as_mut() {
+                    sets.interrupt("The character crossed a pad.");
+                }
+                scene.place(&mut commands, super::zone::placement(pad.landing), None);
+            }
+            if let WorldUpdate::Chat(line) = update {
+                chat.receive(line, &state);
+            }
+        }
+        if ended || taken < BATCH || started.elapsed() >= share {
+            break;
         }
     }
     let admission = state.world.session_id();
@@ -2347,6 +2379,11 @@ mod tests {
 
     fn held_rules_receiver() -> (App, std::sync::mpsc::Sender<WorldUpdate>) {
         let (sender, receiver) = std::sync::mpsc::channel();
+        (loading_app(receiver), sender)
+    }
+
+    /// An admitted session behind a loading screen that is up.
+    fn loading_app(receiver: std::sync::mpsc::Receiver<WorldUpdate>) -> App {
         let mut app = crate::testing::app();
         let mut state = OnlineState::new(true);
         testing::admit(&mut state, 1, testing::player(7));
@@ -2357,7 +2394,30 @@ mod tests {
             .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
             .init_resource::<Assets<StandardMaterial>>()
             .add_systems(Update, receive);
-        (app, sender)
+        app
+    }
+
+    #[test]
+    fn a_waiting_admission_takes_the_whole_backlog_in_one_frame() {
+        let queue = BATCH * 4;
+        let (sender, receiver) = std::sync::mpsc::sync_channel(queue);
+        let mut app = loading_app(receiver);
+        sender.try_send(held_entry(2)).unwrap();
+        for n in 1..queue {
+            sender
+                .try_send(rules_update(n.try_into().unwrap()))
+                .unwrap();
+        }
+        app.update();
+        // The queue has room for all of it again: the one frame took four
+        // batches, not one.
+        for n in 0..queue {
+            sender
+                .try_send(rules_update(n.try_into().unwrap()))
+                .unwrap();
+        }
+        // What came after the admission still waits for the zone.
+        assert_eq!(world(&app).session_id(), Some(1));
     }
 
     fn rules_update(pvp: u32) -> WorldUpdate {

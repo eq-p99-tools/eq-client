@@ -19,6 +19,10 @@ use std::borrow::Cow;
 /// The page's name, which also marks its content as generated.
 pub(super) const PAGE: &str = "EQC_FiltersPage";
 
+/// The Filters page's viewport, which `/filter` shows.
+#[derive(bevy::prelude::Component, Clone, Copy, Debug)]
+pub(crate) struct FiltersPage;
+
 const BUTTON: &str = "EQC_Filter_";
 const VALUE: &str = "ValueLabel";
 const MARGIN: f32 = 10.0;
@@ -66,15 +70,29 @@ fn row_button(template: &Button, category: FilterCategory, area: Area) -> Button
     button
 }
 
-/// The skin's pages, and for the Options window a Filters page after them,
-/// where the skin has a checkbox to cut its buttons from.
-pub(super) fn pages(pages: &[Page], owner: WindowId) -> Cow<'_, [Page]> {
+/// Whether a skin page is the skin's own filters page: one holding an
+/// `OFP_` control, or titled Filters.
+fn skin_filters(page: &Page) -> bool {
+    page.pieces.iter().any(|(id, _)| id.starts_with("OFP_"))
+        || page
+            .title
+            .as_deref()
+            .is_some_and(|title| title.trim().eq_ignore_ascii_case("filters"))
+}
+
+/// The skin's pages, and for the Options window this client's Filters page,
+/// where the skin has a button to cut its rows from. The page takes the
+/// place of the skin's own filters page, whose controls are not wired, so
+/// the window keeps one Filters tab in the skin's place; a skin without one
+/// gets the page after its own. The page's note wraps within the page's
+/// width, `page_width`.
+pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_, [Page]> {
     if owner != WindowId::Options || pages.iter().any(|page| page.name == PAGE) {
         return Cow::Borrowed(pages);
     }
-    let Some(first) = pages.first() else {
+    if pages.is_empty() {
         return Cow::Borrowed(pages);
-    };
+    }
     let pieces = || pages.iter().flat_map(|page| &page.pieces);
     // A plain button where the skin has one, else its checkbox.
     let template = pieces()
@@ -125,7 +143,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId) -> Cow<'_, [Page]> {
                 Area {
                     x: MARGIN,
                     y: MARGIN,
-                    width: 2.0 * width + GAP,
+                    width: (2.0 * width + GAP).min(page_width - 2.0 * MARGIN).max(60.0),
                     height: 3.0 * height,
                 },
                 Align::Left,
@@ -133,7 +151,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId) -> Cow<'_, [Page]> {
         }),
     )];
     let mut y = MARGIN + 3.0 * height + GAP;
-    for category in FilterCategory::ALL {
+    for category in eq_client_core::chat_filters::rows() {
         let area = Area {
             x: MARGIN,
             y,
@@ -159,15 +177,31 @@ pub(super) fn pages(pages: &[Page], owner: WindowId) -> Cow<'_, [Page]> {
         ));
         y += height + 2.0;
     }
+    Cow::Owned(placed(pages, rows))
+}
+
+/// The skin's pages with this client's Filters page of `rows` in the place
+/// of the skin's own, or after them. `pages` is not empty.
+fn placed(pages: &[Page], rows: Vec<(String, Element)>) -> Vec<Page> {
     let mut all = pages.to_vec();
-    all.push(Page {
+    let at = all.iter().position(skin_filters);
+    let base = at.map_or(&pages[0], |at| &all[at]);
+    let page = Page {
         name: PAGE.into(),
-        title: Some("Filters".into()),
+        title: base
+            .title
+            .clone()
+            .filter(|_| at.is_some())
+            .or_else(|| Some("Filters".into())),
         pieces: rows,
         tooltip: Some("What the server sends of each kind of message".into()),
-        ..first.clone()
-    });
-    Cow::Owned(all)
+        ..base.clone()
+    };
+    match at {
+        Some(at) => all[at] = page,
+        None => all.push(page),
+    }
+    all
 }
 
 /// The generated page's full height, for its scrolling viewport.
@@ -187,24 +221,37 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_page_has_a_row_for_every_kind_and_is_added_once() {
+    fn the_page_has_a_row_for_every_kind_with_one_and_is_added_once() {
         let first = super::super::qol::tests::source();
-        let made = pages(std::slice::from_ref(&first), WindowId::Options);
+        let made = pages(std::slice::from_ref(&first), WindowId::Options, 300.0);
         assert_eq!(made.len(), 2);
         let page = &made[1];
         assert_eq!(page.name, PAGE);
+        // The note wraps within the page (6.494d's look).
+        let note = page.pieces.iter().find(|(id, _)| id == NOTE_ID);
+        match note.map(|(_, element)| element) {
+            Some(Element::Label(label)) => {
+                assert!(label.area.x + label.area.width <= 300.0 - MARGIN);
+                assert!(label.wraps);
+            }
+            other => panic!("{other:?}"),
+        }
         let buttons: Vec<_> = page
             .pieces
             .iter()
             .filter_map(|(id, _)| filter_button(id))
             .collect();
-        assert_eq!(buttons, FilterCategory::ALL);
+        let rows: Vec<_> = FilterCategory::ALL
+            .into_iter()
+            .filter(|category| *category != FilterCategory::SwarmPetDeath)
+            .collect();
+        assert_eq!(buttons, rows);
         let values: Vec<_> = page
             .pieces
             .iter()
             .filter_map(|(id, _)| filter_value(id))
             .collect();
-        assert_eq!(values, FilterCategory::ALL);
+        assert_eq!(values, rows);
         for (id, element) in &page.pieces {
             if let Element::Button(button) = element {
                 assert!(!button.checkbox, "{id}");
@@ -212,12 +259,30 @@ mod tests {
             }
         }
         assert!(content_height(page).unwrap() > 24.0 * 14.0);
-        assert_eq!(pages(&made, WindowId::Options).len(), 2);
+        assert_eq!(pages(&made, WindowId::Options, 300.0).len(), 2);
         assert_eq!(
-            pages(std::slice::from_ref(&first), WindowId::Spellbook).len(),
+            pages(std::slice::from_ref(&first), WindowId::Spellbook, 300.0).len(),
             1
         );
         assert_eq!(filter_button("EQC_Filter_ooc"), Some(FilterCategory::Ooc));
+        // The skin's own filters page gives way to this one, in its place.
+        let mut skin = first.clone();
+        skin.name = "OptionsFilterPage".into();
+        skin.title = Some("Filters".into());
+        let mut after = first.clone();
+        after.name = "OptionsLaterPage".into();
+        after.title = Some("Later".into());
+        let skin_pages = [first.clone(), skin, after];
+        let made = pages(&skin_pages, WindowId::Options, 300.0);
+        let names: Vec<_> = made.iter().map(|page| page.name.as_str()).collect();
+        assert_eq!(names, [first.name.as_str(), PAGE, "OptionsLaterPage"]);
+        assert_eq!(made[1].title.as_deref(), Some("Filters"));
+        assert!(
+            made[1]
+                .pieces
+                .iter()
+                .any(|(id, _)| filter_button(id).is_some())
+        );
         assert_eq!(filter_button("EQC_Filter_oocValueLabel"), None);
         assert_eq!(
             filter_value("EQC_Filter_oocValueLabel"),

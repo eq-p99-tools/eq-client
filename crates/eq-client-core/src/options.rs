@@ -861,7 +861,7 @@ mod tests {
         assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
         assert!(text.contains("loot_no_drop = 1\n"));
-        assert!(text.contains("filter_auctions = hide\n"));
+        assert!(text.contains("Channel04 = 0\n"));
         assert!(text.contains("attack_on_assist = true\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // A file from before the QoL page keeps its choices there.
