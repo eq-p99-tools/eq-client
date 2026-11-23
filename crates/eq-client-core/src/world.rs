@@ -637,8 +637,9 @@ impl ClientWorld {
     }
 
     /// The titles and suffixes the player may choose from, as the latest
-    /// list of this admission named them; none until the player asks. No
-    /// window asks yet: the program's title window is unread (R49-14).
+    /// list in this zone named them; none until the server sends one. No
+    /// window asks for it yet: the title window is read (R49-14) but waits,
+    /// as titles are outside Project 1999 and Quarm (Adam, 11-23).
     #[must_use]
     pub fn titles(&self) -> Option<&[eq_network_game::names::TitleChoice]> {
         self.zone.titles.as_deref()
@@ -1296,8 +1297,9 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
-            // The titles the player may choose: kept, latest first, only where
-            // the session offers them, until the zone changes.
+            // The titles the player may choose: kept, the latest replacing
+            // the one before, only where the session offers them, until the
+            // zone changes.
             WorldEvent::TitleList(titles) => {
                 if self.in_world() && self.can(crate::Capability::Titling) {
                     self.zone.titles = Some(titles.clone());

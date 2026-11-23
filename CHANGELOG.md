@@ -14,6 +14,7 @@
   - **When it shows:** a kind 43 for another spawn only sets the flag, with no redraw, so its helm changes at that spawn's next head wear change (inferred, as the read gives).
   - **Your own** follows the Show My Helm option at once, as before.
   - The flag counts only where the session offers Show My Helm (`Capability::ShowingHelm`, stock `EQEmu`). Project 1999's records aren't checked, and `EQMac` and `RoF2` records never say it, so every helm shows there as before.
+- Keep the latest title list (checklist 6.516), lifted onto main from #574. Where the session offers titles (stock EQEmu only), the core keeps the list the server last sent in this zone (`ClientWorld::titles`), forgotten on a zone change; elsewhere a list is ignored. Nothing asks for the list or chooses a title yet. Read R49-14 has now read the program's title window, but titles are outside Project 1999 and Quarm, so the window waits under Adam's 11-23 priority rule.
 
 - Destroy the coins on the cursor (gap 3.8, checklist 6.512), as the
   Titanium program's Destroy button does (read R49-11). With coins on the
