@@ -61,10 +61,15 @@ pub(super) fn check(
         .copied()
         .flatten()
         .ok_or_else(|| crate::chat::Said::own(super::empty_gem(gem, map)))?;
-    if let Some(refusal) = busy(world, map) {
+    // While a Bard sings and no other cast is under way, a gem press stops
+    // the song whatever its timers or the mana, and casts nothing
+    // (0x4ecb56, read R49-21c); a forget goes too ([I], R49-48 a). The
+    // session decides both.
+    let singing = world.casting().singing.is_some() && !world.casting().holds_actions();
+    if !singing && let Some(refusal) = busy(world, map) {
         return Err(refusal);
     }
-    if forgetting {
+    if forgetting || singing {
         return Ok(spell_id);
     }
     if mana_cost

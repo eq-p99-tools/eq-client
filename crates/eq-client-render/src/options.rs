@@ -873,10 +873,7 @@ mod tests {
             &profile,
             eq_client_core::GameDialect::EqMac,
         );
-        assert_eq!(
-            eqmac.get(FilterCategory::DamageOverTime),
-            FilterMode::MineOnly
-        );
+        assert_eq!(eqmac.get(FilterCategory::DamageOverTime), FilterMode::Show);
         assert_eq!(eqmac.get(FilterCategory::Ooc), FilterMode::Hide);
         // A character with no file of their own reads the defaults.
         let other = CharacterProfile {
