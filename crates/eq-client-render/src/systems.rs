@@ -434,7 +434,7 @@ pub(super) fn schedule(app: &mut App) {
                         spellbook::search::present,
                         spellbook::sets::ui::present,
                     ),
-                    skinned::tabs,
+                    (skinned::open_filters, skinned::tabs).chain(),
                     (abilities::present, crate::combat_abilities::present),
                     (
                         skinned::slide,

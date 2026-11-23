@@ -68,6 +68,33 @@
   session show in chat. Repins eq-network to 66900af (#339), which also
   brings the duel offer and `/surname` answers and the session's report of
   each server message it could not read (none of them shown or logged yet).
+- Keep the server filters as the Titanium program keeps them (read R49-2,
+  checklist 6.494a to c), on eq-network #407.
+  - **Rows and choices:** the Filters page lists the program's 28 rows in
+    its order but swarm pets' deaths, which has no row there either, each
+    stepping through its own choices in the program's order. Bad words start
+    filtered, as there.
+  - **Keys:** the options file keeps each row under the original's
+    `eqclient.ini` key (`Channel00`, `BadWord`, `PCSpells` and the rest) as
+    its choice's index; an index outside the row's choices gives its
+    default. They stay per character, this client's choice (the original
+    keeps one set per install). The `filter_<kind>` lines of the first
+    filters change are no longer read.
+  - **`/filter`** shows the Options window on the Filters page, reading no
+    words and sending nothing, as the program does.
+  - **At once on Titanium:** a change goes to the server at once on EQEmu
+    and P99 alike, as the program sends it again on every change; Mac-era
+    servers take it at the next zone-in. P99's first use is attended.
+  - **Scripts:** `filter.<kind>` reads a row and `click("filter", kind)`
+    steps it.
+  - **Page note:** shorter, and wrapped within the page (6.494d's look
+    found it ran past the window's edge).
+  - A hidden row hides only where the server honours it; the program's own
+    local hiding (stuns, others' environmental lines, spell and damage
+    lines) is the next change.
+  - The repin passes the program's duel lines (`WorldEvent::DuelNews`)
+    over until the duel slice shows them, and fills the new
+    `PlayerState::intoxication` in tests.
 
 - Keep server filters per character and give them to the session (parity
   item 6, recording checklist 6.494). Options gains a Filters page with one

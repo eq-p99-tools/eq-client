@@ -81,6 +81,10 @@ impl From<&str> for Said {
     }
 }
 
+/// A `/filter` asking for the Filters page ([`ChatState::filter_page`]).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FilterPage;
+
 /// A locally produced line in the System channel.
 pub(super) fn system_line(said: impl Into<Said>) -> ChatLine {
     let Said {
@@ -181,6 +185,9 @@ pub(super) struct ChatState {
     /// A window a slash command opens or closes, as `/raidwindow` does the
     /// Raid window, waiting for the toggle.
     pub toggled: Option<super::windows::WindowId>,
+    /// A `/filter`, waiting to show the Options window on its Filters page
+    /// ([`crate::skinned::open_filters`]).
+    pub filter_page: Option<FilterPage>,
     /// An explicit disconnect to handle before other gameplay input.
     pub departure: Option<super::login::Departure>,
     pub(super) socials: super::socials::Inbox,
@@ -564,6 +571,7 @@ impl ChatState {
             show_names_usage: _,
             ui_scale: _,
             toggled: _,
+            filter_page: _,
             draft: _,
             refusals: _,
         } = self;
@@ -2333,6 +2341,16 @@ pub(super) fn client_request_in_scope(
         state.inspect_toggled = Some(super::dialogs::InspectToggle);
         return Some(Ok(()));
     }
+    // `/filter` reads no words and sends nothing: it shows the Options
+    // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
+    if input
+        .split_whitespace()
+        .next()
+        .is_some_and(|name| name.eq_ignore_ascii_case("/filter"))
+    {
+        state.filter_page = Some(FilterPage);
+        return Some(Ok(()));
+    }
     if input.eq_ignore_ascii_case("/log") {
         state.log_toggle = true;
         return Some(Ok(()));
@@ -3072,6 +3090,19 @@ mod tests {
     }
 
     #[test]
+    fn a_filter_command_shows_the_filters_page_and_sends_nothing() {
+        // eqgame.exe 0x46a245 reads no words (R49-2a).
+        for line in ["/filter", "/FILTER", "/filter ooc off"] {
+            let mut state = ChatState::default();
+            assert!(
+                matches!(client_request(line, &mut state), Some(Ok(()))),
+                "{line}"
+            );
+            assert_eq!(state.filter_page, Some(FilterPage), "{line}");
+        }
+    }
+
+    #[test]
     fn only_chat_channels_ask_for_a_message_on_a_bare_slash_command() {
         for name in ["say", "auction", "ooc", "guildsay", "gsay", "shout", "rsay"] {
             for rest in ["", "   "] {
@@ -3082,8 +3113,7 @@ mod tests {
             }
             assert!(outbound(ChatTab::All, &format!("/{name} hello")).is_ok());
         }
-        // `/filter`'s forms are unread (6.494a): every form gets this answer.
-        for name in ["help", "played", "unknown", "filter"] {
+        for name in ["help", "played", "unknown"] {
             assert_eq!(
                 outbound(ChatTab::All, &format!("/{name}")).unwrap_err(),
                 format!("This client does not take /{name} that way yet."),
