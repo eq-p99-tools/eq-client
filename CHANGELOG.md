@@ -7,6 +7,39 @@
   - **Fix:** a setting that rescales the layout (`Level::rescales_layout`, the interface scale alone) is held on its slider while pressed. The thumb and value label show the held size, and the setting changes once as the press ends, by the mouse's release or a script's one-frame press. Closing the window mid-drag discards the held size. The other sliders still set as they move.
   - **Recovery:** right-click the slider for 100%, or type `/uiscale` (100%) or `/uiscale N` with N a 5% step from 50 to 200. Scripts can use `slash("uiscale 100")` or the slider as before. The options file's `ui_scale` key still works too.
 
+- Drowning and lava now hurt on every Titanium server, public EQEmu and
+  P99 included, as the Titanium program reports them on any server
+  (eq-network's liquid change; read R25). **Characters on public servers
+  can now drown and burn with this client.** Take Environmental Damage,
+  on by default, still withholds every report; a test shows a P99-style
+  session reports neither liquid with it off. `docs/settings.md` says so.
+  Inferred parts are under checklist 6.491.
+  - **The program's lines (reads R49-3 e and R49-3b).** After each of its
+    own reports on a Titanium session, the client prints the program's
+    amount line, then the record's own line for the type, in the
+    program's colours: falls, drowning, lava, zone 200's lava and cold.
+    The death path sends no record, so it prints the amount line alone.
+  - **A record the server sends** for the player (a trap's, or `EQEmu`'s
+    echo of the player's own non-fall record) prints the program's line
+    for its type in place of a melee line. A trap's line is chosen by the
+    record's spell field, as the program does. `EQEmu`'s echo prints the
+    line a second time, as the official client does there, so log
+    parsers read the same lines.
+  - **Departure, labelled (6.491f):** the program takes an echoed
+    record's amount off its local HP a second time. This client keeps HP
+    the server's, so it does not.
+  - **A drowning record from the server empties the air counter** while
+    the head is under, as the program's does.
+  - **The tick** runs strictly more than a second after the last, as the
+    program's `> 1000 ms` (read R49-3 a).
+  - **Lava takes any resist,** a negative one included, as the program's
+    arithmetic does. Zone 200's type-244 heat and cold (type 246) have
+    their formulas in `environment` but nothing samples them: zone 200
+    needs disease resistance, and cold's regions wait on read R49-26.
+  - Other players' environmental lines, which the program builds with
+    their name under chat filter 0x11, are row 6.491g, not built here.
+  - Repin eq-network to c52bc91, its main with #326 merged. It brings
+    `WorldEvent::HazardReported` and `TRAP_DAMAGE_KIND`.
 - `/guildstatus` is offered, as read R49-6k reads it (checklist 6.575).
   - The Titanium program answers it itself and sends nothing: for the player a typed name finds (`/guildstatus Name`, ignoring case), or else for the target.
   - Lines 12256, 12257 and 12258 give the rank (member, officer, leader) with the name and the guild. 12259 gives the name alone for any other rank, and 12260 refuses a missing spawn, one that isn't a player, or a game master. All come in message type 0x111.
