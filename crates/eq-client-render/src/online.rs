@@ -507,6 +507,7 @@ impl Panels<'_> {
         changes: &Changes,
         state: &mut OnlineState,
         messages: Option<&hud::messages::Messages>,
+        filters: &eq_client_core::chat_filters::ChatFilters,
         chat: &mut super::chat::ChatState,
     ) {
         // Capture received facts here; action/draw systems apply the current
@@ -525,7 +526,8 @@ impl Panels<'_> {
         if changes.inventory {
             self.inventory.refresh(state.world.inventory().stale());
         }
-        for notice in &changes.notices {
+        let passes = |notice: &&_| super::notices::passes(notice, filters);
+        for notice in changes.notices.iter().filter(passes) {
             self.tell(notice, messages, chat);
         }
         if state.world.in_world() {
@@ -893,7 +895,14 @@ pub(super) fn receive(
             }
             state.reset_presentation((reason, old_gems), &mut panels, &mut scene, &mut commands);
         }
-        panels.show(&changes, &mut state, messages.as_deref(), &mut chat);
+        let filters = own_filters(state.world(), options.as_deref());
+        panels.show(
+            &changes,
+            &mut state,
+            messages.as_deref(),
+            &filters,
+            &mut chat,
+        );
         if let Some(moved) = &changes.moved {
             panels.moved(
                 state.world.session_id(),
@@ -1059,6 +1068,19 @@ fn log_grant(grant: eq_client_core::world::MotionGrant) {
             "Movement granted"
         );
     }
+}
+
+/// The player's own chat filters, as their options give them for the
+/// character playing, even before those load this frame.
+fn own_filters(
+    world: &eq_client_core::world::ClientWorld,
+    options: Option<&super::options::OptionsState>,
+) -> eq_client_core::chat_filters::ChatFilters {
+    options.map_or_else(Default::default, |options| {
+        options
+            .of(super::profile_files::playing(world).as_ref())
+            .chat_filters
+    })
 }
 
 /// The Luclin models the character just admitted chose: from their own

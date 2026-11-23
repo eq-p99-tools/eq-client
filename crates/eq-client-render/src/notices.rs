@@ -371,6 +371,16 @@ fn environmental_lines(
     amount.into_iter().chain(record).collect()
 }
 
+/// Whether the player's own filters let a notice through. The song stop's
+/// line is hidden where the Bard songs filter is "mine only": read R49-21
+/// gives the program's test as filter 9 holding 1, which read R49-2 names
+/// mine only (read R49-48 e asks to confirm the compare).
+pub(super) fn passes(notice: &Notice, filters: &eq_client_core::chat_filters::ChatFilters) -> bool {
+    use eq_client_core::filters::{FilterCategory, FilterMode};
+    !matches!(notice, Notice::SongStopped { .. })
+        || filters.get(FilterCategory::BardSongs) != FilterMode::MineOnly
+}
+
 /// How a notice reads, and where each part shows.
 #[allow(
     clippy::too_many_lines,
@@ -592,6 +602,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 disagreement.rule
             );
             Vec::new()
+        }
+        // The program's words, or this client's where the installation
+        // lacks them.
+        Notice::SongStopped { string_id, .. } => {
+            chat(official(Some(*string_id), &[], "Your song ends.", messages))
         }
         Notice::SongStopUnconfirmed { released_cast } => chat(
             if *released_cast {
@@ -1243,6 +1258,44 @@ mod tests {
             record: None,
         };
         assert_eq!(wording(&unworded, None), []);
+    }
+
+    #[test]
+    fn a_song_stop_says_the_programs_line_unless_the_bard_songs_filter_is_mine_only() {
+        use eq_client_core::chat_filters::ChatFilters;
+        use eq_client_core::filters::{FilterCategory, FilterMode};
+        let stopped = Notice::SongStopped {
+            spell_id: 42,
+            string_id: 12687,
+        };
+        let messages = Messages::parse("EQST0002\n0 1\n12687 Synthetic song stop.\n");
+        assert_eq!(
+            wording(&stopped, Some(&messages)),
+            [(Place::Chat, Said::official("Synthetic song stop."))]
+        );
+        assert_eq!(
+            wording(&stopped, None),
+            [(Place::Chat, "Your song ends.".into())]
+        );
+        // The filter, as read R49-21 gives the program's test (R49-48 e).
+        let mut filters = ChatFilters::default();
+        for (mode, shown) in [
+            (FilterMode::Show, true),
+            (FilterMode::MineOnly, false),
+            (FilterMode::GroupOnly, true),
+            (FilterMode::Hide, true),
+        ] {
+            filters.set(FilterCategory::BardSongs, mode);
+            assert_eq!(passes(&stopped, &filters), shown, "{mode:?}");
+        }
+        // Other lines don't follow it.
+        filters.set(FilterCategory::BardSongs, FilterMode::MineOnly);
+        assert!(passes(
+            &Notice::SongStopUnconfirmed {
+                released_cast: false
+            },
+            &filters
+        ));
     }
 
     #[test]
