@@ -457,6 +457,12 @@ impl ClientWorld {
         self.translocate.as_ref()
     }
 
+    /// The challenge to a duel waiting for the player's answer.
+    #[must_use]
+    pub const fn duel(&self) -> Option<&crate::socials::DuelQuestion> {
+        self.duel.as_ref()
+    }
+
     /// The resurrection offered and not yet answered.
     #[must_use]
     pub const fn resurrection(&self) -> Option<&ConsentOffer<ResurrectionOffer>> {

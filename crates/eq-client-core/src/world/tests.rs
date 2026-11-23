@@ -5668,7 +5668,7 @@ fn the_zone_keeps_how_spawns_show_their_names_and_where_corpses_lie() {
 #[test]
 fn what_other_players_ask_of_the_player_changes_nothing_yet() {
     use eq_network_game::popups::Popup;
-    use eq_network_game::socials::{DuelRefusal, DuelUpdate, VoiceKind, VoiceMacro};
+    use eq_network_game::socials::{VoiceKind, VoiceMacro};
     let mut world = admitted();
     let spawns = world.spawns().len();
     let events = [
@@ -5680,7 +5680,6 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
             popup_id: 1,
             negative_id: 0,
         }),
-        WorldEvent::YellForHelp { spawn_id: 5 },
         WorldEvent::VoiceMacro(VoiceMacro {
             from: "Example".into(),
             kind: VoiceKind::Group,
@@ -5691,21 +5690,193 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
             target_id: 7,
             inspector_id: 5,
         },
-        WorldEvent::Duel(DuelUpdate::Challenge { from: 5 }),
-        WorldEvent::Duel(DuelUpdate::Accepted {
-            challenger: 5,
-            accepter: 9,
-        }),
-        WorldEvent::Duel(DuelUpdate::Refused {
-            from: 5,
-            reason: DuelRefusal::Declined,
-        }),
     ];
     for event in events {
         assert_eq!(game(&mut world, event), Changes::default());
     }
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
+}
+
+#[test]
+fn duel_news_tells_the_player_of_their_own_duels() {
+    use eq_network_game::socials::{DuelRefusal, DuelUpdate};
+    let mut world = admitted();
+    let duel = |world: &mut ClientWorld, update| game(world, WorldEvent::Duel(update)).notices;
+    // With no question to answer, a challenge is told; one the server
+    // passes back naming the player is not.
+    assert_eq!(
+        duel(&mut world, DuelUpdate::Challenge { from: 5 }),
+        [Notice::Duel(DuelNotice::Challenged("a rat".into()))]
+    );
+    assert_eq!(
+        duel(&mut world, DuelUpdate::Challenge { from: 9 }),
+        Vec::<Notice>::new()
+    );
+    // A duel begins with the player in it, either side; others say nothing.
+    for (challenger, accepter) in [(9, 5), (5, 9)] {
+        assert_eq!(
+            duel(
+                &mut world,
+                DuelUpdate::Accepted {
+                    challenger,
+                    accepter
+                }
+            ),
+            [Notice::Duel(DuelNotice::Begun("a rat".into()))]
+        );
+    }
+    assert_eq!(
+        duel(
+            &mut world,
+            DuelUpdate::Accepted {
+                challenger: 5,
+                accepter: 44
+            }
+        ),
+        Vec::<Notice>::new()
+    );
+    // A challenger not in the spawn list is someone.
+    assert_eq!(
+        duel(
+            &mut world,
+            DuelUpdate::Refused {
+                from: 44,
+                reason: DuelRefusal::Considering
+            }
+        ),
+        [Notice::Duel(DuelNotice::Refused {
+            from: "Someone".into(),
+            reason: DuelRefusal::Considering
+        })]
+    );
+}
+
+#[test]
+fn a_duel_question_follows_its_admission_and_closes_once() {
+    use crate::confirmations::{ConsentClosure, ConsentId, ConsentKind};
+    use eq_network_game::socials::{DuelQuestion, DuelUpdate};
+    let mut world = admitted();
+    let id = |session_id, sequence| ConsentId {
+        session_id,
+        kind: ConsentKind::Duel,
+        sequence,
+    };
+    // Another admission's question is not this one's.
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::DuelOffer(DuelQuestion {
+                id: id(2, 1),
+                challenger: 5
+            })
+        )
+        .ignored
+    );
+    assert!(world.duel().is_none());
+    game(
+        &mut world,
+        WorldEvent::DuelOffer(DuelQuestion {
+            id: id(1, 1),
+            challenger: 5,
+        }),
+    );
+    assert_eq!(world.duel().map(|question| question.challenger), Some(5));
+    // Where the session asks, the challenge's own news says nothing more.
+    world.capabilities = vec![crate::Capability::Dueling];
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::Duel(DuelUpdate::Challenge { from: 5 })
+        )
+        .notices,
+        Vec::<Notice>::new()
+    );
+    // An older question's closing leaves it; its own closes it.
+    game(
+        &mut world,
+        WorldEvent::ConsentClosed {
+            id: id(1, 0),
+            closure: ConsentClosure::Interrupted,
+        },
+    );
+    assert!(world.duel().is_some());
+    game(
+        &mut world,
+        WorldEvent::ConsentClosed {
+            id: id(1, 1),
+            closure: ConsentClosure::Interrupted,
+        },
+    );
+    assert!(world.duel().is_none());
+    // A refused answer is told.
+    let refused = game(
+        &mut world,
+        WorldEvent::DuelRefused {
+            offer_id: id(1, 1),
+            session_id: 1,
+            reason: "gone".into(),
+        },
+    );
+    assert_eq!(
+        refused.notices,
+        [Notice::Duel(DuelNotice::AnswerRefused("gone".into()))]
+    );
+}
+
+#[test]
+fn a_yell_stats_and_coins_are_told_as_they_come() {
+    use crate::{Coins, stats::StatChange};
+    use eq_network_game::rewards::Reward;
+    let mut world = admitted();
+    assert_eq!(
+        game(&mut world, WorldEvent::YellForHelp { spawn_id: 5 }).notices,
+        [Notice::YellForHelp("a rat".into())]
+    );
+    // Someone the player cannot name says nothing.
+    assert_eq!(
+        game(&mut world, WorldEvent::YellForHelp { spawn_id: 44 }).notices,
+        Vec::<Notice>::new()
+    );
+    let change = StatChange {
+        strength: 5,
+        wisdom: 2,
+        ..StatChange::default()
+    };
+    assert_eq!(
+        game(&mut world, WorldEvent::StatsChanged(change)).notices,
+        [Notice::StatsChanged(change)]
+    );
+    let coins = Coins {
+        platinum: 1,
+        gold: 0,
+        silver: 3,
+        copper: 0,
+    };
+    assert_eq!(
+        game(
+            &mut world,
+            WorldEvent::Reward(Reward {
+                giver_id: Some(5),
+                coins,
+                experience: 0,
+                items: vec![]
+            })
+        )
+        .notices,
+        [Notice::Reward(coins)]
+    );
+    // A reward of items or experience alone has its own server lines.
+    let nothing = Reward {
+        giver_id: Some(5),
+        coins: Coins::default(),
+        experience: 100,
+        items: vec![1001],
+    };
+    assert_eq!(
+        game(&mut world, WorldEvent::Reward(nothing)).notices,
+        Vec::<Notice>::new()
+    );
 }
 
 #[test]

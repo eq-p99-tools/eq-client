@@ -85,6 +85,7 @@ pub use eq_network_game::socials;
 pub use eq_network_game::spells::BookActionStatus;
 pub use eq_network_game::spells::SpellBook;
 pub use eq_network_game::spells::SpellUpdate;
+pub use eq_network_game::stats;
 pub use eq_network_game::sysinfo::{Machine, SysInfo};
 pub use eq_network_game::targets;
 pub use eq_network_game::tracking;

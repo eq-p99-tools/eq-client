@@ -43,7 +43,7 @@ pub use items::ItemCache;
 pub use landings::Landing;
 pub use link::Link;
 pub use motions::{CastDone, Motion};
-pub use notice::{ListingNotice, Notice, Party};
+pub use notice::{DuelNotice, ListingNotice, Notice, Party};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
@@ -327,6 +327,8 @@ pub struct ClientWorld {
     resurrection: Option<ConsentOffer<ResurrectionOffer>>,
     /// The translocate offered and not yet answered.
     translocate: Option<ConsentOffer<TranslocateOffer>>,
+    /// The challenge to a duel waiting for the player's answer.
+    duel: Option<crate::socials::DuelQuestion>,
     /// The session's last reported disposition of a consent prompt.
     last_consent_close: Option<(ConsentId, ConsentClosure)>,
     last_consent_refusal: Option<ConsentId>,
@@ -601,9 +603,9 @@ impl ClientWorld {
             ConsentKind::Translocate => {
                 let _ = self.translocate.take_if(|current| current.id == id);
             }
-            // A duel's question has no prompt here yet: it waits for its
-            // front end (the duel slice), as `WorldEvent::Duel` does.
-            ConsentKind::Duel => {}
+            ConsentKind::Duel => {
+                let _ = self.duel.take_if(|current| current.id == id);
+            }
         }
     }
 
@@ -952,17 +954,16 @@ impl ClientWorld {
             // does it apply charm or other server control, spin players or show their
             // hiding's end. Berserk remains informational; raw stun durations
             // are interpreted by the session's OwnStun. The target
-            // the server sets and whom it targets, a quest's reward and ding
-            // (the session puts a reward's coins in the purse), a sacrifice
-            // offer and a player becoming a corpse wait for their front ends
-            // too; until one answers, an offer goes unanswered, as it did
-            // unread. A quest's change to the stats, a
+            // the server sets and whom it targets, a quest's ding, a
+            // sacrifice offer and a player becoming a corpse (pending
+            // R49-6e, checklist 6.492) wait for their front ends too; until
+            // one answers, an offer goes unanswered, as it did unread. A
             // skill's button ready again is not shown yet either, nor the
             // effects the server plays besides sound and flight: a spell's
             // nimbus, particles and camera shake. The official client's
             // sound for a quest's ding is
-            // not known, so it stays silent (inferred, item 6.273). A yell
-            // for help, voice macro and duel wait for their front ends.
+            // not known, so it stays silent (inferred, item 6.273). A voice
+            // macro waits for its front end.
             // Popups and inspections use the worker's scoped events.
             // The guild's members and their changes, and an
             // invitation to join or rise in it, wait for a guild window; until
@@ -971,7 +972,13 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            WorldEvent::SpellTable(_)
+            // Apply Poison's answer (eq-client #556) and the server filters'
+            // outcome (eq-client #560) take their arms in those PRs.
+            WorldEvent::PoisonAnswered(_)
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
@@ -982,20 +989,16 @@ impl ClientWorld {
             | WorldEvent::HideAndSneakEnded
             | WorldEvent::Target(_)
             | WorldEvent::TargetOfTarget(_)
-            | WorldEvent::Reward(_)
             | WorldEvent::Ding
             | WorldEvent::SacrificeOffer(_)
             | WorldEvent::SacrificeRefused { .. }
             | WorldEvent::BecameCorpse { .. }
-            | WorldEvent::StatsChanged(_)
             | WorldEvent::SkillReset(_)
             | WorldEvent::Effect(_)
             | WorldEvent::Popup(_)
-            | WorldEvent::YellForHelp { .. }
             | WorldEvent::VoiceMacro(_)
             | WorldEvent::InspectRequest { .. }
             | WorldEvent::InspectAnswer(_)
-            | WorldEvent::Duel(_)
             | WorldEvent::NewTitles
             | WorldEvent::Gm(_)
             // Pinned past these before their front ends land (repin 6.561);
@@ -1655,6 +1658,46 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            WorldEvent::DuelOffer(question) => {
+                if self.in_world() && self.session_id == Some(question.id.session_id) {
+                    self.duel = Some(*question);
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::DuelRefused { session_id, offer_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    self.last_consent_refusal = Some(*offer_id);
+                    news.notices.push(Notice::Duel(DuelNotice::AnswerRefused(reason.clone())));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::Duel(update) => self.duel_news(*update, news),
+            WorldEvent::YellForHelp { spawn_id } => {
+                // A spawn the player cannot name says nothing.
+                match self.party(u32::from(*spawn_id)) {
+                    Party::Named(name) if self.in_world() => {
+                        news.notices.push(Notice::YellForHelp(name));
+                    }
+                    _ => news.ignored = true,
+                }
+            }
+            WorldEvent::StatsChanged(change) => {
+                if self.in_world() {
+                    news.notices.push(Notice::StatsChanged(*change));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::Reward(reward) => {
+                // Only the coins: the items and the experience come with
+                // the server's own lines.
+                let coins = reward.coins;
+                if self.in_world() && coins != crate::Coins::default() {
+                    news.notices.push(Notice::Reward(coins));
+                }
+            }
             WorldEvent::ConsentClosed { id, closure } => {
                 if self.session_id == Some(id.session_id) {
                     self.dismiss_consent(*id);
@@ -1825,6 +1868,52 @@ impl ClientWorld {
 
     /// Who a spawn ID names in a death: the player, a spawn by the name
     /// players see, or no one the player can name.
+    /// News of a duel: a challenge with no question to answer, a duel the
+    /// player is part of beginning, or a TAKP client turning the player's
+    /// down. A challenge the session asks about comes as its question
+    /// instead.
+    fn duel_news(&mut self, update: crate::socials::DuelUpdate, news: &mut Changes) {
+        use crate::socials::DuelUpdate;
+        if !self.in_world() {
+            news.ignored = true;
+            return;
+        }
+        let name = |world: &Self, id: u16| match world.party(u32::from(id)) {
+            Party::Named(name) => name,
+            Party::Player | Party::Unseen => "Someone".to_owned(),
+        };
+        let own = |world: &Self, id: u16| world.is_player(id);
+        let notice = match update {
+            // The question asks it, where the session offers one; the
+            // player's own record is a server passing an acceptance back.
+            DuelUpdate::Challenge { from }
+                if !own(self, from)
+                    && !self.capabilities().contains(&crate::Capability::Dueling) =>
+            {
+                DuelNotice::Challenged(name(self, from))
+            }
+            DuelUpdate::Challenge { .. } => return,
+            DuelUpdate::Accepted {
+                challenger,
+                accepter,
+            } => {
+                if own(self, challenger) && !own(self, accepter) {
+                    DuelNotice::Begun(name(self, accepter))
+                } else if own(self, accepter) && !own(self, challenger) {
+                    DuelNotice::Begun(name(self, challenger))
+                } else {
+                    news.ignored = true;
+                    return;
+                }
+            }
+            DuelUpdate::Refused { from, reason } => DuelNotice::Refused {
+                from: name(self, from),
+                reason,
+            },
+        };
+        news.notices.push(Notice::Duel(notice));
+    }
+
     fn party(&self, spawn_id: u32) -> Party {
         if self
             .player
@@ -1883,6 +1972,7 @@ impl ClientWorld {
         self.reading = None;
         self.resurrection = None;
         self.translocate = None;
+        self.duel = None;
         self.popup = None;
         self.player_inspection = None;
         self.reset_guild(reason);
