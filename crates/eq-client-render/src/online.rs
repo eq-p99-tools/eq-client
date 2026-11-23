@@ -317,7 +317,6 @@ impl OnlineState {
         (self.selection.as_mut(), &self.world)
     }
 
-    /// The target the server's answer to an assist names, taken once.
     /// Starts a Bard's melody and gives its first gem (read R49-33 c).
     pub(super) fn start_melody(&mut self, gems: Vec<u8>) -> Option<u8> {
         self.world.start_melody(gems)
@@ -333,6 +332,7 @@ impl OnlineState {
         self.world.take_melody_step()
     }
 
+    /// The target the server's answer to an assist names, taken once.
     pub(super) fn take_assisted(&mut self) -> Option<u16> {
         self.world.take_assisted()
     }

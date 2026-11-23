@@ -318,6 +318,20 @@ unconfirmed. When no cast is held, the client reports unconfirmed song state
 as soon as it submits the request. Song buffs and gem timers follow the
 server's updates.
 
+On P99 and Titanium EQEmu, a Bard can type `/melody` followed by gem numbers,
+such as `/melody 1 3 2`, to play those songs in turn, as the official client
+does. The first gem is pressed at once. Each time your own gem refreshes after
+a song, the client stops the song and presses the next gem, going back to the
+first after the last. Every press goes through the same checks as a click, so
+a gem on its timer or short of mana says why and the melody moves on at the
+next refresh. Nothing else moves it, so a melody whose press was refused with
+no later refresh stops there. `/melody` with no numbers clears the list, and
+while a song plays it only stops the song. Clicking a gem while singing also
+clears the list. Gems 1 to 8 are taken; the official client also takes 9,
+which this client has no gem for, so a 9 is passed over. Elsewhere, and for
+other classes, `/melody` does nothing. Scripts can run it as typed, for
+example `slash("/melody 1 2")`.
+
 Spellbook operations wait for matching answers one at a time. After 30
 seconds without a matching reply, the session reports the edit as unconfirmed
 and allows edits whose replies it can tell apart. Re-enter the zone to retry
