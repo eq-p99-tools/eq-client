@@ -273,6 +273,7 @@ pub(super) fn schedule(app: &mut App) {
                 skinned::slash,
             ),
             hud::actions,
+            hud::melody::melody.after(hud::actions),
             (
                 hud::hotbar::update,
                 crate::socials::update

@@ -328,6 +328,21 @@ impl OnlineState {
         (self.selection.as_mut(), &self.world)
     }
 
+    /// Starts a Bard's melody and gives its first gem (read R49-33 c).
+    pub(super) fn start_melody(&mut self, gems: Vec<u8>) -> Option<u8> {
+        self.world.start_melody(gems)
+    }
+
+    /// Clears the melody list.
+    pub(super) fn clear_melody(&mut self) {
+        self.world.clear_melody();
+    }
+
+    /// The gem the owed melody step presses, taken once.
+    pub(super) fn take_melody_step(&mut self) -> Option<u8> {
+        self.world.take_melody_step()
+    }
+
     /// The target the server's answer to an assist names, taken once.
     pub(super) fn take_assisted(&mut self) -> Option<u16> {
         self.world.take_assisted()
