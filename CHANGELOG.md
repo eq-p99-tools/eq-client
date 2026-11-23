@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Auto attack at a zone change follows the Titanium program (read R49-32, checklist 6.625). The zone change turns auto attack off without a word and sends nothing while leaving. Then, as the program's character tick sends the toggle whenever it differs from the last one sent, the first frame in play in the new zone sends the off, quietly, if the last toggle sent was on. The target is cleared at the change, as before. The Mac-era and RoF2 clients send nothing, as before, until their programs are read.
 - Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
   - A buff the program removes for the landing is dropped as a prediction. If the server's word still holds it afterwards (a record for it, or the next zone-in's table), its word stands, and the disagreement is logged with the rule and both spells (6.612 T1).
   - A value the client can't work out still leaves the landing unslotted. That covers a random formula, one that reads hit points, or one that needs a level we don't know. The old guess for a possible step-4 replace is gone.
