@@ -420,9 +420,6 @@ pub(super) fn target_name(world: &eq_client_core::world::ClientWorld) -> String 
         .unwrap_or_default()
 }
 
-/// A label's text, by the official client's numbering: percentages of the
-/// player's hit points, mana and stamina, the target's name and hit points,
-/// each group member's, and the members' names.
 /// The sign after the player's own percent, which shows with the number
 /// before it: none while the estimate has no maximum, a state the program,
 /// which always knows its maximum, never shows (inferred, 6.529).
@@ -439,6 +436,9 @@ pub(super) fn vital_sign(
     }
 }
 
+/// A label's text, by the official client's numbering: percentages of the
+/// player's hit points, mana and stamina, the target's name and hit points,
+/// each group member's, and the members' names.
 pub(super) fn label_text(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
