@@ -452,12 +452,14 @@ fn draw(
     // The look changes only which model is drawn: the size, feet and name
     // height below come from the race and size as for a classic model.
     let own_generation = player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen);
-    // A spawn whose own model can't be had is drawn as the program draws it
-    // (0x43c84b, read R49-37a): a Human of its gender, taken as race 1 for
-    // its size and feet unless its race is 216 or 472. A carrier keeps its
-    // marker, and a race that draws nothing still draws nothing.
+    // A spawn whose own model the installation lacks is drawn as the
+    // program draws it (0x43c84b, read R49-37a): a Human of its gender,
+    // taken as race 1 for its size and feet unless its race is 216 or 472.
+    // A carrier keeps its marker, and a race that draws nothing still draws
+    // nothing. A race this client has no model name for yet keeps the
+    // marker: that gap is ours, not the installation's.
     let unavailable = own
-        .is_none_or(|code| matches!(nearby_state.models.get(&(code, own_generation)), Some(None)));
+        .is_some_and(|code| matches!(nearby_state.models.get(&(code, own_generation)), Some(None)));
     let (model, race, generation) = if unavailable && !carrier && races::drawn(spawn.race) {
         let (code, race) = races::stand_in(spawn.race, spawn.gender);
         let generation = player_models::generation((race, spawn.gender, spawn.kind), chosen);
@@ -544,8 +546,9 @@ fn draw(
             ));
         }
     } else {
-        // A carrier, or a spawn whose Human stand-in can't be had either,
-        // keeps an explicit marker (ours: the program has no such case).
+        // A carrier, a race this client has no model name for, or a spawn
+        // whose Human stand-in can't be had either keeps an explicit marker
+        // (ours: the program has no such case).
         let height = if corpse {
             0.5
         } else {

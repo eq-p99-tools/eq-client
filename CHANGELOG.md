@@ -3,6 +3,7 @@
 ## Unreleased
 
 - The Player window's mana and endurance percents read as the Titanium program's label provider makes them (read R49-37b, gap 3.9, checklist 6.529): current x 100 / maximum in whole numbers, cut toward zero, at most 100, shown as a bare number, and "0" while the maximum is 0. Before our estimate has a maximum they show "0" too (inferred: the program always knows it). The "%" after each is the skin's own text, which the program never hides, so this client no longer hides the Player window's signs; that rule, from the earlier 6.529 entry, was inferred and is withdrawn. Hit points keep their current text, as R49-37 didn't read them.
+- A spawn whose model the installation lacks is drawn as the program draws it (read R49-37a, 0x43c84b): a Human of its gender, sized and footed as race 1 unless its race is 216 or 472. Before, it drew a marker. A carrier keeps its marker, and so does a race this client has no model name for yet, since that gap is ours.
 
 - `/pet target` and unknown `/pet` words, as read R49-22a reads the Titanium program (checklist 6.610, gap 3.5).
   - **`/pet target`** stays local and sends no pet order.
