@@ -36,6 +36,9 @@ mod who;
 mod zone;
 
 pub use casting::{CastNews, Casting, Cooldowns, NoSpells, SpellCatalog, SpellTiming};
+
+/// The Bard's class number.
+const BARD: u32 = 8;
 pub use changes::{Changes, Moved, Reply, Reset};
 pub use group::{Group, GroupNotice};
 pub use guild::GuildInvitation;
@@ -480,6 +483,11 @@ impl ClientWorld {
         self.zone.doors.close_due(now);
         self.zone.pet_buffs.expire_early(now);
         self.casting.cooldowns.resolve(spells, now);
+        // The global recast is the spell's recovery after the server's
+        // answer, and none for a Bard (read R49-34 m).
+        if self.player.as_ref().and_then(|player| player.class) == Some(BARD) {
+            self.casting.cooldowns.without_recovery();
+        }
         self.expire_casts(now);
     }
 
