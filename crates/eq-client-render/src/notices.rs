@@ -1285,7 +1285,10 @@ mod tests {
         // send no program line, they are.
         for released_cast in [false, true] {
             let unconfirmed = Notice::SongStopUnconfirmed { released_cast };
-            assert!(!ours_shown(&unconfirmed, eq_client_core::GameDialect::Titanium));
+            assert!(!ours_shown(
+                &unconfirmed,
+                eq_client_core::GameDialect::Titanium
+            ));
             assert!(ours_shown(&unconfirmed, eq_client_core::GameDialect::EqMac));
         }
         assert!(ours_shown(&stopped, eq_client_core::GameDialect::Titanium));
