@@ -857,10 +857,13 @@ fn gem_clicks_cast_or_forget_without_predicting_slots_and_chat_blocks_actions() 
     };
     let feedback = |app: &App| app.world().resource::<ChatState>().newest();
     // A submitted request blocks another click even before a server Begin notification.
+    // The program's gem click says nothing for it (read R49-34 h); a
+    // forget still says why.
     testing::pending_cast(&mut online(&mut app), Some(73));
+    let said = feedback(&app);
     press(&mut app);
     assert!(rx.try_recv().is_err());
-    assert!(feedback(&app).contains("acknowledge"));
+    assert_eq!(feedback(&app), said);
     forget(&mut app);
     assert!(rx.try_recv().is_err());
     testing::pending_cast(&mut online(&mut app), None);
@@ -1110,7 +1113,7 @@ fn short_server_mana_refuses_casts_locally_but_never_blocks_forgetting() {
     };
     assert_eq!(
         check(&with_mana(Some(9)), &request),
-        Err(crate::chat::Said::official("Synthetic short mana"))
+        Err(Some(crate::chat::Said::official("Synthetic short mana")))
     );
     request.forgetting = true;
     assert_eq!(check(&with_mana(Some(9)), &request), Ok(73));
@@ -1159,8 +1162,8 @@ fn a_gem_cast_meets_the_programs_checks_in_its_order() {
             std::time::Instant::now(),
         )
     };
-    let words = |result: Result<requests::Checked, crate::chat::Said>| {
-        result.map_err(|said| said.words.text)
+    let words = |result: Result<requests::Checked, Option<crate::chat::Said>>| {
+        result.map_err(|said| said.map(|said| said.words.text))
     };
     let plain = requests::CastChecks::default();
     let standing = requests::Checked {
@@ -1191,7 +1194,7 @@ fn a_gem_cast_meets_the_programs_checks_in_its_order() {
         };
         assert_eq!(
             words(check(&online, checks)),
-            Err("Your level is too low for that spell.".into())
+            Err(Some("Your level is too low for that spell.".into()))
         );
     }
     let at_level = requests::CastChecks {
@@ -1199,11 +1202,11 @@ fn a_gem_cast_meets_the_programs_checks_in_its_order() {
         ..plain
     };
     assert_eq!(words(check(&online, at_level)), Ok(standing));
-    // Ducking refuses a spell but not a song.
+    // Crouched refuses a spell but not a song.
     posture(&mut online, PostureState::Ducking);
     assert_eq!(
         words(check(&online, plain)),
-        Err("You can't cast while ducking.".into())
+        Err(Some("You must be standing to cast that.".into()))
     );
     let song = requests::CastChecks {
         song: true,
@@ -1225,8 +1228,25 @@ fn a_gem_cast_meets_the_programs_checks_in_its_order() {
     };
     assert_eq!(
         words(check(&online, everything)),
-        Err("You are stunned.".into())
+        Err(Some("You are stunned.".into()))
     );
+    // The gem click's own tests come first (read R49-34 h): a request the
+    // server hasn't answered makes it do nothing, saying nothing...
+    testing::pending_cast(&mut online, Some(73));
+    assert_eq!(words(check(&online, everything)), Err(None));
+    // ...and a cast under way says 0x2efd, here in our words.
+    testing::spell(
+        &mut online,
+        SpellUpdate::Began {
+            caster_id: 12,
+            spell_id: 73,
+            duration_ms: 2000,
+        },
+    );
+    assert!(matches!(
+        words(check(&online, everything)),
+        Err(Some(text)) if text.starts_with("Already casting")
+    ));
 }
 
 #[test]

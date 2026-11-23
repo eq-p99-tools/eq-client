@@ -3,17 +3,22 @@
 ## Unreleased
 
 - A gem cast meets the Titanium program's own checks before it goes, in its
-  order (read R49-34 e, slice G, checklist 6.639; audit table in the PR):
-  a sitting player stands first when Allow Auto Stand is on (step 4);
-  stunned says 0xae (5); a cast while one is under way says 0x309a (9),
-  where it said this client's words, and a Bard's song still passes; a
-  level below the spell's for the class says 0x309b (10), from the
-  installed spell data; and a spell that isn't a song, cast while ducking,
-  says 0xd5 (16), all in colour 0x121. A song is one a Bard has a level
-  for [I]. Sitting without Allow Auto Stand is still left to the server,
-  as only spells with the record's +0x1fc byte clear need standing and
-  that byte isn't mapped. The local mana check and the gem refresh wait
-  stay until their reads land.
+  order (reads R49-34 e and h-j, slice G, checklist 6.639; audit table in
+  the PR). The gem click comes first (0x4ecb56): while a cast is under way
+  or the gem's refresh runs it says 0x2efd in colour 0x108, where it said
+  this client's words (kept as the fallback), and a Bard's song still
+  passes; while a request waits on the server it does nothing and says
+  nothing, where it said "Waiting for the server". Then the cast start
+  (0x411f3d): a sitting player stands first when Allow Auto Stand is on
+  (step 4); stunned says 0xae (5); a level below the spell's for the class
+  says 0x309b (10), from the installed spell data; and a spell that isn't a
+  song, cast while crouched, says 0xd5 (16), these in colour 0x121. A song
+  is one a Bard has a level for [I]. Sitting without Allow Auto Stand is
+  still left to the server, as only spells with the record's +0x1fc byte
+  clear need standing and that byte isn't mapped; the same byte holds back
+  0xd4 (a song while lying). The global recast the click also tests isn't
+  kept here. The local mana check stays for now: the program has none
+  (read R49-34 g), and dropping it is with the reviewer.
 - Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
   - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
   - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
