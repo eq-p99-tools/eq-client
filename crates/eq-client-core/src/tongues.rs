@@ -61,8 +61,9 @@ pub fn known(languages: &[u8]) -> Vec<u8> {
         .collect()
 }
 
-/// Which program's letter draw to use: Titanium's random letter is 'a' to
-/// 'y'; TAKP's may also be a backtick (read R49-4m).
+/// Which program's letter draw to use. A random letter is a backtick or 'a'
+/// to 'y' everywhere but Titanium's listener stage, whose is 'a' to 'y'
+/// (the listener stage, R49-4).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Letters {
     /// The Titanium program's.
@@ -303,12 +304,49 @@ fn swapped(word: &str, more: bool) -> Option<String> {
     Some(form)
 }
 
+/// Which garble stage a letter is in, which sets its first roll's bar and
+/// its random letter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Stage {
+    /// By the speaker's skill: the first roll must be above 40.
+    Speaker,
+    /// By the listener's skill: the first roll must be 51 or more.
+    Listener,
+}
+
+impl Stage {
+    /// The first roll the letter needs, at least.
+    const fn threshold(self) -> u32 {
+        match self {
+            Self::Speaker => 41,
+            Self::Listener => 51,
+        }
+    }
+
+    /// A random letter. Titanium's speaker stage draws 0x60 plus
+    /// 0x40cbb2(0, 0x19) (R49-4b), a backtick or 'a' to 'y', taking the draw
+    /// as inclusive as its consonant draw, 'a' plus 0x40cbb2(0, 0x18), must
+    /// be (inferred). Its listener stage draws 'a' to 'y' (R49-4). TAKP's
+    /// listener stage draws a roll modulo 0x1a plus 0x60, a backtick or 'a'
+    /// to 'y' (R49-4m); the `EQMac` speaker stage isn't read, so it draws as
+    /// Titanium's does (inferred).
+    fn random(self, kind: Letters, rolls: &mut Rolls) -> u8 {
+        let (first, count) = match (self, kind) {
+            (Self::Listener, Letters::Titanium) => (b'a', 25),
+            (Self::Speaker, _) | (Self::Listener, Letters::EqMac) => (b'`', 26),
+        };
+        first + u8::try_from(rolls.pick(count)).unwrap_or(0)
+    }
+}
+
 /// The per-letter rule both stages share (R49-4b): a letter is kept unless
-/// the first roll passes `threshold` and the second is above 5 and above the
-/// skill plus 10; then a 99 or 100 inside a word is a space, a second roll
-/// within 30 of the skill a letter of the same kind, and anything else a
-/// random letter.
-fn letters(word: &mut [u8], skill: u8, threshold: u32, kind: Letters, rolls: &mut Rolls) {
+/// the first roll reaches the stage's bar and the second is above 5 and
+/// above the skill plus 10; then a 99 or 100 that isn't the word's first
+/// letter, with neither neighbour a space, is a space; a second roll within
+/// 30 of the skill a letter of the same kind; and anything else a random
+/// letter.
+fn letters(word: &mut [u8], skill: u8, stage: Stage, kind: Letters, rolls: &mut Rolls) {
+    let threshold = stage.threshold();
     let skill = u32::from(skill);
     for index in 0..word.len() {
         let letter = word[index];
@@ -324,7 +362,7 @@ fn letters(word: &mut [u8], skill: u8, threshold: u32, kind: Letters, rolls: &mu
         }
         let inside = index > 0
             && word[index - 1] != b' '
-            && word.get(index + 1).is_some_and(|next| *next != b' ');
+            && word.get(index + 1).is_none_or(|next| *next != b' ');
         word[index] = if second >= 99 && inside {
             b' '
         } else if second - skill < 31 {
@@ -339,18 +377,15 @@ fn letters(word: &mut [u8], skill: u8, threshold: u32, kind: Letters, rolls: &mu
                 }
             }
         } else {
-            match kind {
-                Letters::Titanium => b'a' + u8::try_from(rolls.pick(25)).unwrap_or(0),
-                Letters::EqMac => b'`' + u8::try_from(rolls.pick(26)).unwrap_or(0),
-            }
+            stage.random(kind, rolls)
         };
     }
 }
 
-fn garble_words(word: &str, skill: u8, threshold: u32, kind: Letters, rolls: &mut Rolls) -> String {
+fn garble_words(word: &str, skill: u8, kind: Letters, rolls: &mut Rolls) -> String {
     let mut bytes = word.as_bytes().to_vec();
     if word.is_ascii() {
-        letters(&mut bytes, skill, threshold, kind, rolls);
+        letters(&mut bytes, skill, Stage::Speaker, kind, rolls);
     }
     // Only ASCII letters were swapped for ASCII letters or spaces.
     String::from_utf8(bytes).unwrap_or_else(|_| word.to_owned())
@@ -401,7 +436,7 @@ pub fn speaker_stage(message: &mut Message, skill: u8, kind: Letters, rolls: &mu
         } else {
             word
         };
-        kept.push(Token::Word(garble_words(&word, skill, 41, kind, rolls)));
+        kept.push(Token::Word(garble_words(&word, skill, kind, rolls)));
     }
     join(message, kept);
     if let Some(punctuation) = punctuation {
@@ -433,7 +468,7 @@ pub fn listener_stage(message: &mut Message, skill: u8, kind: Letters, rolls: &m
         let end = link.start.min(bytes.len()).max(start);
         let mut plain = bytes[start..end].to_vec();
         if plain.is_ascii() {
-            letters(&mut plain, skill, 51, kind, rolls);
+            letters(&mut plain, skill, Stage::Listener, kind, rolls);
             bytes[start..end].copy_from_slice(&plain);
         }
         start = link.end.max(end);
