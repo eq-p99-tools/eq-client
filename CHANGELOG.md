@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- On Titanium, navigation mesh routes keep the headroom test: a size's floor
+  needs twice its stand height to the ceiling, not only its capsule's
+  height, so a route no longer leads a walker under a ceiling its move is
+  refused at. A scripted walk that meets a headroom refusal anyway stops
+  with a line instead of pushing each frame. Meshes rebuild once
+  (checklist 6.504).
+
 - Refuse a move of the player's own body into less headroom than the
   Titanium program allows (read R1d, 0x48bb83): the gap from the floor to
   the ceiling at the move's end must be 2 × the stand height standing,

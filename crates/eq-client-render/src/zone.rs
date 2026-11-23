@@ -314,7 +314,17 @@ impl Scene<'_, '_> {
                 .settings
                 .as_ref()
                 .and_then(|settings| settings.0.settings_directory.clone());
-            mesh.start(&zone.short_name, triangles, world, directory);
+            let client = self
+                .settings
+                .as_ref()
+                .map_or_else(Default::default, |settings| settings.0.installed_client);
+            mesh.start(
+                &zone.short_name,
+                triangles,
+                world,
+                directory,
+                crate::zone_navmesh::settings(client),
+            );
         }
         spawn_static_zone(
             commands,

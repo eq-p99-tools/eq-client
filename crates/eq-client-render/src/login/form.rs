@@ -536,7 +536,11 @@ mod tests {
         };
         assert_eq!(shown(&mut app), (0, false));
         let folder = std::env::temp_dir().join("eq-prebuild-form");
-        app.insert_resource(NavmeshPrebuild::installed(folder.clone(), folder));
+        app.insert_resource(NavmeshPrebuild::installed(
+            folder.clone(),
+            folder,
+            eq_client_assets::ui::InstalledClient::default(),
+        ));
         app.update();
         assert_eq!(shown(&mut app), (1, true));
     }

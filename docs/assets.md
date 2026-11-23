@@ -138,6 +138,14 @@ that can't reach the goal also falls back, with a warning. `--no-navmesh` (or
 uses grid search. The older `--navmesh` flag is still accepted and changes
 nothing. This is route planning, not server permission to move or teleport.
 
+On Titanium a mesh keeps the client's headroom test (checklist 6.496, 6.504): a
+size's floor needs twice its stand height of room to the ceiling, not only its
+collision capsule's height, so a route doesn't lead a walker under a ceiling
+where its move would be refused. A grid route can still meet that refusal, and
+the script then stops with "walk refused: too little headroom" instead of
+pushing into the ceiling. Routes don't plan for ducking or mounted walkers.
+Changing the installed client rebuilds each zone's mesh once.
+
 Models, UI layouts and movement rules remain incomplete across client versions.
 Sound loading currently handles Titanium WAV assets, not the Mac-era sound
 format. Day/night lighting has provisional presentation tuning. Bounded
