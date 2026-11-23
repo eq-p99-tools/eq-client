@@ -2209,7 +2209,7 @@ fn assisted(words: &str, online: &super::online::OnlineState) -> Result<u16, Str
         return world
             .target()
             .selected
-            .ok_or_else(|| "Target someone to assist first.".to_owned());
+            .ok_or_else(|| super::slash::NO_TARGET.to_owned());
     };
     if let Some(player) = world
         .player()

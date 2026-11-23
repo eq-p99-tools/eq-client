@@ -23,6 +23,10 @@ const UNASSISTED: [(u32, &str); 2] = [
     (0x33d2, "Target someone, then use /assist."),
 ];
 
+/// This client's own answer to `/assist` with no target, kept where the
+/// installed client has no R46 lines or the server takes no assist.
+pub(crate) const NO_TARGET: &str = "Target someone to assist first.";
+
 /// Which the player asked.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Asked {
@@ -118,7 +122,7 @@ fn unassisted(client: eq_client_assets::ui::InstalledClient, messages: &Messages
             .map(|(id, ours)| messages.said_text(id, ours))
             .collect()
     } else {
-        vec![Said::own("Target someone to assist first.")]
+        vec![Said::own(NO_TARGET)]
     }
 }
 
@@ -140,6 +144,16 @@ pub(super) fn answers(
     let empty = Messages::default();
     let messages = messages.as_deref().unwrap_or(&empty);
     let target = online.world().target().selected;
+    // A server that takes no assist keeps the answer it had before R46's
+    // lines: this client's no-target line, else the outbox's refusal.
+    if asked == Asked::Assist && !outbox::offered(online.world(), asked.capability()) {
+        chat.refuse(Said::own(if target.is_none() {
+            NO_TARGET
+        } else {
+            outbox::UNAVAILABLE
+        }));
+        return;
+    }
     if asked == Asked::Assist && target.is_none() {
         let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
         for line in unassisted(client, messages) {

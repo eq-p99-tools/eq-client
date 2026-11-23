@@ -1,9 +1,11 @@
 //! `/hidecorpses`, as Titanium's handler runs it (0x469b01, read R46
 //! section 2): local only, it hides corpses from the view by clearing each
-//! one's draw flag. Two words hide the corpses present once; a third sets a
-//! flag that hides corpses as they come; any other word shows them all
-//! again. Words and lines are the installed client's strings where it has
-//! them; this client's stand in otherwise.
+//! one's draw flag. Two words hide the corpses present once; any other word
+//! shows them all again. A third word (0x33f6) sets a flag whose meaning is
+//! unread (R49-8e: it may hide corpses once looted rather than every new
+//! one), so it is held: this client doesn't take it yet. Words and lines are
+//! the installed client's strings where it has them; this client's stand in
+//! otherwise.
 use super::chat::{ChatState, Said, system_line};
 use super::hud::messages::Messages;
 use super::online::OnlineState;
@@ -32,21 +34,21 @@ const GROUP_LINE: (u32, &str) = (
     0x3398,
     "Corpses other than yours and your group's are hidden.",
 );
-/// The word that hides corpses as they come, and its line.
-const LATER: (u32, &str) = (0x33f6, "new");
-const LATER_LINE: (u32, &str) = (0x33f7, "New corpses will be hidden.");
+/// The flag word, held until R49-8e reads what its flag hides (its line
+/// is 0x33f7).
+const HELD: (u32, &str) = (0x33f6, "new");
+/// The answer on a client without R46's forms, and to the held word.
+const NOT_YET: &str = "This client does not take /hidecorpses that way yet.";
 /// The line for any other word: every corpse shows again.
 const SHOWN_LINE: (u32, &str) = (0x3399, "Every corpse is shown.");
 
-/// Which corpses `/hidecorpses` hid, and whether it hides those to come.
+/// Which corpses `/hidecorpses` hid, in which zone session.
 #[derive(Resource, Default)]
 pub(crate) struct HiddenCorpses {
     hidden: BTreeSet<u16>,
-    /// The mode flag 0x33f6 sets ([0x905d24]+0x14).
-    later: bool,
-    /// The corpses present when last looked at, so that a corpse that comes
-    /// afterwards is known as new.
-    seen: BTreeSet<u16>,
+    /// The zone session the hidden ids belong to: spawn ids are reused in
+    /// the next zone.
+    session: Option<u64>,
 }
 
 impl HiddenCorpses {
@@ -65,24 +67,26 @@ impl HiddenCorpses {
         }
     }
 
-    /// Hides the corpses that came since last looked at, while the flag
-    /// holds, keeping the player's own (inferred: which corpses the flag
-    /// hides is unread, recording checklist 6.490), and forgets corpses
-    /// gone from the zone.
+    /// Forgets every hidden corpse when the zone session changes, and a
+    /// corpse gone from the zone.
     fn follow(&mut self, world: &ClientWorld) {
-        let present: BTreeSet<u16> = corpses(world).map(|(id, _)| id).collect();
-        if self.later {
-            let mine = own_name(world);
-            for (id, owner) in corpses(world) {
-                if !self.seen.contains(&id)
-                    && !mine.as_deref().is_some_and(|mine| same(mine, &owner))
-                {
-                    self.hidden.insert(id);
-                }
-            }
+        let session = world.session_id();
+        if self.session != session {
+            self.session = session;
+            self.hidden.clear();
         }
-        self.hidden.retain(|id| present.contains(id));
-        self.seen = present;
+        if self.hidden.is_empty() {
+            return;
+        }
+        let spawns = world.spawns();
+        self.hidden.retain(|id| {
+            spawns.get(id).is_some_and(|spawn| {
+                matches!(
+                    spawn.state.kind,
+                    SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse
+                )
+            })
+        });
     }
 }
 
@@ -115,8 +119,8 @@ fn grouped(world: &ClientWorld, owner: &str) -> bool {
         .any(|member| same(member, owner))
 }
 
-/// Answers a `/hidecorpses` the chat noted, and hides corpses that come
-/// while its flag holds.
+/// Answers a `/hidecorpses` the chat noted, and forgets hidden corpses the
+/// zone no longer holds.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn run(
     mut chat: ResMut<ChatState>,
@@ -126,51 +130,53 @@ pub(crate) fn run(
     mut hidden: ResMut<HiddenCorpses>,
 ) {
     let world = online.world();
+    hidden.follow(world);
     if let Some(words) = chat.hide_corpses.take() {
         let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
-        if client.runs_r46_forms() {
-            let empty = Messages::default();
-            let messages = messages.as_deref().unwrap_or(&empty);
-            for line in answer(&mut hidden, world, &words, messages) {
-                chat.history.push(system_line(line));
+        let empty = Messages::default();
+        let messages = messages.as_deref().unwrap_or(&empty);
+        match client
+            .runs_r46_forms()
+            .then(|| answer(&mut hidden, world, &words, messages))
+            .flatten()
+        {
+            Some(lines) => {
+                for line in lines {
+                    chat.history.push(system_line(line));
+                }
             }
-        } else {
-            chat.refuse(Said::own(
-                "This client does not take /hidecorpses that way yet.",
-            ));
+            None => chat.refuse(Said::own(NOT_YET)),
         }
     }
-    hidden.follow(world);
 }
 
-/// What a `/hidecorpses` with these words does, and the lines it says.
+/// What a `/hidecorpses` with these words does, and the lines it says;
+/// None for the held flag word, which this client doesn't take yet.
 fn answer(
     corpses_hidden: &mut HiddenCorpses,
     world: &ClientWorld,
     words: &str,
     messages: &Messages,
-) -> Vec<Said> {
+) -> Option<Vec<Said>> {
     let said = |(id, ours): (u32, &str)| messages.said_text(id, ours);
     let Some(typed) = words.split_whitespace().next() else {
-        return HELP.into_iter().map(said).collect();
+        return Some(HELP.into_iter().map(said).collect());
     };
     let is = |(id, ours): (u32, &str)| said((id, ours)).words.text.eq_ignore_ascii_case(typed);
     let mine = own_name(world);
     let own = |owner: &str| mine.as_deref().is_some_and(|mine| same(mine, owner));
-    if is(OTHERS) {
+    Some(if is(OTHERS) {
         corpses_hidden.sweep(world, own);
         vec![said(OTHERS_LINE)]
     } else if is(GROUP) {
         corpses_hidden.sweep(world, |owner| own(owner) || grouped(world, owner));
         vec![said(GROUP_LINE)]
-    } else if is(LATER) {
-        corpses_hidden.later = true;
-        vec![said(LATER_LINE)]
+    } else if is(HELD) {
+        return None;
     } else {
-        corpses_hidden.later = false;
         corpses_hidden.hidden.clear();
         vec![said(SHOWN_LINE)]
-    }
+    })
 }
 
 #[cfg(test)]

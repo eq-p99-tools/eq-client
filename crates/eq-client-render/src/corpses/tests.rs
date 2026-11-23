@@ -39,21 +39,21 @@ fn hidden(state: &HiddenCorpses) -> Vec<u16> {
     state.hidden.iter().copied().collect()
 }
 
-fn ask(online: &OnlineState, state: &mut HiddenCorpses, words: &str) -> Vec<String> {
+fn ask(online: &OnlineState, state: &mut HiddenCorpses, words: &str) -> Option<Vec<String>> {
     answer(state, online.world(), words, &Messages::default())
-        .into_iter()
-        .map(|said| said.words.text)
-        .collect()
+        .map(|lines| lines.into_iter().map(|said| said.words.text).collect())
 }
 
 #[test]
 fn the_two_hiding_words_sweep_the_corpses_present_once() {
     let online = zone();
     let mut state = HiddenCorpses::default();
-    assert_eq!(ask(&online, &mut state, "OTHERS"), [OTHERS_LINE.1]);
+    state.follow(online.world());
+    assert_eq!(ask(&online, &mut state, "OTHERS").unwrap(), [OTHERS_LINE.1]);
     assert_eq!(hidden(&state), [11, 12, 13]);
     let mut state = HiddenCorpses::default();
-    assert_eq!(ask(&online, &mut state, "group"), [GROUP_LINE.1]);
+    state.follow(online.world());
+    assert_eq!(ask(&online, &mut state, "group").unwrap(), [GROUP_LINE.1]);
     assert_eq!(hidden(&state), [12, 13]);
     // A sweep is not a mode: a corpse that comes afterwards shows.
     state.follow(online.world());
@@ -67,42 +67,55 @@ fn the_two_hiding_words_sweep_the_corpses_present_once() {
 }
 
 #[test]
-fn the_flag_hides_corpses_as_they_come_but_the_players_own() {
-    let mut online = zone();
+fn the_flag_word_is_held_and_changes_nothing() {
+    let online = zone();
     let mut state = HiddenCorpses::default();
     state.follow(online.world());
-    assert_eq!(ask(&online, &mut state, "new"), [LATER_LINE.1]);
-    // Setting the flag hides nothing present.
-    state.follow(online.world());
-    assert_eq!(hidden(&state), Vec::<u16>::new());
-    testing::spawns(
-        &mut online,
-        vec![
-            corpse(14, "Later's_corpse0", SpawnKind::PlayerCorpse),
-            corpse(15, "Example's_corpse1", SpawnKind::PlayerCorpse),
-        ],
-    );
-    state.follow(online.world());
-    assert_eq!(hidden(&state), [14]);
+    ask(&online, &mut state, "others");
+    // Not the show-all branch: what was hidden stays hidden.
+    assert_eq!(ask(&online, &mut state, "NEW"), None);
+    assert_eq!(hidden(&state), [11, 12, 13]);
 }
 
 #[test]
 fn any_other_word_shows_them_all_and_no_word_gives_help() {
     let online = zone();
     let mut state = HiddenCorpses::default();
+    state.follow(online.world());
     ask(&online, &mut state, "others");
-    ask(&online, &mut state, "new");
-    assert_eq!(ask(&online, &mut state, "anything"), [SHOWN_LINE.1]);
+    assert_eq!(
+        ask(&online, &mut state, "anything").unwrap(),
+        [SHOWN_LINE.1]
+    );
     assert_eq!(hidden(&state), Vec::<u16>::new());
-    assert!(!state.later);
-    assert_eq!(ask(&online, &mut state, "  ").len(), 3);
+    assert_eq!(ask(&online, &mut state, "  ").unwrap().len(), 3);
     assert!(!state.hides(10));
+}
+
+#[test]
+fn a_new_zone_session_forgets_every_hidden_corpse() {
+    let mut online = zone();
+    let mut state = HiddenCorpses::default();
+    state.follow(online.world());
+    ask(&online, &mut state, "others");
+    // The next zone reuses the ids: the same corpses, a new session.
+    testing::admit(&mut online, 2, testing::player(1));
+    testing::spawns(
+        &mut online,
+        vec![
+            corpse(11, "Other's_corpse0", SpawnKind::PlayerCorpse),
+            corpse(12, "a_bat's_corpse3", SpawnKind::NpcCorpse),
+        ],
+    );
+    state.follow(online.world());
+    assert_eq!(hidden(&state), Vec::<u16>::new());
 }
 
 #[test]
 fn a_corpse_gone_from_the_zone_is_forgotten() {
     let mut online = zone();
     let mut state = HiddenCorpses::default();
+    state.follow(online.world());
     ask(&online, &mut state, "others");
     testing::news(&mut online, [WorldEvent::Despawn(12)]);
     state.follow(online.world());
