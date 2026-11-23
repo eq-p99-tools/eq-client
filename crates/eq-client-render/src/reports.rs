@@ -226,7 +226,9 @@ pub(crate) fn answer(
             // window here ([0x9928a8]) and ignores the words. Which skin
             // screen that is is unread, so this client takes the text form:
             // a departure, labelled.
-            PetitionForm::Window => {}
+            PetitionForm::Window => bevy::log::debug!(
+                "The world turns the petition window on; this client has none yet, so the petition takes the text form (6.511 departure)"
+            ),
         }
     }
     let empty = match asked {
@@ -422,7 +424,7 @@ mod tests {
         assert_eq!((guide.id, guide.colour), (GUIDE_SENT, 0));
         let bug = echo(Asked::Bug("pathing: the guard".into())).unwrap();
         assert_eq!((bug.id, bug.colour), (BUG_SENT, PROGRAM_COLOUR));
-        assert!(bug.arguments.is_empty());
+        assert_eq!(bug.arguments, Vec::<String>::new());
         // The program's feedback window prints nothing once it sends.
         assert_eq!(echo(Asked::Feedback("a note".into())), None);
         // Without an installation's lines, this client's words stand in.
