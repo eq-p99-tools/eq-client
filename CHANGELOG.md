@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Scripts can use the map's own controls (checklist 6.589), since a script may do whatever the player can (Adam, 11-23): the search boxes, the watch controls and rows, a spawn's marker, the inspector's Clear and Target, the landmarks and the presentation controls, as `map_search`, `map_watch`, `map_marker`, `map_inspector`, `map_target`, `map_landmarks` and `map_style` targets. Each click runs the map's own handler, so the Target button keeps its capability and range checks. A marker takes the spawn's admission, id and revision, which the report's new `map_markers` field lists for the 64 nearest spawns; a stale one is refused. Watches, landmarks and presentation are saved settings, and these clicks change them as a person's do.
+
 - A jump never stands a seated player or ends a feign held standing (checklist 6.600, Adam 11-23: "jumping does not stand, just as jumping from sitting does not stand").
   - **Seated jump:** a jump press while sitting or kneeling to loot does nothing and stands no one, as the original client's jump waits on the can-move flag (read R19 c). The Mac-era client is inferred the same. With Allow Auto-Stand on, forward still stands a sitter.
   - **Feign held standing:** with Move While Feigned on, a jump from standing still keeps its crouch's wait but sends no duck or stand, so the feign holds. The session's new `FeignHeld` report says when one is held. Without the option, a feigned player lies, and a lying jump stays blocked.
