@@ -1222,6 +1222,9 @@ pub struct OfficialOptions {
     /// 0x4af32c), unclamped here. The section it sits in is unread, so
     /// `[Defaults]` is tried before `[Options]` (checklist 6.487).
     pub loot_no_drop: Option<i64>,
+    /// Whether an assist's answer starts auto attack: `AttackOnAssist` in
+    /// `[Defaults]` (Titanium setup 0x4a3341, read R49-8 d).
+    pub attack_on_assist: Option<bool>,
 }
 
 fn options_from_ini(text: &str) -> OfficialOptions {
@@ -1252,6 +1255,7 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         loot_no_drop: ini_value(text, "Defaults", "LootNoDrop")
             .or_else(|| ini_value(text, "Options", "LootNoDrop"))
             .and_then(|v| v.trim().parse().ok()),
+        attack_on_assist: flag("Defaults", "AttackOnAssist"),
     }
 }
 
@@ -2127,9 +2131,14 @@ LookSpring=1
                 mouse_sensitivity: Some(4),
                 look_spring: Some(true),
                 loot_no_drop: None,
+                attack_on_assist: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+        assert_eq!(
+            options_from_ini("[Defaults]\nAttackOnAssist=1\n").attack_on_assist,
+            Some(true)
+        );
         let loot = |text| options_from_ini(text).loot_no_drop;
         assert_eq!(loot("[Defaults]\nLootNoDrop=1\n"), Some(1));
         assert_eq!(loot("[Options]\nLootNoDrop=2\n"), Some(2));

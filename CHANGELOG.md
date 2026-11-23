@@ -15,6 +15,22 @@
   nothing; a server that takes no assist keeps its earlier answers. The
   Mac-era client keeps its earlier answers. Inferred parts are
   under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+  - After read R49-8, on a Titanium installation:
+    - `/assist Name` looks the word up as the program does (0x47981d): any
+      spawn whose name starts with it, the shortest first. It sends the
+      assist for that spawn without changing the target. No match is
+      silent; the player's own name prints line 0x57b and sends nothing.
+      The main-assist words keep this client's answer.
+    - Attack On Assist (`attack_on_assist`, default off, inferred): when on,
+      the assist answer that sets the target starts auto attack through the
+      attack key's own refusals. `/assist on` and `/assist off` set it.
+    - `/autoinventory` with coins on the cursor puts them in the purse, one
+      move of that kind, whole, and is silent past a billion of the kind.
+      The inventory window's put-away button runs the same routine.
+    - `/hidecorpses`' third word sets the looted-corpse mode: when the loot
+      window closes, the corpse just looted is hidden unless it is yours.
+      It doesn't hide corpses as they arrive. The show-all word and a new
+      zone clear it (both inferred).
 
 - Make every client-generation decision exhaustive, so adding a third
   generation (RoF2 is planned) breaks each place that must decide what it

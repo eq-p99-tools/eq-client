@@ -66,6 +66,11 @@ pub(crate) enum SplitAction {
     Confirm,
     Cancel,
 }
+
+/// The most of one coin kind `/autoinventory` puts in the purse: a move
+/// that would pass it says nothing and sends nothing (0x475ce4, read R49-8 c).
+const PURSE_LIMIT: u64 = 1_000_000_000;
+
 impl InventoryState {
     pub(crate) fn select_merchant(
         &mut self,
@@ -555,8 +560,11 @@ impl InventoryState {
 
     /// Puts the cursor item away as `/autoinventory` does (read R46
     /// section 1): one move, to the first place the program's order finds.
-    /// Nothing on the cursor is nothing to do. `Ok(false)` is no place it
-    /// fits; an error is any other reason the move can't go.
+    /// Coins on the cursor go to the purse, whole, unless that would put
+    /// more than a billion of the kind there, which is silent (0x475ce4,
+    /// read R49-8 c). Nothing on the cursor is nothing to do. `Ok(false)` is
+    /// no place the item fits; an error is any other reason the move can't
+    /// go.
     pub(super) fn auto_inventory(
         &mut self,
         online: &mut OnlineState,
@@ -564,6 +572,26 @@ impl InventoryState {
     ) -> anyhow::Result<bool> {
         let inventory = online.world().inventory();
         if !inventory.items().contains_key(&InventorySlot::CURSOR) {
+            if let Some((coin, amount)) = crate::coins::on_cursor(online.world()) {
+                let carried = online
+                    .world()
+                    .coins_in(CoinPlace::Purse)
+                    .map_or(0, |purse| purse.of(coin));
+                if u64::from(carried) + u64::from(amount) <= PURSE_LIMIT {
+                    crate::coins::send(
+                        CoinTransfer {
+                            from: CoinPlace::Cursor,
+                            to: CoinPlace::Purse,
+                            coin,
+                            into: coin,
+                            amount,
+                        },
+                        online,
+                        sender,
+                    );
+                    self.revision = self.revision.wrapping_add(1);
+                }
+            }
             return Ok(true);
         }
         anyhow::ensure!(
@@ -1573,6 +1601,58 @@ mod tests {
             })
             .collect();
         (result, moves)
+    }
+
+    /// `/autoinventory` with this much platinum in the purse and on the
+    /// cursor, and no item there: the coin moves it sent.
+    fn coins_put_away(purse: u32, cursor: u32) -> Vec<eq_client_core::money::CoinTransfer> {
+        let mut bench = Bench::demo(7);
+        bench.state.demo = false;
+        let platinum = |platinum| eq_client_core::Coins {
+            platinum,
+            ..eq_client_core::Coins::default()
+        };
+        testing::news(
+            &mut bench.online,
+            [
+                eq_client_core::WorldEvent::Coins(platinum(purse)),
+                eq_client_core::WorldEvent::CoinsElsewhere {
+                    cursor: platinum(cursor),
+                    bank: eq_client_core::Coins::default(),
+                    given: eq_client_core::Coins::default(),
+                    offered: eq_client_core::Coins::default(),
+                },
+            ],
+        );
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let sender = Outbox::new(Some(tx));
+        let Bench { state, online } = &mut bench;
+        assert!(state.auto_inventory(online, &sender).unwrap());
+        rx.try_iter()
+            .filter_map(|command| match command {
+                ClientCommand::MoveCoins { transfer, .. } => Some(transfer),
+                _ => None,
+            })
+            .collect()
+    }
+
+    #[test]
+    fn autoinventory_puts_the_cursors_coins_in_the_purse_unless_past_a_billion() {
+        use eq_client_core::money::{Coin, CoinPlace, CoinTransfer};
+        assert_eq!(
+            coins_put_away(999_999_990, 10),
+            [CoinTransfer {
+                from: CoinPlace::Cursor,
+                to: CoinPlace::Purse,
+                coin: Coin::Platinum,
+                into: Coin::Platinum,
+                amount: 10,
+            }]
+        );
+        // One past the billion is silent, and nothing goes.
+        assert_eq!(coins_put_away(999_999_991, 10), []);
+        // No coins and no item: nothing to do.
+        assert_eq!(coins_put_away(5, 0), []);
     }
 
     #[test]

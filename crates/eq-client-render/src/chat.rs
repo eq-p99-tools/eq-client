@@ -139,6 +139,8 @@ pub(super) struct ChatState {
     pub(crate) slash: Option<super::slash::Asked>,
     /// A `/hidecorpses`'s words, waiting for its answer.
     pub(crate) hide_corpses: Option<String>,
+    /// An `/assist` with words after it, waiting for its answer.
+    pub(crate) assist_words: Option<String>,
     /// An `/autoinventory` waiting to put the cursor item away.
     pub(crate) autoinventory: Option<crate::inventory::auto::Asked>,
     /// A `/doability`'s words, waiting for the Actions window's buttons.
@@ -2040,6 +2042,10 @@ pub(super) fn client_request_in_scope(
         state.slash = Some(asked);
         return Some(Ok(()));
     }
+    if let Some(words) = command_words(input, "assist").filter(|words| !words.trim().is_empty()) {
+        state.assist_words = Some(words.trim().to_owned());
+        return Some(Ok(()));
+    }
     if let Some(words) = command_words(input, "doability") {
         state.doability = Some(words.to_owned());
         return Some(Ok(()));
@@ -2203,7 +2209,7 @@ fn random_range(words: &str) -> Result<(u32, u32), String> {
 
 /// Whose target `/assist` takes: the player named, among those in the zone,
 /// or else the player's target.
-fn assisted(words: &str, online: &super::online::OnlineState) -> Result<u16, String> {
+pub(super) fn assisted(words: &str, online: &super::online::OnlineState) -> Result<u16, String> {
     let world = online.world();
     let Some(name) = words.split_whitespace().next() else {
         return world

@@ -209,6 +209,7 @@ pub(super) fn schedule(app: &mut App) {
                 who::zone_list,
                 whereabouts::answers,
                 crate::slash::answers,
+                crate::slash::assist_named,
                 crate::corpses::run,
                 inventory::auto::run,
                 (contacts::answers, contacts::persist).chain(),

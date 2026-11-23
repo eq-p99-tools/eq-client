@@ -21,6 +21,9 @@ const SHOW_NAMES: &str = "show_names";
 /// The name a file keeps [`Options::loot_no_drop`] under.
 const LOOT_NO_DROP: &str = "loot_no_drop";
 
+/// The name a file keeps [`Options::attack_on_assist`] under.
+const ATTACK_ON_ASSIST: &str = "attack_on_assist";
+
 /// An option the player turns on or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Toggle {
@@ -351,6 +354,13 @@ pub struct Options {
     /// sets it; the official client keeps it in `eqclient.ini`, this client
     /// per character.
     pub loot_no_drop: LootNoDrop,
+    /// Whether the answer to an assist starts auto attack as it targets, as
+    /// `/assist on` and `/assist off` set it (Titanium 0x45f40a, read
+    /// R49-8 d). The official client keeps it in `eqclient.ini`
+    /// (`[Defaults]` `AttackOnAssist`), this client per character. Its
+    /// default there is unread, so it starts off (inferred, checklist
+    /// 6.490).
+    pub attack_on_assist: bool,
     /// See [`Level::ClipPlane`].
     pub clip_plane: u16,
     /// See [`Level::MaxFps`].
@@ -391,6 +401,7 @@ impl Default for Options {
             qol,
             show_names: ShowNames::Everything,
             loot_no_drop: LootNoDrop::Ask,
+            attack_on_assist: false,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
             mouse_sensitivity: 50,
@@ -546,6 +557,12 @@ impl Options {
                 }
                 continue;
             }
+            if key.trim() == ATTACK_ON_ASSIST {
+                if let Ok(on) = value.trim().parse() {
+                    options.attack_on_assist = on;
+                }
+                continue;
+            }
             if let Some(level) = Level::ALL
                 .into_iter()
                 .find(|level| level.key() == key.trim())
@@ -586,6 +603,10 @@ impl Options {
         for part in [LOOT_NO_DROP, " = ", &loot_no_drop, "\n"] {
             text.push_str(part);
         }
+        let attack_on_assist = self.attack_on_assist.to_string();
+        for part in [ATTACK_ON_ASSIST, " = ", &attack_on_assist, "\n"] {
+            text.push_str(part);
+        }
         for level in Level::ALL {
             for part in [level.key(), " = ", &self.level(level).to_string(), "\n"] {
                 text.push_str(part);
@@ -607,6 +628,7 @@ mod tests {
         options.set(Toggle::Qol(Fix::JesusMode), true);
         options.show_names = ShowNames::Last;
         options.loot_no_drop = LootNoDrop::AskUnusable;
+        options.attack_on_assist = true;
         let text = options.text();
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
@@ -615,6 +637,7 @@ mod tests {
         assert!(text.contains("hidden_windows = false\n"));
         assert!(text.contains("show_names = 2\n"));
         assert!(text.contains("loot_no_drop = 1\n"));
+        assert!(text.contains("attack_on_assist = true\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // A file from before the QoL page keeps its choices there.
         let before = Options::read(

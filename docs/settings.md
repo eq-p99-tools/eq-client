@@ -61,6 +61,16 @@ file name in the installation root or its `sounds` folder. Cues play once,
 with limits on pending requests, concurrent voices, and playback time. World
 resets clear pending cues and stop their playback.
 
+## Attack On Assist
+
+Titanium installations keep `attack_on_assist` in the character's options file.
+When it is on, the server's assist answer that sets the target also starts auto
+attack, through the attack key's own refusals and line. `/assist on` and
+`/assist off` set it and say its state, so a social or a script sets it as a
+player does. It starts off: the program's own default is unread (checklist
+6.490), and the installation's `[Defaults]` `AttackOnAssist` seeds it where
+present. The Mac-era client has no such option.
+
 ## Quality of life
 
 Options → QoL stores these choices per character. Availability can depend on the

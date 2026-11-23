@@ -325,6 +325,30 @@ pub(super) fn say_refusals(
     }
 }
 
+/// The put-away button. On a client that runs R46's forms it runs
+/// `/autoinventory`'s routine for an item (0x51881c calls 0x47477f, read
+/// R49-8 b). Its coin path is the window's own (0x517ebb), taken here as the
+/// same purse move (inferred, checklist 6.490). Its sound 0x92 isn't played:
+/// this client has no sound for it yet (6.490). Elsewhere it stores the
+/// cursor item as before.
+fn put_away(
+    state: &mut InventoryState,
+    settings: &crate::ViewerSettings,
+    online: &mut super::online::OnlineState,
+    sender: &crate::outbox::Outbox,
+) {
+    state.actions.split = None;
+    if settings.0.installed_client.runs_r46_forms() {
+        match state.auto_inventory(online, sender) {
+            Ok(true) => (),
+            Ok(false) => state.refuse("There is no room for that item.".into()),
+            Err(error) => state.refuse(crate::outbox::window_line(&error)),
+        }
+    } else {
+        state.actions.auto_store = true;
+    }
+}
+
 /// Left-click chooses a stack quantity or moves through the cursor; right-click inspects.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
 pub(super) fn input(
@@ -405,8 +429,7 @@ pub(super) fn input(
         return;
     }
     if store.any() {
-        state.actions.split = None;
-        state.actions.auto_store = true;
+        put_away(&mut state, &settings, &mut online, &sender);
     }
     state.store_cursor(&mut online, &sender);
     for action in split_buttons.iter() {

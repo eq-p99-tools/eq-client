@@ -180,7 +180,8 @@ pub(super) fn answers(
                         session_id: stamp.session_id,
                         created: stamp.created,
                     },
-                    // A self target is the session's refusal (0x57b).
+                    // The plain form's own test of a self target is unread
+                    // (checklist 6.490): it goes as the target is.
                     Asked::Assist => ClientCommand::Assist {
                         session_id: stamp.session_id,
                         spawn_id: target.unwrap_or_default(),
@@ -189,6 +190,124 @@ pub(super) fn answers(
             }
         }
         Err(refusal) => chat.refuse(refusal),
+    }
+}
+
+/// `/assist on` and `/assist off`'s lines: the option's state after the
+/// word (read R46 section 5). Which of the two is on is inferred from their
+/// order (checklist 6.490).
+const ATTACK_ON_ASSIST_LINES: [(u32, &str); 2] = [
+    (0x33cf, "Attack on assist is on."),
+    (0x33d0, "Attack on assist is off."),
+];
+/// The main-assist words (0x2252, 0x2253, 0x223d): the group and raid roles
+/// are not decoded, so these keep this client's answer.
+const MAIN_ASSIST_WORDS: [u32; 3] = [0x2252, 0x2253, 0x223d];
+/// `/assist` naming the player: the line, in its colour, and nothing sent
+/// (0x46ae21, read R49-8 c).
+const ASSIST_SELF: (u32, &str) = (0x57b, "You cannot assist yourself.");
+const ASSIST_SELF_COLOUR: u32 = 0x111;
+/// This client's answer to a form it doesn't take yet.
+const ASSIST_NOT_YET: &str = "This client does not take /assist that way yet.";
+
+/// What an `/assist` with words comes to, on a client that runs R46's
+/// forms (0x46ae21, read R49-8 c).
+#[derive(Debug, PartialEq, Eq)]
+enum AssistWords {
+    /// The option word for on or off ([`crate::sharing::words`]), as
+    /// `/autosplit` compares them (inferred, checklist 6.490).
+    Option(bool),
+    /// A main-assist word.
+    MainAssist,
+    /// A name: the spawn it picks, as 0x47981d picks one, if any.
+    Named(Option<u16>),
+}
+
+fn assist_words(words: &str, world: &ClientWorld, messages: &Messages) -> AssistWords {
+    let typed = words.split_whitespace().next().unwrap_or_default();
+    if crate::sharing::names(typed, crate::sharing::words::ON, messages) {
+        return AssistWords::Option(true);
+    }
+    if crate::sharing::names(typed, crate::sharing::words::OFF, messages) {
+        return AssistWords::Option(false);
+    }
+    if MAIN_ASSIST_WORDS
+        .into_iter()
+        .filter_map(|id| messages.formatted(id, &[]))
+        .any(|main| main.eq_ignore_ascii_case(typed))
+    {
+        return AssistWords::MainAssist;
+    }
+    AssistWords::Named(crate::emotes::named_spawn(world, typed))
+}
+
+/// Answers an `/assist` with words the chat noted. On a client that runs
+/// R46's forms (read R49-8 c):
+/// - the option words set Attack On Assist and say its state;
+/// - a main-assist word keeps this client's answer;
+/// - any other word names a spawn by 0x47981d's prefix lookup, and the
+///   assist goes for it without changing the target; no match is silent,
+///   and the player's own name says 0x57b and sends nothing.
+///
+/// The program's token expansion of the word (0x492f68) is not modelled
+/// (checklist 6.490). Elsewhere, the word names a player in the zone, as
+/// this client took it before.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn assist_named(
+    mut chat: ResMut<ChatState>,
+    online: Res<super::online::OnlineState>,
+    outbox: Res<Outbox>,
+    messages: Option<Res<Messages>>,
+    (settings, options): (
+        Option<Res<crate::ViewerSettings>>,
+        Option<ResMut<crate::options::OptionsState>>,
+    ),
+) {
+    let Some(words) = chat.assist_words.take() else {
+        return;
+    };
+    let empty = Messages::default();
+    let messages = messages.as_deref().unwrap_or(&empty);
+    let world = online.world();
+    let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
+    let assist = |spawn_id| {
+        let _ = outbox.post(world, |stamp| ClientCommand::Assist {
+            session_id: stamp.session_id,
+            spawn_id,
+        });
+    };
+    if !client.runs_r46_forms() {
+        match super::chat::assisted(&words, &online) {
+            Ok(spawn_id) => assist(spawn_id),
+            Err(refusal) => chat.refuse(Said::own(refusal)),
+        }
+        return;
+    }
+    match assist_words(&words, world, messages) {
+        AssistWords::Option(on) => {
+            if let Some(mut options) = options {
+                options.options.attack_on_assist = on;
+            }
+            let (id, ours) = ATTACK_ON_ASSIST_LINES[usize::from(!on)];
+            chat.history
+                .push(super::chat::system_line(messages.said_text(id, ours)));
+        }
+        AssistWords::MainAssist => chat.refuse(Said::own(ASSIST_NOT_YET)),
+        AssistWords::Named(_) if !outbox::offered(world, Capability::Assisting) => {
+            chat.refuse(Said::own(outbox::UNAVAILABLE));
+        }
+        AssistWords::Named(Some(spawn_id))
+            if world
+                .player()
+                .is_some_and(|player| player.spawn_id == spawn_id) =>
+        {
+            let (id, ours) = ASSIST_SELF;
+            chat.history.push(super::chat::system_line(
+                messages.said_text(id, ours).typed(ASSIST_SELF_COLOUR),
+            ));
+        }
+        AssistWords::Named(Some(spawn_id)) => assist(spawn_id),
+        AssistWords::Named(None) => (),
     }
 }
 

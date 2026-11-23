@@ -348,6 +348,10 @@ pub struct ClientWorld {
     /// The target the server's answer to an assist names, until the player
     /// takes it.
     assisted: Option<u16>,
+    /// How many assist answers have named a target, wrapping, and the last
+    /// one named: a front end that starts auto attack on an answer
+    /// (`AttackOnAssist`, read R49-8 d) sees each once.
+    assist_answer: (u32, Option<u16>),
     /// The player's raid, while they are in one. The server lists it again
     /// after each admission.
     raid: Option<Raid>,
@@ -581,6 +585,14 @@ impl ClientWorld {
     /// once: a front end targets it as the player would.
     pub fn take_assisted(&mut self) -> Option<u16> {
         self.assisted.take()
+    }
+
+    /// How many assist answers have named a target, wrapping, and the
+    /// target the last one named. Unlike [`Self::take_assisted`], reading
+    /// it takes nothing.
+    #[must_use]
+    pub const fn assist_answer(&self) -> (u32, Option<u16>) {
+        self.assist_answer
     }
 
     /// The player's HP, with what their items add, when the server's last
@@ -1397,7 +1409,12 @@ impl ClientWorld {
             // Dice nearby, the server's answer to an assist, and a roll,
             // emote or assist the session would not send.
             WorldEvent::Roll(roll) => news.notices.push(Notice::Roll(roll.clone())),
-            WorldEvent::Assisted(answer) => self.assisted = answer.target,
+            WorldEvent::Assisted(answer) => {
+                self.assisted = answer.target;
+                if answer.target.is_some() {
+                    self.assist_answer = (self.assist_answer.0.wrapping_add(1), answer.target);
+                }
+            }
             WorldEvent::SocialRefused {
                 session_id,
                 reason,
