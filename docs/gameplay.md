@@ -333,7 +333,8 @@ unconfirmed. When no cast is held, the client reports unconfirmed song state
 as soon as it submits the request. Song buffs and gem timers follow the
 server's updates. On P99 and Titanium EQEmu, when a song stops, the gems
 whose songs have no recast time are ready again at once, and so is the short
-wait before any spell, as in the official client.
+wait before any spell, as in the official client. There, a Bard's songs also
+leave no such wait after they are sung, so the next song can follow at once.
 
 On P99 and Titanium EQEmu, a Bard can type `/melody` followed by gem numbers,
 such as `/melody 1 3 2`, to play those songs in turn, as the official client
@@ -455,14 +456,30 @@ reported by the current admission.
 
 The P99 paths follow Titanium source and await attended checks.
 
-`/ttell message` sends a tell to the player you target, exactly as
-`/tell Name message` would, and `/whotarget` lists the target's name in the
-zone's `/who`. A tell goes only to another player whose name is letters
-alone. An NPC, a pet, a corpse or yourself gets this client's own refusal
-line and nothing is sent; `/whotarget` takes any target, since it sends
-nothing. Socials may run both; a script tells only with its own tell step.
-The forms, the refusal lines and the target kinds are inferred until the
-original client's handling is read (recording checklist 6.528).
+`/ttell message` sends a tell to your target, as `/tell Name message`
+would, and `/whotarget` lists the target's name in the zone's `/who`. On
+Titanium servers both follow the original client (read R49-18, recording
+checklist 6.528):
+
+- **No words or no target:** `/ttell` says nothing and sends nothing.
+- **Which targets take a tell:** the name is the one the server sent. A
+  creature's corpse is taken whenever it has a name, as it stands, and the
+  server answers for it. Any other target is taken only when its name has
+  no `#` and no `_`, and is cut at its apostrophe, so a player's corpse's
+  tell goes to its owner. Any other target gets the original's refusal
+  line. Most creatures' names have a `_`, so they are refused.
+- **Yourself:** a tell that would go to you (your own spawn or your own
+  corpse) gets the original's line for that and is not sent.
+- **One difference, labelled:** the original counts a creature that dies
+  in view as a player's corpse and so refuses it; this client keeps it a
+  creature's corpse and sends the tell, which the server then answers.
+- **`/whotarget`** lists any target, you included, as a typed `/who` of its
+  name would, passing over any words after it. With no target it says
+  nothing.
+
+On Mac-era and RoF2 servers, whose clients are unread, a tell goes only to
+another player whose name is letters alone, and this client's own lines
+answer the rest. Socials and a script's `slash` step may run both.
 
 ## Petitions, bug reports and feedback
 

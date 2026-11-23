@@ -1956,14 +1956,31 @@ impl ClientWorld {
             }
             // Training at a guildmaster, and the practice points it spends.
             WorldEvent::Training(update) => self.training_news(update, news),
-            // The program's own words (`string_id`, `arguments`) are the
-            // language-training client half's (6.597); this keeps the
-            // library's words, as before.
             WorldEvent::TrainingRefused {
-                session_id, reason, ..
+                session_id,
+                reason,
+                string_id,
+                arguments,
             } => {
                 if self.session_id == Some(*session_id) {
-                    news.notices.push(Notice::TrainingRefused(reason.clone()));
+                    // The coin line (0x2f21) names the guildmaster, shown
+                    // as the program shows a spawn's name.
+                    let arguments = if *string_id == Some(0x2f21) {
+                        arguments
+                            .iter()
+                            .map(|name| crate::entities::display_name(name))
+                            .collect()
+                    } else {
+                        arguments.clone()
+                    };
+                    news.notices.push(Notice::TrainingRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                        arguments,
+                        common_alternate: self
+                            .language_zero_selector
+                            .map(crate::rules::LanguageZeroSelector::alternate_name),
+                    });
                 } else {
                     news.ignored = true;
                 }
