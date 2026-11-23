@@ -253,8 +253,8 @@ mod tests {
         assert_eq!(generation((1, 0, PLAYER), none, true), Generation::Luclin);
         assert_eq!(generation((1, 0, PLAYER), none, false), Generation::Classic);
         // An explicit key decides where offered, and nothing opens a shut gate.
-        let off = keys(&[(1, 0, false)]);
-        assert_eq!(generation((1, 0, PLAYER), off, true), Generation::Classic);
+        let off = keys(&[(2, 0, false)]);
+        assert_eq!(generation((2, 0, PLAYER), off, true), Generation::Classic);
         let on = keys(&[(2, 1, true)]);
         assert_eq!(generation((2, 1, PLAYER), on, true), Generation::Luclin);
         assert_eq!(generation((2, 1, PLAYER), on, false), Generation::Classic);
@@ -318,7 +318,11 @@ mod tests {
         assert_eq!(generation((1, 0, PLAYER), human, true), Generation::Luclin);
         // The fallback is per gender, and only Human takes Erudite's.
         assert_eq!(
-            generation((1, 1, PLAYER), keys(&[(1, 1, false), (3, 0, true)]), true),
+            generation(
+                (1, 1, PLAYER),
+                keys(&[(1, 1, false), (3, 1, false), (3, 0, true)]),
+                true
+            ),
             Generation::Classic
         );
         assert_eq!(
