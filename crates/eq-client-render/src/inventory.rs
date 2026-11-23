@@ -503,8 +503,7 @@ fn use_clicked(
     spells: &crate::spellbook::SpellNames,
     settings: &crate::ViewerSettings,
 ) {
-    let casting = online.world().casting();
-    let casting = casting.cast.is_some() || casting.pending.is_some();
+    let casting = online.world().casting().holds_actions();
     state.use_slot(
         slot,
         (online, spells),
