@@ -121,10 +121,10 @@ pub enum Fix {
     /// Requests logout without sitting or camp preparation, then waits for its outcome.
     ExitAtOnce,
     /// Lets the player cross any zone line regardless of the level that
-    /// zone asks for. The official client reads a minimum level from each
-    /// zone and turns players away at the line below it; this client has
-    /// read no such table yet and the world sets no level of its own, so
-    /// the gate and its bypass land together with the reading.
+    /// zone asks for. That the official client reads a minimum level for
+    /// each zone and turns players away below it is inferred, not read;
+    /// this client gates no crossing and the world sets no level of its
+    /// own, so the setting changes nothing until such a gate lands.
     ZoneAnywhere,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
@@ -164,7 +164,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 32] = [
+    pub const ALL: [Self; 33] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -362,7 +362,7 @@ impl Fix {
                 "Request logout without automatic sitting or the camp countdown. Wait for the server response before leaving the session."
             }
             Self::ZoneAnywhere => {
-                "Cross any zone line whatever level it asks for, the way the official client turns players away below it. Nothing is blocked today and nothing is sent differently; the gate lands with the zone's own level table and this lets it pass."
+                "Cross any zone line whatever level the zone asks for. Nothing is blocked today, so this changes nothing yet."
             }
             Self::AnswerListPolls => {
                 "Answer supported P99 list presence polls after a local delay. This does not join a list or answer numeric challenges."
