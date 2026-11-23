@@ -8,10 +8,12 @@
 //! inferred from what 13177 says; this client's words stand in without the
 //! strings.
 //!
-//! `/guildstatus` is answered here too, once read R49-6k lets it be offered
-//! (checklist 6.575): `EQEmu`'s guild status lines, from the target the
-//! client knows, since Titanium's patch maps no `OP_GuildStatus`. A string
-//! the installation lacks gives no line.
+//! `/guildstatus` is answered here too (checklist 6.575, read R49-6k): the
+//! Titanium program answers it itself and sends nothing, of the player a
+//! typed name finds or else the target, in strings 12256 to 12260 by rank,
+//! and of a player in no guild in words of its own, for which this client's
+//! own words stand. A string the installation lacks gives no line. The Mac
+//! client's own answer wasn't read, so there it is refused for now.
 use super::chat::{ChatState, Said};
 use super::hud::messages::Messages;
 use bevy::prelude::*;
@@ -19,20 +21,20 @@ use eq_client_assets::clock::ClientClock;
 use eq_client_core::{whereabouts, world::ClientWorld};
 
 /// Which the player asked.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) enum Asked {
     /// `/loc`: where the player stands.
     Location,
     /// `/time`: the time in Norrath and on Earth.
     Time,
-    /// `/guildstatus`: the target's guild and rank in it.
-    GuildStatus,
+    /// `/guildstatus [name]`: a player's guild and rank in it, the named
+    /// player's or else the target's.
+    GuildStatus(Option<String>),
 }
 
-/// Whether `/guildstatus` is offered: false until read R49-6k says whether
-/// the official client answers it itself, from its target, and in which
-/// strings (checklist 6.575). Only tests answer it while it is false.
-const GUILD_STATUS_READ: bool = false;
+/// Whether `/guildstatus` is offered: read R49-6k says the official client
+/// answers it itself, and in which strings (checklist 6.575).
+const GUILD_STATUS_READ: bool = true;
 
 impl Asked {
     /// What a typed line asks, if it is `/location` or `/time`, spelled out.
@@ -47,10 +49,12 @@ impl Asked {
             Some(Self::Location)
         } else if name.eq_ignore_ascii_case("time") {
             Some(Self::Time)
-        } else if guild_status && name.eq_ignore_ascii_case("guildstatus") {
-            Some(Self::GuildStatus)
         } else {
-            None
+            // The program takes the first word after the command as a name.
+            let mut words = name.split_whitespace();
+            let command = words.next()?;
+            (guild_status && command.eq_ignore_ascii_case("guildstatus"))
+                .then(|| Self::GuildStatus(words.next().map(str::to_owned)))
         }
     }
 }
@@ -66,7 +70,12 @@ fn answer(
 ) -> Result<Vec<Said>, String> {
     let player = world.player().ok_or("Enter the world first")?;
     Ok(match asked {
-        Asked::GuildStatus => guild_status(world, messages).into_iter().collect(),
+        Asked::GuildStatus(_) if clock == eq_client_assets::clock::EQMAC => {
+            return Err("/guildstatus on the Mac client waits for its program read".to_owned());
+        }
+        Asked::GuildStatus(named) => guild_status(world, named.as_deref(), messages)
+            .into_iter()
+            .collect(),
         Asked::Location => {
             let numbers = whereabouts::location(player.position);
             let fallback = format!("You stand at {}.", numbers.join(", "));
@@ -103,21 +112,31 @@ fn answer(
     })
 }
 
-/// `EQEmu`'s guild status line for the target, in the installed client's
-/// words (`Handle_OP_GuildStatus`: 12256 to 12260, inferred to be the
-/// program's own until read R49-6k); none where the installation lacks the
-/// string or the client can't tell.
-fn guild_status(world: &ClientWorld, messages: &Messages) -> Option<Said> {
+/// The program's guild status line (read R49-6k, 0x466970), in the
+/// installed client's words: 12256 to 12258 by rank with the name and the
+/// guild, 12259 with the name alone for any other rank, and 12260 for no
+/// player. None where the installation lacks the string or the client
+/// can't tell yet. A player in no guild gets this client's own words, as
+/// the program's are its own and not in the strings.
+fn guild_status(world: &ClientWorld, named: Option<&str>, messages: &Messages) -> Option<Said> {
     use eq_client_core::world::GuildStatus;
-    let (id, arguments) = match world.guild_status()? {
+    let (id, arguments) = match world.guild_status(named)? {
         GuildStatus::NoPlayer => (12260, Vec::new()),
-        GuildStatus::NoGuild { name } => (12259, vec![name]),
+        GuildStatus::NoGuild { name } => {
+            return Some(Said::own(format!("{name} is not in a guild.")).typed(GUILD_STATUS_TYPE));
+        }
+        GuildStatus::Ranked { name } => (12259, vec![name]),
         GuildStatus::Member { name, guild } => (12256, vec![name, guild]),
         GuildStatus::Officer { name, guild } => (12257, vec![name, guild]),
         GuildStatus::Leader { name, guild } => (12258, vec![name, guild]),
     };
-    messages.formatted(id, &arguments).map(Said::official)
+    messages
+        .formatted(id, &arguments)
+        .map(|line| Said::official(line).typed(GUILD_STATUS_TYPE))
 }
+
+/// The message type the program gives every guild status line (0x111).
+const GUILD_STATUS_TYPE: u32 = 0x111;
 
 /// Answers a `/loc`, `/time` or `/guildstatus` the chat noted, in the chat.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -152,34 +171,41 @@ mod tests {
     use eq_client_core::WorldEvent;
 
     #[test]
-    fn guild_status_waits_for_its_read_then_answers_in_the_installed_strings_only() {
+    fn guild_status_answers_as_the_program_reads_in_the_installed_strings() {
         use eq_client_core::listing::{GuildRank, ListingChange};
-        // Not offered until R49-6k: the word passes on as before.
-        assert_eq!(Asked::typed("/guildstatus"), None);
+        // Offered since R49-6k, with the first word after it as a name.
+        assert_eq!(Asked::typed("/guildstatus"), Some(Asked::GuildStatus(None)));
         assert_eq!(
-            Asked::typed_when("/GuildStatus ", true),
-            Some(Asked::GuildStatus)
+            Asked::typed("/GuildStatus  Zed more"),
+            Some(Asked::GuildStatus(Some("Zed".into())))
         );
+        assert_eq!(Asked::typed("/guildstatusx"), None);
         let messages = Messages::parse(
             "EQST0002
 0 3
 12258 %1 leads %2
-12259 %1 has no guild
+12259 %1 holds a rank
 12260 Target a player
 ",
         );
         let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
         let mut state = OnlineState::new(true);
         testing::admit(&mut state, 1, testing::player(7));
-        let said = |state: &OnlineState, messages: &Messages| {
-            answer(Asked::GuildStatus, state.world(), earth, messages, TITANIUM).unwrap()
+        let said = |state: &OnlineState, messages: &Messages, named: Option<&str>| {
+            let asked = Asked::GuildStatus(named.map(str::to_owned));
+            answer(asked, state.world(), earth, messages, TITANIUM).unwrap()
         };
-        assert_eq!(said(&state, &messages), [Said::official("Target a player")]);
+        let official = |text: String| Said::official(text).typed(GUILD_STATUS_TYPE);
+        assert_eq!(
+            said(&state, &messages, None),
+            [official("Target a player".into())]
+        );
         state.select_target(Some(7));
         let name = state.world().player().unwrap().name.clone();
+        // No guild: the program's words are its own, so ours stand.
         assert_eq!(
-            said(&state, &messages),
-            [Said::official(format!("{name} has no guild"))]
+            said(&state, &messages, None),
+            [Said::own(format!("{name} is not in a guild.")).typed(GUILD_STATUS_TYPE)]
         );
         testing::news(
             &mut state,
@@ -196,8 +222,30 @@ mod tests {
             ],
         );
         assert_eq!(
-            said(&state, &messages),
-            [Said::official(format!("{name} leads Seekers"))]
+            said(&state, &messages, None),
+            [official(format!("{name} leads Seekers"))]
+        );
+        // By name, whatever the target; a name no one has is refused.
+        state.select_target(None);
+        assert_eq!(
+            said(&state, &messages, Some(&name.to_lowercase())),
+            [official(format!("{name} leads Seekers"))]
+        );
+        assert_eq!(
+            said(&state, &messages, Some("Nobody")),
+            [official("Target a player".into())]
+        );
+        state.select_target(Some(7));
+        testing::news(
+            &mut state,
+            [WorldEvent::Listing {
+                spawn_id: 7,
+                change: ListingChange::GuildRank(GuildRank::Other(4)),
+            }],
+        );
+        assert_eq!(
+            said(&state, &messages, None),
+            [official(format!("{name} holds a rank"))]
         );
         // A string the installation lacks gives no line, never words of ours.
         testing::news(
@@ -207,8 +255,19 @@ mod tests {
                 change: ListingChange::GuildRank(GuildRank::Member),
             }],
         );
-        assert_eq!(said(&state, &messages), []);
-        assert_eq!(said(&state, &Messages::default()), []);
+        assert_eq!(said(&state, &messages, None), []);
+        assert_eq!(said(&state, &Messages::default(), None), []);
+        // The Mac client's answer wasn't read.
+        assert!(
+            answer(
+                Asked::GuildStatus(None),
+                state.world(),
+                earth,
+                &messages,
+                EQMAC
+            )
+            .is_err()
+        );
     }
 
     #[test]
