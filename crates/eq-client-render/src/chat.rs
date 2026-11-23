@@ -146,6 +146,8 @@ pub(super) struct ChatState {
     pub(crate) hide_corpses: Option<String>,
     /// An `/assist` with words after it, waiting for its answer.
     pub(crate) assist_words: Option<String>,
+    /// A `/shield`'s words, none or a name, waiting for its answer.
+    pub(crate) shield_words: Option<String>,
     /// An `/autoinventory` waiting to put the cursor item away.
     pub(crate) autoinventory: Option<crate::inventory::auto::Asked>,
     /// Chat server channel commands, as the chat server's words, waiting
@@ -536,6 +538,7 @@ impl ChatState {
             motd_asked,
             fastdrop_asked,
             assist_words,
+            shield_words,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -593,6 +596,7 @@ impl ChatState {
         *motd_asked = None;
         *fastdrop_asked = None;
         *assist_words = None;
+        *shield_words = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -2316,6 +2320,10 @@ pub(super) fn client_request_in_scope(
         state.slash = Some(asked);
         return Some(Ok(()));
     }
+    if let Some(words) = super::shield::typed(input) {
+        state.shield_words = Some(words);
+        return Some(Ok(()));
+    }
     if let Some(words) = command_words(input, "assist").filter(|words| !words.trim().is_empty()) {
         state.assist_words = Some(words.trim().to_owned());
         return Some(Ok(()));
@@ -2873,14 +2881,6 @@ fn class_command(
     stamp: &dyn Fn() -> Result<crate::outbox::Stamp, String>,
 ) -> Option<Result<ClientCommand, String>> {
     Some(match name {
-        // A Warrior's `/shield` of the target, which takes no words.
-        "shield" => {
-            if words.is_empty() {
-                stamp().and_then(|stamp| super::abilities::shield_command(world, stamp))
-            } else {
-                Err("Use /shield without arguments".into())
-            }
-        }
         "harmtouch" | "layonhands" => {
             let ability = eq_client_core::knights::KnightAbility::named(name)?;
             if words.is_empty() {

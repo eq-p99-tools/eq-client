@@ -119,6 +119,7 @@ mod script_workbench;
 mod select_preview;
 mod sharing;
 mod sheets;
+mod shield;
 mod skills;
 mod skin;
 mod skinned;
