@@ -87,13 +87,16 @@ mod tests {
                 spell_level: 1,
                 push: None,
             },
-            Landing {
+            &Landing {
                 finder: eq_client_core::GameDialect::Titanium.buff_placement(),
-                band: Some(Band {
-                    beneficial: true,
-                    short: false,
-                    last: false,
-                }),
+                spell: eq_client_core::buffs::placement::Spell {
+                    band: Some(Band {
+                        beneficial: true,
+                        short: false,
+                        last: false,
+                    }),
+                    ..eq_client_core::buffs::placement::Spell::default()
+                },
                 record_type: Some(2),
                 caster_level: Some(1),
                 ..Landing::default()
@@ -113,7 +116,7 @@ mod tests {
                 spell_level: 1,
                 push: None,
             },
-            Landing::default(),
+            &Landing::default(),
             start,
         );
         assert_eq!(tracker.slot_of(99), None);

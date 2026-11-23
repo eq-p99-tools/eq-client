@@ -1772,12 +1772,12 @@ mod tests {
             Landing {
                 caster_level: Some(20),
                 keeps_record: None,
-                ..equal
+                ..equal.clone()
             },
             Landing {
                 caster_level: None,
                 keeps_record: Some(true),
-                ..equal
+                ..equal.clone()
             },
         ] {
             let mut state = BuffTracker::default();
