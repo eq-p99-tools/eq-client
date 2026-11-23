@@ -164,7 +164,7 @@ pub(super) fn answers(
                         chat.history.push(super::chat::system_line(
                             Said::own(format!(
                                 "You will join {} each time you log in.",
-                                kept.as_str()
+                                shown(kept.as_str())
                             ))
                             .typed(PLAIN_COLOUR),
                         ));
@@ -186,6 +186,23 @@ pub(super) fn answers(
             created: stamp.created,
         });
     }
+}
+
+/// An autojoin list as this client's lines show it: each `channel:password`
+/// entry keeps its channel, and its password is never printed. Whether the
+/// program's own lines show it is unread; ours keep it off the screen, the
+/// log and scripts' chat.
+fn shown(list: &str) -> String {
+    list.split(',')
+        .map(|entry| {
+            entry
+                .split_once(':')
+                .map_or(entry, |(channel, _)| channel)
+                .trim()
+        })
+        .filter(|channel| !channel.is_empty())
+        .collect::<Vec<_>>()
+        .join(", ")
 }
 
 /// The channels to join at a login to the chat server (R49-12 c): this
@@ -250,7 +267,9 @@ pub(super) fn autojoin(
         return;
     };
     chat.history.push(super::chat::system_line(
-        Said::own(format!("Autojoining channels: {list}")).typed(AUTOJOINING_COLOUR),
+        // The program prints a plain line here whose words aren't read; these
+        // are this client's, in its colour (R49-12 c).
+        Said::own(format!("Autojoining channels: {}", shown(&list))).typed(AUTOJOINING_COLOUR),
     ));
     let _ = outbox.post(world, |stamp| ClientCommand::ChatChannel {
         session_id: stamp.session_id,
@@ -494,7 +513,7 @@ mod tests {
         );
         assert_eq!(
             app.world().resource::<ChatState>().newest(),
-            "You will join general, trade:secret each time you log in."
+            "You will join general, trade each time you log in."
         );
     }
 
@@ -504,7 +523,7 @@ mod tests {
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
-            .channel_autojoin = eq_client_core::options::AutoJoin::new("general");
+            .channel_autojoin = eq_client_core::options::AutoJoin::new("general, trade:secret");
         app.update();
         // Nothing before the link takes the login.
         assert!(received.try_recv().is_err());
@@ -513,13 +532,16 @@ mod tests {
         app.update();
         app.update();
         match received.try_recv().unwrap() {
-            ClientCommand::ChatChannel { text, .. } => assert_eq!(text, "/join general"),
+            // The password goes to the chat server, as the program sends it.
+            ClientCommand::ChatChannel { text, .. } => {
+                assert_eq!(text, "/join general, trade:secret");
+            }
             other => panic!("{other:?}"),
         }
         assert!(received.try_recv().is_err());
         assert_eq!(
             app.world().resource::<ChatState>().newest(),
-            "Autojoining channels: general"
+            "Autojoining channels: general, trade"
         );
         // A later link, after a loss, joins again, once.
         testing::news(&mut app.world_mut().resource_mut::<OnlineState>(), [up()]);

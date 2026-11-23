@@ -561,7 +561,8 @@ link to it when the world offers one, and these commands go to it:
   options; else your character's `ChannelAutoJoin` in the official client's
   own file for them (`[ChatManager]`); else `eqclient.ini`'s `[Defaults]`
   one. `NONE`, the official default, joins nothing. This client never writes
-  the official client's files.
+  the official client's files. Its lines about the list show each channel's
+  name but never a password.
 - `/chat words` sends the chat server's own channel words as typed: `join`,
   `leave`, `leaveall`, `list`, `listall`, `announce`, and the owner and
   moderator words (`setowner`, `oplist`, `invite`, `grant`, `moderate`,
