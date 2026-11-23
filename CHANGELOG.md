@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- Repin eq-network to b631816, keeping today's behaviour (checklist 6.572). The repin brings the bandolier sets, the swap and belt use (all unoffered), and augments read from Titanium item records (6.570).
+  - **Augments:** an augmented item no longer makes the inventory unreadable. `InventoryItem::augments` is filled in every literal.
+  - **Weight:** the session's new `WeightUnavailable::Augments` reads exactly as `Container` does: an unknown load, never a lighter one. A worn augmented item makes equipped stats unconfirmed, so the speed inputs stay unproven.
+  - **Ignored for now:** `WorldEvent::BandoliersUnknown` and `BandolierRefused` go in the ignore arm with the bandolier sets, whose windows are parked (P99 and Quarm features first).
+
 - Scripts can ask for AA requests (checklist 6.569). The new steps are `train_aa(RANK_ID)`, `activate_aa(RANK_ID)` and `aa_split(PERCENT)`, in this client's own words: the official `/alternateadv` subwords are unread (R49-40b), so they wait.
   - Each step posts one `TrainAlternateAdvancement`, `ActivateAlternateAdvancement` (no target) or `SetAlternateAdvancementSplit` command for the current admission, then moves on. It never waits for the server and never retries.
   - The client checks nothing about the rank or the points: the session decides, and its refusal is said in chat.
