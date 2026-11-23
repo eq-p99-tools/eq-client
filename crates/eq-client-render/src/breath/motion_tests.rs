@@ -177,6 +177,7 @@ fn only_the_matching_worker_refusal_releases_a_move_after_a_grant_reset() {
     push(
         &updates,
         WorldEvent::MotionState {
+            swim: None,
             session_id: 11,
             units_per_second: Some(6.0),
             backward_units_per_second: None,

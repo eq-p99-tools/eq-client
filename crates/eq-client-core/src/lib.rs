@@ -41,7 +41,7 @@ pub use eq_network_game::bind_wound;
 pub use eq_network_game::boats;
 pub use eq_network_game::books;
 pub use eq_network_game::characters::{CharacterChoice, CharacterLook};
-pub use eq_network_game::chat::OutboundChat;
+pub use eq_network_game::chat::{OutboundChat, Tongue};
 pub use eq_network_game::clock;
 pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;
@@ -70,7 +70,7 @@ pub use eq_network_game::merchant;
 pub use eq_network_game::money;
 pub use eq_network_game::movement::{
     BackwardCalibration, DiagonalAlong, DiagonalRates, EqMacFatigueInputs, GroundedDiagonal,
-    HeadingUpdate, MotionCalibration, MovementMode, MovementRequest, SpeedInputAcceptance,
+    HeadingUpdate, MotionCalibration, MovementMode, MovementRequest, Pace, SpeedInputAcceptance,
     SpeedInputState, SpeedInputUnavailable, SpeedInputs, StrafeCalibration, StrafeSide, Support,
     WalkCalibration,
 };

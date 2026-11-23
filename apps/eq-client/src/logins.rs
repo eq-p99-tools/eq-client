@@ -29,10 +29,20 @@ pub struct Installation {
 
 /// The official client a server type's players install.
 pub fn installed_client(protocol: eq_network::client::ServerProtocol) -> InstalledClient {
-    if protocol.is_titanium() {
+    if speaks_titanium(protocol) {
         InstalledClient::Titanium
     } else {
         InstalledClient::EqMac
+    }
+}
+
+/// Whether a server type speaks Titanium's packets (P99 or stock `EQEmu`).
+/// `RoF2` is refused before anything is sent, so it keeps the other branch
+/// until the client knows its installation.
+pub fn speaks_titanium(protocol: eq_network::client::ServerProtocol) -> bool {
+    match eq_client_core::GameDialect::from(protocol) {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
     }
 }
 

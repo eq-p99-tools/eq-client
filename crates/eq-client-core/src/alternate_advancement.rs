@@ -40,6 +40,16 @@ impl State {
                 }
             }
             Update::DefinitionsUnknown => self.definitions.clear(),
+            // Points, experience, reuse timers and EQMac's ranks wait for the
+            // AA window's slices; they change none of the effects kept here.
+            Update::Points(_)
+            | Update::Progress(_)
+            | Update::Timer(_)
+            | Update::MacRanks(_)
+            | Update::MacSelections(_)
+            | Update::MacPoints(_)
+            | Update::MacProgress(_)
+            | Update::MacTimer(_) => {}
         }
     }
 
@@ -85,6 +95,21 @@ mod tests {
             classes: 1 << 2,
             sequence: 900,
             rank: 3,
+            hotkey_sid: 0,
+            hotkey_sid2: 0,
+            title_sid: 0,
+            desc_sid: 0,
+            cost: 0,
+            prereq_skill: 0,
+            prereq_minpoints: 0,
+            kind: 0,
+            spellid: 0,
+            spell_type: 0,
+            spell_refresh: 0,
+            max_level: 0,
+            last_id: 0,
+            next_id: 0,
+            cost2: 0,
             effects: vec![Effect {
                 id: 14,
                 value: -2,

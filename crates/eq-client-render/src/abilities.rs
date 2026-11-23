@@ -64,9 +64,19 @@ pub(super) fn discipline_command(
     if !knows_discipline(world, discipline) {
         return Err("The discipline is unavailable to your character".into());
     }
+    let own = world
+        .player()
+        .map(|player| player.spawn_id)
+        .ok_or("Not in the zone yet")?;
+    // Today's request kept through the repin (6.561): the player's own
+    // spawn as the target, and every discipline held while one is active,
+    // as before; the disciplines slice owns R48b's target and timed rule.
     Ok(ClientCommand::UseDiscipline {
         session_id: stamp.session_id,
-        discipline,
+        spell_id: discipline.spell(),
+        timer: discipline.timer(),
+        target_id: own,
+        timed_self: true,
         created: stamp.created,
     })
 }

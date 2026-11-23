@@ -211,6 +211,9 @@ impl InventoryState {
                 revision: inventory.revision(),
                 slot,
                 target_id,
+                // The memorized test, as before, until the Bard song slice
+                // passes the installed word.
+                installed_class_spell: None,
                 created: now,
             };
             let available = target_id == player.spawn_id
@@ -1438,6 +1441,7 @@ mod tests {
             online,
             9,
             eq_client_core::SpawnState {
+                body_type: None,
                 class: Some(40),
                 spawn_id: 9,
                 name: "Synthetic banker".into(),
