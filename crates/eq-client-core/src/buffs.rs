@@ -1863,7 +1863,7 @@ mod tests {
                 rule: Some(placement::Rule::Replaced),
             }]
         );
-        assert!(state.take_disagreements().is_empty());
+        assert_eq!(state.take_disagreements(), []);
         // So does the next zone-in's table still holding it.
         state.replace_snapshot(BTreeMap::from([(0, buff(40))]), 25, now());
         state.observe_effect(effect(42), &stronger(10, 5), now());
