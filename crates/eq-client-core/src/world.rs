@@ -928,13 +928,6 @@ impl ClientWorld {
             WorldEvent::ZoneLineRejected { session_id, reason } => {
                 self.zone_line_refused(*session_id, reason, news);
             }
-            WorldEvent::SameZoneBoundary { session_id } => {
-                if self.accepts_reply(*session_id) {
-                    news.replies.push(Reply::SameZoneBoundary);
-                } else {
-                    news.ignored = true;
-                }
-            }
             WorldEvent::SameZoneRelocated(relocation) => {
                 self.same_zone_relocated(*relocation, now, news);
             }
@@ -966,6 +959,28 @@ impl ClientWorld {
                     && self.popup.as_ref().is_some_and(|offer| offer.serial == *serial)
                 {
                     self.popup = None;
+                }
+            }
+            // Another player looked at the player, on the Mac era (line
+            // 0x57c, %1 their name; always shown, the program's option for
+            // it being unread: 6.621). The words are ours where the
+            // installation lacks the line.
+            WorldEvent::InspectedBy {
+                session_id,
+                name,
+                string_id,
+                ..
+            } => {
+                if self.accepts_reply(*session_id) {
+                    let name = crate::entities::display_name(name);
+                    news.notices.push(Notice::ProgramLine {
+                        string_id: *string_id,
+                        said: format!("{name} inspects you."),
+                        arguments: vec![name],
+                        lines: Vec::new(),
+                    });
+                } else {
+                    news.ignored = true;
                 }
             }
             WorldEvent::PlayerInspection(view) => {
@@ -1935,7 +1950,12 @@ impl ClientWorld {
             }
             // Training at a guildmaster, and the practice points it spends.
             WorldEvent::Training(update) => self.training_news(update, news),
-            WorldEvent::TrainingRefused { session_id, reason } => {
+            // The program's own words (`string_id`, `arguments`) are the
+            // language-training client half's (6.597); this keeps the
+            // library's words, as before.
+            WorldEvent::TrainingRefused {
+                session_id, reason, ..
+            } => {
                 if self.session_id == Some(*session_id) {
                     news.notices.push(Notice::TrainingRefused(reason.clone()));
                 } else {
@@ -2168,6 +2188,38 @@ impl ClientWorld {
                 own: own(),
                 opponent: name(opponent),
             },
+            // The Mac era's `/decline` answers (6.622). This client offers
+            // no `/decline` yet, so these come only once it does; the
+            // program's lines, in our words where the installation lacks
+            // them.
+            DuelNews::Declining { challenger } => {
+                let challenger = name(challenger);
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33be,
+                    said: format!("You decline {challenger}'s challenge."),
+                    arguments: vec![challenger],
+                    lines: Vec::new(),
+                });
+                return;
+            }
+            DuelNews::NothingToDecline => {
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33bf,
+                    said: "You have no challenge to decline.".to_owned(),
+                    arguments: Vec::new(),
+                    lines: Vec::new(),
+                });
+                return;
+            }
+            DuelNews::DecliningWhileDueling => {
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33bd,
+                    said: "You can't decline while dueling.".to_owned(),
+                    arguments: Vec::new(),
+                    lines: Vec::new(),
+                });
+                return;
+            }
         };
         news.notices.push(Notice::Duel(notice));
     }

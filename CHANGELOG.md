@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- A zone line that leads back into the same zone places the player at its landing on stock EQEmu too, as the Titanium program does (0x48aaa6, checklist 6.640, repin to eq-network 231d67d with #430). Before, the client waited for a server move that never came, so in qeynos2 the player fell down the Temple of Life shaft. The installed zone lines already checked P99's crossings, and now check stock EQEmu's. Quarm, TAKP and RoF2 refuse a same-zone line, as before.
+  - The repin carries every eq-network change since 614d1c0. An item's cold resistance is scaled with the other bonuses (#418). A training refusal keeps this client's words; the program's line is the language-training client half's (#427). Movement sends no vertical speed of its own, so the session sends 0 as before (#423, the 6.617 client half's).
+  - On Quarm and TAKP: another player's inspection says the program's line 0x57c naming them (#426), and the player's inspect note is now sent wherever the session answers inspections. The Mac era's `/decline` answers say the program's lines 0x33bd to 0x33bf (#429), though this client offers no `/decline` yet.
+  - P99's expansion mask now arrives (#437, 0x3). Only character creation's race and class lists read it, and on P99 they are unchanged.
 - Zones without a sky are lit as the original lights them, so the Erudin palace and other interiors are no longer too dark (Adam, 11-23). See [Zone lighting](docs/zone-lighting.md).
   - **Baked light:** each terrain vertex's colour from the zone file, and each placed object's colour track, is now drawn. Before, both were dropped at load.
   - **The engine's single-pass formula:** each vertex sums the ambient by its alpha past the 0.12 offset, its own light at full weight, and up to three point lights. The sum saturates once, then multiplies the texture.
