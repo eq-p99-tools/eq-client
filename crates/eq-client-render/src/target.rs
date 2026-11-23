@@ -552,6 +552,62 @@ impl Scene<'_, '_> {
     }
 }
 
+impl Scene<'_, '_> {
+    /// Why a click at `at`, a thing's middle on the view, picks something
+    /// else: what it picks, and for a door what its ray met of the door and
+    /// what solid stands nearer. For a script's report only.
+    fn missed(&self, thing: Thing, at: Vec2, choice: Choice) -> String {
+        let picks = match choice {
+            Choice::Spawn(id, _) => format!("spawn {id}"),
+            Choice::Item(id) => format!("object {id}"),
+            Choice::Door(door) => format!("door {}", door.id),
+            Choice::Nothing => "nothing".to_owned(),
+        };
+        let Thing::Door(id) = thing else {
+            return format!("a click at its middle picks {picks}");
+        };
+        let ray = self
+            .cameras
+            .single()
+            .ok()
+            .and_then(|(camera, transform)| camera.viewport_to_world(transform, at).ok());
+        let models = self.door_models.as_ref();
+        let met = ray.zip(models).and_then(|(ray, models)| {
+            self.doors
+                .iter()
+                .find_map(|(_, door, transform, visibility)| {
+                    (door.id == id)
+                        .then(|| super::doors::hit_point(ray, door, transform, *visibility, models))
+                        .flatten()
+                })
+        });
+        let Some((distance, _)) = met else {
+            return format!(
+                "a click at its middle picks {picks}; the ray there misses the door's drawn faces"
+            );
+        };
+        let solid = ray.and_then(|ray| {
+            self.collision
+                .as_ref()
+                .and_then(|collision| collision.0.as_ref())
+                .and_then(|world| {
+                    world
+                        .without_doors(&[id])
+                        .ray_distance(ray.origin, *ray.direction, distance)
+                })
+        });
+        match solid {
+            Some(nearer) if nearer + 0.01 < distance => format!(
+                "a click at its middle picks {picks}; the ray meets the door at {distance:.1} \
+                 but something solid at {nearer:.1}"
+            ),
+            _ => format!(
+                "a click at its middle picks {picks}; the ray meets the door at {distance:.1}"
+            ),
+        }
+    }
+}
+
 /// A thing in the scene a script names for a click (checklist 6.587).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Thing {
@@ -620,25 +676,37 @@ pub(super) fn aim(
     let Some(thing) = scripted.request.take().map(|request| request.thing) else {
         return;
     };
-    let verdict = scene
-        .aim(thing)
-        .filter(|at| {
-            windows.single().is_ok_and(|window| {
-                let size = window.size();
-                at.x >= 0.0
-                    && at.y >= 0.0
-                    && at.x < size.x
-                    && at.y < size.y
-                    && !ui.covers(*at * window.scale_factor())
-            })
-        })
-        .filter(|at| {
-            let doors = matches!(thing, Thing::Door(_));
-            scene
-                .pick(&online, *at, doors)
-                .is_some_and(|picked| thing.is(picked.choice))
-        })
-        .ok_or_else(|| thing.covered().to_owned());
+    let refuse = |why: String| format!("{}: {why}", thing.covered());
+    let verdict = (|| {
+        let at = scene
+            .aim(thing)
+            .ok_or_else(|| refuse("it isn't drawn, or is behind the camera".to_owned()))?;
+        let window = windows
+            .single()
+            .map_err(|_| refuse("there is no window".to_owned()))?;
+        let size = window.size();
+        if at.x < 0.0 || at.y < 0.0 || at.x >= size.x || at.y >= size.y {
+            return Err(refuse(format!(
+                "its middle shows at ({:.0}, {:.0}), off the window",
+                at.x, at.y
+            )));
+        }
+        if ui.covers(at * window.scale_factor()) {
+            return Err(refuse(format!(
+                "a window covers its middle at ({:.0}, {:.0})",
+                at.x, at.y
+            )));
+        }
+        let doors = matches!(thing, Thing::Door(_));
+        let picked = scene
+            .pick(&online, at, doors)
+            .ok_or_else(|| refuse("the view casts no ray there".to_owned()))?;
+        if thing.is(picked.choice) {
+            Ok(at)
+        } else {
+            Err(refuse(scene.missed(thing, at, picked.choice)))
+        }
+    })();
     scripted.aim = Some(verdict);
 }
 
@@ -1918,7 +1986,9 @@ mod tests {
         assert_eq!(
             app.world_mut().resource_mut::<ScenePointer>().aim.take(),
             Some(Err(
-                "that spawn is covered or off screen from here".to_owned()
+                "that spawn is covered or off screen from here: it isn't drawn, or is behind \
+                 the camera"
+                    .to_owned()
             ))
         );
         scripted_frame(&mut app, Thing::Spawn(NPC + 1), Some(center), true);
