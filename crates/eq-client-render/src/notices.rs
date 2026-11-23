@@ -371,14 +371,31 @@ fn environmental_lines(
     amount.into_iter().chain(record).collect()
 }
 
-/// Whether the player's own filters let a notice through. The song stop's
-/// line is hidden where the Bard songs filter is "mine only": read R49-21
-/// gives the program's test as filter 9 holding 1, which read R49-2 names
-/// mine only (read R49-48 e asks to confirm the compare).
-pub(super) fn passes(notice: &Notice, filters: &eq_client_core::chat_filters::ChatFilters) -> bool {
+/// Whether a notice is shown, by the player's own filters and the
+/// generation's program:
+/// - The song stop's line is hidden where the Bard songs filter is "mine
+///   only": read R49-21 gives the program's test as filter 9 holding 1,
+///   which read R49-2 names mine only (read R49-48 e asks to confirm).
+/// - Where the Titanium program says each song stop itself (`SongStopped`),
+///   this client's own unconfirmed-stop lines would only add to it, so
+///   they are not shown there; the Mac-era servers send no program line, so
+///   ours stays.
+pub(super) fn shown(
+    notice: &Notice,
+    filters: &eq_client_core::chat_filters::ChatFilters,
+    generation: eq_client_core::GameDialect,
+) -> bool {
     use eq_client_core::filters::{FilterCategory, FilterMode};
-    !matches!(notice, Notice::SongStopped { .. })
-        || filters.get(FilterCategory::BardSongs) != FilterMode::MineOnly
+    match notice {
+        Notice::SongStopped { .. } => {
+            filters.get(FilterCategory::BardSongs) != FilterMode::MineOnly
+        }
+        Notice::SongStopUnconfirmed { .. } => match generation {
+            eq_client_core::GameDialect::Titanium => false,
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => true,
+        },
+        _ => true,
+    }
 }
 
 /// How a notice reads, and where each part shows.
@@ -1279,23 +1296,29 @@ mod tests {
         );
         // The filter, as read R49-21 gives the program's test (R49-48 e).
         let mut filters = ChatFilters::default();
-        for (mode, shown) in [
+        let titanium = eq_client_core::GameDialect::Titanium;
+        for (mode, shows) in [
             (FilterMode::Show, true),
             (FilterMode::MineOnly, false),
             (FilterMode::GroupOnly, true),
             (FilterMode::Hide, true),
         ] {
             filters.set(FilterCategory::BardSongs, mode);
-            assert_eq!(passes(&stopped, &filters), shown, "{mode:?}");
+            assert_eq!(shown(&stopped, &filters, titanium), shows, "{mode:?}");
         }
-        // Other lines don't follow it.
-        filters.set(FilterCategory::BardSongs, FilterMode::MineOnly);
-        assert!(passes(
-            &Notice::SongStopUnconfirmed {
-                released_cast: false
-            },
-            &filters
-        ));
+        // Our own unconfirmed-stop lines don't follow it. Where the program
+        // says each stop (Titanium) they aren't shown; on the Mac-era
+        // servers, which send no program line, they are.
+        filters.set(FilterCategory::BardSongs, FilterMode::Show);
+        for released_cast in [false, true] {
+            let unconfirmed = Notice::SongStopUnconfirmed { released_cast };
+            assert!(!shown(&unconfirmed, &filters, titanium));
+            assert!(shown(
+                &unconfirmed,
+                &filters,
+                eq_client_core::GameDialect::EqMac
+            ));
+        }
     }
 
     #[test]

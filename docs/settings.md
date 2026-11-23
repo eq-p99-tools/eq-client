@@ -41,29 +41,50 @@ window-layout file.
 
 ## Server filters
 
-Options → Filters lists the kinds of message the server can be asked not to
-send: one button per kind that steps through the modes the server takes for
-it (show, hide, and for some kinds mine only or group only), and a label that
-says the current mode. A kind the generation's packet has no word for has no
-row, so Titanium lists 24 kinds and Mac-era servers 16. The kinds, their
-words and the page are this client's own: which official options set each
-kind, the ini keys the original keeps them under and its `/filter` forms are
-unread (recording checklist 6.494a to c), so `/filter` answers that this
-client does not take it that way yet.
+Options → Filters lists the original Titanium client's filter rows, in its
+order: the chat channels, bad words, players' and creatures' spells, bard
+songs, critical hits, spell damage, misses and hits, damage shields, damage
+over time, pets, focus effects, heals over time, item speech, strikethrough
+and stuns (read in the program, recording checklist 6.494b). Each row's
+button steps through that row's choices in the original's order (show and
+hide, and for some rows mine only or group only), and a label says the
+current one. A row the generation's packet has no word for is hidden, so
+Mac-era servers list 16. The row and choice words are this client's own.
+`/filter` shows the Options window on this page, as the original's does; it
+reads no words and sends nothing.
 
-The modes are kept per character in `options-<world>-<character>.txt`, one
-`filter_<kind> = <mode>` line per kind (`show`, `hide`, `mine` or `group`),
-seeded from `options.txt` like the other options. A line naming a mode no
-generation can say is not read, so that kind keeps its default; the defaults
-are the packet the client sent before filters could be set.
+The rows are kept under the original's `eqclient.ini` `[Options]` keys
+(`Channel00` to `Channel09`, `BadWord`, `PCSpells`, `NPCSpells`,
+`BardSongs`, `CriticalSpells`, `CriticalMelee`, `SpellDamage`,
+`HideDamageShield`, `DotDamage`, `PetAttacks`, `PetMisses`, `FocusEffects`,
+`PetSpells`, `HealOverTimeSpells`, `ItemSpeech`, `Strikethrough`, `Stun`,
+`SwarmPetDeath`), each the index of its choice, with the original's
+defaults: every row shown but bad words, whose filter starts on. An index
+outside a row's choices gives the row's default. **Per character, this
+client's choice:** the original keeps one set per install in
+`eqclient.ini`; this client keeps them in `options-<world>-<character>.txt`,
+seeded from `options.txt` like the other options. Swarm pets' deaths have no
+row in the original's window either; the file keeps the key and the packet
+sends it.
 
 Choosing a character at the character list gives the session that
-character's saved modes, so its first zone-in carries them on every server
-type. A change made in play reaches the server at once where the session
-offers it (EQEmu); elsewhere (P99, Quarm, TAKP) it goes with the next
-zone-in. The page's note says which applies to the current server. A
-character entered automatically at connect starts from the defaults until
-its saved modes are sent after it enters.
+character's saved rows, so its first zone-in carries them on every server
+type. On Titanium servers (EQEmu and P99) a change is sent at once, as the
+original sends it again on every change; on Mac-era servers it goes with the
+next zone-in, as the page's note says. A character entered automatically at
+connect starts from the defaults until its saved rows are sent after it
+enters.
+
+**What a hidden row does today:** it asks the server not to send those
+lines, so it hides them only where the server honours that row (stock EQEmu
+sends some lines, such as creatures' shouts, without checking). The original
+also hides some kinds itself (stuns, other players' environmental damage,
+spell and damage lines); this client does not yet (6.494 C2). The packet's
+first word, an ini-only switch, is sent as 0, the original's default.
+
+Scripts read a row with `filter.<kind>` (`show`, `hide`, `mine` or `group`)
+and step it with `click("filter", "<kind>")`, by the kind's stable name
+(`ooc`, `shouts`, `bard_songs` and the rest).
 
 ## Display and audio
 
