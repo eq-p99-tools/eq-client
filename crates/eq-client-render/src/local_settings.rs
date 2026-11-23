@@ -571,7 +571,15 @@ mod tests {
             assert!(reached(&format!("/{name} 1")), "{name}");
         }
         // The table's shortest words for them reach them too.
-        for line in ["/clearc", "/showsp", "/combatm", "/particle", "/mousesp", "/chatf", "/userc"] {
+        for line in [
+            "/clearc",
+            "/showsp",
+            "/combatm",
+            "/particle",
+            "/mousesp",
+            "/chatf",
+            "/userc",
+        ] {
             assert!(reached(line), "{line}");
         }
         // A shorter word the table gives an earlier name never does.
