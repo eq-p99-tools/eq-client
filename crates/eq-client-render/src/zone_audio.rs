@@ -288,6 +288,14 @@ fn is_night(time: Option<eq_client_core::clock::GameTime>) -> bool {
     })
 }
 
+/// The player's place in the `.eff` files' frame, whose x and y are the
+/// server's y and x [I: from the local look on 099c208, where a record's
+/// height matched the ground only with its x and y swapped, in qeytoqrg's
+/// two night regions; the program's own transform is unread].
+const fn file_frame(position: eq_client_core::WorldPosition) -> [f32; 3] {
+    [position.y, position.x, position.z]
+}
+
 fn distance(emitter: &Emitter, at: [f32; 3]) -> f32 {
     let [x, y, z] = emitter.position;
     ((x - at[0]).powi(2) + (y - at[1]).powi(2) + (z - at[2]).powi(2)).sqrt()
@@ -554,7 +562,7 @@ pub(super) fn update(
     let Some(player) = world.player() else {
         return;
     };
-    let at = [player.position.x, player.position.y, player.position.z];
+    let at = file_frame(player.position);
     let night = is_night(world.game_time(std::time::Instant::now()));
     for (index, emitter) in loaded.emitters.iter().enumerate() {
         let unplayed = match emitter.kind {
@@ -803,6 +811,23 @@ mod tests {
             Some(((0, 0), None))
         );
         assert_eq!(choose_music(&regions, [5000.0, 0.0, 0.0], false, 3), None);
+    }
+
+    #[test]
+    fn the_files_frame_swaps_the_servers_x_and_y() {
+        let server = eq_client_core::WorldPosition {
+            x: 200.7,
+            y: 5063.8,
+            z: -3.8,
+            heading: 0.0,
+        };
+        assert_eq!(file_frame(server), [5063.8, 200.7, -3.8]);
+        // A region the file places at (5063.8, 200.7) holds that player.
+        let region = [emitter([5063.8, 200.7, -3.8], 50.0, [1, 1], 1, 0)];
+        assert_eq!(
+            choose_music(&region, file_frame(server), false, 3),
+            Some(((0, 0), Some(1)))
+        );
     }
 
     #[test]

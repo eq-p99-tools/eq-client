@@ -74,6 +74,7 @@
   - **Emitters** follow the Titanium program's loader (read R49-7 first pass and its engine follow-up). `eq-client-assets` reads `<zone>_sounds.eff`'s 84-byte records:
     - one emitter for a type-2 record or matching day and night fields, else a day one and a night one, each with its own type, sound, delay and volume;
     - a radius below 0 reaches 10,000;
+    - positions are in the files' own frame, whose x and y are the server's y and x (inferred from the local look, where qeytoqrg's regions met the ground only swapped);
     - a delay above 0 repeats after delay + 500 plus a random share;
     - a positive volume is a millibel attenuation (2000 is a tenth, above 10000 silent); otherwise 0.2 for type 0 and 1.0 for the rest.
     - a music record's sound number of 0 or more is the `<zone>.xmi` sequence it plays, counted from 0 (read on the music sign: 0x44bc19 to 0x4c6a99). A negative number names an `mp3index.txt` entry, which this client does not play yet; it is logged once a zone.

@@ -71,6 +71,9 @@ read R49-7 first pass and its engine follow-up):
   sound that plays day and night. Any other record is a day sound and a night
   sound, each with its own sound, type, delay and volume.
 - A radius below 0 reaches 10,000 units; a radius of 0 is heard nowhere.
+- The files place their sounds with x and y the other way round from the
+  server's coordinates (`/loc`); the client swaps them (an estimate from a
+  local look).
 - A delay above 0 repeats the sound after the delay plus 500 and up to the
   record's random extra. A positive volume is an attenuation in millibels:
   2,000 is a tenth of full volume, and above 10,000 is silent. Otherwise a
