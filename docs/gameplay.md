@@ -198,7 +198,17 @@ guard, not a claim about every server's maximum range.
 Coin boxes support purse, cursor, personal-bank and give-window moves where the
 session offers them. Click to choose an amount, or Shift-click to pick up all;
 click another box with coins on the cursor to place/convert them. Shared banking
-and destroying coins have no client action yet.
+has no client action yet.
+
+With coins on the cursor and no item there, **Destroy cursor item** destroys
+the coins instead, where the server takes it (stock EQEmu today; elsewhere it
+says "This server does not take destroying coins."). It asks once, "Destroy 3
+platinum and 2 gold? This cannot be undone.", then sends one destroy for each
+kind, the most valuable first. **No**, Escape, closing inventory, or any change
+to the cursor's coins cancels it. No answer comes from the server, so the coins
+leave the cursor at once. How the Titanium program starts a coin destroy, and
+whether it asks first, is unread (R49-11): the confirmation is ours, kept as a
+safeguard. Scripts use the same control and dialog.
 
 On local-only Titanium EQEmu, **Drop cursor item** in Inventory asks before dropping one
 ordinary, verified droppable item or whole stack. The server chooses the

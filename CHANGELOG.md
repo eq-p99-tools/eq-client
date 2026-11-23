@@ -2,6 +2,18 @@
 
 ## Unreleased
 
+- Destroy the coins on the cursor (gap 3.8, checklist 6.512). With coins on
+  the cursor and no item, **Destroy cursor item** asks once ("Destroy 3
+  platinum and 2 gold? This cannot be undone.") and, on Yes, sends one
+  `DestroyCoins` per kind, the most valuable first, from eq-network #342.
+  Where the session doesn't offer `Capability::DestroyingCoins` (all but
+  stock EQEmu for now) it says "This server does not take destroying coins."
+  and asks nothing. An item on the cursor is destroyed as before. Any change
+  to the cursor's coins cancels the question. Scripts click the same control
+  and dialog, so they destroy coins as they destroy items. The confirmation
+  is ours until read R49-11 says what the program does. Repins eq-network to
+  e697649 (#338 to #342); petition and chat-channel news is ignored until
+  their client PRs land.
 - Drowning and lava now hurt on every Titanium server, public EQEmu and
   P99 included, as the Titanium program reports them on any server
   (eq-network's liquid change; read R25). **Characters on public servers

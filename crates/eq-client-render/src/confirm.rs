@@ -34,6 +34,12 @@ pub(crate) enum Question {
         revision: u64,
         item_id: u32,
     },
+    /// The coins on the cursor, in this admission, selected to destroy
+    /// ([`crate::inventory::destruction`]).
+    DestroyCoins {
+        session_id: u64,
+        coins: eq_client_core::Coins,
+    },
     /// The exact cursor item selected for ground drop.
     DropItem {
         session_id: u64,
@@ -65,6 +71,17 @@ impl Question {
                         && inventory.revision() == revision && item.details.id == item_id)
                     .map_or_else(String::new, |item| format!("Destroy all {} of {}? This cannot be undone.",
                         item.stack_count.unwrap_or(1), item.details.name))
+            }
+            Self::DestroyCoins { session_id, coins } => {
+                let world = online.world();
+                if world.session_id() == Some(session_id)
+                    && world.coins_in(eq_client_core::money::CoinPlace::Cursor) == Some(coins)
+                {
+                    format!("Destroy {}? This cannot be undone.",
+                        crate::inventory::destruction::coins_text(coins))
+                } else {
+                    String::new()
+                }
             }
             Self::DropItem { session_id, revision, item_id } => {
                 let inventory = online.world().inventory();
