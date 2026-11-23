@@ -201,13 +201,8 @@ impl SessionWorker {
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        // A spell table is taken above; a gap is filed and
-                        // reported by the gap log slice (6.500); this viewer
-                        // asks for no reconnect, so it queues nothing a fresh
-                        // login would drop.
-                        ClientEvent::World(WorldEvent::SpellTable(_))
-                        | ClientEvent::Gap(_)
-                        | ClientEvent::CommandDropped { .. } => None,
+                        // A spell table is taken above.
+                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))

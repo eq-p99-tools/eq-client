@@ -834,9 +834,6 @@ impl ClientWorld {
                 diagonal,
                 falls,
                 jump_factor,
-                // The swim grant waits for the swimming slice; the motion
-                // granted stays as it was.
-                swim: _,
             } => self.grant_motion(
                 *session_id,
                 MotionGrant {
@@ -1015,18 +1012,11 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            // Apply Poison's answer (eq-client #556), the server filters'
-            // outcome (eq-client #560), the surname's answer, the staff
-            // reports' outcome and the title list
-            // take their arms in those threads' PRs.
+            // Apply Poison's answer (eq-client #556) and the surname's
+            // answer take their arms in those threads' rebuilds.
             unshown @ (WorldEvent::PoisonAnswered(_)
             | WorldEvent::ApplyPoisonRefused { .. }
-            | WorldEvent::ServerFiltersKept { .. }
-            | WorldEvent::ServerFiltersRefused { .. }
             | WorldEvent::SurnameAnswer { .. }
-            | WorldEvent::ReportSent { .. }
-            | WorldEvent::ReportRefused { .. }
-            | WorldEvent::TitleList(_)
             | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
@@ -1052,34 +1042,17 @@ impl ClientWorld {
             | WorldEvent::Gm(_)
             // Pinned past these before their front ends land (repin 6.561);
             // each waits for the client slice named.
-            // A duel's question, refusal and news (read R49-6): the duel
-            // slice (6.492).
-            | WorldEvent::DuelOffer(_)
-            | WorldEvent::DuelRefused { .. }
+            // A duel's news (read R49-6): the session tells it; the world
+            // arm says nothing.
             | WorldEvent::DuelNews(_)
-            // Applying a poison: the apply poison slice (6.493).
-            | WorldEvent::ApplyPoisonRefused { .. }
-            | WorldEvent::PoisonAnswered(_)
             // The Bazaar search: its client slice (6.550).
             | WorldEvent::Bazaar(_)
             | WorldEvent::BazaarRefused { .. }
-            // Where the player is bound: /charinfo (6.524).
-            | WorldEvent::BoundIn { .. }
             // RoF2's buff icons, mana and endurance pools: the RoF2 slices
             // (6.527, 6.538).
             | WorldEvent::BuffIcons(_)
             | WorldEvent::ResourcePercent { .. }
             | WorldEvent::ResourcePool { .. }
-            // Chat server channels: the chat channels slice (6.509).
-            | WorldEvent::Channel(_)
-            | WorldEvent::ChannelLink(_)
-            | WorldEvent::ChatChannelRefused { .. }
-            // A chat line the pace held: the chat pace slice (6.523).
-            | WorldEvent::ChatRefused { .. }
-            // A last name's answer and the title list: the surname and
-            // titles slices (titles 6.516).
-            | WorldEvent::SurnameAnswer { .. }
-            | WorldEvent::TitleList(_)
             // The bandolier sets and potion belt, unknown sets and the
             // session's refusals: their windows' slice (6.559, 6.573).
             | WorldEvent::Bandoliers(_)
@@ -1101,20 +1074,7 @@ impl ClientWorld {
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
-            | WorldEvent::SystemInfoReported { .. }
-            // Shown once their front ends land; counted until then.
-            | WorldEvent::PoisonAnswered(_)
-            | WorldEvent::ApplyPoisonRefused { .. }
-            | WorldEvent::ServerFiltersKept { .. }
-            | WorldEvent::ServerFiltersRefused { .. }
-            | WorldEvent::DuelOffer(_)
-            | WorldEvent::DuelRefused { .. }
-            | WorldEvent::SurnameAnswer { .. }
-            | WorldEvent::Channel(_)
-            | WorldEvent::ChannelLink(_)
-            | WorldEvent::ChatChannelRefused { .. }
-            | WorldEvent::ReportSent { .. }
-            | WorldEvent::ReportRefused { .. }) => {
+            | WorldEvent::SystemInfoReported { .. }) => {
                 // Each still counts in the session's gap file, by kind.
                 news.unshown = crate::gaps::variant_name(unshown);
             }
@@ -2021,7 +1981,9 @@ impl ClientWorld {
             {
                 DuelNotice::Challenged(name(self, from))
             }
-            DuelUpdate::Challenge { .. } => return,
+            // An auto-decline is told by the session's duel news (read
+            // R49-6): nothing here.
+            DuelUpdate::Challenge { .. } | DuelUpdate::AutoDeclined { .. } => return,
             DuelUpdate::Accepted {
                 challenger,
                 accepter,

@@ -308,6 +308,7 @@ mod tests {
         );
     }
 
+    #[test]
     fn charinfo_says_the_bind_zone_in_this_clients_words() {
         let messages = Messages::default();
         let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);

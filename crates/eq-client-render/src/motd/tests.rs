@@ -16,6 +16,7 @@ fn motd_line(text: &str) -> ChatLine {
             item_links: Vec::new(),
         },
         source: Source::Server,
+        tongue: None,
     }
 }
 

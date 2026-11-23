@@ -496,6 +496,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => Some("dbstr_us.txt"),
             Self::EqMac => None,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.db_string_file(),
         }
     }
 
@@ -814,6 +816,8 @@ impl InstalledClient {
         match self {
             Self::Titanium => true,
             Self::EqMac => false,
+            // Titanium's, inferred for RoF2 (6.489).
+            Self::Rof2 => Self::Titanium.runs_r46_forms(),
         }
     }
 

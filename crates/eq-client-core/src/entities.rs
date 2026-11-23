@@ -147,7 +147,6 @@ mod tests {
             spawn_id: 9,
             name: "Synthetic walker".into(),
             kind: SpawnKind::Npc,
-            body_type: None,
             race: 1,
             gender: 0,
             position: WorldPosition {
@@ -222,7 +221,6 @@ mod tests {
             spawn_id: id,
             name: String::new(),
             kind: SpawnKind::Npc,
-            body_type: None,
             race: 1,
             gender: 0,
             position: WorldPosition {

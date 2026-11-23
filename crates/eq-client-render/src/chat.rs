@@ -322,7 +322,7 @@ impl ChatState {
         })
     }
 
-    pub(super) fn receive(&mut self, mut line: ChatLine, online: &OnlineState) {
+    pub(super) fn receive(&mut self, line: ChatLine, online: &OnlineState) {
         // The guild's message of the day shows only when its text is new
         // and not empty; the copy kept changes either way (R11, 0x40a7fd).
         // The one `/getguildmotd` asked for always shows, and is then the
@@ -360,7 +360,7 @@ impl ChatState {
 
     /// Puts a received line in the chat: the ignore list's say, the reply
     /// list, and its item links.
-    fn deliver(&mut self, line: ChatLine, online: &OnlineState) {
+    fn deliver(&mut self, mut line: ChatLine, online: &OnlineState) {
         if line.source == Source::Server
             && let Some(sender) = line.sender.as_deref().filter(|sender| !sender.is_empty())
         {
@@ -505,6 +505,17 @@ impl ChatState {
             contacts,
             language_asked,
             away_tells,
+            slash,
+            hide_corpses,
+            autoinventory,
+            channel_asked,
+            doability,
+            spell_set_asked,
+            loot_no_drop,
+            emotes,
+            disciplines,
+            motd_asked,
+            fastdrop_asked,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -514,6 +525,11 @@ impl ChatState {
             languages: _,
             socials: _,
             departure: _,
+            // Kept: the chat pace's last hold, which runs out on its own
+            // time, and the server's message of the day, kept by the
+            // connection it came on.
+            paced: _,
+            server_motd: _,
             // Kept: the player's own chat setup and what the screen shows.
             history: _,
             received_links: _,
@@ -542,6 +558,17 @@ impl ChatState {
         contacts.asked = None;
         *language_asked = None;
         away_tells.clear();
+        *slash = None;
+        *hide_corpses = None;
+        *autoinventory = None;
+        channel_asked.clear();
+        *doability = None;
+        *spell_set_asked = None;
+        *loot_no_drop = None;
+        emotes.clear();
+        disciplines.clear();
+        *motd_asked = None;
+        *fastdrop_asked = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -2054,11 +2081,6 @@ pub(super) fn submit_typed_line(
     outbox: &crate::outbox::Outbox,
     qol: &Settings,
 ) -> Result<(), String> {
-    // A social or hotbutton never lifts the drop's question: it could
-    // chain it with a drop (6.536).
-    if crate::commands::spelled(line).is_some_and(|command| super::fastdrop::typed(&command)) {
-        return Err("A social cannot turn /fastdrop on or off; type it.".into());
-    }
     submit_line(line, ChatTab::All, chat, online, outbox, qol).map_err(|error| match error {
         Unsent::Mistake(reason) => reason,
         Unsent::Refused => "The session refused the command.".into(),
@@ -2185,6 +2207,42 @@ pub(super) fn client_request(input: &str, state: &mut ChatState) -> Option<Resul
     client_request_in_scope(input, state, None)
 }
 
+/// An ask a system answers later, kept with the words typed after its
+/// command; true when the line was one.
+fn word_asked(input: &str, state: &mut ChatState) -> bool {
+    if let Some(words) = command_words(input, "doability") {
+        state.doability = Some(words.to_owned());
+        return true;
+    }
+    if let Some(words) = command_words(input, "hidecorpses") {
+        state.hide_corpses = Some(words.to_owned());
+        return true;
+    }
+    if command_words(input, "autoinventory").is_some() {
+        state.autoinventory = Some(crate::inventory::auto::Asked);
+        return true;
+    }
+    if let Some(words) = command_words(input, "memspellset") {
+        state.spell_set_asked = Some(words.to_owned());
+        return true;
+    }
+    if let Some(words) = command_words(input, "lootnodrop") {
+        state.loot_no_drop = Some(words.to_owned());
+        return true;
+    }
+    if let Some(words) = command_words(input, "discipline") {
+        state
+            .disciplines
+            .push(super::disciplines::Asked::Typed(words.to_owned()));
+        return true;
+    }
+    if let Some((emote, words)) = emote_words(input) {
+        state.emotes.push((emote.case, words.to_owned()));
+        return true;
+    }
+    false
+}
+
 pub(super) fn client_request_in_scope(
     input: &str,
     state: &mut ChatState,
@@ -2236,34 +2294,7 @@ pub(super) fn client_request_in_scope(
     if let Some(asked) = super::chat_channels::typed(input) {
         return Some(asked.map(|words| state.channel_asked.push(words)));
     }
-    if let Some(words) = command_words(input, "doability") {
-        state.doability = Some(words.to_owned());
-        return Some(Ok(()));
-    }
-    if let Some(words) = command_words(input, "hidecorpses") {
-        state.hide_corpses = Some(words.to_owned());
-        return Some(Ok(()));
-    }
-    if command_words(input, "autoinventory").is_some() {
-        state.autoinventory = Some(crate::inventory::auto::Asked);
-        return Some(Ok(()));
-    }
-    if let Some(words) = command_words(input, "memspellset") {
-        state.spell_set_asked = Some(words.to_owned());
-        return Some(Ok(()));
-    }
-    if let Some(words) = command_words(input, "lootnodrop") {
-        state.loot_no_drop = Some(words.to_owned());
-        return Some(Ok(()));
-    }
-    if let Some(words) = command_words(input, "discipline") {
-        state
-            .disciplines
-            .push(super::disciplines::Asked::Typed(words.to_owned()));
-        return Some(Ok(()));
-    }
-    if let Some((emote, words)) = emote_words(input) {
-        state.emotes.push((emote.case, words.to_owned()));
+    if word_asked(input, state) {
         return Some(Ok(()));
     }
     if let Some(request) = zone_who_request(input) {
@@ -3586,12 +3617,12 @@ mod tests {
         let qol = Settings::default();
         let mut chat = ChatState::default();
         assert_eq!(
-            submit_social_line("/tt hi", &mut chat, &mut online, &outbox, &qol),
+            submit_typed_line("/tt hi", &mut chat, &mut online, &outbox, &qol),
             Err("Target another player to send them a tell.".into())
         );
         assert!(received.try_recv().is_err());
         online.select_target(Some(8));
-        submit_social_line("/tt hi there", &mut chat, &mut online, &outbox, &qol).unwrap();
+        submit_typed_line("/tt hi there", &mut chat, &mut online, &outbox, &qol).unwrap();
         let typed = |received: &std::sync::mpsc::Receiver<ClientCommand>| {
             received.try_recv().map(|command| match command {
                 ClientCommand::SendChatInAdmission { message, .. } => {
@@ -3601,7 +3632,7 @@ mod tests {
             })
         };
         let sent = typed(&received).unwrap();
-        submit_social_line(
+        submit_typed_line(
             "/tell Friend hi there",
             &mut chat,
             &mut online,
@@ -3619,7 +3650,7 @@ mod tests {
         );
         assert!(received.try_recv().is_err());
         // /whotarget lists the zone locally and sends nothing.
-        submit_social_line("/whotarget", &mut chat, &mut online, &outbox, &qol).unwrap();
+        submit_typed_line("/whotarget", &mut chat, &mut online, &outbox, &qol).unwrap();
         assert_eq!(
             chat.zone_who.as_ref().map(|filter| filter.text.as_str()),
             Some("Friend")

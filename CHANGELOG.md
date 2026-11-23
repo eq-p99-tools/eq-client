@@ -310,9 +310,8 @@
   same checks and the same one-at-a-time hold as a Yes; a destroy and every
   other question still ask. It is off at start, never saved, and off again
   at a world entry, a camp, a return to login or a lost link (a zone change
-  keeps it). Only the player's typing turns it over: a
-  script's `slash("fastdrop")` is refused at parse, and a social or
-  hotbutton line is refused. The program's handler (0x4685ba) is unread, so
+  keeps it). A social, a hotbutton or a script's `slash("fastdrop")` turns it
+  over as typing does (checklist 6.584). The program's handler (0x4685ba) is unread, so
   all of this is inferred (pending R49-6n). It sends nothing itself.
 
 - Say where the player is bound with `/charinfo` (checklist 6.524), from

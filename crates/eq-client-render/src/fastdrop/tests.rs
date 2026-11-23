@@ -1,5 +1,5 @@
 use super::*;
-use crate::chat::submit_social_line;
+use crate::chat::submit_typed_line;
 use crate::online::{OnlineState, testing};
 
 fn app() -> App {
@@ -54,25 +54,22 @@ fn each_fastdrop_turns_it_over_and_says_the_state_it_lands_in() {
 }
 
 #[test]
-fn a_social_or_hotbutton_line_cannot_turn_it_over() {
+fn a_social_or_script_line_turns_it_over_as_typing_does() {
+    // A social, a hotbutton or a script's slash runs the line as typed
+    // (6.584): the drop's question is turned over the same way.
     let mut online = OnlineState::new(true);
     testing::admit(&mut online, 1, testing::player(7));
     let outbox = crate::outbox::Outbox::new(None);
     let mut chat = ChatState::default();
-    for line in ["/fastdrop", "/fa", "/FASTDROP now"] {
-        assert!(
-            submit_social_line(
-                line,
-                &mut chat,
-                &mut online,
-                &outbox,
-                &eq_client_core::qol::Settings::default()
-            )
-            .is_err(),
-            "{line}"
-        );
-    }
-    assert_eq!(chat.fastdrop_asked, None);
+    submit_typed_line(
+        "/fastdrop",
+        &mut chat,
+        &mut online,
+        &outbox,
+        &eq_client_core::qol::Settings::default(),
+    )
+    .unwrap();
+    assert!(chat.fastdrop_asked.is_some());
 }
 
 #[test]

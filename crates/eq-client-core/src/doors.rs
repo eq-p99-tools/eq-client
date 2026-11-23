@@ -167,7 +167,6 @@ impl DoorTable {
                 }
                 eq_network_game::reach::EQMAC.doors
             }
-            GameDialect::Rof2 => return None,
         };
         let door = self.doors.entries().get(&id)?;
         // A door is reached at its origin where it stands now, within 20, as
