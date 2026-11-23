@@ -144,6 +144,8 @@ pub(super) struct ChatState {
     pub(crate) slash: Option<super::slash::Asked>,
     /// A `/hidecorpses`'s words, waiting for its answer.
     pub(crate) hide_corpses: Option<String>,
+    /// An `/assist` with words after it, waiting for its answer.
+    pub(crate) assist_words: Option<String>,
     /// An `/autoinventory` waiting to put the cursor item away.
     pub(crate) autoinventory: Option<crate::inventory::auto::Asked>,
     /// Chat server channel commands, as the chat server's words, waiting
@@ -519,6 +521,7 @@ impl ChatState {
             disciplines,
             motd_asked,
             fastdrop_asked,
+            assist_words,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -573,6 +576,7 @@ impl ChatState {
         disciplines.clear();
         *motd_asked = None;
         *fastdrop_asked = None;
+        *assist_words = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -2295,6 +2299,10 @@ pub(super) fn client_request_in_scope(
         state.slash = Some(asked);
         return Some(Ok(()));
     }
+    if let Some(words) = command_words(input, "assist").filter(|words| !words.trim().is_empty()) {
+        state.assist_words = Some(words.trim().to_owned());
+        return Some(Ok(()));
+    }
     if let Some(asked) = super::chat_channels::typed(input) {
         return Some(asked.map(|words| state.channel_asked.push(words)));
     }
@@ -2447,7 +2455,7 @@ fn random_range(words: &str) -> Result<(u32, u32), String> {
 
 /// Whose target `/assist` takes: the player named, among those in the zone,
 /// or else the player's target.
-fn assisted(words: &str, online: &super::online::OnlineState) -> Result<u16, String> {
+pub(super) fn assisted(words: &str, online: &super::online::OnlineState) -> Result<u16, String> {
     let world = online.world();
     let Some(name) = words.split_whitespace().next() else {
         return world

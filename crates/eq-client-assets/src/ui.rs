@@ -1333,6 +1333,9 @@ pub struct OfficialOptions {
     /// Whether each player race and gender draws with its Luclin model, in
     /// the order of [`LUCLIN_MODEL_KEYS`].
     pub luclin_models: [Option<bool>; LUCLIN_MODEL_KEYS.len()],
+    /// Whether an assist's answer starts auto attack: `AttackOnAssist` in
+    /// `[Defaults]` (Titanium setup 0x4a3341, read R49-8 d).
+    pub attack_on_assist: Option<bool>,
 }
 
 /// The `[Defaults]` keys this client takes the official client's Luclin
@@ -1406,6 +1409,7 @@ fn options_from_ini(text: &str) -> OfficialOptions {
             .or_else(|| ini_value(text, "Options", "LootNoDrop"))
             .and_then(|v| v.trim().parse().ok()),
         luclin_models: LUCLIN_MODEL_KEYS.map(|(key, _, _)| flag("Defaults", key)),
+        attack_on_assist: flag("Defaults", "AttackOnAssist"),
     }
 }
 
@@ -2326,9 +2330,14 @@ LookSpring=1
                 look_spring: Some(true),
                 loot_no_drop: None,
                 luclin_models: [None; 30],
+                attack_on_assist: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+        assert_eq!(
+            options_from_ini("[Defaults]\nAttackOnAssist=1\n").attack_on_assist,
+            Some(true)
+        );
         let loot = |text| options_from_ini(text).loot_no_drop;
         assert_eq!(loot("[Defaults]\nLootNoDrop=1\n"), Some(1));
         assert_eq!(loot("[Options]\nLootNoDrop=2\n"), Some(2));

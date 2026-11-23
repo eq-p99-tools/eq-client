@@ -213,6 +213,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::motd::answers,
                 crate::fastdrop::answers,
                 crate::slash::answers,
+                crate::slash::assist_named,
                 crate::corpses::run,
                 inventory::auto::run,
                 crate::chat_channels::answers,

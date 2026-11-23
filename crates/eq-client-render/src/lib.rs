@@ -420,6 +420,9 @@ fn seed_official_options(
         if let Some(level) = official.loot_no_drop {
             option_defaults.loot_no_drop = eq_client_core::no_drop::LootNoDrop::from_level(level);
         }
+        if let Some(on) = official.attack_on_assist {
+            option_defaults.attack_on_assist = on;
+        }
         seed_levels(option_defaults, &official);
     }
 }

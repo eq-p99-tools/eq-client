@@ -1,11 +1,22 @@
 //! `/hidecorpses`, as Titanium's handler runs it (0x469b01, read R46
 //! section 2): local only, it hides corpses from the view by clearing each
 //! one's draw flag. Two words hide the corpses present once; any other word
-//! shows them all again. A third word (0x33f6) sets a flag whose meaning is
-//! unread (R49-8e: it may hide corpses once looted rather than every new
-//! one), so it is held: this client doesn't take it yet. Words and lines are
-//! the installed client's strings where it has them; this client's stand in
-//! otherwise.
+//! shows them all again. A third word (0x33f6) sets a standing mode (read
+//! R49-8e): when the loot window closes (0x52aeb6), the corpse just looted
+//! is hidden unless it carries the player's own name. It doesn't hide
+//! corpses as they arrive. Words and lines are the installed client's
+//! strings where it has them; this client's stand in otherwise.
+//!
+//! Inferred, checklist 6.490:
+//! - the show-all word clears the mode as well as what's hidden (the flag's
+//!   clearing is unread);
+//! - a new zone session clears the mode (unread; the hidden ids go with the
+//!   session because spawn ids are reused).
+//!
+//! A gap, checklist 6.490: the program also counts a hidden corpse as unseen
+//! for its cast start and abilities (0x480409); this client doesn't. Whether
+//! the mouse pick, the cycle keys and the name tags skip one is unread: here
+//! it isn't drawn, so the mouse doesn't pick it, and `/target` still finds it.
 use super::chat::{ChatState, Said, system_line};
 use super::hud::messages::Messages;
 use super::online::OnlineState;
@@ -22,7 +33,7 @@ const HELP: [(u32, &str); 3] = [
     ),
     (
         0x3394,
-        "new hides corpses as they come; any other word shows them all.",
+        "looted hides each corpse you loot but your own; any other word shows them all.",
     ),
 ];
 /// The word that hides every corpse but the player's own, and its line.
@@ -34,10 +45,13 @@ const GROUP_LINE: (u32, &str) = (
     0x3398,
     "Corpses other than yours and your group's are hidden.",
 );
-/// The flag word, held until R49-8e reads what its flag hides (its line
-/// is 0x33f7).
-const HELD: (u32, &str) = (0x33f6, "new");
-/// The answer on a client without R46's forms, and to the held word.
+/// The word that sets the looted-corpse mode, and its line.
+const LOOTED: (u32, &str) = (0x33f6, "looted");
+const LOOTED_LINE: (u32, &str) = (
+    0x33f7,
+    "Each corpse you loot but your own is hidden when you close it.",
+);
+/// The answer on a client without R46's forms.
 const NOT_YET: &str = "This client does not take /hidecorpses that way yet.";
 /// The line for any other word: every corpse shows again.
 const SHOWN_LINE: (u32, &str) = (0x3399, "Every corpse is shown.");
@@ -49,6 +63,11 @@ pub(crate) struct HiddenCorpses {
     /// The zone session the hidden ids belong to: spawn ids are reused in
     /// the next zone.
     session: Option<u64>,
+    /// Whether the looted-corpse mode (0x33f6) is set.
+    after_loot: bool,
+    /// The corpse the loot window shows, with its owner's name, so that
+    /// its close can be seen whichever way the window closed.
+    looting: Option<(u16, String)>,
 }
 
 impl HiddenCorpses {
@@ -74,7 +93,10 @@ impl HiddenCorpses {
         if self.session != session {
             self.session = session;
             self.hidden.clear();
+            self.after_loot = false;
+            self.looting = None;
         }
+        self.closed_loot(world);
         if self.hidden.is_empty() {
             return;
         }
@@ -87,6 +109,29 @@ impl HiddenCorpses {
                 )
             })
         });
+    }
+}
+
+impl HiddenCorpses {
+    /// Hides the corpse whose loot window just closed, in the looted-corpse
+    /// mode, unless it is the player's own (0x52aeb6), and notes the corpse
+    /// the window shows now.
+    fn closed_loot(&mut self, world: &ClientWorld) {
+        let open = world.loot().map(|loot| loot.corpse_id);
+        if let Some((id, owner)) = self.looting.take_if(|(id, _)| open != Some(*id))
+            && self.after_loot
+            && !own_name(world).is_some_and(|mine| same(&mine, &owner))
+            && corpses(world).any(|(corpse, _)| corpse == id)
+        {
+            self.hidden.insert(id);
+        }
+        if let Some(open) = open
+            && let Some(owner) = corpses(world)
+                .find(|(corpse, _)| *corpse == open)
+                .map(|(_, owner)| owner)
+        {
+            self.looting = Some((open, owner));
+        }
     }
 }
 
@@ -111,8 +156,8 @@ fn same(name: &str, owner: &str) -> bool {
     name.eq_ignore_ascii_case(owner)
 }
 
-/// Whether `owner` is in the player's group. It stands in for the
-/// program's test 0x4bb226, which is unread (6.490).
+/// Whether `owner` is in the player's group: the six group names, as the
+/// program's test 0x4bb226 reads them (R49-8e).
 fn grouped(world: &ClientWorld, owner: &str) -> bool {
     (0..6)
         .filter_map(|place| world.group_place(place))
@@ -135,48 +180,44 @@ pub(crate) fn run(
         let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
         let empty = Messages::default();
         let messages = messages.as_deref().unwrap_or(&empty);
-        match client
-            .runs_r46_forms()
-            .then(|| answer(&mut hidden, world, &words, messages))
-            .flatten()
-        {
-            Some(lines) => {
-                for line in lines {
-                    chat.history.push(system_line(line));
-                }
+        if client.runs_r46_forms() {
+            for line in answer(&mut hidden, world, &words, messages) {
+                chat.history.push(system_line(line));
             }
-            None => chat.refuse(Said::own(NOT_YET)),
+        } else {
+            chat.refuse(Said::own(NOT_YET));
         }
     }
 }
 
-/// What a `/hidecorpses` with these words does, and the lines it says;
-/// None for the held flag word, which this client doesn't take yet.
+/// What a `/hidecorpses` with these words does, and the lines it says.
 fn answer(
     corpses_hidden: &mut HiddenCorpses,
     world: &ClientWorld,
     words: &str,
     messages: &Messages,
-) -> Option<Vec<Said>> {
+) -> Vec<Said> {
     let said = |(id, ours): (u32, &str)| messages.said_text(id, ours);
     let Some(typed) = words.split_whitespace().next() else {
-        return Some(HELP.into_iter().map(said).collect());
+        return HELP.into_iter().map(said).collect();
     };
     let is = |(id, ours): (u32, &str)| said((id, ours)).words.text.eq_ignore_ascii_case(typed);
     let mine = own_name(world);
     let own = |owner: &str| mine.as_deref().is_some_and(|mine| same(mine, owner));
-    Some(if is(OTHERS) {
+    if is(OTHERS) {
         corpses_hidden.sweep(world, own);
         vec![said(OTHERS_LINE)]
     } else if is(GROUP) {
         corpses_hidden.sweep(world, |owner| own(owner) || grouped(world, owner));
         vec![said(GROUP_LINE)]
-    } else if is(HELD) {
-        return None;
+    } else if is(LOOTED) {
+        corpses_hidden.after_loot = true;
+        vec![said(LOOTED_LINE)]
     } else {
         corpses_hidden.hidden.clear();
+        corpses_hidden.after_loot = false;
         vec![said(SHOWN_LINE)]
-    })
+    }
 }
 
 #[cfg(test)]

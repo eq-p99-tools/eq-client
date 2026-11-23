@@ -402,7 +402,11 @@ The Project 1999 and EQEmu sessions offer `/assist`, `/random`, `/emote`,
 reported by the current admission.
 
 - Use `/assist` with a selected entity or `/assist Player` with an exact
-  player name. Wait for the returned selection before using an action that
+  player name. Under a Titanium installation `/assist Name` takes any spawn
+  whose name starts with the word, the shortest such name first, without
+  changing your target; no match says nothing, and your own name says the
+  installed line and sends nothing. `/assist on` and `/assist off` set
+  [Attack On Assist](settings.md#attack-on-assist). Wait for the returned selection before using an action that
   depends on it. On P99 an unresolved request holds the next assist until
   its reply or zone entry. A reply that arrives after the five-second local
   selection window can release the hold.

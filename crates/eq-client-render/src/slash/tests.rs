@@ -415,3 +415,116 @@ fn the_answer_system_sends_lfg_once() {
     app.update();
     assert!(received.try_recv().is_err());
 }
+
+fn named_spawn(spawn_id: u16, name: &str) -> eq_client_core::SpawnState {
+    eq_client_core::SpawnState {
+        name: name.into(),
+        pet_owner: None,
+        ..testing::pet(spawn_id, 0)
+    }
+}
+
+/// An app that answers `/assist` with words, on a server that takes
+/// assists, with a Friendly (20), a Friend (21) and the player (7).
+fn assisting() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
+    let mut online = admitted(vec![Capability::Assisting]);
+    testing::spawns(
+        &mut online,
+        vec![named_spawn(20, "Friendly000"), named_spawn(21, "Friend000")],
+    );
+    online.select_target(Some(20));
+    let mut app = App::new();
+    let (queue, received) = std::sync::mpsc::sync_channel(4);
+    app.insert_resource(online)
+        .insert_resource(Outbox::new(Some(queue)))
+        .insert_resource(crate::options::OptionsState::default())
+        .init_resource::<ChatState>()
+        .add_systems(Update, assist_named);
+    (app, received)
+}
+
+fn assist_with(app: &mut App, words: &str) -> Vec<String> {
+    app.world_mut().resource_mut::<ChatState>().assist_words = Some(words.into());
+    app.update();
+    app.world()
+        .resource::<ChatState>()
+        .history
+        .lines(eq_client_core::chat::ChatTab::All)
+        .into_iter()
+        .map(|(_, line)| line.message.text.clone())
+        .collect()
+}
+
+#[test]
+fn assist_with_a_name_takes_the_shortest_prefix_match_and_keeps_the_target() {
+    let (mut app, received) = assisting();
+    assert_eq!(assist_with(&mut app, "FRI"), Vec::<String>::new());
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        ClientCommand::Assist {
+            session_id: 5,
+            spawn_id: 21
+        }
+    ));
+    assert_eq!(assist_with(&mut app, "friendl"), Vec::<String>::new());
+    assert!(matches!(
+        received.try_recv().unwrap(),
+        ClientCommand::Assist { spawn_id: 20, .. }
+    ));
+    // The assist doesn't change the target; its answer does.
+    assert_eq!(
+        app.world()
+            .resource::<OnlineState>()
+            .world()
+            .target()
+            .selected,
+        Some(20)
+    );
+}
+
+#[test]
+fn assist_naming_no_one_is_silent_and_naming_ourselves_says_its_line() {
+    let (mut app, received) = assisting();
+    assert_eq!(assist_with(&mut app, "nobody"), Vec::<String>::new());
+    assert!(received.try_recv().is_err());
+    assert_eq!(assist_with(&mut app, "exam"), [ASSIST_SELF.1]);
+    assert!(received.try_recv().is_err());
+    let chat = app.world().resource::<ChatState>();
+    let lines = chat.history.lines(eq_client_core::chat::ChatTab::All);
+    assert_eq!(lines[0].1.message_type, Some(ASSIST_SELF_COLOUR));
+}
+
+#[test]
+fn the_option_words_set_attack_on_assist_and_say_its_state() {
+    let (mut app, received) = assisting();
+    assert_eq!(assist_with(&mut app, "ON"), [ATTACK_ON_ASSIST_LINES[0].1]);
+    assert!(
+        app.world()
+            .resource::<crate::options::OptionsState>()
+            .options
+            .attack_on_assist
+    );
+    assert_eq!(
+        assist_with(&mut app, "off").last().map(String::as_str),
+        Some(ATTACK_ON_ASSIST_LINES[1].1)
+    );
+    assert!(
+        !app.world()
+            .resource::<crate::options::OptionsState>()
+            .options
+            .attack_on_assist
+    );
+    assert!(received.try_recv().is_err());
+}
+
+#[test]
+fn the_mac_era_client_keeps_assisting_a_player_by_name() {
+    let (mut app, received) = assisting();
+    app.insert_resource(crate::ViewerSettings(crate::ViewerConfig {
+        installed_client: eq_client_assets::ui::InstalledClient::EqMac,
+        ..crate::ViewerConfig::default()
+    }));
+    // Not a player in the zone: this client's earlier refusal.
+    assert_eq!(assist_with(&mut app, "fri").len(), 1);
+    assert!(received.try_recv().is_err());
+}

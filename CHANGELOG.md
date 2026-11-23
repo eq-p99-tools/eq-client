@@ -223,6 +223,35 @@
   `inferred for RoF2 (6.489)`. The skill rules read through a private
   `Program` (Titanium, `EQMac`). Repins eq-network for the placeholder.
   Nothing a player can reach changes.
+- Take `/autoinventory`, `/hidecorpses` and a plain `/assist` as the
+  Titanium handlers do (read R46). `/autoinventory` puts the cursor item in
+  the first place the program's order finds, worn slots first, then the
+  general slots and bags, in one move; with no room it prints the installed
+  line and the item stays. `/hidecorpses` hides the corpses present but
+  yours, or but yours and your group's, once; any other word shows them
+  all again, and a new zone forgets what was hidden. The third word, whose
+  flag is unread, is answered as not taken yet. A hidden corpse isn't
+  drawn or picked by the mouse, and a name still finds it. A plain
+  `/assist` with no target prints the installed two lines and sends
+  nothing; a server that takes no assist keeps its earlier answers. The
+  Mac-era client keeps its earlier answers. Inferred parts are
+  under checklist 6.490. Networking pinned to 126b2c7 (eq-network #324).
+  - After read R49-8, on a Titanium installation:
+    - `/assist Name` looks the word up as the program does (0x47981d): any
+      spawn whose name starts with it, the shortest first. It sends the
+      assist for that spawn without changing the target. No match is
+      silent; the player's own name prints line 0x57b and sends nothing.
+      The main-assist words keep this client's answer.
+    - Attack On Assist (`attack_on_assist`, default off, inferred): when on,
+      the assist answer that sets the target starts auto attack through the
+      attack key's own refusals. `/assist on` and `/assist off` set it.
+    - `/autoinventory` with coins on the cursor puts them in the purse, one
+      move of that kind, whole, and is silent past a billion of the kind.
+      The inventory window's put-away button runs the same routine.
+    - `/hidecorpses`' third word sets the looted-corpse mode: when the loot
+      window closes, the corpse just looted is hidden unless it is yours.
+      It doesn't hide corpses as they arrive. The show-all word and a new
+      zone clear it (both inferred).
 
 - Make every client-generation decision exhaustive, so adding a third
   generation (RoF2 is planned) breaks each place that must decide what it
