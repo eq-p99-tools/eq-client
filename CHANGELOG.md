@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- CI: the Lint workflow gains a Docs job, `cargo doc --workspace --no-deps --locked` with `RUSTDOCFLAGS=-D warnings`, on every pull request and push to main beside Format (Adam's yes, 11-23). A broken doc link now fails the PR it lands in.
 - Draw players with the Luclin models where the viewer chose them
   (checklist 6.554, Luclin slice L1). The choice is one per-character
   option, `luclin_models` in the options file (a list of model codes such as
@@ -27,7 +28,6 @@
     from the race, size and classic model as before, with tests. The zone's classic scale flag
     applies as Titanium's race rule reads (R49-44d asks whether the program
     skips Luclin models).
-
 - A session that ends leaves no ask for the next (gap 3.11, checklist
   6.535). The chat state's pending asks (a `/target`, `/who`, `/loc` or
   `/time`, a guild or split command, a boat take, `/follow`, a Ranger's
