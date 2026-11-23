@@ -6635,12 +6635,32 @@ pub(super) mod tests {
         pitch: f32,
         samples: usize,
     ) -> Vec<(MovementMode, Vec3, Duration)> {
+        swim_from(
+            rim_pool(rim),
+            Vec3::new(-1.0, -3.9, 0.0),
+            0.0,
+            (swim, pitch),
+            samples,
+        )
+        .unwrap_or_else(|error| panic!("rim {rim}: {error}"))
+    }
+
+    /// Swims from `feet` facing `heading` (EQ units) for `samples` accepted
+    /// samples, forward held and the look pitched, under a Titanium
+    /// session's bound, and gives each sample's mode, feet and time, or
+    /// the session's refusal with the samples before it.
+    fn swim_from(
+        world: CollisionWorld,
+        feet: Vec3,
+        heading: f32,
+        (swim, pitch): (Option<eq_client_core::movement::SwimCalibration>, f32),
+        samples: usize,
+    ) -> Result<Vec<(MovementMode, Vec3, Duration)>, String> {
         let (mut app, receiver) = fixture();
         app.add_systems(Update, input);
-        app.insert_resource(Collision(Some(rim_pool(rim))));
-        let feet = Vec3::new(-1.0, -3.9, 0.0);
+        app.insert_resource(Collision(Some(world)));
         let origin = feet + Vec3::Y * 3.75;
-        let placement = world_position(origin.to_array(), 0.0);
+        let placement = world_position(origin.to_array(), heading);
         // The session bounds every sample as a Titanium server's would.
         let start = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
         let mut session = eq_network_game::movement::MotionSession::new(11, 7, placement, start)
@@ -6676,7 +6696,7 @@ pub(super) mod tests {
             transform.translation = origin;
             let mut camera = world.query::<&mut OrbitCamera>();
             let mut camera = camera.single_mut(world).unwrap();
-            camera.yaw = crate::camera::behind(eq_client_core::render_heading(0.0));
+            camera.yaw = crate::camera::behind(eq_client_core::render_heading(heading));
             camera.look = pitch;
             let mut controls = world.resource_mut::<Controls>();
             controls.speed = Some(grant.units_per_second);
@@ -6695,16 +6715,16 @@ pub(super) mod tests {
                     session.set_climb(per_step);
                 }
                 if let ClientCommand::Move(request) = command {
-                    session
-                        .send_move_sample(&request, Instant::now(), |_| Ok(()))
-                        .unwrap_or_else(|error| {
-                            panic!(
-                                "rim {rim}: {:?} {:?} at {:?}: {error}; before {seen:?}",
-                                request.mode,
-                                request.position,
-                                request.created.duration_since(start)
-                            )
-                        });
+                    if let Err(error) =
+                        session.send_move_sample(&request, Instant::now(), |_| Ok(()))
+                    {
+                        return Err(format!(
+                            "{:?} {:?} at {:?}: {error}; before {seen:?}",
+                            request.mode,
+                            request.position,
+                            request.created.duration_since(start)
+                        ));
+                    }
                     accept_now(&mut app, &request);
                     let at = Vec3::from_array(eq_client_core::render_position(request.position))
                         - Vec3::Y * 3.75;
@@ -6715,7 +6735,7 @@ pub(super) mod tests {
                 break;
             }
         }
-        seen
+        Ok(seen)
     }
 
     fn accept_now(app: &mut App, request: &MovementRequest) {
@@ -6756,6 +6776,101 @@ pub(super) mod tests {
             if let Some((mode, at)) = out {
                 assert_eq!(mode, MovementMode::Forward, "rim {rim}");
                 assert!((at.y - rim).abs() < 0.01, "rim {rim}: {at}");
+            }
+        }
+    }
+
+    /// The live look's three Temple of Life spots (North Qeynos), swum
+    /// against the installed zone's own collision and water as zone entry
+    /// builds them. Prints the floor and water along each spot's heading and
+    /// every sample, and says whether the swimmer got out. Needs an
+    /// `EverQuest` folder in `EQ_DIR`; reads files only.
+    #[test]
+    #[ignore = "reads an EverQuest installation named by EQ_DIR"]
+    fn installed_temple_of_life_rim() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("EQ_DIR").expect("EQ_DIR names an EverQuest folder"),
+        );
+        let zone = eq_client_assets::load_zone(&directory, "qeynos2").expect("qeynos2 loads");
+        let world = || {
+            crate::scene_collision::collision_world(
+                &zone,
+                crate::scene_collision::collision_triangles(&zone),
+                Some(3.75),
+            )
+            .expect("collision builds")
+        };
+        let surface: f32 = std::env::var("RIM_SURFACE")
+            .ok()
+            .and_then(|z| z.parse().ok())
+            .unwrap_or(-2.0);
+        let pitches: Vec<f32> = std::env::var("RIM_PITCHES")
+            .ok()
+            .map(|list| list.split(',').filter_map(|p| p.parse().ok()).collect())
+            .unwrap_or_else(|| vec![0.0, 0.3, 0.45, 0.55]);
+        let profile = world();
+        for (name, x, y, heading) in [
+            ("A", -306.0_f32, -191.0_f32, 128.0_f32),
+            ("B", -294.3, -223.5, 128.0),
+            ("C", -308.8, -168.4, 0.0),
+        ] {
+            let ahead = Vec3::from_array(eq_client_core::render_vector([
+                (heading / 512.0 * std::f32::consts::TAU).sin(),
+                (heading / 512.0 * std::f32::consts::TAU).cos(),
+                0.0,
+            ]));
+            let origin = Vec3::from_array(eq_client_core::render_position(
+                eq_client_core::WorldPosition {
+                    x,
+                    y,
+                    z: surface,
+                    heading,
+                },
+            ));
+            println!("spot {name}: origin {origin} ahead {ahead}");
+            for step in 0..=80_u16 {
+                let at = origin + ahead * (f32::from(step) * 0.25);
+                let floor = profile.ground(at + Vec3::Y * 12.0, 0.0, 40.0);
+                let wet = |dy: f32| profile.in_liquid(at + Vec3::Y * dy);
+                let world_at = eq_client_core::world_position((at).to_array(), heading);
+                println!(
+                    "  d {:5.2} world ({:8.2},{:8.2}) floor {:?} liquid at surface {:?} +0.5 {:?} -0.5 {:?} -3.75 {:?}",
+                    f32::from(step) * 0.25,
+                    world_at.x,
+                    world_at.y,
+                    floor.map(|f| f - origin.y + surface),
+                    wet(0.0),
+                    wet(0.5),
+                    wet(-0.5),
+                    wet(-3.75),
+                );
+            }
+            for &pitch in &pitches {
+                let feet = origin - Vec3::Y * 3.75;
+                match swim_from(world(), feet, heading, (Some(WET_SWIMMER), pitch), 120) {
+                    Ok(seen) => {
+                        let last = seen.last().map(|(_, at, _)| *at);
+                        println!(
+                            "  pitch {pitch}: {} samples, last feet {last:?}",
+                            seen.len()
+                        );
+                        for (mode, at, time) in &seen {
+                            let world_at = eq_client_core::world_position(
+                                (*at + Vec3::Y * 3.75).to_array(),
+                                0.0,
+                            );
+                            println!(
+                                "    {:>6.3}s {:?} origin ({:.2},{:.2},{:.2})",
+                                time.as_secs_f32(),
+                                mode,
+                                world_at.x,
+                                world_at.y,
+                                world_at.z
+                            );
+                        }
+                    }
+                    Err(error) => println!("  pitch {pitch}: REFUSED {error}"),
+                }
             }
         }
     }
