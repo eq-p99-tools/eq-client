@@ -11,9 +11,11 @@
   classic model scale flag (read R49-9f), so a human needs more than 8.0 in
   an ordinary zone and more than about 6.27 in such a zone. The compare is
   strict, as the program's is.
-  The test's engine gate always holds (engine read 1), and the test has no
-  water test, so a swimmer is held under a low ceiling too and stays a
-  swimmer. Fly, a lift's carry and the Mac-era client move as before.
+  The test's engine gate always holds (engine read 1). The program's test
+  has no water test, but a swimmer isn't tested here until an attended
+  look at the official client: the live look refused a swim through Kedge
+  Keep's entry passage, which players swim. Fly, a lift's carry and the
+  Mac-era client move as before.
   Inferred parts are under checklist 6.496; the program's AllowAutoStand
   stand-up is row 6.496c, not built here.
 - Buffs landing on the player take the slot the Titanium program's whole slot finder gives them (checklist 6.612, read R49-22e, repin to eq-network #417). That includes step 4's replace in place, worked out from each effect's base, formula and max as 0x40f339 does, and step 6's eviction. The facts come from the installed spell data: effects, the Bard level and the band, with each held buff's stored level from its record.
