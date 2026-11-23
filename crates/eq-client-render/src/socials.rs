@@ -403,7 +403,7 @@ pub(super) fn update(
         });
     let dispatch = outbox.for_script(chat_admission);
     if let Some(error) = state.tick(admission, now, |command| {
-        crate::chat::submit_social_line(
+        crate::chat::submit_typed_line(
             command,
             &mut chat,
             &mut online,
@@ -487,7 +487,7 @@ mod tests {
             assert!(
                 state
                     .tick(Some(1), now, |command| {
-                        crate::chat::submit_social_line(
+                        crate::chat::submit_typed_line(
                             command,
                             &mut chat,
                             &mut online,
