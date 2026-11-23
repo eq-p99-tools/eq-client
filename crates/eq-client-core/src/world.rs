@@ -1027,6 +1027,9 @@ impl ClientWorld {
             // The bandolier sets and potion belt: their window's slice (6.559).
             | WorldEvent::Bandoliers(_)
             | WorldEvent::PotionBelt(_)
+            // An AA request the session would not send: the AA client
+            // slices (C1 to C4), which send none yet.
+            | WorldEvent::AlternateAdvancementRefused { .. }
             // The task journal, offers and history: the tasks slice (6.560).
             | WorldEvent::TaskDescribed { .. }
             | WorldEvent::TaskStepUpdated { .. }
