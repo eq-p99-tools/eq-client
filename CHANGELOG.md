@@ -8,6 +8,14 @@
   - **Jumps and falls of other spawns.** A spawn moving only up or down plays its jump (L04, L03 for race 49) or, faster than 45 a second down, its fall (L05), as the program's picker does, where it used to stand. Moving is now a speed of 2 a second in any direction.
   - Our own sender still reports no vertical speed on a jump or fall; that is a separate row.
 
+- Answer `/played` as the Titanium program does (read R49-8 a, checklist
+  6.490b): the account's entitled time in years (line 0xe24), when the
+  character was made (0x32a8) and its played days, hours and minutes
+  (0x32af), from the profile's fields (eq-network #410), adding a minute
+  each minute after the profile as the program does. The creation time's
+  wording follows the program's `%#c` in the C locale (inferred). The
+  Mac-era and RoF2 clients' `/played` is unread, so it's refused there
+  for now.
 - A Bard's item use now carries the song test from the installed spell data (gap 3.5, checklist 6.542, read R49-21b): the item's spell counts as the class's when the player's class level for it is neither 0 nor 255. The session uses it to choose, for an item's song it keeps, between sending the stop and ending it here. Without installed spell data, or without that spell's class levels, the session keeps its memorized test as before. Labelled: the program also needs the spell's byte +0x1c4 to be clear. That byte isn't mapped to a spells file field yet (read R49-48c), so a class spell with it set counts as a song here and not in the program.
 - Show the session's chat pace (checklist 6.523, eq-network c951420). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
