@@ -86,6 +86,8 @@ pub(super) enum ValueLabel {
     Shows(Level),
     /// The mode of one kind of server filter, on the Filters page.
     Filter(eq_client_core::filters::FilterCategory),
+    /// The Filters page's note on when a change reaches the server.
+    FilterNote,
     Blank,
 }
 
@@ -93,6 +95,9 @@ pub(super) enum ValueLabel {
 /// labels; a slider the client keeps nothing for shows no value, rather
 /// than the skin's sample.
 pub(super) fn value_label(name: &str, owner: WindowId) -> Option<ValueLabel> {
+    if owner == WindowId::Options && name == super::filters::NOTE_ID {
+        return Some(ValueLabel::FilterNote);
+    }
     if owner != WindowId::Options || !name.ends_with("ValueLabel") {
         return None;
     }

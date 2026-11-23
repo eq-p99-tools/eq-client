@@ -39,6 +39,32 @@ Map background opacity, plain/skin style and position lock use
 the [map's controls](controls.md#map); window coordinates remain in the normal
 window-layout file.
 
+## Server filters
+
+Options → Filters lists the kinds of message the server can be asked not to
+send: one button per kind that steps through the modes the server takes for
+it (show, hide, and for some kinds mine only or group only), and a label that
+says the current mode. A kind the generation's packet has no word for has no
+row, so Titanium lists 24 kinds and Mac-era servers 16. The kinds, their
+words and the page are this client's own: which official options set each
+kind, the ini keys the original keeps them under and its `/filter` forms are
+unread (recording checklist 6.494a to c), so `/filter` answers that this
+client does not take it that way yet.
+
+The modes are kept per character in `options-<world>-<character>.txt`, one
+`filter_<kind> = <mode>` line per kind (`show`, `hide`, `mine` or `group`),
+seeded from `options.txt` like the other options. A line naming a mode no
+generation can say is not read, so that kind keeps its default; the defaults
+are the packet the client sent before filters could be set.
+
+Choosing a character at the character list gives the session that
+character's saved modes, so its first zone-in carries them on every server
+type. A change made in play reaches the server at once where the session
+offers it (EQEmu); elsewhere (P99, Quarm, TAKP) it goes with the next
+zone-in. The page's note says which applies to the current server. A
+character entered automatically at connect starts from the defaults until
+its saved modes are sent after it enters.
+
 ## Display and audio
 
 Options provides Max FPS, Far Clip Plane and Mouselook Sensitivity controls.

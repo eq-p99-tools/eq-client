@@ -23,7 +23,8 @@ const BUTTON: &str = "EQC_Filter_";
 const VALUE: &str = "ValueLabel";
 const MARGIN: f32 = 10.0;
 const GAP: f32 = 6.0;
-const NOTE: &str = "Each kind steps through the modes the server takes for it. Where the server reads a change at once it is sent now; elsewhere the next zone-in carries it.";
+/// The note's screen ID; its words follow the session ([`crate::options::FilterNote`]).
+pub(super) const NOTE_ID: &str = "EQC_Filter_Note";
 
 /// A row's button's screen ID.
 fn button_id(category: FilterCategory) -> String {
@@ -116,11 +117,11 @@ pub(super) fn pages(pages: &[Page], owner: WindowId) -> Cow<'_, [Page]> {
         label
     };
     let mut rows = vec![(
-        "EQC_Filter_Note".to_owned(),
+        NOTE_ID.to_owned(),
         Element::Label(Label {
             wraps: true,
             ..label(
-                NOTE,
+                crate::options::filter_note(false),
                 Area {
                     x: MARGIN,
                     y: MARGIN,

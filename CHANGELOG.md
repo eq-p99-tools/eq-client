@@ -2,6 +2,22 @@
 
 ## Unreleased
 
+- Keep server filters per character and give them to the session (parity
+  item 6, recording checklist 6.494). Options gains a Filters page with one
+  row per kind the generation's packet has a word for (24 on Titanium, 16 on
+  Mac-era servers): a button steps through the kind's modes and a label says
+  the current one. The modes are kept as `filter_<kind>` lines in the
+  character's options file; a mode no generation can say keeps the default,
+  which is the packet sent before. The character list gives the session the
+  chosen character's saved set, so the first zone-in carries it; a change in
+  play is sent at once where the session offers it (EQEmu) and otherwise
+  goes with the next zone-in, as the page's note says. The kinds, words and
+  page are this client's own until the official options, ini keys and
+  `/filter` forms are read (6.494a to c); `/filter` answers that it is not
+  taken that way yet. Repins eq-network to e3a9b32 (#331), which also brings
+  #327 (chat is still sent in Common) and #329 (Apply Poison answers are not
+  shown yet).
+
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
   is in `InstalledClient::ALL` but has no marker files, so no folder is ever

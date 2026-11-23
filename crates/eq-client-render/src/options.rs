@@ -109,6 +109,20 @@ pub(crate) struct FilterButton(pub(crate) eq_client_core::filters::FilterCategor
 #[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) struct FilterValue(pub(crate) eq_client_core::filters::FilterCategory);
 
+/// The Filters page's note: it says when a change reaches this server.
+#[derive(Component, Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct FilterNote;
+
+/// The Filters page's note, for a session that reads a change at once
+/// (`ServerFiltersAtOnce` offered) or one that reads it only at zone-in.
+pub(crate) const fn filter_note(at_once: bool) -> &'static str {
+    if at_once {
+        "Each kind steps through the modes the server takes for it. This server reads a change at once, so it is sent now."
+    } else {
+        "Each kind steps through the modes the server takes for it. This server reads a change only at zone-in, so it applies at the next zone."
+    }
+}
+
 /// Steps a kind's server filter when its Filters page button is clicked.
 /// The session hears the change from [`tell_session`].
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
@@ -133,7 +147,18 @@ pub(crate) fn show_filters(
     state: Res<OptionsState>,
     mut buttons: Query<(&FilterButton, &mut Visibility)>,
     mut labels: Query<(&FilterValue, &mut Text)>,
+    mut notes: Query<&mut Text, (With<FilterNote>, Without<FilterValue>)>,
 ) {
+    let note = filter_note(
+        online
+            .world()
+            .can(eq_client_core::Capability::ServerFiltersAtOnce),
+    );
+    for mut text in &mut notes {
+        if text.0 != note {
+            note.clone_into(&mut text.0);
+        }
+    }
     let dialect = online.world().generation();
     let taken =
         |category: eq_client_core::filters::FilterCategory| !category.modes(dialect).is_empty();
@@ -693,6 +718,49 @@ mod tests {
             *app.world().get::<Visibility>(button).unwrap(),
             Visibility::Inherited
         );
+    }
+
+    #[test]
+    fn the_filters_note_says_when_a_change_reaches_this_server() {
+        use eq_client_core::Capability;
+        let mut app = crate::testing::app();
+        app.insert_resource(OptionsState::new(Options::default()))
+            .insert_resource(OnlineState::new(true))
+            .add_systems(Update, show_filters);
+        let note = app.world_mut().spawn((FilterNote, Text::default())).id();
+        let says = |app: &App| app.world().get::<Text>(note).unwrap().0.clone();
+        // Before an admission nothing is read until the zone-in.
+        app.update();
+        assert_eq!(says(&app), filter_note(false));
+        assert!(says(&app).contains("next zone"));
+        // A session that offers ServerFiltersAtOnce reads it at once.
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        app.insert_resource(online);
+        app.update();
+        assert_eq!(says(&app), filter_note(true));
+        assert!(says(&app).contains("sent now"));
+        // One that does not offer it, as P99, Quarm and TAKP, waits.
+        let mut online = OnlineState::new(true);
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities: Capability::ALL
+                    .into_iter()
+                    .filter(|capability| *capability != Capability::ServerFiltersAtOnce)
+                    .collect(),
+                choices: Vec::new(),
+                session_id: 2,
+                zone: "qeytoqrg".into(),
+                player: Box::new(testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }],
+        );
+        app.insert_resource(online);
+        app.update();
+        assert_eq!(says(&app), filter_note(false));
     }
 
     #[test]
