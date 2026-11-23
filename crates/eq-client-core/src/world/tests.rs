@@ -1287,6 +1287,28 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
 }
 
 #[test]
+fn a_song_stop_says_the_programs_line_in_its_colour_for_this_admission_only() {
+    let mut world = admitted();
+    let stopped = |session_id| WorldEvent::SongStopped {
+        session_id,
+        spell_id: 42,
+        string_id: 0x318f,
+    };
+    let changes = game(&mut world, stopped(1));
+    assert_eq!(
+        changes.notices,
+        [Notice::SongStopped {
+            spell_id: 42,
+            string_id: 0x318f
+        }]
+    );
+    assert_eq!(changes.notices[0].message_type(), Some(0x108));
+    let stale = game(&mut world, stopped(7));
+    assert!(stale.ignored);
+    assert_eq!(stale.notices, []);
+}
+
+#[test]
 fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
     let mut world = admitted();
     game(
