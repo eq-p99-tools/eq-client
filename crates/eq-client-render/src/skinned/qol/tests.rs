@@ -192,6 +192,7 @@ fn dangerous_section_groups_the_existing_choices_and_run_speed() {
         Fix::Fly,
         Fix::JesusMode,
         Fix::ExitAtOnce,
+        Fix::ZoneAnywhere,
     ];
     for size in [Vec2::new(640.0, 220.0), Vec2::new(180.0, 100.0)] {
         let skin = source();

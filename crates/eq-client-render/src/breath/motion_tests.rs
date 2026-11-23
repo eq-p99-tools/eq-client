@@ -300,6 +300,29 @@ fn an_overdue_move_withholds_the_stale_gauge_and_recovers_on_a_late_result() {
 }
 
 #[test]
+fn thegreys_air_cant_be_breathed_with_the_head_out_of_water() {
+    for (zone, breathes) in [(171, false), (172, true)] {
+        let (mut app, _commands, _updates) = scheduled();
+        prepare_liquid_in(
+            &mut app,
+            Some(vec![Capability::Inventory, Capability::Moving]),
+            zone,
+        );
+        // The water lies far below: the head is in air.
+        app.world_mut().resource_mut::<OnlineState>().regions =
+            ZoneRegions::test_liquid_surface(-100.0, Liquid::Water);
+        app.update();
+        let probe = app.world().resource::<State>().probe();
+        assert!(
+            matches!(probe, Some((Some(Medium::Air), Ok(Sample::CanBreathe)))) == breathes
+                && (breathes
+                    || matches!(probe, Some((Some(Medium::Air), Ok(Sample::Submerged(_)))))),
+            "zone {zone}: {probe:?}"
+        );
+    }
+}
+
+#[test]
 fn p99_swim_samples_the_native_head_after_the_worker_result() {
     let (mut app, commands, updates) = scheduled();
     let (surface, placement) = prepare_p99_surface(&mut app);
@@ -503,6 +526,10 @@ fn prepare_p99_surface(app: &mut App) -> (eq_client_core::WorldPosition, u64) {
 }
 
 fn prepare_liquid(app: &mut App, capabilities: Option<Vec<Capability>>) -> u64 {
+    prepare_liquid_in(app, capabilities, 0)
+}
+
+fn prepare_liquid_in(app: &mut App, capabilities: Option<Vec<Capability>>, zone_id: u16) -> u64 {
     let local_reports = capabilities.is_none();
     let mut online = app.world_mut().resource_mut::<OnlineState>();
     let mut player = online.world().player().unwrap().clone();
@@ -527,7 +554,7 @@ fn prepare_liquid(app: &mut App, capabilities: Option<Vec<Capability>>) -> u64 {
                 player: Box::new(player),
                 far_clip: None,
                 spell_landing_flag: None,
-                zone_id: 0,
+                zone_id,
             }],
         );
         testing::connect(&mut online, true);

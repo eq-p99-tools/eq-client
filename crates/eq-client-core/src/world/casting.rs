@@ -375,12 +375,10 @@ fn class_refresh(slot: u32, spell_id: u32) -> bool {
     if slot == u32::from(knights::CAST_SLOT) {
         return knight;
     }
-    // EQEmu can translate its internal ability slot to slot 10.
+    // EQEmu can translate its internal ability slot to slot 10, the slot
+    // every discipline casts from (read R48); the refresh settles only the
+    // cast of the spell it names.
     slot == u32::from(disciplines::CAST_SLOT)
-        && (knight
-            || disciplines::Discipline::SUPPORTED
-                .iter()
-                .any(|action| action.spell() == spell_id))
 }
 
 #[cfg(test)]
