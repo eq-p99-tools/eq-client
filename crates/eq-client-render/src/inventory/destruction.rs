@@ -200,18 +200,37 @@ impl InventoryState {
             coins.current(online.world()),
             "The coins on the cursor changed; select them again"
         );
+        // The session holds no destroy back (eq-network
+        // `two_kinds_destroyed_back_to_back_are_both_sent_with_nothing_held`),
+        // so every kind goes in this frame. Should one be refused here, the
+        // kinds already sent are gone: the line says which coins stay.
+        let mut sent = Coins::default();
         for coin in Coin::ALL {
             let amount = coins.coins.of(coin);
             if amount == 0 {
                 continue;
             }
-            outbox
-                .post(online.world(), |stamp| ClientCommand::DestroyCoins {
-                    session_id: stamp.session_id,
-                    destroy: CoinDestroy { coin, amount },
-                    created: stamp.created,
-                })
-                .map_err(|refusal| anyhow::anyhow!(refusal.text()))?;
+            if let Err(refusal) = outbox.post(online.world(), |stamp| ClientCommand::DestroyCoins {
+                session_id: stamp.session_id,
+                destroy: CoinDestroy { coin, amount },
+                created: stamp.created,
+            }) {
+                let mut kept = coins.coins;
+                for coin in Coin::ALL {
+                    *kept.of_mut(coin) -= sent.of(coin);
+                }
+                anyhow::bail!(if sent.is_empty() {
+                    format!("{}; nothing was destroyed", refusal.text())
+                } else {
+                    format!(
+                        "{}; destroy sent for {}, but {} stays on the cursor",
+                        refusal.text(),
+                        coins_text(sent),
+                        coins_text(kept)
+                    )
+                });
+            }
+            *sent.of_mut(coin) = amount;
         }
         self.actions.message = format!("Destroy sent for {}", coins_text(coins.coins));
         Ok(())
@@ -526,6 +545,27 @@ mod tests {
                 .destruction
                 .selecting()
         );
+    }
+
+    #[test]
+    fn a_kind_refused_after_another_was_sent_says_which_coins_stay() {
+        // A queue with room for one command: platinum goes, gold is refused.
+        let online = with_cursor_coins(platinum_and_gold(), true);
+        let (tx, rx) = std::sync::mpsc::sync_channel(1);
+        let outbox = Outbox::new(Some(tx));
+        let (mut state, mut asked) = (InventoryState::default(), Asked::default());
+        state
+            .destroy_action(Action::Select, &online, &outbox, &mut asked)
+            .unwrap();
+        let refusal = state
+            .destroy_action(Action::Confirm, &online, &outbox, &mut asked)
+            .unwrap_err();
+        assert_eq!(
+            refusal.to_string(),
+            "Too many requests at once; try again; destroy sent for 3 platinum, but 2 gold stays on the cursor"
+        );
+        assert_eq!(destroyed(&rx), [(Coin::Platinum, 3)]);
+        assert!(!state.destruction.selecting());
     }
 
     #[test]
