@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
+  - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.
+  - **Each refresh of the player's own gem** sends the song stop, then presses the next gem, cycling. Nothing else moves the melody (no timer, no retry), so with no refresh after a refused press it stalls ([I]; read R49-48 f is filed for the program's index on a refusal).
+  - **`/melody` while a song is sung** sends only the stop. With no numbers it only clears the list.
+  - **Gems 1 to 8** are taken. The program takes 9, which this client has no gem for. How the program splits the numbers isn't in the read, so a run of digits is one number here ([I]).
+  - **Only a Bard's `/melody` does anything.** Anyone else's sends nothing and says nothing, as the program's.
+  - **A gem click while singing** clears the list, the user's and a script's alike (0x47e8e0). A new admission starts with none. Scripts run it as typed: `slash("melody 1 2")`.
 - `/pet target` and unknown `/pet` words, as read R49-22a reads the Titanium program (checklist 6.610, gap 3.5).
   - **`/pet target`** stays local and sends no pet order.
     - It targets the player's pet through the same selection a click on the pet uses.
