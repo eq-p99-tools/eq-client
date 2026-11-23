@@ -25,6 +25,13 @@
 //! faces, passable faces and the meshes read F4b's unreferenced case covers
 //! (read F4f: the placer copies that bit into the actor at +0xe4):
 //! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --instance-flags <zone>`
+//!
+//! Each placed model's meshes, one line each: the mesh's 0x36 flags, its
+//! +0x14 reference, whether read R49-49c's no-hit case covers it (flags lack
+//! 0x10000 and no reference: the walking sweep skips the whole mesh), and
+//! its faces and passable faces. An optional filter keeps the models whose
+//! names contain it:
+//! `cargo run -p eq-client-assets --example inspect_door_models -- <EQ dir> --actor-meshes <zone> [filter]`
 use libeq::pfs::PfsReader;
 use libeq::wld::parser::{DmSpriteDef2, FragmentRef, StringReference, WldDoc};
 use std::collections::{BTreeMap, BTreeSet};
@@ -42,6 +49,12 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     if zone == "--instance-flags" {
         let zone = args.next().ok_or("supply a zone short name")?;
         instance_flags(&directory, &zone)?;
+        return Ok(());
+    }
+    if zone == "--actor-meshes" {
+        let zone = args.next().ok_or("supply a zone short name")?;
+        let filter = args.next().map(|name| name.to_ascii_uppercase());
+        actor_mesh_lines(&directory, &zone, filter.as_deref())?;
         return Ok(());
     }
     if zone == "--changed" {
@@ -359,6 +372,33 @@ fn places(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>
 
 /// Per placed object model: placements with and without the 0x15 instance
 /// flag 0x80, and its meshes' faces.
+/// Each model's meshes with what read R49-49c's no-hit case decides.
+fn actor_mesh_lines(
+    directory: &Path,
+    zone: &str,
+    filter: Option<&str>,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let facts = mesh_facts(directory, zone).ok_or("no object archive")?;
+    let actors = actor_meshes(directory, zone).ok_or("no object archive")?;
+    println!("## {zone}");
+    println!("model\tmesh\tflags\treferenced\tno_hit\tfaces\tpassable");
+    for (model, meshes) in &actors {
+        if filter.is_some_and(|filter| !model.to_ascii_uppercase().contains(filter)) {
+            continue;
+        }
+        for mesh in meshes {
+            match facts.get(mesh) {
+                Some(fact) => println!(
+                    "{model}\t{mesh}\t{:#x}\t{}\t{}\t{}\t{}",
+                    fact.flags, fact.referenced, fact.unreferenced, fact.faces, fact.passable
+                ),
+                None => println!("{model}\t{mesh}\t-\t-\t-\t-\t-"),
+            }
+        }
+    }
+    Ok(())
+}
+
 fn instance_flags(directory: &Path, zone: &str) -> Result<(), Box<dyn std::error::Error>> {
     use libeq::wld::parser::Actor;
     let facts = mesh_facts(directory, zone).ok_or("no object archive")?;
