@@ -6879,6 +6879,7 @@ pub(super) mod tests {
     /// `EverQuest` folder in `EQ_DIR`; reads files only.
     #[test]
     #[ignore = "reads an EverQuest installation named by EQ_DIR"]
+    #[allow(clippy::too_many_lines)] // A diagnostic printout.
     fn installed_temple_of_life_rim() {
         let directory = std::path::PathBuf::from(
             std::env::var_os("EQ_DIR").expect("EQ_DIR names an EverQuest folder"),
@@ -6901,23 +6902,43 @@ pub(super) mod tests {
             |list| list.split(',').filter_map(|p| p.parse().ok()).collect(),
         );
         let profile = world();
-        for (name, x, y, heading) in [
-            ("A", -306.0_f32, -191.0_f32, 128.0_f32),
-            ("B", -294.3, -223.5, 128.0),
-            ("C", -308.8, -168.4, 0.0),
-        ] {
+        // name,x,y,z,heading;... with z empty for the surface.
+        let spots: Vec<(String, f32, f32, f32, f32)> = std::env::var("RIM_SPOTS").map_or_else(
+            |_| {
+                [
+                    ("A", -306.0_f32, -191.0_f32, surface, 128.0_f32),
+                    ("B", -306.0, -216.0, surface, 128.0),
+                    ("C", -308.8, -180.0, surface, 0.0),
+                    ("C2", -314.02, -179.86, surface, 0.0),
+                    ("W", -314.15, -166.45, -1.6, 0.0),
+                ]
+                .into_iter()
+                .map(|(name, x, y, z, heading)| (name.to_owned(), x, y, z, heading))
+                .collect()
+            },
+            |list| {
+                list.split(';')
+                    .filter_map(|spot| {
+                        let mut parts = spot.split(',');
+                        let name = parts.next()?.trim().to_owned();
+                        let mut number = || parts.next().map(str::trim);
+                        let x = number()?.parse().ok()?;
+                        let y = number()?.parse().ok()?;
+                        let z = number()?.parse().unwrap_or(surface);
+                        let heading = number()?.parse().ok()?;
+                        Some((name, x, y, z, heading))
+                    })
+                    .collect()
+            },
+        );
+        for (name, x, y, z, heading) in spots {
             let ahead = Vec3::from_array(eq_client_core::render_vector([
                 (heading / 512.0 * std::f32::consts::TAU).sin(),
                 (heading / 512.0 * std::f32::consts::TAU).cos(),
                 0.0,
             ]));
             let origin = Vec3::from_array(eq_client_core::render_position(
-                eq_client_core::WorldPosition {
-                    x,
-                    y,
-                    z: surface,
-                    heading,
-                },
+                eq_client_core::WorldPosition { x, y, z, heading },
             ));
             println!("spot {name}: origin {origin} ahead {ahead}");
             for step in 0..=80_u16 {
@@ -6925,15 +6946,18 @@ pub(super) mod tests {
                 let floor = profile.ground(at + Vec3::Y * 12.0, 0.0, 40.0);
                 let wet = |dy: f32| profile.in_liquid(at + Vec3::Y * dy);
                 let world_at = eq_client_core::world_position((at).to_array(), heading);
+                let above = profile.ray_distance(at, Vec3::Y, 12.0);
                 println!(
-                    "  d {:5.2} world ({:8.2},{:8.2}) floor {:?} liquid at surface {:?} +0.5 {:?} -0.5 {:?} -3.75 {:?}",
+                    "  d {:5.2} world ({:8.2},{:8.2}) floor {:?} ceiling {:?} liquid at origin {:?} +0.5 {:?} -0.5 {:?} -1 {:?} -3.75 {:?}",
                     f32::from(step) * 0.25,
                     world_at.x,
                     world_at.y,
-                    floor.map(|f| f - origin.y + surface),
+                    floor.map(|f| f - origin.y + z),
+                    above.map(|d| z + d),
                     wet(0.0),
                     wet(0.5),
                     wet(-0.5),
+                    wet(-1.0),
                     wet(-3.75),
                 );
             }
