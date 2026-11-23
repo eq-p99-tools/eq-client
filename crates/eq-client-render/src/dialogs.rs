@@ -259,7 +259,9 @@ pub(super) fn sync_note(
     mut chat: ResMut<crate::chat::ChatState>,
     mut sync: Local<NoteSync>,
 ) {
-    if chat.inspect_toggled.take().is_some() {
+    // Read before taking, so the chat isn't marked changed every frame.
+    if chat.inspect_toggled.is_some() {
+        chat.inspect_toggled = None;
         sync.toggle();
     }
     let world = online.world();
