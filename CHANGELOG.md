@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- `/ttell` and `/whotarget` as the Titanium program takes them (read R49-18,
+  checklist 6.528). `/ttell` says nothing with no words or no target; a
+  target is taken by the name the server sent, refused (line 0x3322) when
+  it has a `#` or `_` unless it is a creature's corpse, and cut at its
+  apostrophe, so a player's corpse's tell goes to its owner; a tell to
+  yourself or your own corpse gets line 0x3023 and is not sent.
+  `/whotarget` lists any target as a typed `/who` of its name, ignoring any
+  words, and says nothing with no target. Labelled: the program counts a
+  creature that dies in view as a player's corpse and refuses it, where
+  this client sends the tell. Mac-era and RoF2 keep this client's own
+  rules. The code moves to `targeted.rs`.
 - `/shield` follows the Titanium program's handler (checklist 6.517, read R49-22d). A Warrior of level 30 or more can name the player to shield, as `/shield Name`: the name is matched as `/assist Name` matches it, the shortest name it begins winning, and the target is left as it is. A name that matches no one says nothing. With no name, the target is shielded. The lines for another class or a lower level, for no target, and for naming or targeting yourself are the installation's own (strings 0xfc1, 0xfbf and 0xfc2, 0xcce and 0xfbe), with this client's words where the installation lacks them. As in the program, the client checks no distance, kind or recast; the server answers those. The Mac-era client's handler is unread there, so it keeps the earlier checks and words. The program's general "can act" test and its silence while a trade or certain windows are open are not modelled yet (row 6.517a), as for `/assist`.
 - **The Use key now uses what is at the centre of the view, not the nearest door** (read R49-19, checklist 6.609). On Titanium (and RoF2, inferred) it casts the program's ray from the camera through the centre of the 3D view, the same pick a mouse click makes:
   - The first character the ray hits becomes the target. An NPC, or one the target setter refuses while no target stands, also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered; no hail). A player or corpse that becomes the target is only targeted, as the program's key handler reads (0x462519).
