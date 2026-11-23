@@ -185,7 +185,9 @@ impl SessionWorker {
                 } else {
                     client
                 };
+                crate::gaps::begin(settings.as_deref());
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
+                    crate::gaps::write_when_due();
                     if let Some(fact) = spell_bridge.capture(&event)? {
                         if let Some(sight) = &sight {
                             sight.receive(&fact);
@@ -204,6 +206,12 @@ impl SessionWorker {
                             RecordEvent::Chat(event) => chat_update(event),
                             _ => None,
                         },
+                        // What the session dropped or could not read goes to
+                        // the session's gap file.
+                        ClientEvent::Gap(gap) => {
+                            crate::gaps::record(&*gap);
+                            None
+                        }
                         ClientEvent::Diagnostic(message) => {
                             tracing::info!("{message}");
                             None
@@ -224,6 +232,7 @@ impl SessionWorker {
                     Ok(())
                 })
             })();
+            crate::gaps::end();
             if let Err(error) = result {
                 tracing::error!("Session ended: {error:#}");
                 // A session asked to stop ends without a reason to show.

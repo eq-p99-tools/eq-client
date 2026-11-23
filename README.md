@@ -101,6 +101,7 @@ ones:
 | `--window-size WxH`, `--window-position X,Y` | Window size and placement in physical pixels |
 | `--no-navmesh` | Turns off the zone navigation meshes that script walks use |
 | `--script-editor` | Opens the Scripts window at launch |
+| `--gap-report [PATH...]` | Prints the server messages past sessions dropped or could not read; `--samples` adds body samples |
 
 The client keeps its own settings in its settings directory and only reads the
 installation's files. On P99, where the original client has been seen sending
@@ -108,6 +109,14 @@ it, the client sends the same weekly report of the machine you play on just
 before entering the world: processor, display adapter, memory and screen size.
 The date of the last report is kept in the client's settings directory, so the
 weekly wait carries over between runs.
+
+Every session also counts, in `gaps/` in the settings directory, each server
+message it dropped or could not read and each kind of world news it does not
+show yet. These are the gaps between this client and the original;
+`--gap-report` lists them. Only the newest 50 files are kept. They stay on
+your machine: a sample from a zone may hold what other players said or their
+names, so the report leaves samples out unless `--samples` asks for them.
+Never commit the files to a repository.
 
 ## Settings and quality of life
 

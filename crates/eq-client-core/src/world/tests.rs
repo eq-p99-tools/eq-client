@@ -5695,7 +5695,16 @@ fn what_other_players_ask_of_the_player_changes_nothing_yet() {
         }),
     ];
     for event in events {
-        assert_eq!(game(&mut world, event), Changes::default());
+        // Nothing changes; the news only counts in the session's gap file.
+        let unshown = crate::gaps::variant_name(&event);
+        assert!(unshown.is_some());
+        assert_eq!(
+            game(&mut world, event),
+            Changes {
+                unshown,
+                ..Changes::default()
+            }
+        );
     }
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
@@ -6071,7 +6080,16 @@ fn new_titles_and_game_masters_notices_change_nothing_yet() {
         WorldEvent::Gm(GmNotice::Petition(None)),
     ];
     for event in events {
-        assert_eq!(game(&mut world, event), Changes::default());
+        // Nothing changes; the news only counts in the session's gap file.
+        let unshown = crate::gaps::variant_name(&event);
+        assert!(unshown.is_some());
+        assert_eq!(
+            game(&mut world, event),
+            Changes {
+                unshown,
+                ..Changes::default()
+            }
+        );
     }
     assert_eq!(world.spawns().len(), spawns);
     assert!(world.player().is_some());
@@ -6666,4 +6684,15 @@ fn the_players_posture_changes_are_counted_but_not_a_first_standing() {
     let mut world = admitted();
     assert_eq!(posture(&mut world, PostureState::Sitting), 1);
     assert_eq!(posture(&mut world, PostureState::Standing), 2);
+}
+
+#[test]
+fn news_the_world_does_not_show_is_named_for_the_gap_file() {
+    let mut world = admitted();
+    assert_eq!(game(&mut world, WorldEvent::Ding).unshown, Some("Ding"));
+    assert_eq!(game(&mut world, WorldEvent::Spun).unshown, Some("Spun"));
+    assert_eq!(
+        game(&mut world, WorldEvent::YellForHelp { spawn_id: 7 }).unshown,
+        Some("YellForHelp")
+    );
 }

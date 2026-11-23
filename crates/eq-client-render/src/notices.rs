@@ -434,6 +434,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             chat(match kind {
                 ConsentKind::Resurrection => "The resurrection offer expired.".into(),
                 ConsentKind::Translocate => "The translocate offer expired.".into(),
+                // A duel question has no deadline, so it never expires.
+                ConsentKind::Duel => return Vec::new(),
             })
         }
         // eqstr 1406, where the installation has it.

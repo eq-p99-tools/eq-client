@@ -600,6 +600,9 @@ impl ClientWorld {
             ConsentKind::Translocate => {
                 let _ = self.translocate.take_if(|current| current.id == id);
             }
+            // No duel question is shown in this build, so none is kept to
+            // dismiss.
+            ConsentKind::Duel => (),
         }
     }
 
@@ -964,7 +967,7 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            WorldEvent::SpellTable(_)
+            unshown @ (WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
@@ -994,7 +997,17 @@ impl ClientWorld {
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
-            | WorldEvent::SystemInfoReported { .. } => (),
+            | WorldEvent::SystemInfoReported { .. }
+            // Shown once their front ends land; counted until then.
+            | WorldEvent::PoisonAnswered(_)
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::DuelOffer(_)
+            | WorldEvent::DuelRefused { .. }) => {
+                // Each still counts in the session's gap file, by kind.
+                news.unshown = crate::gaps::variant_name(unshown);
+            }
 
             // The zone and what is in it.
             WorldEvent::BoatControl(packet) => {

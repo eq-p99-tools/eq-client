@@ -976,6 +976,10 @@ fn apply(
     let before = world.player().map(|player| player.position);
     let old_gems = super::spellbook::sets::snapshot(world);
     let changes = world.apply(update, std::time::Instant::now(), spells);
+    // News the world does not show yet still counts in the session's gaps.
+    if let Some(kind) = changes.unshown {
+        eq_client_core::gaps::unshown(kind);
+    }
     if let Some(outbox) = outbox
         && !changes.ignored
     {

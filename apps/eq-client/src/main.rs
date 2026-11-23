@@ -1,5 +1,6 @@
 #![doc = "Native EQ client entry point: login, online play and offline asset previews."]
 
+mod gaps;
 mod logins;
 mod presets;
 mod session;
@@ -201,6 +202,18 @@ struct Arguments {
     /// Parse the complete script and exit before session, asset or graphics setup.
     #[arg(long, requires = "script", conflicts_with = "script_follow")]
     check_script: bool,
+
+    /// Print a Markdown report of the server messages past sessions
+    /// dropped or could not read, from these gap files or folders, or from
+    /// the settings directory's `gaps` folder when none are named, then
+    /// exit.
+    #[arg(long, num_args = 0.., value_name = "PATH")]
+    gap_report: Option<Vec<PathBuf>>,
+
+    /// Include body samples in `--gap-report`. They may hold what other
+    /// players said or their names: keep such a report to yourself.
+    #[arg(long, requires = "gap_report")]
+    samples: bool,
 
     /// Open the in-client script editor; opening it never starts a script.
     #[arg(long)]
@@ -474,6 +487,22 @@ fn main() {
         report(panic);
     }));
     let (mut arguments, typed_installation) = parse_arguments();
+    if let Some(paths) = &arguments.gap_report {
+        let settings = arguments
+            .settings_dir
+            .clone()
+            .or_else(default_settings_directory);
+        match gaps::report(paths, settings.as_deref(), arguments.samples) {
+            Ok(report) => {
+                print!("{report}");
+                return;
+            }
+            Err(error) => {
+                eprintln!("error: {error}");
+                std::process::exit(2);
+            }
+        }
+    }
     if arguments.check_script {
         std::process::exit(script_check_exit(
             arguments.script.as_deref().expect("Clap requires --script"),

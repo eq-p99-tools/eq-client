@@ -2,6 +2,23 @@
 
 ## Unreleased
 
+- Record every server message a session drops or cannot read, and the
+  world news the client hears but does not show yet, so live runs become a
+  list of gaps to close (6.500). Each session writes one
+  `gaps/gaps-<UTC start>.json` in the settings directory, at most every
+  10 s and when the session ends: each gap by server type, generation,
+  stage, zone, opcode and kind, with its count, first and last seen, body
+  lengths and up to three 256-byte samples. Unshown world news is counted
+  by its kind's name alone, never by what it holds. Only the newest 50
+  files are kept. The files stay on this machine and never belong in a
+  repository: a zone sample may hold what other players said or their
+  names. `--gap-report [PATH...]` prints a Markdown report over the saved
+  files, gaps to close first; `--samples` adds the samples, which it leaves
+  out by default. Repins eq-network to the merge of #333 (72b0ccd), which
+  also brings the duel answer, Rogue poison, server filters and a chosen
+  chat language: their events are counted as unshown news here until their
+  own client changes land, and chat keeps to the common tongue as before.
+
 - Add RoF2 as a placeholder generation, following eq-network's
   (`GameDialect::Rof2`, `ServerProtocol::EqEmuRof2`). `InstalledClient::Rof2`
   is in `InstalledClient::ALL` but has no marker files, so no folder is ever
