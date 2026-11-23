@@ -7041,8 +7041,9 @@ mod tests {
         );
     }
 
-    #[test]
-    fn a_scripts_click_on_the_interface_scale_sets_it_once() {
+    /// The interface scale each time a script's one line changed it, from
+    /// `start`, and whether the run completed.
+    fn scale_script(line: &str, start: u16) -> (Vec<u16>, Phase) {
         use crate::{
             options::OptionsState,
             skinned::{SkinSlider, slide},
@@ -7060,11 +7061,8 @@ mod tests {
             }
         }
 
-        let program = Program::parse(
-            "click(\"slider\", \"ui_scale\", 67)\nreport(\"after click\")\n",
-            Path::new("."),
-        )
-        .unwrap();
+        let program =
+            Program::parse(&format!("{line}\nreport(\"after\")\n"), Path::new(".")).unwrap();
         let mut app = pointing(Vec::new());
         let window = app
             .world_mut()
@@ -7091,6 +7089,10 @@ mod tests {
             .insert_resource(Script::from_program(program))
             .init_resource::<Changes>()
             .add_systems(Update, (slide, count).chain().after(drive));
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .set_level(Level::UiScale, start);
         app.world_mut().spawn((
             Button,
             SkinSlider::test_level(Level::UiScale),
@@ -7100,11 +7102,34 @@ mod tests {
         for ms in (0..=2_000).step_by(10) {
             frame_at(&mut app, ms);
         }
-        assert_eq!(
+        (
+            app.world().resource::<Changes>().0.clone(),
             app.world().resource::<RunStatus>().phase(),
-            Phase::Completed
+        )
+    }
+
+    #[test]
+    fn a_scripts_click_on_the_interface_scale_sets_it_once() {
+        assert_eq!(
+            scale_script("click(\"slider\", \"ui_scale\", 67)", 100),
+            (vec![150], Phase::Completed)
         );
-        assert_eq!(app.world().resource::<Changes>().0, [150]);
+    }
+
+    #[test]
+    fn a_scripts_right_click_on_the_interface_scale_returns_it_to_100() {
+        assert_eq!(
+            scale_script("right_click(\"slider\", \"ui_scale\", 50)", 50),
+            (vec![100], Phase::Completed)
+        );
+    }
+
+    #[test]
+    fn a_scripts_held_click_on_the_interface_scale_sets_it_as_it_lets_go() {
+        assert_eq!(
+            scale_script("hold_click(800, \"slider\", \"ui_scale\", 0)", 100),
+            (vec![50], Phase::Completed)
+        );
     }
 
     fn script_pointer(app: &App) -> Option<Vec2> {

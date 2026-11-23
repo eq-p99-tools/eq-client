@@ -279,7 +279,15 @@ pub(crate) fn slide(
     mut state: ResMut<OptionsState>,
     mut inventory: ResMut<InventoryState>,
 ) {
-    let right = mouse.is_some_and(|mouse| mouse.just_pressed(MouseButton::Right));
+    let down = |button| mouse.as_ref().is_some_and(|mouse| mouse.pressed(button));
+    let left = down(MouseButton::Left);
+    // A right-click, the player's or a script's (which also marks the
+    // control pressed), and not part of a left drag.
+    let right_click = !left
+        && mouse
+            .as_ref()
+            .is_some_and(|mouse| mouse.just_pressed(MouseButton::Right));
+    let right_held = !left && down(MouseButton::Right);
     for (interaction, mut slider, cursor) in &mut sliders {
         let pressed = (*interaction == Interaction::Pressed)
             .then_some(cursor.normalized)
@@ -302,7 +310,12 @@ pub(crate) fn slide(
             }
         };
         let value = if level.rescales_layout() {
-            if *interaction == Interaction::Pressed {
+            if right_click && *interaction != Interaction::None {
+                if slider.held.is_some() {
+                    slider.held = None;
+                }
+                Some(eq_client_core::options::Options::default().level(level))
+            } else if *interaction == Interaction::Pressed && !right_held {
                 if let Some(along) = pressed {
                     let value = level.at(along);
                     if slider.held != Some(value) {
@@ -310,11 +323,11 @@ pub(crate) fn slide(
                     }
                 }
                 continue;
-            }
-            if slider.held.is_some() {
+            } else if slider.held.is_some() && left {
+                // The left button still holds the press the slider took.
+                continue;
+            } else if slider.held.is_some() {
                 slider.held.take()
-            } else if right && *interaction == Interaction::Hovered {
-                Some(eq_client_core::options::Options::default().level(level))
             } else {
                 None
             }
@@ -1318,6 +1331,64 @@ mod tests {
         mouse.press(MouseButton::Right);
         app.update();
         assert_eq!(scale(&app), 50);
+    }
+
+    #[test]
+    fn a_scripts_right_click_returns_the_interface_scale_to_its_default() {
+        // A script's right-click marks the slider pressed where it points, as
+        // its left click does; the right button makes it the reset, with
+        // nothing held to set as the press ends.
+        let (mut app, slider, _) = scale_slider();
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .set_level(Level::UiScale, 50);
+        point(&mut app, slider, 125);
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Right);
+        app.update();
+        assert_eq!(scale(&app), 100);
+        app.world_mut().resource_mut::<Changes>().0.clear();
+        // The right button held, then let go: nothing more is set.
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Right);
+        *app.world_mut().get_mut::<Interaction>(slider).unwrap() = Interaction::None;
+        app.update();
+        app.update();
+        assert_eq!(scale(&app), 100);
+        assert_eq!(app.world().resource::<Changes>().0, Vec::<u16>::new());
+    }
+
+    #[test]
+    fn the_held_interface_scale_waits_for_the_left_button() {
+        // The press can lose its pressed mark while the button still holds
+        // it; the held size waits for the button.
+        let (mut app, slider, label) = scale_slider();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        point(&mut app, slider, 175);
+        app.update();
+        *app.world_mut().get_mut::<Interaction>(slider).unwrap() = Interaction::None;
+        app.world_mut()
+            .get_mut::<RelativeCursorPosition>(slider)
+            .unwrap()
+            .normalized = None;
+        app.update();
+        assert_eq!(scale(&app), 100);
+        assert_eq!(app.world().get::<Text>(label).unwrap().0, "175 %");
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        assert_eq!(scale(&app), 175);
+        assert_eq!(app.world().resource::<Changes>().0, [175]);
     }
 
     #[test]
