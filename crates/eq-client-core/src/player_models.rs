@@ -54,10 +54,9 @@ pub const fn offered(dialect: GameDialect, expansions: Option<Expansions>) -> bo
         return false;
     };
     match dialect {
-        GameDialect::Titanium | GameDialect::Rof2 => mask & OFFERING_BITS != 0,
-        // Inferred until read R49-44 e: the Mac client's mask, from its own
-        // opcode, is taken to gate the same way.
-        GameDialect::EqMac => mask & OFFERING_BITS != 0,
+        // Read for Titanium. Inferred until read R49-44 e: the Mac client's
+        // mask, from its own opcode, is taken to gate the same way.
+        GameDialect::Titanium | GameDialect::Rof2 | GameDialect::EqMac => mask & OFFERING_BITS != 0,
     }
 }
 

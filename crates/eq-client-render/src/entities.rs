@@ -909,9 +909,9 @@ mod tests {
             // The server offers the models, so the key decides.
             testing::news(
                 &mut online,
-                [WorldEvent::Expansions(eq_client_core::rules::Expansions(
-                    0xF,
-                ))],
+                [eq_client_core::WorldEvent::Expansions(
+                    eq_client_core::rules::Expansions(0xF),
+                )],
             );
             let mut app = App::new();
             character::testing::stores(app.world_mut());

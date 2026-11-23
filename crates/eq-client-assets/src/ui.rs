@@ -1343,7 +1343,7 @@ pub struct OfficialOptions {
 
 /// The `[Defaults]` keys the official client takes its Luclin model choice
 /// from, with the race and gender (0 male, 1 female) each sets: read R49-44
-/// a, `UseLuclin<Race>Male` / `Female` with <Race> from 0x437915, for the
+/// a, `UseLuclin<Race>Male` / `Female` with `<Race>` from 0x437915, for the
 /// races its loader walks (0x43df32: 1-12, 128 and 130).
 pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 28] = [
     ("UseLuclinHumanMale", 1, 0),
