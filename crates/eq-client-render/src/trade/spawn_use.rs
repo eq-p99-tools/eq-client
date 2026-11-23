@@ -209,9 +209,11 @@ impl TradeState {
             }
             Some(spawn)
         };
-        // The program's tail: with Inspect Others on and nothing on the
-        // cursor, a player, or the player themself, is inspected within 20
-        // and named by line 0x305a beyond (reads R49-16, R49-16e).
+        // The program's tail (0x4a73d9): only with Inspect Others on and
+        // nothing on the cursor ([0x905d24]+0x10 == 0, read R49-16 (b)) does
+        // it call 0x498a66, which acts on a player, or the player themself:
+        // within 20 it inspects, and only at 20 or more does it say line
+        // 0x305a. With the option off or an item held, nothing is said.
         let cursor_empty = !world
             .inventory()
             .items()
