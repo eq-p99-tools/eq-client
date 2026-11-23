@@ -49,6 +49,8 @@ pub(super) enum Action {
     StepInto,
     StepOut,
     Stop,
+    /// Steps the run length the next Run uses.
+    Length,
     Discard,
     Cancel,
     Tab(Tab),
@@ -61,9 +63,13 @@ impl Action {
     pub(super) fn usable(self, phase: Phase, busy: bool) -> bool {
         let active = phase.active();
         match self {
-            Self::Run | Self::New | Self::Open | Self::Save | Self::Reload | Self::Discard => {
-                !active && !busy
-            }
+            Self::Run
+            | Self::New
+            | Self::Open
+            | Self::Save
+            | Self::Reload
+            | Self::Discard
+            | Self::Length => !active && !busy,
             // Before a run it starts one; while paused it resumes to the line.
             Self::RunToCursor => (!active && !busy) || phase == Phase::Paused,
             Self::Pause => active && phase != Phase::Paused,
@@ -249,9 +255,50 @@ fn icon_button(
         .id()
 }
 
+/// The run length selector's text, which names the length the next Run uses.
+#[derive(Component)]
+pub(super) struct LengthLabel;
+
+/// Keeps the selector's text on the chosen run length.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn length_label(
+    state: Res<super::Workbench>,
+    mut labels: Query<&mut Text, With<LengthLabel>>,
+) {
+    let wanted = state.run_length.label();
+    for mut text in &mut labels {
+        if text.0 != wanted {
+            text.0.clone_from(&wanted);
+        }
+    }
+}
+
 /// The run and debugging controls as icons, for the right end of the row
-/// above a page's script area.
+/// above a page's script area, after the run length selector.
 fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
+    let text = label(
+        commands,
+        crate::script::RunLength::Default.label(),
+        13.0,
+        theme::INK_BRIGHT,
+    );
+    commands.entity(text).insert(LengthLabel);
+    let length = commands
+        .spawn((
+            Button,
+            Action::Length,
+            Tooltip("How long the next run may go. Click for the next length.".to_owned()),
+            Node {
+                padding: UiRect::axes(px(9), px(5)),
+                border: UiRect::all(px(1)),
+                flex_shrink: 0.0,
+                ..default()
+            },
+            BackgroundColor(theme::BUTTON),
+            BorderColor::all(theme::EDGE),
+        ))
+        .add_child(text)
+        .id();
     let children = [
         (icons::Icon::Run, "Run", Action::Run),
         (
@@ -272,8 +319,10 @@ fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
             column_gap: px(4),
             flex_shrink: 0.0,
             margin: UiRect::left(Val::Auto),
+            align_items: AlignItems::Center,
             ..default()
         })
+        .add_child(length)
         .add_children(&children)
         .id()
 }
@@ -741,9 +790,10 @@ pub(super) fn refresh(
                 },
             );
             format!(
-                "{}  ·  {progress}  ·  {:.1}s{}",
+                "{}  ·  {progress}  ·  {:.1}s of {}{}",
                 phase_text(status.phase()),
                 status.elapsed().as_secs_f32(),
+                status.length().span(),
                 if state.document.dirty() {
                     "  ·  Unsaved edits"
                 } else {
@@ -913,7 +963,10 @@ fn flow_summary(status: &RunStatus) -> String {
         lines.push(format!("If L{line}: {taken}"));
     }
     for (line, iteration, limit) in flow.loops() {
-        lines.push(format!("Loop L{line}: {iteration}/{limit}"));
+        lines.push(match limit {
+            Some(limit) => format!("Loop L{line}: {iteration}/{limit}"),
+            None => format!("Loop L{line}: {iteration}"),
+        });
     }
     if !flow.calls().is_empty() {
         lines.push(String::new());

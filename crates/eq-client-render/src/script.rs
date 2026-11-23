@@ -17,11 +17,13 @@
 pub(crate) mod control;
 mod execution;
 mod input;
+mod length;
 pub(crate) use input::AuthoredInput;
 pub use input::InputMode;
 pub(super) use input::install as install_input;
 pub(crate) use input::world::WorldInput;
 pub(super) use input::world::apply as world_input;
+pub use length::{MAX_MINUTES, RunLength};
 pub(crate) mod language;
 pub(crate) use parse::{COMMANDS, FREE_TEXT};
 mod parse;
@@ -68,7 +70,6 @@ const FACE_LIMIT: Duration = Duration::from_secs(5);
 /// heading units.
 const FACED: f32 = 0.5;
 const MAX_ONLINE_WAIT: Duration = Duration::from_mins(3);
-const MAX_RUNTIME: Duration = Duration::from_mins(15);
 const FOLLOW_POLL: Duration = Duration::from_millis(250);
 /// Path positions searched per frame, keeping each frame short.
 const SEARCH_BUDGET: usize = 1500;
@@ -125,6 +126,8 @@ pub struct Script {
     /// without anyone watching the window, but `gm` steps stay refused.
     offline: bool,
     input_mode: InputMode,
+    /// How long the player lets this run go.
+    length: RunLength,
     /// True only after this frame's background ownership check succeeds.
     owns_input: bool,
     /// The route a `walk` step is searching for or following.
@@ -271,6 +274,7 @@ impl Script {
             local: false,
             offline: false,
             input_mode: InputMode::Attended,
+            length: RunLength::Default,
             owns_input: false,
             route: None,
             door_wait: None,
@@ -339,6 +343,7 @@ impl Script {
             .local_session(config.local_session)
             .offline_preview(!online)
             .input_mode(config.script_input_mode)
+            .run_length(config.script_run_length)
     }
 
     /// The current run's typed progress, including its immutable source snapshot.
@@ -385,6 +390,18 @@ impl Script {
     #[must_use]
     pub fn input_mode(mut self, mode: InputMode) -> Self {
         self.input_mode = mode;
+        self
+    }
+
+    /// The player's chosen run length. It lifts only the run's overall
+    /// counts; paces, waits, input rules and Stop stay as they are.
+    #[must_use]
+    pub fn run_length(mut self, length: RunLength) -> Self {
+        self.length = length;
+        self.progress.length = length;
+        if let Some(run) = &mut self.language {
+            run.counted(length.counted());
+        }
         self
     }
 
@@ -1307,7 +1324,11 @@ pub(super) fn drive(
     }
     let started = *script.started.get_or_insert(now);
     script.progress.elapsed = now.saturating_sub(started);
-    if now.saturating_sub(started) > MAX_RUNTIME {
+    if script
+        .length
+        .runtime()
+        .is_some_and(|runtime| now.saturating_sub(started) > runtime)
+    {
         script.cancel_press(&mut buttons, &mut commands);
         script.stop(&mut keys, &mut mouse, "maximum runtime reached");
         script.retire(&mut commands);
@@ -5998,7 +6019,7 @@ mod tests {
                         .request(Request::Stop);
                     270
                 }
-                "runtime" => u64::try_from(MAX_RUNTIME.as_millis()).unwrap() + 1,
+                "runtime" => u64::try_from(length::DEFAULT_RUNTIME.as_millis()).unwrap() + 1,
                 _ => {
                     let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
                     online.enabled = true;
@@ -6174,6 +6195,99 @@ mod tests {
         let status = app.world().resource::<RunStatus>();
         assert_eq!(status.phase(), Phase::Failed);
         assert_eq!(status.events().back().unwrap().message, "Session ended");
+    }
+
+    /// A run of `source` offline at the player's chosen length.
+    fn lengthened(source: &str, length: RunLength) -> App {
+        let mut app = pointing(Vec::new());
+        app.init_resource::<RunControl>()
+            .init_resource::<RunStatus>()
+            .add_systems(Update, observe.after(drive));
+        let program = Program::parse(source, Path::new(".")).unwrap();
+        app.insert_resource(
+            Script::from_program(program)
+                .offline_preview(true)
+                .run_length(length),
+        );
+        app
+    }
+
+    #[test]
+    fn the_players_length_sets_the_time_cap() {
+        let minute = 60_000;
+        for (length, stopped_by) in [
+            (RunLength::Default, Some(15)),
+            (RunLength::Minutes(30), Some(30)),
+            (RunLength::Unlimited, None),
+        ] {
+            let mut app = lengthened("while True:\n    pass\n", length);
+            let mut stopped = None;
+            for minutes in [0, 14, 16, 29, 31, 24 * 60, 7 * 24 * 60] {
+                frame_at(&mut app, minutes * minute);
+                if stopped.is_none() && !app.world().contains_resource::<Script>() {
+                    stopped = Some(minutes);
+                }
+            }
+            match stopped_by {
+                Some(cap) => {
+                    // Stopped by the first frame past its cap.
+                    let first_past = [0, 14, 16, 29, 31].into_iter().find(|m| *m > cap);
+                    assert_eq!(stopped, first_past, "{length:?}");
+                    let status = app.world().resource::<RunStatus>();
+                    assert_eq!(
+                        status.events().back().unwrap().message,
+                        "maximum runtime reached",
+                        "{length:?}"
+                    );
+                }
+                None => assert_eq!(stopped, None, "{length:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn stop_ends_an_unlimited_spin_next_frame_and_releases_held_keys() {
+        // A loop with no cap runs one statement a frame, past the default's
+        // 5,000, so the client keeps drawing; Stop still lands.
+        let mut app = lengthened("while True:\n    pass\n", RunLength::Unlimited);
+        for frame in 0..5_200 {
+            frame_at(&mut app, frame * 16);
+        }
+        let statements = app
+            .world()
+            .resource::<Script>()
+            .status()
+            .flow()
+            .unwrap()
+            .statements();
+        assert!(statements > 5_000, "{statements}");
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 5_200 * 16);
+        assert!(!app.world().contains_resource::<Script>());
+        // A held key is let go when Stop lands, at any length.
+        let mut app = lengthened(
+            "hold(\"W\", 10000)\nwhile True:\n    pass\n",
+            RunLength::Unlimited,
+        );
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 100);
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
+        app.world_mut()
+            .resource_mut::<RunControl>()
+            .request(Request::Stop);
+        frame_at(&mut app, 200);
+        assert!(!app.world().contains_resource::<Script>());
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyW)
+        );
     }
 
     #[test]
@@ -7202,7 +7316,7 @@ mod tests {
         }
         let status = app.world().resource::<RunStatus>();
         let flow = status.flow().unwrap();
-        assert_eq!(flow.loops(), [(2, 1, 2)]);
+        assert_eq!(flow.loops(), [(2, 1, Some(2))]);
         assert_eq!(flow.branch(), Some((4, true)));
         assert_eq!(flow.variables(), ["n: int = 1"]);
         assert!(
@@ -7632,7 +7746,10 @@ mod tests {
         frame_at(&mut app, 3);
         let status = app.world().resource::<RunStatus>();
         assert_eq!(status.phase(), Phase::Paused);
-        assert_eq!(status.flow().unwrap().loops(), [(1, 1, 100), (2, 1, 100)]);
+        assert_eq!(
+            status.flow().unwrap().loops(),
+            [(1, 1, Some(100)), (2, 1, Some(100))]
+        );
         assert_eq!(status.flow().unwrap().statements(), 2);
 
         app.world_mut()
