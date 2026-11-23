@@ -79,6 +79,7 @@ mod keys;
 mod lighting;
 mod list_cells;
 mod loading;
+mod local_settings;
 mod login;
 mod logs;
 mod map;
@@ -338,6 +339,7 @@ fn seed_official_options(
             (Toggle::PcNames, official.pc_names),
             (Toggle::NpcNames, official.npc_names),
             (Toggle::LookSpring, official.look_spring),
+            (Toggle::CombatMusic, official.combat_music),
         ] {
             if let Some(on) = setting {
                 option_defaults.set(toggle, on);
@@ -441,7 +443,7 @@ pub fn run(
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox);
     init_presentation(&mut app);
-    app.insert_resource(options::OptionsState::new(option_defaults));
+    app.insert_resource(options::OptionsState::new(&option_defaults));
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {

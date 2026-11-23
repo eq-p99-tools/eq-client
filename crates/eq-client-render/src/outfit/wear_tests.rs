@@ -43,7 +43,7 @@ fn submitted_hand_changes_redress_the_avatar_and_paperdoll_in_the_same_zone() {
     }
     world.insert_resource(library);
     world.insert_resource(crate::ViewerSettings::default());
-    world.insert_resource(crate::options::OptionsState::new(default()));
+    world.insert_resource(crate::options::OptionsState::new(&default()));
     world.init_resource::<Wardrobe>();
     world.insert_resource(online);
     let held = |world: &World, figure| {

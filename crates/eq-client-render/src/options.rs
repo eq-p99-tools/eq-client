@@ -29,16 +29,16 @@ pub(crate) struct OptionsState {
 
 impl Default for OptionsState {
     fn default() -> Self {
-        Self::new(Options::default())
+        Self::new(&Options::default())
     }
 }
 
 impl OptionsState {
     /// Options that start from these defaults until a character's own load.
-    pub(crate) fn new(defaults: Options) -> Self {
+    pub(crate) fn new(defaults: &Options) -> Self {
         Self {
-            options: defaults,
-            defaults,
+            options: *defaults,
+            defaults: *defaults,
             store: Store::default(),
             told: None,
             helm: None,
@@ -184,7 +184,7 @@ mod tests {
             .resource_mut::<crate::ViewerSettings>()
             .0
             .settings_directory = Some(directory.to_owned());
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .add_systems(
                 Update,
                 (crate::profile_files::follow, toggle, persist).chain(),
@@ -329,7 +329,7 @@ mod tests {
         let mut options = Options::default();
         options.set(Toggle::Qol(Fix::SkipModifiedFood), false);
         let saved = options.text();
-        app.insert_resource(OptionsState::new(options))
+        app.insert_resource(OptionsState::new(&options))
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .add_systems(Update, tell_session);
         meal_admission(&mut app, 1, false);
@@ -413,7 +413,7 @@ mod tests {
         use eq_client_core::{Capability, ClientCommand};
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, (toggle, tell_session).chain());
         let mut online = OnlineState::new(true);
@@ -455,7 +455,7 @@ mod tests {
     fn a_setting_for_what_the_session_does_not_offer_stays_as_it_is() {
         use eq_client_core::{Capability, WorldEvent, qol::Fix};
         let mut app = crate::testing::app();
-        app.insert_resource(OptionsState::new(Options::default()))
+        app.insert_resource(OptionsState::new(&Options::default()))
             .add_systems(Update, toggle);
         // A session without meals eats nothing on its own, so the
         // food setting is greyed out there.

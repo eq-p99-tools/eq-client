@@ -1169,6 +1169,9 @@ pub struct OfficialOptions {
     /// Whether the first-person view springs back level: `LookSpring` in
     /// `[Options]` (Titanium 0x4af32c).
     pub look_spring: Option<bool>,
+    /// Whether combat music plays: `CombatMusic` in `[Defaults]`, which the
+    /// official `/combatmusic` saves (read R49-22c, 0x4689a2).
+    pub combat_music: Option<bool>,
 }
 
 fn options_from_ini(text: &str) -> OfficialOptions {
@@ -1196,6 +1199,7 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         mouse_sensitivity: ini_value(text, "Options", "MouseSensitivity")
             .and_then(|v| v.trim().parse().ok()),
         look_spring: flag("Options", "LookSpring"),
+        combat_music: flag("Defaults", "CombatMusic"),
     }
 }
 
@@ -2053,6 +2057,7 @@ LookSpring=1
                 max_fps: Some(100),
                 mouse_sensitivity: Some(4),
                 look_spring: Some(true),
+                combat_music: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
