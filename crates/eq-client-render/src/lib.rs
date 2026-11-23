@@ -88,6 +88,7 @@ mod login;
 mod logs;
 mod map;
 mod marquee;
+mod motd;
 mod motion;
 mod names;
 mod navigation;
