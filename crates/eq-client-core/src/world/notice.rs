@@ -166,10 +166,16 @@ impl Notice {
     pub const fn message_type(&self) -> Option<u32> {
         match self {
             Self::ServerString { message_type, .. } => *message_type,
+            // The program prints the song stop's line in colour 0x108.
+            Self::SongStopped { .. } => Some(SONG_STOP_COLOUR),
             _ => None,
         }
     }
 }
+
+/// The colour the program prints a song stop's line in (0x40f06d, read
+/// R49-21).
+const SONG_STOP_COLOUR: u32 = 0x108;
 
 /// Something to tell the player.
 #[derive(Clone, Debug, PartialEq)]
@@ -319,6 +325,30 @@ pub enum Notice {
         /// The official client's string for it, in `eqstr_us.txt`.
         string_id: Option<u32>,
     },
+    /// A poison was not put on, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    ApplyPoisonRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
+    /// A poison started going on: the player sat, and the session sends it
+    /// when the program's wait ends (read R49-1).
+    PoisonStarted {
+        /// The program's line for it, in `eqstr_us.txt` (0x305e).
+        string_id: u32,
+    },
+    /// A posture change stopped a poison before it was sent (read R49-1 d).
+    PoisonInterrupted {
+        /// The program's line for it, in `eqstr_us.txt` (0x30d1).
+        string_id: u32,
+    },
+    /// The server's answer to a poison put on: whether it took.
+    PoisonAnswered {
+        /// Whether it took.
+        applied: bool,
+    },
     /// A command to the pet was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     PetRefused {
@@ -335,7 +365,32 @@ pub enum Notice {
         value: u32,
     },
     /// A training request was not sent, and why.
-    TrainingRefused(String),
+    TrainingRefused {
+        /// This library's words for it.
+        reason: String,
+        /// The program's own line, where the session names one.
+        string_id: Option<u32>,
+        /// What that line names, in order. For the `EQMac` program's
+        /// mastered-language line (0x327e), the language's number.
+        arguments: Vec<String>,
+        /// Whether the world names the common tongue by its alternate name,
+        /// for a line that names a language; None until the world says.
+        common_alternate: Option<bool>,
+    },
+    /// A language practice the `EQMac` program resolves at once (read
+    /// 6.597): its line 0x2f22 for the language's first point, else 0x2f23,
+    /// naming the guildmaster and the language.
+    LanguagePracticed {
+        /// The guildmaster's name.
+        trainer: String,
+        /// The language's number.
+        language: u8,
+        /// Whether this was the language's first point.
+        first: bool,
+        /// Whether the world names the common tongue by its alternate name;
+        /// None until the world says.
+        common_alternate: Option<bool>,
+    },
     /// A training request or projection from the current admission.
     TrainingPractice(crate::training::PracticeUpdate),
     /// An answer to a resurrection was not sent, and why.
@@ -388,6 +443,15 @@ pub enum Notice {
     WhoList(crate::who::WhoList),
     /// Submission or an observed outcome of an explicit buff cancellation.
     BuffCancellation(crate::buffs::cancel::Update),
+    /// A Bard's song stopped under the Titanium program's rules, with the
+    /// line the program prints at the stop (0x40f06d, read R49-21), in its
+    /// colour 0x108. The host hides it where the Bard songs filter does.
+    SongStopped {
+        /// The song's spell.
+        spell_id: u32,
+        /// The program's line, in `eqstr_us.txt`.
+        string_id: u32,
+    },
     /// A manual song stop whose server outcome is unknown.
     SongStopUnconfirmed {
         /// Whether the worker released a local casting hold.
