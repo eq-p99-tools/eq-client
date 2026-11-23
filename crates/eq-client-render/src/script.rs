@@ -60,6 +60,17 @@ use bevy::window::PrimaryWindow;
 use crate::keys::Act;
 use parse::{MAX_STEPS, MAX_WAIT, MoveCommand};
 
+/// Why a scripted walk stopped where the headroom test refused its move.
+const HEADROOM_REFUSED: &str =
+    "walk refused: too little headroom over the floor ahead to stand there";
+
+/// Why a scripted walk stops now, whatever its route says: the headroom
+/// test refused the latest move, which the walker would only push again
+/// (checklist 6.504).
+fn walk_refusal(controls: &super::motion::Controls) -> Option<&'static str> {
+    controls.headroom_refused.then_some(HEADROOM_REFUSED)
+}
+
 /// The command the steps that move toward something hold: forward the way
 /// the camera looks, which they turn toward their aim.
 const FORWARD: Act = Act::CameraForward;
@@ -1849,6 +1860,14 @@ pub(super) fn drive(
                         );
                     }
                 };
+                // A move the headroom test refused is undone each frame
+                // the walker pushes it, so the walk stops at the first one
+                // (checklist 6.504).
+                if let Some(reason) = walk_refusal(&observed.4) {
+                    log_end(&online);
+                    script.stop(&mut keys, &mut mouse, reason);
+                    return;
+                }
                 let (arrived, out_of_time) = match step {
                     RouteStep::Unreachable => {
                         log_end(&online);
@@ -5090,6 +5109,14 @@ mod tests {
             }
         }
         assert_eq!(rerouted_at, Some(frame * 5));
+    }
+
+    #[test]
+    fn a_walk_stops_at_a_move_the_headroom_test_refused() {
+        let mut controls = super::super::motion::Controls::default();
+        assert_eq!(walk_refusal(&controls), None);
+        controls.headroom_refused = true;
+        assert_eq!(walk_refusal(&controls), Some(HEADROOM_REFUSED));
     }
 
     #[test]

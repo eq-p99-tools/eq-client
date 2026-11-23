@@ -114,6 +114,10 @@ pub(super) struct Controls {
     shoreline: shoreline::Control,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
+    /// Whether the generation's headroom test refused the latest move of
+    /// the player's own (checklist 6.496): a scripted walk stops on it
+    /// rather than push into the same ceiling each frame (6.504).
+    pub headroom_refused: bool,
     /// When a jump was pressed since the last sample; only where falls are simulated.
     pub jump: Option<Instant>,
     /// When the latest jump started; it outlasts a reset, so a new
@@ -268,6 +272,7 @@ impl Default for Controls {
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
             refused: None,
+            headroom_refused: false,
             jump: None,
             last_jump: None,
             endurance_spent: None,
@@ -2553,6 +2558,7 @@ pub(super) fn input(
                 on_mount(online.world(), spells.as_deref()),
             ),
         );
+    controls.headroom_refused = refused;
     let (landing, jumped) = if refused {
         controls.airborne.clone_from(&previous_airborne);
         mode = MovementMode::Forward;
@@ -7531,10 +7537,13 @@ pub(super) mod tests {
                     moved.push(proposal.position);
                 }
             }
-            let airborne = app.world().resource::<Controls>().airborne.clone();
-            (moved, airborne)
+            let controls = app.world().resource::<Controls>();
+            let refused = controls.headroom_refused;
+            (moved, (controls.airborne.clone(), refused))
         };
-        let (moved, airborne) = walk(7.0);
+        let (moved, (airborne, refused)) = walk(7.0);
+        // A scripted walk stops on this (6.504).
+        assert!(refused);
         // No move away from the start; the airborne state is the frame's
         // start: still on the ground, no speed up or down.
         assert!(
@@ -7547,7 +7556,8 @@ pub(super) mod tests {
         assert!(airborne.velocity().abs() < f32::EPSILON);
         assert!(airborne.take_landing().is_none());
         // With room enough the same walk goes.
-        let (moved, _) = walk(8.1);
+        let (moved, (_, refused)) = walk(8.1);
+        assert!(!refused);
         assert!(moved.iter().any(|at| at.x < -0.01), "{moved:?}");
     }
 

@@ -105,8 +105,8 @@ pub fn zone_collision(zone: &ZoneAsset) -> Option<eq_client_core::movement::Coll
 
 /// The zone's navigation mesh as zone entry builds it (the same triangles,
 /// world and settings, so one cache serves both), read from or kept in the
-/// cache under `settings_directory` when one is given. For the select spot
-/// tools; nothing opens a window.
+/// cache under `settings_directory` when one is given, for `client`'s
+/// headroom test. For the select spot tools; nothing opens a window.
 ///
 /// # Errors
 /// Says why no mesh could be built.
@@ -114,6 +114,7 @@ pub fn select_spot_mesh(
     settings_directory: Option<&std::path::Path>,
     zone_name: &str,
     zone: &ZoneAsset,
+    client: eq_client_assets::ui::InstalledClient,
 ) -> Result<NavMesh, String> {
     let triangles = collision_triangles(zone);
     let world = collision_world(zone, triangles.clone(), None);
@@ -122,7 +123,7 @@ pub fn select_spot_mesh(
         zone_name,
         &triangles,
         world.as_ref(),
-        &eq_client_core::movement::navmesh::Settings::sized(crate::zone_navmesh::walker_sizes()),
+        &crate::zone_navmesh::settings(client, eq_client_assets::scale::ZoneScale::default()),
         eq_client_core::movement::navmesh::build_threads(),
         &std::sync::atomic::AtomicBool::new(false),
     )

@@ -850,6 +850,7 @@ fn setup_scene(
             // The offline viewer stands its model at the mesh's own size,
             // with no spawn to size it by.
             scale: 1.0,
+            zone_scale: eq_client_assets::scale::ZoneScale::default(),
         }
         .prepare(settings.0.navmesh, false),
         settings.0.terrain_only,
@@ -1727,6 +1728,7 @@ mod tests {
                         },
                         native_head: None,
                         scale: 1.0,
+                        zone_scale: eq_client_assets::scale::ZoneScale::default(),
                     }
                     .prepare(false, false),
                     true,
