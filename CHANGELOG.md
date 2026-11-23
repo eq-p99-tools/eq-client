@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Buying from a merchant follows the Titanium program's order and lines
+  (read R49-35 a, checklist 6.627), for the one-click buy and the quantity
+  window alike. A pending trade, a ware the merchant no longer lists and a
+  quantity below one pass silently, as the program's do. Something on the
+  cursor is refused with the program's line 0x2164 (colour 0x114) before
+  the coins are counted, and coins short of one of the ware with line
+  0x2f1c (colour 0x111), both from the installation, in this client's
+  words where it lacks them. There is still no room check: the program has
+  none, and the server says when the item doesn't fit. The program's
+  +0x2a8 guard is unread and not built. Selling and the Mac-era buy are
+  unchanged.
 - A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
   - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.
   - **Each refresh of the player's own gem** sends the song stop, then presses the next gem, cycling. Nothing else moves the melody (no timer, no retry), so with no refresh after a refused press it stalls ([I]; read R49-48 f is filed for the program's index on a refusal).
