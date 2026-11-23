@@ -211,6 +211,7 @@ pub(super) fn schedule(app: &mut App) {
                 who::zone_list,
                 whereabouts::answers,
                 crate::motd::answers,
+                crate::reports::say,
                 crate::fastdrop::answers,
                 crate::slash::answers,
                 crate::slash::assist_named,
@@ -273,6 +274,7 @@ pub(super) fn schedule(app: &mut App) {
                 skinned::slash,
             ),
             hud::actions,
+            hud::melody::melody.after(hud::actions),
             (
                 hud::hotbar::update,
                 crate::socials::update
@@ -369,6 +371,7 @@ pub(super) fn schedule(app: &mut App) {
                         training::window,
                         tracking::window,
                         tracking::say_rangers_only,
+                        pet::say_pet_target,
                     ),
                     (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,
