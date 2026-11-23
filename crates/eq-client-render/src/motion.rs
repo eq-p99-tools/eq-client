@@ -165,6 +165,8 @@ pub(super) struct Controls {
     stun_active: bool,
     /// When the last jump in water began its up stroke (read R39 B).
     water_jump: Option<Instant>,
+    /// When the next surface hop may come (actor +0x6c, read R33b 3).
+    surface_hop: Option<Instant>,
     /// The wet body's velocity between samples (0x4bfe0f; reads R33 and
     /// R41). A correction, placement or admission starts it at rest.
     wet: eq_client_core::movement::water::WetVelocity,
@@ -288,6 +290,7 @@ impl Default for Controls {
             stunned: false,
             stun_active: false,
             water_jump: None,
+            surface_hop: None,
             wet: eq_client_core::movement::water::WetVelocity::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
@@ -1303,6 +1306,38 @@ fn sample_keys(keys: &ButtonInput<KeyCode>, map: &KeyMap) -> ButtonInput<KeyCode
 /// How long a jump in water strokes up (0x4acbac, read R39 B).
 const WATER_JUMP: Duration = Duration::from_millis(500);
 
+/// How often a swimmer looking up may hop (0x48a793 re-arms actor +0x6c
+/// 1500 ms on, read R33b 3).
+const SURFACE_HOP_INTERVAL: Duration = Duration::from_millis(1500);
+
+/// The hop's rise: actor +0xc0, the jump strength, times 3.0 ([0x640e24],
+/// read R33b 3), in units a tick. That +0xc0 is the 1.65 the jump scales
+/// by 1.35 (`eq_client_assets::falls`) is inferred (checklist 6.483c).
+const SURFACE_HOP_RISE: f32 = 1.65 * 3.0;
+
+/// The hop's push along the heading, in units a tick (0x489c83(0.5), read
+/// R33b 3).
+const SURFACE_HOP_PUSH: f32 = 0.5;
+
+/// Seconds in one program tick: velocities a tick to units a second.
+const PROGRAM_TICK_SECONDS: f32 = 0.05;
+
+/// Whether the point the program's hop test samples is dry: ahead of the
+/// origin along the heading by the origin's height above the soles, one
+/// unit below the origin (0x48a026, read R33b 3). Dry is no mapped water
+/// or lava there.
+fn surface_hop_ground(
+    world: &eq_client_core::movement::CollisionWorld,
+    feet: Vec3,
+    feet_offset: f32,
+    facing: Vec3,
+) -> bool {
+    let origin = feet + Vec3::Y * feet_offset;
+    world
+        .liquid_at(origin + facing * feet_offset - Vec3::Y)
+        .is_none()
+}
+
 /// A swim stroke along `direction`, pitched by the character's look pitch,
 /// and whether it is a forward stroke looking up (the shoreline boost's
 /// cue). The program keeps the full horizontal input and adds sin(pitch) x
@@ -2082,16 +2117,46 @@ pub(super) fn input(
             }
         }
         controls.wet.clamp(caps);
-        let (across, up) = controls.wet.advance(
-            swim.set,
-            eq_client_core::movement::water::WetInput {
-                horizontal: [horizontal.x, horizontal.z],
-                vertical,
-                jump,
-            },
-            span,
-        );
-        let mut travel = Vec3::new(across[0], up, across[1]);
+        // A swimmer stroking with the look up hops toward dry ground just
+        // ahead, at most once in 1500 ms: the jump strength times 3 added
+        // to the rise and half a unit a tick along the heading, before the
+        // frame's step (0x4a1d74 to 0x48a793, read R33b 3). The test runs
+        // on the stroke's pitch; the program reads its input record's
+        // pitch (+0x2c), taken as the same (inferred, checklist 6.483c).
+        if vertical > 0.0 && controls.surface_hop.is_none_or(|ready| now >= ready) {
+            controls.surface_hop = Some(now + SURFACE_HOP_INTERVAL);
+            let heading = eq_client_core::render_heading(current_heading);
+            let facing = Vec3::new(heading.sin(), 0.0, heading.cos());
+            if surface_hop_ground(world, feet, body.feet_offset, facing) {
+                let ([x, z], y) = controls.wet.units_per_second();
+                let push = facing * SURFACE_HOP_PUSH / PROGRAM_TICK_SECONDS;
+                let lift = SURFACE_HOP_RISE * controls.jump_factor / PROGRAM_TICK_SECONDS;
+                controls.wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
+                    [x + push.x, z + push.z],
+                    y + lift,
+                );
+            }
+        }
+        let input = eq_client_core::movement::water::WetInput {
+            horizontal: [horizontal.x, horizontal.z],
+            vertical,
+            jump,
+        };
+        // The program steps the wet set only while the origin is in the
+        // water and the dry one from the next frame (read R33): the sample
+        // ends at the frame whose travel takes the origin out, and the fall
+        // that follows carries the velocity it left with.
+        let mut travel = Vec3::ZERO;
+        let mut left = span;
+        while left > 0.0 {
+            let piece = left.min(eq_client_core::movement::water::WET_FRAME_SECONDS);
+            let (across, up) = controls.wet.advance(swim.set, input, piece);
+            travel += Vec3::new(across[0], up, across[1]);
+            left -= piece;
+            if !world.origin_in_liquid(feet + travel, body.height) {
+                break;
+            }
+        }
         if let Some(step) = follow_step {
             // Stop within one frame of reach, as on land.
             let reach = step.beyond + caps.horizontal / 60.0;
@@ -6759,15 +6824,22 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_swimmer_pops_out_of_the_water_over_a_rim_the_walk_would_climb() {
-        // Temple of Life's pool (attended, 11-23): forward with the view
-        // pitched up at a rim a little above the water. Each rise takes the
-        // origin out of the water and the next sample is a fall; a fall
-        // whose soles are still wet passes over what the walk climbs
-        // (origin + 1.25 for this body) and lands on the rim, inside the
-        // session's bound. A rim past that keeps the swimmer in the pool.
-        for (rim, climbs) in [(0.0, true), (1.0, true), (1.25, true), (2.5, false)] {
-            let seen = swim_at_rim(rim, Some(WET_SWIMMER), 0.4, 25);
+    fn a_swimmer_hops_out_of_the_water_onto_a_rim_above_it() {
+        // Temple of Life's pool (attended and local looks, 11-23): forward
+        // with the view pitched up at a rim 3 to 3.3 above the water. Dry
+        // ground just ahead gives the program's surface hop (read R33b 3),
+        // the origin leaves the water on that frame and the fall carries
+        // the rise on, passing over what the walk climbs (origin + 1.25
+        // for this body) onto the rim, inside the session's bound. A rim
+        // higher than the hop reaches keeps the swimmer in the pool.
+        for (rim, climbs) in [
+            (0.0, true),
+            (1.25, true),
+            (2.5, true),
+            (3.3, true),
+            (4.5, false),
+        ] {
+            let seen = swim_at_rim(rim, Some(WET_SWIMMER), 0.4, 40);
             let out = seen
                 .iter()
                 .find(|(_, at, _)| at.x > 0.0)
@@ -6778,6 +6850,26 @@ pub(super) mod tests {
                 assert!((at.y - rim).abs() < 0.01, "rim {rim}: {at}");
             }
         }
+    }
+
+    #[test]
+    fn a_swimmer_looking_up_away_from_dry_ground_does_not_hop() {
+        // Open water ahead (the rim behind): no hop, so the origin rises
+        // only by the stroke, a little above the surface.
+        let seen = swim_from(
+            rim_pool(3.0),
+            Vec3::new(-1.0, -3.9, 0.0),
+            256.0,
+            (Some(WET_SWIMMER), 0.4),
+            30,
+        )
+        .unwrap();
+        let highest = seen
+            .iter()
+            .map(|(_, at, _)| at.y + 3.75)
+            .fold(f32::MIN, f32::max);
+        assert!(seen.iter().all(|(_, at, _)| at.x < 0.0), "{seen:?}");
+        assert!(highest < 1.0, "origin rose to {highest}: {seen:?}");
     }
 
     /// The live look's three Temple of Life spots (North Qeynos), swum
@@ -6804,10 +6896,10 @@ pub(super) mod tests {
             .ok()
             .and_then(|z| z.parse().ok())
             .unwrap_or(-2.0);
-        let pitches: Vec<f32> = std::env::var("RIM_PITCHES")
-            .ok()
-            .map(|list| list.split(',').filter_map(|p| p.parse().ok()).collect())
-            .unwrap_or_else(|| vec![0.0, 0.3, 0.45, 0.55]);
+        let pitches: Vec<f32> = std::env::var("RIM_PITCHES").ok().map_or_else(
+            || vec![0.0, 0.3, 0.45, 0.55],
+            |list| list.split(',').filter_map(|p| p.parse().ok()).collect(),
+        );
         let profile = world();
         for (name, x, y, heading) in [
             ("A", -306.0_f32, -191.0_f32, 128.0_f32),
