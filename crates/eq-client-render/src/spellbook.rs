@@ -160,6 +160,29 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
         Some(self.mechanics(spell)?.effects.map(|slot| slot.id))
     }
 
+    fn placement_effects(
+        &self,
+        spell: u32,
+    ) -> Option<[eq_client_core::buffs::placement::Effect; 12]> {
+        Some(
+            self.mechanics(spell)?
+                .effects
+                .map(|slot| eq_client_core::buffs::placement::Effect {
+                    id: slot.id,
+                    base: slot.base,
+                    formula: slot.formula,
+                    max: slot.maximum,
+                }),
+        )
+    }
+
+    fn bard_level(&self, spell: u32) -> Option<bool> {
+        const BARD: u32 = 8;
+        // The class level the program tests (0x44e755(8)): 255 for none.
+        self.installed_scribe_level(spell, BARD)
+            .map(|level| level != u8::MAX)
+    }
+
     fn target_type(&self, spell: u32) -> Option<u32> {
         self.spell(spell)?.target_type
     }

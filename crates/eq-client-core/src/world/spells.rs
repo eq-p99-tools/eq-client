@@ -155,7 +155,12 @@ impl ClientWorld {
     }
 
     /// Every buff slot at once, as at admission.
-    pub(super) fn buff_snapshot(&mut self, buffs: &[Option<Buff>], now: Instant) {
+    pub(super) fn buff_snapshot(
+        &mut self,
+        buffs: &[Option<Buff>],
+        now: Instant,
+        changes: &mut Changes,
+    ) {
         self.buffs.replace_snapshot(
             buffs
                 .iter()
@@ -164,6 +169,18 @@ impl ClientWorld {
                 .collect(),
             u32::try_from(buffs.len()).unwrap_or(u32::MAX),
             now,
+        );
+        self.buff_disagreements(changes);
+    }
+
+    /// Reports each removal the slot finder predicted that the server's
+    /// word contradicted (6.612 T1).
+    fn buff_disagreements(&mut self, changes: &mut Changes) {
+        changes.notices.extend(
+            self.buffs
+                .take_disagreements()
+                .into_iter()
+                .map(Notice::BuffPredictionContradicted),
         );
     }
 
@@ -177,6 +194,7 @@ impl ClientWorld {
             if self.buffs.apply(update.clone(), now) {
                 changes.notices.push(Notice::BuffSlotMismatch);
             }
+            self.buff_disagreements(changes);
         } else {
             changes.ignored = true;
         }
@@ -216,7 +234,6 @@ impl ClientWorld {
     fn landing(&self, effect: &SpellEffect, spells: &dyn SpellCatalog) -> Landing {
         let spell = u32::from(effect.spell_id);
         let own = effect.caster_id == effect.target_id;
-        let held: Vec<u32> = self.buffs.spells().filter(|held| *held != spell).collect();
         let new = spells.effect_ids(spell);
         // Step 2's blocker test, only partly read: any held spell with
         // effect 148 leaves the landing unplaced. Native 0x40ea07 includes
@@ -239,18 +256,6 @@ impl ClientWorld {
         } else {
             blocker
         };
-        // Step 4 is not ported: a held spell that shares an effect with the
-        // landing at a position both compare (before an effect 254), or
-        // whose effects are not known, could be the one it replaces.
-        let conflict = held.iter().any(|held| {
-            let (Some(new), Some(old)) = (new, spells.effect_ids(*held)) else {
-                return true;
-            };
-            new.iter()
-                .zip(old.iter())
-                .take_while(|(new, old)| **new != 254 && **old != 254)
-                .any(|(new, old)| new == old)
-        });
         // R20 (d): caster spawn +0x24c, plus effect 0x110's total for a Bard
         // song, which this client does not know: a Bard caster's is left
         // unknown.
@@ -259,12 +264,25 @@ impl ClientWorld {
             .filter(|caster| caster.state.class.is_some_and(|class| class != 8))
             .map(|caster| caster.state.level)
             .filter(|level| *level != 0);
+        // What step 4 compares, from the spell data (read R49-22e); each
+        // held spell's level comes from its record in the tracker.
+        let facts = |id: u32, level: Option<u8>| crate::buffs::placement::Spell {
+            id,
+            band: spells.buff_band(id),
+            bard: spells.bard_level(id),
+            effects: spells.placement_effects(id),
+            level,
+        };
         Landing {
             finder: self.generation().buff_placement(),
             keeps_record: new.map(|ids| ids.iter().any(|id| matches!(id, 0x43 | 0x65 | 0x71))),
-            band: spells.buff_band(spell),
+            spell: facts(spell, caster_level),
+            held: self
+                .buffs
+                .spells()
+                .map(|held| (held, facts(held, None)))
+                .collect(),
             blocker,
-            conflict,
             record_type: spells
                 .target_type(spell)
                 .map(|kind| if own && matches!(kind, 13 | 20) { 4 } else { 2 }),

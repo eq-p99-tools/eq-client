@@ -1914,7 +1914,7 @@ impl ClientWorld {
                 reason,
                 string_id,
             } => self.cast_refused((*session_id, *spell_id), (reason, *string_id), news),
-            WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
+            WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now, news),
             WorldEvent::Buff(update) => {
                 if match self.generation {
                     crate::GameDialect::Titanium => true,
