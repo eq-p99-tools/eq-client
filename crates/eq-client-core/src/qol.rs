@@ -143,6 +143,12 @@ pub enum Fix {
     /// takes only `/duel` (read R49-6a). Adam's choice (11-23), on by
     /// default; off, the client behaves as the program does.
     DuelAnswerCard,
+    /// Lets the Use key use the nearest door, ground item or world container
+    /// within reach, as this client did before, wherever the camera points.
+    /// The Titanium program's key casts the ray through the centre of the 3D
+    /// view and uses only what it hits: the first spawn, else a door (read
+    /// R49-19). Off by default; the reach checks are the same either way.
+    UsePicksNearest,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
@@ -181,7 +187,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 35] = [
+    pub const ALL: [Self; 36] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -208,6 +214,7 @@ impl Fix {
         Self::ExitAtOnce,
         Self::ZoneAnywhere,
         Self::DuelAnswerCard,
+        Self::UsePicksNearest,
         Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
@@ -252,6 +259,7 @@ impl Fix {
             Self::ExitAtOnce => "exit_at_once",
             Self::ZoneAnywhere => "zone_anywhere",
             Self::DuelAnswerCard => "duel_answer_card",
+            Self::UsePicksNearest => "use_picks_nearest",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -300,6 +308,7 @@ impl Fix {
             Self::ExitAtOnce => "Exit at Once",
             Self::ZoneAnywhere => "Zone Anywhere",
             Self::DuelAnswerCard => "Duel Answer Card",
+            Self::UsePicksNearest => "Use Picks Nearest",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -397,6 +406,9 @@ impl Fix {
             Self::DuelAnswerCard => {
                 "Ask Yes or No when another player challenges you to a duel: Yes accepts as /duel does, and No closes the card and sends nothing. The original client has no card and takes only /duel; turn this off to play it that way."
             }
+            Self::UsePicksNearest => {
+                "Let the Use key use the nearest door, item on the ground or world container within reach, wherever you face. The original client uses only what lies at the centre of your view; turn this off to play it that way."
+            }
             Self::AnswerListPolls => {
                 "Answer supported P99 list presence polls after a local delay. This does not join a list or answer numeric challenges."
             }
@@ -463,7 +475,10 @@ impl Fix {
             | Self::WindowsApart
             // Yes sends what `/duel` at the challenger sends, at the
             // player's own press.
-            | Self::DuelAnswerCard => Kind::Shows,
+            | Self::DuelAnswerCard
+            // The player's own press uses a door or object the key reaches
+            // through the same reach checks, only not the one in view.
+            | Self::UsePicksNearest => Kind::Shows,
         }
     }
 
@@ -512,6 +527,7 @@ impl Fix {
             | Self::HotbarItemGuard
             | Self::BuffTimeLeft
             | Self::WeaponRatio
+            | Self::UsePicksNearest
             | Self::WindowsApart => None,
         }
     }
@@ -557,6 +573,8 @@ impl Fix {
             | Self::JesusMode
             | Self::ExitAtOnce
             | Self::ZoneAnywhere
+            // The program's centre ray unless the player asks (6.609).
+            | Self::UsePicksNearest
             | Self::FloatingCombatText => Availability::Setting { default: false },
             Self::MapEverywhere
             | Self::FrameCap
@@ -716,6 +734,7 @@ mod tests {
                 Fix::ExitAtOnce,
                 Fix::ZoneAnywhere,
                 Fix::DuelAnswerCard,
+                Fix::UsePicksNearest,
             ]
         );
         // A fix that is always on stays on whatever is asked.
@@ -743,6 +762,7 @@ mod tests {
             Fix::JesusMode,
             Fix::ExitAtOnce,
             Fix::ZoneAnywhere,
+            Fix::UsePicksNearest,
         ] {
             assert!(!settings.on(fix), "{fix:?}");
         }

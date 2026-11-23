@@ -1,6 +1,31 @@
-//! Use selects what is nearest within reach: a door, an item on the ground, or a
+//! The Use key. On Titanium (and RoF2, inferred) it casts the program's ray
+//! through the centre of the 3D view (read R49-19, checklist 6.609): the
+//! scene's pick does that ([`crate::target::input`]). Here is the older
+//! nearest rule, which EQMac keeps until its path is read, and which the
+//! quality-of-life setting "Use Picks Nearest" keeps for anyone who wants
+//! it: whatever is nearest within reach, a door, an item on the ground, or a
 //! world container such as a forge.
 use bevy::prelude::*;
+
+/// Whether the Use key casts the centre ray rather than taking the nearest
+/// door or object. EQMac keeps the nearest rule until its key is read (U6).
+pub(super) fn by_ray(
+    state: &super::online::OnlineState,
+    qol: &eq_client_core::qol::Settings,
+) -> bool {
+    state.world().generation() != eq_client_core::GameDialect::EqMac
+        && !qol.on(eq_client_core::qol::Fix::UsePicksNearest)
+}
+
+/// The options' quality-of-life choices, or their defaults where no options
+/// are kept (a hand-built app).
+pub(super) fn qol(
+    options: Option<&crate::options::OptionsState>,
+) -> eq_client_core::qol::Settings {
+    options.map_or_else(eq_client_core::qol::Settings::default, |options| {
+        options.options.qol
+    })
+}
 
 /// What the Use action would use now.
 #[derive(Clone, Debug, PartialEq)]
@@ -36,15 +61,17 @@ pub(super) fn nearest(state: &super::online::OnlineState) -> Option<Use> {
     }
 }
 
-/// One explicit key press queues one request; no state is predicted.
+/// One explicit key press queues one request; no state is predicted. Where
+/// the key casts the centre ray, the scene's pick answers it instead.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn input(
     keys: super::keys::Keys,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<crate::outbox::Outbox>,
     mut state: ResMut<super::online::OnlineState>,
+    options: Option<Res<crate::options::OptionsState>>,
 ) {
-    if !keys.pressed(super::keys::Act::Use) {
+    if !keys.pressed(super::keys::Act::Use) || by_ray(&state, &qol(options.as_deref())) {
         return;
     }
     match nearest(&state) {
