@@ -7,13 +7,16 @@
 //! The emitters follow the Titanium program's loader (read R49-7 a, first
 //! pass; recording checklist 6.503): each record is one emitter or a day
 //! and a night one, with its own sound, delay and volume. A music record's
-//! track is its id negated (engine follow-up to R49-7, section 2, at
-//! 0x44b502); how the program chooses among regions, fades and switches
+//! sequence is its id, counted from 0 [I: 0x44b502 negates the sound
+//! number the loader stored for music (engine follow-up to R49-7, section
+//! 2), and the installation's music ids run from 0 within the sequence
+//! count]; how the program chooses among regions, fades and switches
 //! music is not read (the follow-up reads only the 20000 clamp and the
 //! 1500 it passes to the music start); every
 //! inferred rule is a named constant or function here, marked \[I\]. The instruments are the
-//! player's sound font, not the program's own (a stated departure: an
-//! installation ships none).
+//! SoundFont the player names (a stated departure: how the program plays
+//! its music is unread, and the synthesizer here refuses the `.sf2` files
+//! an installation may ship as they stand).
 //!
 //! Emitters and music keep their own voices ([`EMITTER_VOICES`]) apart from
 //! the cues [`super::sounds`] plays, so a cue never waits for an emitter
@@ -276,10 +279,11 @@ fn distance(emitter: &Emitter, at: [f32; 3]) -> f32 {
 }
 
 /// The music region the player stands in, nearest centre first, and the
-/// sequence it plays: the track is the day or night id negated (engine
-/// follow-up to R49-7, section 2, 0x44b502), and the sequence index that
-/// track - 1 [I: the step from a track to the file's sequence is unread];
-/// None where no region holds the player or its track names no sequence.
+/// sequence it plays: the day or night id, counted from 0 [I: 0x44b502
+/// negates the number the loader stored (engine follow-up to R49-7,
+/// section 2), and the installation's ids run from 0 within the file's
+/// sequence count]; None where no region holds the player or its id names
+/// no sequence.
 /// Which region wins where they overlap is this client's choice [I].
 fn choose_music(
     emitters: &[Emitter],
@@ -295,10 +299,8 @@ fn choose_music(
         .filter(|(_, emitter, distance)| *distance < emitter.radius)
         .min_by(|a, b| a.2.total_cmp(&b.2))
         .and_then(|(index, emitter, _)| {
-            let track = emitter.id(night).checked_neg()?;
-            usize::try_from(track)
+            usize::try_from(emitter.id(night))
                 .ok()
-                .and_then(|id| id.checked_sub(1))
                 .filter(|sequence| *sequence < sequences)
                 .map(|sequence| (index, sequence))
         })
@@ -518,7 +520,7 @@ pub(super) fn update(
     for (index, emitter) in loaded.emitters.iter().enumerate() {
         let unplayed = match emitter.kind {
             EmitterKind::Unknown(kind) => Some(format!("kind {kind}")),
-            kind if kind.is_music() && emitter.ids.iter().any(|id| *id >= 0) => {
+            kind if kind.is_music() && emitter.ids.iter().any(|id| *id < 0) => {
                 Some(format!("music id {:?}", emitter.ids))
             }
             _ => None,
@@ -729,9 +731,9 @@ mod tests {
     #[test]
     fn the_nearest_music_region_holding_the_player_plays_its_hours_sequence() {
         let regions = [
-            emitter([0.0; 3], 1000.0, [-1, -2], 1, 0),
-            emitter([100.0, 0.0, 0.0], 50.0, [-3, -3], 1, 0),
-            emitter([0.0; 3], 10.0, [-1, -1], 2, 0),
+            emitter([0.0; 3], 1000.0, [0, 1], 1, 0),
+            emitter([100.0, 0.0, 0.0], 50.0, [2, 2], 1, 0),
+            emitter([0.0; 3], 10.0, [0, 0], 2, 0),
         ];
         assert_eq!(choose_music(&regions, [0.0; 3], false, 3), Some((0, 0)));
         assert_eq!(choose_music(&regions, [0.0; 3], true, 3), Some((0, 1)));
@@ -739,14 +741,15 @@ mod tests {
             choose_music(&regions, [90.0, 0.0, 0.0], false, 3),
             Some((1, 2))
         );
-        // A sequence the file lacks, or an id of 0 or more, plays nothing.
+        // A sequence the file lacks, or a negative id, plays nothing; id 0
+        // is the file's first sequence.
         assert_eq!(choose_music(&regions, [90.0, 0.0, 0.0], false, 2), None);
-        let none = [emitter([0.0; 3], 100.0, [0, 1], 1, 0)];
+        let none = [emitter([0.0; 3], 100.0, [-1, i32::MIN], 1, 0)];
         assert_eq!(choose_music(&none, [0.0; 3], false, 3), None);
         assert_eq!(choose_music(&none, [0.0; 3], true, 3), None);
-        let lowest = [emitter([0.0; 3], 100.0, [i32::MIN, -1], 1, 0)];
-        assert_eq!(choose_music(&lowest, [0.0; 3], false, 3), None);
-        assert_eq!(choose_music(&lowest, [0.0; 3], true, 3), Some((0, 0)));
+        let past = [emitter([0.0; 3], 100.0, [3, 0], 1, 0)];
+        assert_eq!(choose_music(&past, [0.0; 3], false, 3), None);
+        assert_eq!(choose_music(&past, [0.0; 3], true, 3), Some((0, 0)));
         assert_eq!(choose_music(&regions, [5000.0, 0.0, 0.0], false, 3), None);
     }
 

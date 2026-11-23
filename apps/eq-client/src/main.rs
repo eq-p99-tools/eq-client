@@ -243,8 +243,9 @@ struct Arguments {
     ui_skin: Option<String>,
 
     /// A sound font (`.sf2`) for the zones' music, which the installation
-    /// plays as MIDI sequences; without one music is silent. The
-    /// installation's own instruments are not used (a stated departure).
+    /// plays as MIDI sequences; without one music is silent. Any `.sf2` the
+    /// installation ships is not used: the synthesizer refuses those as they
+    /// stand (a stated departure).
     #[arg(long, env = "EQ_CLIENT_SOUNDFONT")]
     soundfont: Option<PathBuf>,
 

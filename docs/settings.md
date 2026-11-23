@@ -85,10 +85,13 @@ numbers between the two lists (32 to 161) name the installation's numbered
 sounds, and how music regions choose, fade and switch.
 
 Music plays through a synthesizer on a SoundFont (`.sf2`) that you name with
-`--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`. The installation ships no
-SoundFont, so this is a stated departure: the instruments are your file's, not
-the original program's. Without one, or with a file that is missing,
-unreadable or larger than 512 MB, music is silent and the log says why once.
+`--soundfont <file>` or `EQ_CLIENT_SOUNDFONT`, a stated departure: the
+instruments are your file's, and how the original program plays its music is
+unread. An installation may ship `.sf2` files of its own, but this client's
+synthesizer refuses them as they stand, so name another, such as a General
+MIDI SoundFont. Without one, or with a file that is missing, unreadable,
+refused or larger than 512 MB, music is silent and the log says why once.
+A music region plays its zone's sequence by number, counted from 0.
 
 These options are saved for each character, under Options → General where the
 skin has the controls. A character with no choice of their own starts from the
