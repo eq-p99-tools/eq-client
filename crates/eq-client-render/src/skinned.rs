@@ -18,7 +18,7 @@ use tree::{augment_section, text_box};
 mod presentation;
 pub(crate) use presentation::show;
 #[cfg(test)]
-use presentation::{fraction, gauge_text, label_text, raid_text, shown_now};
+use presentation::{fraction, gauge_text, label_text, raid_text, shown_now, vital_sign};
 
 mod bindings;
 pub(crate) use bindings::PET_COMMANDS;
@@ -186,6 +186,10 @@ pub(crate) enum Shows {
     /// The sign after a group member's health, said only while their health
     /// shows.
     MemberPercent(usize),
+    /// The sign after the player's own hit points, mana or endurance in
+    /// percent (the number's `EQType`: 19, 20 or 21), said only while the
+    /// number shows (inferred, 6.529).
+    VitalPercent(u32),
     /// The group window's Follow and Decline buttons (true) or its Invite
     /// and Disband: the skin keeps each pair in the other's places, and the
     /// one for whether an invitation waits shows.
@@ -2174,6 +2178,9 @@ fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
             _ => None,
         };
     }
+    if owner == WindowId::Player {
+        return vital_percent(name);
+    }
     if owner == WindowId::Group {
         return name
             .strip_prefix("GW_HPPercLabel")
@@ -2188,6 +2195,20 @@ fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
         (WindowId::Merchant, "MW_SelectedPriceLabel") => Shows::ChosenPrice,
         _ => return None,
     })
+}
+
+/// The Player window's sign after a percent, by the number it follows. The
+/// names are inferred from the Group window's `GW_HPPercLabel1` to `5`,
+/// until the default skin's Player window is looked at (6.529); a skin
+/// naming its signs otherwise keeps its own text.
+fn vital_percent(name: &str) -> Option<Shows> {
+    let kind = match name {
+        "PW_HPPercLabel" => 19,
+        "PW_ManaPercLabel" => 20,
+        "PW_FatiguePercLabel" | "PW_EndurancePercLabel" | "PW_StaminaPercLabel" => 21,
+        _ => return None,
+    };
+    Some(Shows::VitalPercent(kind))
 }
 
 /// The training window's practice points or carried coin value.
@@ -4616,6 +4637,61 @@ mod tests {
             Some(Shows::MemberPercent(2))
         );
         assert_eq!(window_label(WindowId::Group, "GW_HPPercLabel6"), None);
+    }
+
+    #[test]
+    fn the_player_windows_signs_follow_their_numbers_only() {
+        for (name, kind) in [
+            ("PW_HPPercLabel", 19),
+            ("PW_ManaPercLabel", 20),
+            ("PW_FatiguePercLabel", 21),
+            ("PW_EndurancePercLabel", 21),
+            ("PW_StaminaPercLabel", 21),
+        ] {
+            assert_eq!(
+                window_label(WindowId::Player, name),
+                Some(Shows::VitalPercent(kind)),
+                "{name}"
+            );
+            // Elsewhere the same name keeps its own text.
+            for owner in [WindowId::Group, WindowId::Target, WindowId::Inventory] {
+                assert_eq!(window_label(owner, name), None, "{name} in {owner:?}");
+            }
+        }
+        for near in [
+            "PW_ManaPercLabel2",
+            "PW_ManaPerc",
+            "pw_manapérclabel",
+            "PW_ManaPercLabel ",
+            "GW_HPPercLabel1",
+            "PW_HPNumber",
+        ] {
+            assert_eq!(window_label(WindowId::Player, near), None, "{near}");
+        }
+    }
+
+    #[test]
+    fn a_vital_sign_shows_only_with_its_number() {
+        // Before the player is known, no sign.
+        let state = OnlineState::new(true);
+        for kind in [19, 20, 21] {
+            assert_eq!(vital_sign(state.world(), Some((100, 100)), None, kind), "");
+        }
+        let mut state = OnlineState::new(true);
+        let mut player = testing::player(7);
+        player.hp_percent = Some(40);
+        testing::admit(&mut state, 1, player);
+        testing::resources(&mut state, 50, 25);
+        let world = state.world();
+        // Hit points known: the sign shows at once.
+        assert_eq!(label_text(world, None, None, 19), "40");
+        assert_eq!(vital_sign(world, None, None, 19), "%");
+        // Mana and endurance with no maximum: neither number nor sign.
+        for kind in [20, 21] {
+            assert_eq!(label_text(world, None, None, kind), "");
+            assert_eq!(vital_sign(world, None, None, kind), "");
+            assert_eq!(vital_sign(world, Some((100, 100)), None, kind), "%");
+        }
     }
 
     #[test]

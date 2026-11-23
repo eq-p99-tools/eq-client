@@ -2,6 +2,16 @@
 
 ## Unreleased
 
+- The Player window's "%" signs show only with their numbers (gap 3.9,
+  checklist 6.529). While the mana or endurance estimate has no maximum, the
+  default skin showed its "%" with no number over an empty bar; now the sign
+  hides until the number shows, as the Group window's already does, and the
+  hit point sign follows the same rule. The program always knows its
+  maximum, so what shows until ours is known is our choice (inferred). The
+  sign names (`PW_HPPercLabel`, `PW_ManaPercLabel`, `PW_FatiguePercLabel`,
+  also `Endurance` and `Stamina`) are inferred from the Group window's until
+  the default skin is looked at; a skin naming them otherwise keeps its own
+  text. The estimate itself is unchanged.
 - Read zones in the EQG format newer clients install, for RoF2 later:
   `eq_client_assets::eqg::load_eqg_zone` turns `<zone>.eqg`'s descriptor,
   terrain and model meshes, placements and diffuse textures into the same
