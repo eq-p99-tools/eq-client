@@ -193,7 +193,12 @@ impl SessionWorker {
                         enqueue(&sender, &worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
+                        // The spell table went its own way above. A server
+                        // message the session left unread (eq-network's gap
+                        // log) can hold what another player said in its
+                        // sample, so nothing of it is logged here; the gap
+                        // log's own work keeps it.
+                        ClientEvent::World(WorldEvent::SpellTable(_)) | ClientEvent::Gap(_) => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
@@ -206,13 +211,6 @@ impl SessionWorker {
                         },
                         ClientEvent::Diagnostic(message) => {
                             tracing::info!("{message}");
-                            None
-                        }
-                        // A server message the session left unread
-                        // (eq-network's gap log); the log keeps it, as it
-                        // did the diagnostic that told of it before.
-                        ClientEvent::Gap(gap) => {
-                            tracing::info!("Unread server message: {gap:?}");
                             None
                         }
                         // A reconnect is a fresh login; this viewer asks for

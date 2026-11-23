@@ -14,8 +14,8 @@
   Stock EQEmu says nothing on success, so this client's own line says the
   petition or bug report was sent; feedback gets none. Refusals from the
   session show in chat. Repins eq-network to 66900af (#339), which also
-  brings the duel offer and `/surname` answers (not shown yet), and logs
-  each server message the session could not read.
+  brings the duel offer and `/surname` answers and the session's report of
+  each server message it could not read (none of them shown or logged yet).
 
 - Keep server filters per character and give them to the session (parity
   item 6, recording checklist 6.494). Options gains a Filters page with one
