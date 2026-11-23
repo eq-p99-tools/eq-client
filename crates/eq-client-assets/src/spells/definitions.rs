@@ -60,8 +60,32 @@ pub struct Definition {
     pub buff_band: Option<(bool, bool)>,
     /// Titanium field 98, the target type (program spell +0x180, R20 (a)).
     pub target_type: Option<u32>,
+    /// Titanium field 167 as read, 0 included: a discipline's reuse timer
+    /// slot (program spell +0x1c0, read R48b c). [`Definition::linked_timer`]
+    /// keeps the same field for gem casts, where 0 means none.
+    pub discipline_timer: Option<u32>,
     /// Field 8: what the client says when the spell fades from the player.
     pub fades: Option<String>,
+}
+
+impl Definition {
+    /// Whether the spell is a discipline: Titanium field 168, which the
+    /// program stores at +0x1c4 as nonzero (read R48b c) and also reads as
+    /// a buff band flag. Unread on the Mac-era client.
+    #[must_use]
+    pub fn discipline(&self) -> Option<bool> {
+        self.buff_band.map(|(_, flag)| flag)
+    }
+
+    /// Whether the spell has a duration and targets its caster, the
+    /// discipline that waits for a free discipline slot (spell +0x20, field
+    /// 16, and target type 6; 0x4bb039, read R48b b). Unknown fields leave
+    /// it unknown.
+    #[must_use]
+    pub fn timed_self(&self) -> Option<bool> {
+        let formula = self.mechanics.as_ref()?.duration_formula;
+        Some(formula != 0 && self.target_type? == 6)
+    }
 }
 
 /// How long a cast holds the caster and the spell.
@@ -181,6 +205,7 @@ impl Definitions {
                     flag(short).zip(flag(last))
                 }),
                 target_type: layout.target_type.and_then(number),
+                discipline_timer: layout.discipline_timer.and_then(number),
                 fades: fields
                     .get(8)
                     .map(|text| text.trim())
@@ -372,6 +397,44 @@ mod tests {
         let spells = Definitions::parse(&fields.join("^"), &Layout::EQMAC);
         assert_eq!(spells.get(42).unwrap().buff_band, None);
         assert_eq!(spells.get(42).unwrap().target_type, None);
+    }
+
+    #[test]
+    fn titanium_reads_the_discipline_flag_timer_and_timed_self_test() {
+        let mut fields = vec!["0"; 183];
+        fields[0] = "4585";
+        fields[168] = "1";
+        fields[167] = "0";
+        fields[16] = "3";
+        fields[98] = "6";
+        let spell = |fields: &[&str]| {
+            Definitions::parse(&fields.join("^"), &Layout::TITANIUM)
+                .get(4585)
+                .cloned()
+                .unwrap()
+        };
+        let read = spell(&fields);
+        assert_eq!(read.discipline(), Some(true));
+        // Timer slot 0 is a slot, where the gem cast's linked timer is none.
+        assert_eq!(read.discipline_timer, Some(0));
+        assert_eq!(read.linked_timer, None);
+        // A duration and a self target: true.
+        assert_eq!(read.timed_self(), Some(true));
+        // No duration with a self target: false.
+        fields[16] = "0";
+        assert_eq!(spell(&fields).timed_self(), Some(false));
+        // A duration with another target type: false.
+        fields[16] = "3";
+        fields[98] = "5";
+        assert_eq!(spell(&fields).timed_self(), Some(false));
+        fields[168] = "0";
+        assert_eq!(spell(&fields).discipline(), Some(false));
+        let mac = Definitions::parse(&fields.join("^"), &Layout::EQMAC);
+        let mac = mac.get(4585).unwrap();
+        assert_eq!(
+            (mac.discipline(), mac.discipline_timer, mac.timed_self()),
+            (None, None, None)
+        );
     }
 
     #[test]

@@ -43,7 +43,7 @@ pub use items::ItemCache;
 pub use landings::Landing;
 pub use link::Link;
 pub use motions::{CastDone, Motion};
-pub use notice::{ListingNotice, Notice, Party};
+pub use notice::{ChannelLine, DuelNotice, ListingNotice, Notice, Party, YellBearing};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
@@ -192,6 +192,9 @@ pub struct MotionGrant {
     /// water's share applies; 0 backs up not at all. None backs up in water
     /// as any swim stroke.
     pub swim_backward_units_per_second: Option<f32>,
+    /// Swimming as the generation's program moves it: the swimmer's inputs
+    /// and the zone's water set, where the session reads them (Titanium).
+    pub swim: Option<crate::movement::SwimCalibration>,
     /// Lateral rates when holding longitudinal input in the calibrated ground mode.
     pub diagonal: crate::DiagonalRates,
     /// Whether the session sends falling samples.
@@ -253,6 +256,9 @@ pub struct ClientWorld {
     guild_invitations: std::collections::VecDeque<guild::GuildInvitation>,
     /// Whether looted coins are shared with the group, once known.
     auto_split: Option<bool>,
+    /// The primary bind point's zone, as this admission's profile said it
+    /// (checklist 6.524).
+    bound_in: Option<u16>,
     /// The login server's worlds, until the chosen world lists characters.
     servers: Option<ServerList>,
     characters: Option<CharacterList>,
@@ -289,6 +295,8 @@ pub struct ClientWorld {
     /// turn it on.
     choices: Vec<crate::Capability>,
     zone_name: String,
+    /// The zone's number, as the server gave it at entry.
+    zone_number: Option<u16>,
     far_clip: Option<f32>,
     /// The zone header's minimum clip, once this admission's header came.
     min_clip: Option<f32>,
@@ -300,6 +308,10 @@ pub struct ClientWorld {
     /// Like the world's other rules it survives zone/character admission,
     /// and a new session's restart clears it to unknown.
     language_zero_selector: Option<crate::rules::LanguageZeroSelector>,
+    /// Whether the world turns on the program's listener garble: Titanium's
+    /// log-server word at 16, or `EQMac`'s `gibberish` at the same place
+    /// (reads R49-4 (c), R49-4m). Kept like the other rules.
+    listener_garble: Option<bool>,
     /// The zone header's gravity, once this admission's header came.
     zone_gravity: Option<f32>,
     /// The zone header's top (`max_z`) and lowest height (its underworld),
@@ -326,12 +338,18 @@ pub struct ClientWorld {
     resurrection: Option<ConsentOffer<ResurrectionOffer>>,
     /// The translocate offered and not yet answered.
     translocate: Option<ConsentOffer<TranslocateOffer>>,
+    /// The challenge to a duel waiting for the player's answer.
+    duel: Option<crate::socials::DuelQuestion>,
     /// The session's last reported disposition of a consent prompt.
     last_consent_close: Option<(ConsentId, ConsentClosure)>,
     last_consent_refusal: Option<ConsentId>,
     popup: Option<crate::popups::PopupOffer>,
     popup_serial: u64,
     player_inspection: Option<crate::inspection::PlayerInspection>,
+    /// The chat server channels the character is on, in slot order, as the
+    /// chat server's last list named them; kept across zones until the link
+    /// ends or the character leaves the world.
+    chat_channels: Vec<String>,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -347,6 +365,10 @@ pub struct ClientWorld {
     /// The target the server's answer to an assist names, until the player
     /// takes it.
     assisted: Option<u16>,
+    /// How many assist answers have named a target, wrapping, and the last
+    /// one named: a front end that starts auto attack on an answer
+    /// (`AttackOnAssist`, read R49-8 d) sees each once.
+    assist_answer: (u32, Option<u16>),
     /// The player's raid, while they are in one. The server lists it again
     /// after each admission.
     raid: Option<Raid>,
@@ -583,6 +605,14 @@ impl ClientWorld {
         self.assisted.take()
     }
 
+    /// How many assist answers have named a target, wrapping, and the
+    /// target the last one named. Unlike [`Self::take_assisted`], reading
+    /// it takes nothing.
+    #[must_use]
+    pub const fn assist_answer(&self) -> (u32, Option<u16>) {
+        self.assist_answer
+    }
+
     /// The player's HP, with what their items add, when the server's last
     /// report said they bled out, taken once: a front end reports it to the
     /// session (`ClientCommand::BledOut`).
@@ -600,15 +630,30 @@ impl ClientWorld {
             ConsentKind::Translocate => {
                 let _ = self.translocate.take_if(|current| current.id == id);
             }
-            // A duel's question has no prompt here yet: it waits for its
-            // front end (the duel slice), as `WorldEvent::Duel` does.
-            ConsentKind::Duel => {}
+            ConsentKind::Duel => {
+                let _ = self.duel.take_if(|current| current.id == id);
+            }
         }
+    }
+
+    /// The titles and suffixes the player may choose from, as the latest
+    /// list in this zone named them; none until the server sends one. No
+    /// window asks for it yet: the title window is read (R49-14) but waits,
+    /// as titles are outside Project 1999 and Quarm (Adam, 11-23).
+    #[must_use]
+    pub fn titles(&self) -> Option<&[eq_network_game::names::TitleChoice]> {
+        self.zone.titles.as_deref()
     }
 
     /// The player closed the book or note they were reading.
     pub fn close_reading(&mut self) {
         self.reading = None;
+    }
+
+    /// The chat server channels the character is on, in slot order: the
+    /// first is `/1`.
+    pub fn chat_channels(&self) -> &[String] {
+        &self.chat_channels
     }
 
     /// Puts away the received equipment report.
@@ -798,12 +843,10 @@ impl ClientWorld {
                 strafe_units_per_second,
                 strafe_walk_units_per_second,
                 swim_backward_units_per_second,
+                swim,
                 diagonal,
                 falls,
                 jump_factor,
-                // The swim grant waits for the swimming slice; the motion
-                // granted stays as it was.
-                swim: _,
             } => self.grant_motion(
                 *session_id,
                 MotionGrant {
@@ -813,6 +856,7 @@ impl ClientWorld {
                     strafe_units_per_second: *strafe_units_per_second,
                     strafe_walk_units_per_second: *strafe_walk_units_per_second,
                     swim_backward_units_per_second: *swim_backward_units_per_second,
+                    swim: *swim,
                     diagonal: *diagonal,
                     falls: *falls,
                     jump_factor: *jump_factor,
@@ -949,6 +993,9 @@ impl ClientWorld {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
                 }
                 if let Some(enabled) = rules.name_generator { self.name_generator = Some(enabled); }
+                if let Some(on) = rules.listener_garble.or(rules.gibberish) {
+                    self.listener_garble = Some(on);
+                }
             }
             WorldEvent::NameSuggestion { selection_id, request_id, name } => {
                 self.name_suggestion = Some(NameSuggestion { selection_id: *selection_id, request_id: *request_id, name: name.clone() });
@@ -960,17 +1007,16 @@ impl ClientWorld {
             // does it apply charm or other server control, spin players or show their
             // hiding's end. Berserk remains informational; raw stun durations
             // are interpreted by the session's OwnStun. The target
-            // the server sets and whom it targets, a quest's reward and ding
-            // (the session puts a reward's coins in the purse), a sacrifice
-            // offer and a player becoming a corpse wait for their front ends
-            // too; until one answers, an offer goes unanswered, as it did
-            // unread. A quest's change to the stats, a
+            // the server sets and whom it targets, a quest's ding, a
+            // sacrifice offer and a player becoming a corpse (pending
+            // R49-6e, checklist 6.492) wait for their front ends too; until
+            // one answers, an offer goes unanswered, as it did unread. A
             // skill's button ready again is not shown yet either, nor the
             // effects the server plays besides sound and flight: a spell's
             // nimbus, particles and camera shake. The official client's
             // sound for a quest's ding is
-            // not known, so it stays silent (inferred, item 6.273). A yell
-            // for help, voice macro and duel wait for their front ends.
+            // not known, so it stays silent (inferred, item 6.273). A voice
+            // macro waits for its front end.
             // Popups and inspections use the worker's scoped events.
             // The guild's members and their changes, and an
             // invitation to join or rise in it, wait for a guild window; until
@@ -979,7 +1025,12 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            WorldEvent::SpellTable(_)
+            // Apply Poison's answer (eq-client #556) and the surname's
+            // answer take their arms in those threads' rebuilds.
+            unshown @ (WorldEvent::PoisonAnswered(_)
+            | WorldEvent::ApplyPoisonRefused { .. }
+            | WorldEvent::SurnameAnswer { .. }
+            | WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
@@ -988,58 +1039,32 @@ impl ClientWorld {
             | WorldEvent::Berserk(_)
             | WorldEvent::Spun
             | WorldEvent::HideAndSneakEnded
+            // `/played`'s profile fields (eq-network #410, 6.490b): the
+            // /played client slice.
+            | WorldEvent::PlayedTime(_)
             | WorldEvent::Target(_)
             | WorldEvent::TargetOfTarget(_)
-            | WorldEvent::Reward(_)
-            | WorldEvent::Ding
             | WorldEvent::SacrificeOffer(_)
             | WorldEvent::SacrificeRefused { .. }
             | WorldEvent::BecameCorpse { .. }
-            | WorldEvent::StatsChanged(_)
             | WorldEvent::SkillReset(_)
             | WorldEvent::Effect(_)
             | WorldEvent::Popup(_)
-            | WorldEvent::YellForHelp { .. }
             | WorldEvent::VoiceMacro(_)
             | WorldEvent::InspectRequest { .. }
             | WorldEvent::InspectAnswer(_)
-            | WorldEvent::Duel(_)
             | WorldEvent::NewTitles
             | WorldEvent::Gm(_)
             // Pinned past these before their front ends land (repin 6.561);
             // each waits for the client slice named.
-            // A duel's question and refusal: the duel slice (6.492).
-            | WorldEvent::DuelOffer(_)
-            | WorldEvent::DuelRefused { .. }
-            // Applying a poison: the apply poison slice (6.493).
-            | WorldEvent::ApplyPoisonRefused { .. }
-            | WorldEvent::PoisonAnswered(_)
             // The Bazaar search: its client slice (6.550).
             | WorldEvent::Bazaar(_)
             | WorldEvent::BazaarRefused { .. }
-            // Where the player is bound: /charinfo (6.524).
-            | WorldEvent::BoundIn { .. }
             // RoF2's buff icons, mana and endurance pools: the RoF2 slices
             // (6.527, 6.538).
             | WorldEvent::BuffIcons(_)
             | WorldEvent::ResourcePercent { .. }
             | WorldEvent::ResourcePool { .. }
-            // The program's duel lines (R49-6): the duel slice's client
-            // work shows them.
-            | WorldEvent::DuelNews(_)
-            // Chat server channels: the chat channels slice (6.509).
-            | WorldEvent::Channel(_)
-            | WorldEvent::ChannelLink(_)
-            | WorldEvent::ChatChannelRefused { .. }
-            // A chat line the pace held: the chat pace slice (6.523).
-            | WorldEvent::ChatRefused { .. }
-            // Petitions, bug reports and feedback: the reports slice (6.511).
-            | WorldEvent::ReportRefused { .. }
-            | WorldEvent::ReportSent { .. }
-            // A last name's answer and the title list: the surname and
-            // titles slices (titles 6.516).
-            | WorldEvent::SurnameAnswer { .. }
-            | WorldEvent::TitleList(_)
             // The bandolier sets and potion belt, unknown sets and the
             // session's refusals: their windows' slice (6.559, 6.573).
             | WorldEvent::Bandoliers(_)
@@ -1061,8 +1086,10 @@ impl ClientWorld {
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
-            | WorldEvent::SystemInfoReported { .. } => (),
-
+            | WorldEvent::SystemInfoReported { .. }) => {
+                // Each still counts in the session's gap file, by kind.
+                news.unshown = crate::gaps::variant_name(unshown);
+            }
             // The zone and what is in it.
             WorldEvent::BoatControl(packet) => {
                 if self.in_world() { self.zone.boat_notice = Some(*packet); }
@@ -1196,6 +1223,40 @@ impl ClientWorld {
             // keeping them, or refusing a set this client fitted to the
             // generation first, is not news for the player.
             WorldEvent::ServerFiltersKept { .. } | WorldEvent::ServerFiltersRefused { .. } => {}
+            // A report to the staff went or was refused (6.511).
+            WorldEvent::ReportSent {
+                session_id,
+                report,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ReportSent(*report));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The session's chat pace held a line (6.523).
+            WorldEvent::ChatRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ChatRefused {
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ReportRefused {
+                session_id,
+                reason,
+                ..
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ReportRefused {
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::ListingRefused {
                 session_id,
                 reason,
@@ -1236,6 +1297,16 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
+            // The titles the player may choose: kept, the latest replacing
+            // the one before, only where the session offers them, until the
+            // zone changes.
+            WorldEvent::TitleList(titles) => {
+                if self.in_world() && self.can(crate::Capability::Titling) {
+                    self.zone.titles = Some(titles.clone());
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::Posture { spawn_id, posture } => {
                 let player = self.is_player(*spawn_id);
                 // A first standing, as the session reports a player at zone
@@ -1399,6 +1470,9 @@ impl ClientWorld {
             // change of it, which the official client always answers with a
             // line (R8).
             WorldEvent::AutoSplit(on) => self.auto_split = Some(*on),
+            // The bind point's zone, as each zone-in's profile says it: the
+            // server sends no change when a bind lands (inferred, 6.524).
+            WorldEvent::BoundIn { zone_id } => self.bound_in = Some(*zone_id),
             WorldEvent::AutoSplitSet { session_id, on } => {
                 if self.session_id == Some(*session_id) {
                     self.auto_split = Some(*on);
@@ -1477,7 +1551,30 @@ impl ClientWorld {
             // Dice nearby, the server's answer to an assist, and a roll,
             // emote or assist the session would not send.
             WorldEvent::Roll(roll) => news.notices.push(Notice::Roll(roll.clone())),
-            WorldEvent::Assisted(answer) => self.assisted = answer.target,
+            WorldEvent::Assisted(answer) => {
+                self.assisted = answer.target;
+                if answer.target.is_some() {
+                    self.assist_answer = (self.assist_answer.0.wrapping_add(1), answer.target);
+                }
+            }
+            // The chat server's channels (recording checklist 6.509).
+            WorldEvent::Channel(event) => self.channel_event(event, news),
+            WorldEvent::ChannelLink(link) => match link {
+                eq_network_game::chat_server::ChannelLink::Up => {}
+                eq_network_game::chat_server::ChannelLink::Lost { .. } => {
+                    self.chat_channels.clear();
+                    news.notices.push(Notice::Channel(ChannelLine::Lost));
+                }
+            },
+            WorldEvent::ChatChannelRefused { session_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ChannelRefused {
+                        reason: reason.clone(),
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::SocialRefused {
                 session_id,
                 reason,
@@ -1667,6 +1764,79 @@ impl ClientWorld {
                     news.ignored = true;
                 }
             }
+            WorldEvent::DuelOffer(question) => {
+                if self.in_world() && self.session_id == Some(question.id.session_id) {
+                    self.duel = Some(*question);
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::DuelRefused { session_id, offer_id, reason } => {
+                if self.session_id == Some(*session_id) {
+                    self.last_consent_refusal = Some(*offer_id);
+                    news.notices.push(Notice::Duel(DuelNotice::AnswerRefused(reason.clone())));
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::Duel(update) => self.duel_news(*update, news),
+            WorldEvent::DuelNews(told) => self.duel_told(*told, news),
+            WorldEvent::YellForHelp { spawn_id } => {
+                // A spawn the player cannot name says nothing.
+                match self.party(u32::from(*spawn_id)) {
+                    Party::Named(name) if self.in_world() => {
+                        let bearing = self.yell_bearing(*spawn_id);
+                        news.notices.push(Notice::YellForHelp { name, bearing });
+                    }
+                    _ => news.ignored = true,
+                }
+            }
+            // The program adds the player's own rise to the base stat with
+            // no line, which this client does not keep apart from the
+            // profile yet (a follow-up to read R49-6f); another spawn's is
+            // told with a line that names no one.
+            WorldEvent::StatsChanged(change) => match u16::try_from(change.spawn_id) {
+                Ok(id) if self.in_world() && !self.is_player(id) => {
+                    news.notices.push(Notice::OthersStatChanged {
+                        lowered: change.amount < 0,
+                    });
+                }
+                Ok(id) if self.in_world() && self.is_player(id) => {}
+                _ => news.ignored = true,
+            },
+            // The Titanium program says each coin with the giver's name and
+            // always plays sound 0x8d (read R49-6g); elsewhere only the coins
+            // are told. The items and the experience come with the server's
+            // own lines, and the session adds the coins to the purse.
+            WorldEvent::Reward(reward) if self.in_world() && prints_r49_6_lines(self.generation) => {
+                let giver = reward
+                    .giver_id
+                    .map(|id| match self.party(u32::from(id)) {
+                        Party::Named(name) => name,
+                        Party::Player | Party::Unseen => String::new(),
+                    })
+                    .unwrap_or_default();
+                if reward.coins != crate::Coins::default() {
+                    news.notices.push(Notice::QuestReward {
+                        coins: reward.coins,
+                        giver,
+                    });
+                }
+                news.sounds.push(crate::effects::Cue::Number(QUEST_REWARD_SOUND));
+            }
+            WorldEvent::Reward(reward) => {
+                let coins = reward.coins;
+                if self.in_world() && coins != crate::Coins::default() {
+                    news.notices.push(Notice::Reward(coins));
+                }
+            }
+            // `EQEmu`'s fixed sound record is a quest reward of nothing to the
+            // Titanium program, which plays its sound (read R49-6g).
+            WorldEvent::Ding => {
+                if self.in_world() && prints_r49_6_lines(self.generation) {
+                    news.sounds.push(crate::effects::Cue::Number(QUEST_REWARD_SOUND));
+                }
+            }
             WorldEvent::ConsentClosed { id, closure } => {
                 if self.session_id == Some(id.session_id) {
                     self.dismiss_consent(*id);
@@ -1745,8 +1915,11 @@ impl ClientWorld {
             } => self.cast_refused((*session_id, *spell_id), (reason, *string_id), news),
             WorldEvent::BuffSnapshot(buffs) => self.buff_snapshot(buffs, now),
             WorldEvent::Buff(update) => {
-                if self.generation == crate::GameDialect::Titanium
-                    && let Some(player) = self.player.as_ref()
+                if match self.generation {
+                    crate::GameDialect::Titanium => true,
+                    // Not built for RoF2.
+                    crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
+                } && let Some(player) = self.player.as_ref()
                 {
                     self.casting.active_discipline.observe_titanium(player.spawn_id, update);
                 }
@@ -1834,6 +2007,116 @@ impl ClientWorld {
 
     /// Who a spawn ID names in a death: the player, a spawn by the name
     /// players see, or no one the player can name.
+    /// News of a duel: a challenge with no question to answer, a duel the
+    /// player is part of beginning, or a TAKP client turning the player's
+    /// down. A challenge the session asks about comes as its question
+    /// instead.
+    fn duel_news(&mut self, update: crate::socials::DuelUpdate, news: &mut Changes) {
+        use crate::socials::DuelUpdate;
+        if !self.in_world() {
+            news.ignored = true;
+            return;
+        }
+        let name = |world: &Self, id: u16| match world.party(u32::from(id)) {
+            Party::Named(name) => name,
+            Party::Player | Party::Unseen => "Someone".to_owned(),
+        };
+        let own = |world: &Self, id: u16| world.is_player(id);
+        let notice = match update {
+            // The question asks it, where the session offers one; the
+            // player's own record is a server passing an acceptance back.
+            DuelUpdate::Challenge { from }
+                if !own(self, from)
+                    && !self.capabilities().contains(&crate::Capability::Dueling) =>
+            {
+                DuelNotice::Challenged(name(self, from))
+            }
+            // A Titanium session tells what the program makes of its own
+            // refusal ([`WorldEvent::DuelNews`]).
+            DuelUpdate::Challenge { .. } | DuelUpdate::AutoDeclined { .. } => return,
+            // The Titanium program has no case for an incoming 0x1b09 (read
+            // R49-6); its session tells the duel's start.
+            DuelUpdate::Accepted { .. } if !tells_duel_accepted(self.generation) => return,
+            DuelUpdate::Accepted {
+                challenger,
+                accepter,
+            } => {
+                if own(self, challenger) && !own(self, accepter) {
+                    DuelNotice::Begun(name(self, accepter))
+                } else if own(self, accepter) && !own(self, challenger) {
+                    DuelNotice::Begun(name(self, challenger))
+                } else {
+                    news.ignored = true;
+                    return;
+                }
+            }
+            DuelUpdate::Refused { from, reason } => DuelNotice::Refused {
+                from: name(self, from),
+                reason,
+            },
+        };
+        news.notices.push(Notice::Duel(notice));
+    }
+
+    /// What a Titanium duel means to the player, as its session tells it
+    /// (read R49-6): each the program's line, with the names it takes.
+    fn duel_told(&self, told: crate::socials::DuelNews, news: &mut Changes) {
+        use crate::socials::DuelNews;
+        if !self.in_world() {
+            news.ignored = true;
+            return;
+        }
+        let name = |id: u16| match self.party(u32::from(id)) {
+            Party::Named(name) => name,
+            Party::Player | Party::Unseen => "Someone".to_owned(),
+        };
+        let own = || {
+            self.player
+                .as_ref()
+                .map(|player| crate::entities::display_name(&player.name))
+                .unwrap_or_default()
+        };
+        let notice = match told {
+            DuelNews::Challenged { by } => DuelNotice::Challenged(name(by)),
+            DuelNews::Begun { with } => DuelNotice::Begun(name(with)),
+            DuelNews::Challenging { target } => DuelNotice::Challenging(name(target)),
+            DuelNews::Accepting { challenger } => DuelNotice::Accepting(name(challenger)),
+            DuelNews::NoPlayerTarget => DuelNotice::NoPlayerTarget,
+            DuelNews::NotYourself => DuelNotice::NotYourself,
+            DuelNews::AlreadyDueling { at_opponent } => DuelNotice::AlreadyDueling { at_opponent },
+            DuelNews::ConsideringAnother => DuelNotice::ConsideringAnother,
+            DuelNews::Won { over } => DuelNotice::Won {
+                own: own(),
+                over: name(over),
+            },
+            DuelNews::Ended { opponent } => DuelNotice::Ended(name(opponent)),
+            DuelNews::TurnedDown { by, reason } => DuelNotice::TurnedDown {
+                by: name(by),
+                reason,
+            },
+            DuelNews::Lapsed { target } => DuelNotice::Lapsed(name(target)),
+            DuelNews::Forfeited { opponent } => DuelNotice::Forfeited {
+                own: own(),
+                opponent: name(opponent),
+            },
+        };
+        news.notices.push(Notice::Duel(notice));
+    }
+
+    /// Where a yeller stands from the player, as the Titanium program
+    /// picks its line (read R49-6d, 0x452dc6): the angle between the
+    /// player's heading and the bearing to the yeller, folded to half a
+    /// turn. No range is tested. None off Titanium, or without both
+    /// places.
+    fn yell_bearing(&self, spawn_id: u16) -> Option<YellBearing> {
+        if !prints_r49_6_lines(self.generation) {
+            return None;
+        }
+        let own = self.player.as_ref()?.position;
+        let yeller = self.zone.spawns.get(&spawn_id)?.state.position;
+        Some(YellBearing::between(own, yeller))
+    }
+
     fn party(&self, spawn_id: u32) -> Party {
         if self
             .player
@@ -1849,6 +2132,51 @@ impl ClientWorld {
             .map_or(Party::Unseen, |name| {
                 Party::Named(crate::entities::display_name(&name))
             })
+    }
+
+    /// Keeps the chat server's list of joined channels, and tells the rest
+    /// as lines. The server's text is untrusted: its item links are read as
+    /// any chat's, and it prints through the ordinary chat path.
+    fn channel_event(
+        &mut self,
+        event: &eq_network_game::chat_server::ChannelEvent,
+        news: &mut Changes,
+    ) {
+        use eq_network_game::chat_server::ChannelEvent;
+        let line = match event {
+            ChannelEvent::Joined { channels } => {
+                self.chat_channels.clone_from(channels);
+                return;
+            }
+            ChannelEvent::Message {
+                channel,
+                sender,
+                text,
+            } => ChannelLine::Message {
+                slot: self
+                    .chat_channels
+                    .iter()
+                    .position(|joined| joined.eq_ignore_ascii_case(channel))
+                    .map(|index| index + 1),
+                channel: plain(channel),
+                sender: plain(sender),
+                text: eq_network_game::chat::message(text.as_bytes(), false).into(),
+            },
+            ChannelEvent::Notice { text } => {
+                ChannelLine::Notice(eq_network_game::chat::message(text.as_bytes(), false).into())
+            }
+            ChannelEvent::MemberJoined { channel, name } => ChannelLine::Member {
+                channel: plain(channel),
+                name: plain(name),
+                joined: true,
+            },
+            ChannelEvent::MemberLeft { channel, name } => ChannelLine::Member {
+                channel: plain(channel),
+                name: plain(name),
+                joined: false,
+            },
+        };
+        news.notices.push(Notice::Channel(line));
     }
 
     /// Forgets what the reason makes stale, and says so.
@@ -1892,6 +2220,7 @@ impl ClientWorld {
         self.reading = None;
         self.resurrection = None;
         self.translocate = None;
+        self.duel = None;
         self.popup = None;
         self.player_inspection = None;
         self.reset_guild(reason);
@@ -1933,6 +2262,8 @@ impl ClientWorld {
                 self.choices.clear();
                 self.player = None;
                 self.connected = false;
+                // A camp ends the chat server link.
+                self.chat_channels.clear();
             }
             Reset::Lost {
                 ended,
@@ -1965,6 +2296,7 @@ impl ClientWorld {
             self.characters = None;
             self.pending_transfer = None;
             self.inventory = Inventory::default();
+            self.chat_channels.clear();
             self.forget_zone();
         }
     }
@@ -2005,6 +2337,7 @@ impl ClientWorld {
         self.group_invitation = None;
         self.forget_guild();
         self.auto_split = None;
+        self.bound_in = None;
         self.joining_group = false;
         self.assisted = None;
         self.raid = None;
@@ -2026,3 +2359,35 @@ impl ClientWorld {
 
 #[cfg(test)]
 mod tests;
+
+/// A name the chat server sent, a channel's or a player's, as plain text:
+/// without control characters, the item link marker among them, so that it
+/// prints as words and can start no link.
+fn plain(name: &str) -> String {
+    name.chars().filter(|c| !c.is_control()).collect()
+}
+
+/// Whether a generation's program tells an incoming duel acceptance. The
+/// Titanium program has no case for 0x1b09 (read R49-6); the others are
+/// unread and keep this client's line.
+const fn tells_duel_accepted(dialect: crate::GameDialect) -> bool {
+    match dialect {
+        crate::GameDialect::Titanium => false,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => true,
+    }
+}
+
+/// The sound the Titanium program plays at a quest reward, by the sound
+/// object's number (read R49-6g); that it is the numbers file's is
+/// inferred.
+const QUEST_REWARD_SOUND: u16 = 0x8d;
+
+/// Whether a generation's program says the lines read R49-6 found for
+/// rewards, yells and levels: the Titanium program's. The others are unread
+/// and keep this client's.
+pub(crate) const fn prints_r49_6_lines(dialect: crate::GameDialect) -> bool {
+    match dialect {
+        crate::GameDialect::Titanium => true,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
+    }
+}

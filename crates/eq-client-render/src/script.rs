@@ -94,6 +94,9 @@ pub struct Script {
     mode: RunMode,
     /// This frame successfully queued a social using the single-step control.
     stepped_social: bool,
+    /// When this run last sent chat (a chat or social step), and that
+    /// step's line: a chat pace refusal after it fails the run there (6.523).
+    chatted: Option<(std::time::Instant, Option<usize>)>,
     held: Vec<KeyCode>,
     /// The movement commands a moving step holds itself, as the key map
     /// resolves a held key to them, so the step moves under any key table.
@@ -255,6 +258,7 @@ impl Script {
             progress: RunStatus::queued(steps.len(), std::sync::Arc::from("")),
             mode: RunMode::Continuous,
             stepped_social: false,
+            chatted: None,
             steps: steps
                 .into_iter()
                 .map(|step| QueuedStep { step, line: None })
@@ -1305,6 +1309,21 @@ pub(super) fn drive(
         script.retire(&mut commands);
         return;
     }
+    // The session's chat pace held a line sent since this run last chatted:
+    // that step failed, as a refused send does (6.523). The pace is the
+    // character's, so the line may be one typed meanwhile; the run's next
+    // chat would meet the same wait.
+    if let Some((_, reason)) = chat
+        .paced
+        .take_if(|(at, _)| script.chatted.is_some_and(|(chatted, _)| *at >= chatted))
+    {
+        script
+            .progress
+            .at_line(script.chatted.and_then(|(_, line)| line));
+        script.stop(&mut keys, &mut mouse, &reason);
+        script.retire(&mut commands);
+        return;
+    }
     if matches!(script.mode, RunMode::Paused(_)) {
         script.owns_input = false;
         script.last_frame = Some(now);
@@ -2351,7 +2370,10 @@ pub(super) fn drive(
                     chat.queue_social(request, Some(script.progress.identity.clone()))
                 });
             match request {
-                Ok(()) => script.stepped_social = single_step,
+                Ok(()) => {
+                    script.stepped_social = single_step;
+                    script.chatted = Some((std::time::Instant::now(), script.progress.line()));
+                }
                 Err(error) => script.stop(&mut keys, &mut mouse, &error),
             }
             return;
@@ -2483,6 +2505,9 @@ pub(super) fn drive(
                 Step::Chat(chat) => Ok(eq_client_core::ClientCommand::SendChat(chat.clone())),
                 _ => return,
             };
+            // Whatever goes as chat meets the session's pace, a `#` command
+            // among it, so a refusal after it fails this step (6.523).
+            let chats = command.as_ref().is_ok_and(is_chat);
             let sent = command.and_then(|command| {
                 observed
                     .1
@@ -2490,8 +2515,12 @@ pub(super) fn drive(
                     .send(online.world(), command)
                     .map_err(|refusal| refusal.text().to_owned())
             });
-            if let Err(error) = sent {
-                script.stop(&mut keys, &mut mouse, &error);
+            match sent {
+                Err(error) => script.stop(&mut keys, &mut mouse, &error),
+                Ok(()) if chats => {
+                    script.chatted = Some((std::time::Instant::now(), script.progress.line()));
+                }
+                Ok(()) => (),
             }
             return;
         }
@@ -3000,6 +3029,17 @@ fn aa_request(
         .map_err(|refusal| refusal.text().to_owned())
 }
 
+/// Whether a command goes as chat, which the session paces (6.523). A slash
+/// step's game commands never do: an emote or a roll is its own request,
+/// outside the pace, and a script has no `/ttell`.
+const fn is_chat(command: &eq_client_core::ClientCommand) -> bool {
+    matches!(
+        command,
+        eq_client_core::ClientCommand::SendChat(_)
+            | eq_client_core::ClientCommand::SendChatInAdmission { .. }
+    )
+}
+
 /// The request for a validated GM command. A fixture form needs a local
 /// session; any other line goes as a typed `#` line would, on any server.
 /// Fixture cleanup carries the admission and reconciled NPC selection to the
@@ -3021,7 +3061,11 @@ fn gm_request(
     let command = parse::gm_command(&words)?;
     let depop = command == "depop";
     let full_spawn = words.first() == Some(&"spawn") && words.len() > 5;
-    let titanium = world.generation() == eq_client_core::GameDialect::Titanium;
+    let titanium = match world.generation() {
+        eq_client_core::GameDialect::Titanium => true,
+        // No RoF2 server takes fixtures yet.
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    };
     if (depop || full_spawn) && !titanium {
         return Err("Full fixture spawn and depop require local EQEmu".into());
     }
@@ -3239,6 +3283,8 @@ fn reach(
             return Err("that spawn is gone or has changed".to_owned());
         }
     }
+    // A script answers a duel's card as the player does, Yes or No: what a
+    // user can do, a script can (Adam, 11-23).
     let entity = find(target, buttons, layout).ok_or("click target is not visible")?;
     match (target, needs.get(entity)) {
         // A spellbook edit needs the session to offer moving or deleting;
@@ -5824,6 +5870,113 @@ mod tests {
         assert!(receiver.try_recv().is_err());
     }
 
+    /// A duel question shown, its Yes laid out as the skin draws it (with
+    /// its skin id), and a script running one step at it: the script
+    /// accepts as the player's click does, once, and the question closes.
+    fn a_script_step_accepts_a_duel(step: Step) {
+        use crate::{
+            confirm::{AnswerButton, Asked, QuestionText},
+            online::{OnlineState, testing},
+            skinned::SkinId,
+            windows::{Shown, WindowId},
+        };
+        use eq_client_core::{
+            WorldEvent,
+            confirmations::{ConsentId, ConsentKind},
+            socials::DuelQuestion,
+        };
+
+        let (mut app, _) = background(vec![step]);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(9));
+        let id = ConsentId {
+            session_id: 7,
+            kind: ConsentKind::Duel,
+            sequence: 1,
+        };
+        testing::news(
+            &mut online,
+            [WorldEvent::DuelOffer(DuelQuestion { id, challenger: 5 })],
+        );
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .init_resource::<Asked>()
+            .init_resource::<crate::chat::ChatState>()
+            .init_resource::<crate::spellbook::SpellNames>()
+            .add_systems(
+                Update,
+                (
+                    crate::confirm::buttons,
+                    crate::confirm::window,
+                    crate::confirm::show,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Confirmation);
+        let dialog = app.world_mut().spawn(Node::default()).id();
+        app.world_mut()
+            .spawn((QuestionText, Text::default(), ChildOf(dialog)));
+        app.world_mut().spawn((
+            Button,
+            AnswerButton(true),
+            SkinId {
+                window: WindowId::Confirmation,
+                id: "Yes_Button".into(),
+            },
+            ChildOf(dialog),
+            laid_out(Vec2::new(600.0, 360.0), 40.0, 2),
+        ));
+        for ms in (0..=1_000).step_by(10) {
+            frame_at(&mut app, ms);
+        }
+        // The Yes went out once, as the player's own click sends it.
+        let sent: Vec<_> = receiver.try_iter().collect();
+        assert!(
+            matches!(
+                sent.as_slice(),
+                [eq_client_core::ClientCommand::AnswerDuel {
+                    session_id: 7,
+                    offer_id,
+                    accept: true
+                }] if *offer_id == id
+            ),
+            "{sent:?}"
+        );
+        assert!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .duel()
+                .is_none()
+        );
+    }
+
+    #[test]
+    fn a_script_can_accept_a_duel() {
+        a_script_step_accepts_a_duel(Step::Click(ClickTarget::Answer(true)));
+    }
+
+    /// Named by its skin id, the Yes is the same control.
+    #[test]
+    fn a_script_can_accept_a_duel_by_the_buttons_skin_id() {
+        a_script_step_accepts_a_duel(Step::Click(ClickTarget::Button(
+            "confirmation",
+            "Yes_Button",
+        )));
+    }
+
+    /// A held click presses a control as a click does.
+    #[test]
+    fn a_script_can_accept_a_duel_with_a_held_click() {
+        a_script_step_accepts_a_duel(Step::HoldClick(
+            ClickTarget::Answer(true),
+            Duration::from_millis(200),
+        ));
+    }
+
     #[test]
     fn scripted_drop_click_cannot_open_confirmation_when_capability_is_withheld() {
         use crate::{
@@ -6909,6 +7062,22 @@ mod tests {
     }
 
     #[test]
+    fn the_reported_markers_leave_out_a_spawn_the_map_cannot_place() {
+        use crate::online::testing as session;
+        let mut online = crate::online::OnlineState::new(true);
+        session::admit(&mut online, 7, session::player(7));
+        let mut lost = session::pet(43, 7);
+        lost.position.x = f32::NAN;
+        session::spawns(&mut online, vec![session::pet(42, 7), lost]);
+        let (count, listed) = report::map_markers(&online, None);
+        assert_eq!(count, 1);
+        assert_eq!(
+            listed.iter().map(|(_, id, _)| *id).collect::<Vec<_>>(),
+            [42]
+        );
+    }
+
+    #[test]
     fn a_map_marker_reported_before_its_spawn_changed_is_refused() {
         use crate::map::{MapControl, MarkerAction};
         use crate::online::testing as session;
@@ -7044,6 +7213,97 @@ mod tests {
         assert_eq!(
             app.world().resource::<OptionsState>().options.level(level),
             120
+        );
+    }
+
+    /// The interface scale each time a script's one line changed it, from
+    /// `start`, and whether the run completed.
+    fn scale_script(line: &str, start: u16) -> (Vec<u16>, Phase) {
+        use crate::{
+            options::OptionsState,
+            skinned::{SkinSlider, slide},
+        };
+        use bevy::ui::RelativeCursorPosition;
+        use eq_client_core::options::Level;
+
+        /// The interface scale each frame the options changed.
+        #[derive(Resource, Default)]
+        struct Changes(Vec<u16>);
+        #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+        fn count(state: Res<OptionsState>, mut changes: ResMut<Changes>) {
+            if state.is_changed() && !state.is_added() {
+                changes.0.push(state.options.level(Level::UiScale));
+            }
+        }
+
+        let program =
+            Program::parse(&format!("{line}\nreport(\"after\")\n"), Path::new(".")).unwrap();
+        let mut app = pointing(Vec::new());
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        set_focus(&mut app, window, true);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 9,
+                zone: "qeytoqrg".into(),
+                player: Box::new(crate::online::testing::player(7)),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }],
+        );
+        crate::online::testing::connect(&mut online, true);
+        app.insert_resource(online)
+            .insert_resource(Script::from_program(program))
+            .init_resource::<Changes>()
+            .add_systems(Update, (slide, count).chain().after(drive));
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .set_level(Level::UiScale, start);
+        app.world_mut().spawn((
+            Button,
+            SkinSlider::test_level(Level::UiScale),
+            RelativeCursorPosition::default(),
+            laid_out(Vec2::new(240.0, 360.0), 80.0, 1),
+        ));
+        for ms in (0..=2_000).step_by(10) {
+            frame_at(&mut app, ms);
+        }
+        (
+            app.world().resource::<Changes>().0.clone(),
+            app.world().resource::<RunStatus>().phase(),
+        )
+    }
+
+    #[test]
+    fn a_scripts_click_on_the_interface_scale_sets_it_once() {
+        assert_eq!(
+            scale_script("click(\"slider\", \"ui_scale\", 67)", 100),
+            (vec![150], Phase::Completed)
+        );
+    }
+
+    #[test]
+    fn a_scripts_right_click_on_the_interface_scale_returns_it_to_100() {
+        assert_eq!(
+            scale_script("right_click(\"slider\", \"ui_scale\", 50)", 50),
+            (vec![100], Phase::Completed)
+        );
+    }
+
+    #[test]
+    fn a_scripts_held_click_on_the_interface_scale_sets_it_as_it_lets_go() {
+        assert_eq!(
+            scale_script("hold_click(800, \"slider\", \"ui_scale\", 0)", 100),
+            (vec![50], Phase::Completed)
         );
     }
 
