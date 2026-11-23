@@ -135,4 +135,7 @@ fn guild_status_of_the_player_reads_their_own_listing() {
             name: world.player().unwrap().name.clone()
         })
     );
+    // The player's own GM flag is the own spawn record's, and refuses too.
+    world.player.as_mut().unwrap().appearance.titanium_gm = Some(1);
+    assert_eq!(world.guild_status(None), Some(GuildStatus::NoPlayer));
 }

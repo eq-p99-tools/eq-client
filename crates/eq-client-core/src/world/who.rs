@@ -249,11 +249,17 @@ impl ClientWorld {
             None => self.target.selected.filter(|_| !self.target_stale()),
         };
         let game_master = |id: &u16| {
-            self.zone
-                .spawns
-                .get(id)
-                .and_then(|spawn| spawn.state.appearance.titanium_gm)
-                .is_some_and(|flag| flag != 0)
+            let flag = if self.is_player(*id) {
+                self.player
+                    .as_ref()
+                    .and_then(|player| player.appearance.titanium_gm)
+            } else {
+                self.zone
+                    .spawns
+                    .get(id)
+                    .and_then(|spawn| spawn.state.appearance.titanium_gm)
+            };
+            flag.is_some_and(|flag| flag != 0)
         };
         let listed = found.filter(|id| !game_master(id)).and_then(|id| {
             if self.is_player(id) {
