@@ -1400,6 +1400,15 @@ pub struct OfficialOptions {
     /// Whether an assist's answer starts auto attack: `AttackOnAssist` in
     /// `[Defaults]` (Titanium setup 0x4a3341, read R49-8 d).
     pub attack_on_assist: Option<bool>,
+    /// How a Ranger's track list is ordered: `TrackSortType` in
+    /// `[Defaults]` (read R49-30 e), a word such as NORMAL.
+    pub track_sort: Option<&'static str>,
+    /// The colours a Ranger's track list hides at startup:
+    /// `TrackFilterType` in `[Defaults]`, a number.
+    pub track_filter: Option<u8>,
+    /// Which players a track list shows: `TrackPlayers` in `[Defaults]`,
+    /// TRUE, FALSE or GROUP; only its first letter is read.
+    pub track_players: Option<char>,
     /// The chat server channels joined at login for a character that keeps
     /// none of its own: `ChannelAutoJoin` in `[Defaults]` (read R49-12 c),
     /// as written. The program's default is `NONE`.
@@ -1479,6 +1488,15 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         }),
         all_luclin_models_off: flag("Defaults", "AllLuclinPcModelsOff"),
         attack_on_assist: flag("Defaults", "AttackOnAssist"),
+        track_sort: ini_value(text, "Defaults", "TrackSortType").and_then(|word| {
+            ["NORMAL", "DISTANCE", "CONSIDER", "RDISTANCE", "RCONSIDER"]
+                .into_iter()
+                .find(|sort| sort.eq_ignore_ascii_case(word.trim()))
+        }),
+        track_filter: ini_value(text, "Defaults", "TrackFilterType")
+            .and_then(|mask| mask.trim().parse().ok()),
+        track_players: ini_value(text, "Defaults", "TrackPlayers")
+            .and_then(|word| word.trim().chars().next()),
         channel_autojoin: ini_value(text, "Defaults", "ChannelAutoJoin")
             .map(|list| list.trim().to_owned()),
     }
@@ -2438,10 +2456,20 @@ LookSpring=1
                 luclin_models: [None; 28],
                 all_luclin_models_off: None,
                 attack_on_assist: None,
+                track_sort: None,
+                track_filter: None,
+                track_players: None,
                 channel_autojoin: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+        let track = options_from_ini(
+            "[Defaults]\nTrackSortType=rdistance\nTrackFilterType=5\nTrackPlayers=GROUP\n",
+        );
+        assert_eq!(
+            (track.track_sort, track.track_filter, track.track_players),
+            (Some("RDISTANCE"), Some(5), Some('G'))
+        );
         assert_eq!(
             options_from_ini("[Defaults]\nChannelAutoJoin= general, trade \n")
                 .channel_autojoin

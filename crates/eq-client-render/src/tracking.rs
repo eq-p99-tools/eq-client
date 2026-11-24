@@ -5,10 +5,15 @@
 //! Cancel stops tracking and closes it as `/stoptracking` does, and the
 //! close box only closes it. The skin's `TrackingWnd` draws it
 //! where the skin has one; elsewhere the client's own panel shows the same
-//! list and Track button. The Ranger's sort, colour filters and players
-//! choice are not read closely enough to act on, so their controls are
-//! drawn greyed (recording checklist 6.446); another class's `/tracksort`
-//! or `/trackfilter` gets the program's Rangers-only line.
+//! list and Track button.
+//!
+//! The options (read R49-30 e, checklist 6.638): a Ranger's `/tracksort`
+//! orders the list by the server's distances and is saved at once; a
+//! Ranger's `/trackfilter` hides NPCs by colour for the session; anyone's
+//! `/trackplayers` lists all players, none, or the group's, and is saved.
+//! Another class's sort or filter gets the program's Rangers-only line. The
+//! skin's controls for them stay greyed until the skin's control names are
+//! read (6.446).
 use crate::{
     online::OnlineState,
     outbox::Outbox,
@@ -30,43 +35,121 @@ const RANGER: u32 = 4;
 /// `eqstr_us.txt` string ID (read R14 section 2).
 const RANGERS_ONLY: u32 = 0x3363;
 
-/// A Ranger's tracking option typed by another class, waiting for its line.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub(crate) struct RangersOnly;
-
-/// Whether a typed command is a Ranger's tracking option, `/tracksort` or
-/// `/trackfilter`, from a player of another class. A Ranger's own is not
-/// read closely enough to act on (6.446), and an unknown class is left to
-/// the server.
-pub(crate) fn rangers_only(command: &str, world: &ClientWorld) -> bool {
-    let name = command
-        .strip_prefix('/')
-        .and_then(|command| command.split_whitespace().next())
-        .unwrap_or_default();
-    (name.eq_ignore_ascii_case("tracksort") || name.eq_ignore_ascii_case("trackfilter"))
-        && world
-            .player()
-            .and_then(|player| player.class)
-            .is_some_and(|class| class != RANGER)
+/// A typed track option, waiting for its answer: the command's words.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub(crate) enum TrackOption {
+    /// `/tracksort`.
+    Sort(String),
+    /// `/trackfilter`.
+    Filter(String),
+    /// `/trackplayers`.
+    Players(String),
 }
 
-/// Says the program's Rangers-only line for a tracking option another class
-/// typed.
+impl TrackOption {
+    /// The option a typed line, spelled out, asks for.
+    pub(crate) fn typed(command: &str) -> Option<Self> {
+        let command = command.strip_prefix('/')?;
+        let (name, words) = command
+            .split_once(char::is_whitespace)
+            .unwrap_or((command, ""));
+        let words = words.trim().to_owned();
+        match name.to_ascii_lowercase().as_str() {
+            "tracksort" => Some(Self::Sort(words)),
+            "trackfilter" => Some(Self::Filter(words)),
+            "trackplayers" => Some(Self::Players(words)),
+            _ => None,
+        }
+    }
+}
+
+/// Whether the player is a Ranger; None while the class is unknown.
+fn ranger(world: &ClientWorld) -> Option<bool> {
+    world
+        .player()
+        .and_then(|player| player.class)
+        .map(|class| class == RANGER)
+}
+
+/// Answers a typed track option with the program's line, and sets it: the
+/// sort and the players choice in the character's options, which saves
+/// them; the filter for the session only.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
-pub(crate) fn say_rangers_only(
+pub(crate) fn answer_option(
     mut chat: ResMut<crate::chat::ChatState>,
+    online: Res<OnlineState>,
+    options: Option<ResMut<crate::options::OptionsState>>,
     messages: Option<Res<crate::hud::messages::Messages>>,
 ) {
-    if chat.rangers_only.is_none() {
+    use eq_client_core::track_options::{
+        FILTER_CLEARED, FILTER_COLOURS, FILTER_SET, PLAYERS_UNKNOWN, SORT_UNKNOWN, TrackPlayers,
+        TrackSort,
+    };
+    let Some(option) = chat.track_option.take() else {
         return;
+    };
+    let empty = crate::hud::messages::Messages::default();
+    let messages = messages.as_deref().unwrap_or(&empty);
+    let rangers = !matches!(option, TrackOption::Players(_));
+    match ranger(online.world()) {
+        // The class is unknown before the profile: nothing to answer yet.
+        None => return,
+        Some(false) if rangers => {
+            let said = messages.said_text(
+                RANGERS_ONLY,
+                "Sorting and filtering tracking are for Rangers.",
+            );
+            chat.history.push(crate::chat::system_line(said));
+            return;
+        }
+        Some(_) => (),
     }
-    chat.rangers_only = None;
-    // The client's own words where the installation has no string table.
-    let fallback = "Sorting and filtering tracking are for Rangers.";
-    let said = messages.as_deref().map_or_else(
-        || crate::chat::Said::own(fallback),
-        |messages| messages.said_or(RANGERS_ONLY, &[], fallback),
-    );
+    let Some(mut options) = options else {
+        return;
+    };
+    let said = match option {
+        TrackOption::Sort(word) => match TrackSort::typed(&word) {
+            Some(sort) => {
+                options.options.track_sort = sort;
+                messages.said_text(sort.line(), "Tracking sort set.")
+            }
+            None => messages.said_text(SORT_UNKNOWN, "Use /tracksort N, D, C, RD or RC."),
+        },
+        TrackOption::Players(word) => {
+            let chosen = TrackPlayers::ALL.into_iter().find(|players| {
+                messages
+                    .argument_free(players.word_line())
+                    .unwrap_or(players.own_word())
+                    .eq_ignore_ascii_case(&word)
+            });
+            match chosen {
+                Some(players) => {
+                    options.options.track_players = players;
+                    messages.said_text(players.line(), "Tracking players set.")
+                }
+                None => messages.said_text(PLAYERS_UNKNOWN, "Use /trackplayers on, off or group."),
+            }
+        }
+        TrackOption::Filter(word) => {
+            let colour = FILTER_COLOURS.iter().find_map(|(_, bit, line, own)| {
+                let said = messages.argument_free(*line).unwrap_or(own);
+                said.eq_ignore_ascii_case(&word)
+                    .then(|| (*bit, said.to_owned()))
+            });
+            // A word for no colour: the program's answer is unread [I], so
+            // nothing is said.
+            let Some((bit, said)) = colour else {
+                return;
+            };
+            let set = options.track_filter.toggle(bit);
+            let (line, own) = if set {
+                (FILTER_SET, "Tracking now hides that colour.")
+            } else {
+                (FILTER_CLEARED, "Tracking now shows that colour.")
+            };
+            messages.said_or(line, &[said], own)
+        }
+    };
     chat.history.push(crate::chat::system_line(said));
 }
 
@@ -114,6 +197,40 @@ struct Inputs {
     session: Option<u64>,
     revision: u64,
     level: Option<u8>,
+    choices: Choices,
+    /// Changes with the group, which `/trackplayers group` lists by.
+    group: u64,
+}
+
+/// The options that shape the list: the saved sort and players choice and
+/// the session's filter.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(crate) struct Choices {
+    pub(crate) sort: eq_client_core::track_options::TrackSort,
+    pub(crate) filter: eq_client_core::track_options::TrackFilter,
+    pub(crate) players: eq_client_core::track_options::TrackPlayers,
+}
+
+impl Choices {
+    /// The choices the character's options hold.
+    pub(crate) fn of(options: Option<&crate::options::OptionsState>) -> Self {
+        options.map_or_else(Self::default, |options| Self {
+            sort: options.options.track_sort,
+            filter: options.track_filter,
+            players: options.options.track_players,
+        })
+    }
+}
+
+/// A hash of the group's names, so the list redraws when it changes.
+fn group_key(world: &ClientWorld) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    if let Some(group) = world.group() {
+        group.leader.hash(&mut hasher);
+        group.members.hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// A row as drawn: the spawn, its name, its colour and whether it is the one
@@ -126,25 +243,58 @@ struct Row {
     chosen: bool,
 }
 
-/// The listed spawns the zone still knows, in the server's order.
-fn rows(world: &ClientWorld) -> Vec<Row> {
+/// The listed spawns the zone still knows, as the program lists them
+/// (0x566194, 0x566ce6 and 0x566fe6): players by the players choice; for a
+/// Ranger, NPCs hidden by the filter's colours and the rows in the sort's
+/// order; for anyone else, the server's order with nothing filtered.
+fn rows(world: &ClientWorld, choices: Choices) -> Vec<Row> {
+    use eq_client_core::{SpawnKind, track_options::TrackPlayers};
     let window = world.track_window();
     let yours = world.player().map(|player| player.level);
-    window
+    let ranger = ranger(world) == Some(true);
+    let grouped = |name: &str| {
+        world.group().is_some_and(|group| {
+            group
+                .leader
+                .iter()
+                .chain(&group.members)
+                .any(|member| member.eq_ignore_ascii_case(name))
+        })
+    };
+    let mut listed: Vec<(Row, f32)> = window
         .entries
         .iter()
         .filter_map(|entry| {
             let spawn = &world.spawn(entry.spawn_id)?.state;
-            Some(Row {
-                spawn_id: entry.spawn_id,
-                name: eq_client_core::entities::display_name(&spawn.name),
-                color: yours
-                    .filter(|_| spawn.level != 0)
-                    .map(|yours| track_color(yours, spawn.level)),
-                chosen: window.selected == Some(entry.spawn_id),
+            let color = yours
+                .filter(|_| spawn.level != 0)
+                .map(|yours| track_color(yours, spawn.level));
+            let shown = if spawn.kind == SpawnKind::Player {
+                match choices.players {
+                    TrackPlayers::On => true,
+                    TrackPlayers::Off => false,
+                    TrackPlayers::Group => grouped(&spawn.name),
+                }
+            } else {
+                !(ranger && color.is_some_and(|color| choices.filter.hides(color)))
+            };
+            shown.then(|| {
+                (
+                    Row {
+                        spawn_id: entry.spawn_id,
+                        name: eq_client_core::entities::display_name(&spawn.name),
+                        color,
+                        chosen: window.selected == Some(entry.spawn_id),
+                    },
+                    entry.distance,
+                )
             })
         })
-        .collect()
+        .collect();
+    if ranger {
+        choices.sort.order(&mut listed, |(_, distance)| *distance);
+    }
+    listed.into_iter().map(|(row, _)| row).collect()
 }
 
 /// Keeps the window with the world's: it opens when the press reaches the
@@ -213,19 +363,22 @@ const ROW_HEIGHT: f32 = 16.0;
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn fill(
     mut commands: Commands,
-    online: Res<OnlineState>,
+    (online, options): (Res<OnlineState>, Option<Res<crate::options::OptionsState>>),
     mut lists: Query<(Entity, &mut TrackRows, Option<&Children>)>,
 ) {
     let world = online.world();
+    let choices = Choices::of(options.as_deref());
     let input = Inputs {
         session: world.session_id(),
         revision: world.track_window().revision,
         level: world.player().map(|player| player.level),
+        choices,
+        group: group_key(world),
     };
     if lists.iter().all(|(_, list, _)| list.checked == Some(input)) {
         return;
     }
-    let wanted = rows(world);
+    let wanted = rows(world, choices);
     for (entity, mut list, children) in &mut lists {
         if list.checked == Some(input) {
             continue;
@@ -417,7 +570,7 @@ mod tests {
     fn the_rows_keep_the_servers_order_and_colour_each_name_by_level() {
         let mut online = admitted();
         testing::news(&mut online, [listed(&[31, 99, 30])]);
-        let rows = rows(online.world());
+        let rows = rows(online.world(), Choices::default());
         // The unknown spawn is left out, as the program skips it.
         let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
         assert_eq!(names, ["a snake", "a bat"]);
@@ -425,25 +578,199 @@ mod tests {
         // Level 14 against 20 is near the green edge: light blue.
         assert_eq!(rows[1].color, Some(ConColor::LightBlue));
         online.select_tracked(Some(30));
-        assert!(super::rows(online.world())[1].chosen);
+        assert!(super::rows(online.world(), Choices::default())[1].chosen);
+    }
+
+    /// Admits a player of this class, keeping the zone's spawns.
+    fn of_class(online: &mut OnlineState, class: Option<u32>) {
+        let mut player = testing::player(7);
+        player.level = 20;
+        player.class = class;
+        testing::admit(online, 1, player);
     }
 
     #[test]
-    fn only_a_rangers_tracking_options_pass() {
-        let mut online = admitted();
-        let class = |online: &mut OnlineState, class| {
-            let mut player = testing::player(7);
-            player.class = class;
-            testing::admit(online, 1, player);
+    fn a_rangers_choices_shape_the_list_and_anothers_keeps_the_servers() {
+        use eq_client_core::track_options::{TrackFilter, TrackPlayers, TrackSort};
+        // A list of a red snake 30 away, a player 5 away and a green bat 20
+        // away, for a level-20 player of this class.
+        let listing = |class| {
+            use eq_client_core::SpawnKind::{Npc, Player};
+            let mut online = OnlineState::new(true);
+            of_class(&mut online, class);
+            let creature = |spawn_id, name: &str, level, kind| {
+                let mut spawn = testing::pet(spawn_id, 0);
+                spawn.pet_owner = None;
+                spawn.name = name.into();
+                spawn.level = level;
+                spawn.kind = kind;
+                spawn
+            };
+            testing::spawns(
+                &mut online,
+                vec![
+                    creature(30, "a_bat00", 14, Npc),
+                    creature(31, "a_snake00", 23, Npc),
+                    creature(32, "Friend", 20, Player),
+                ],
+            );
+            testing::news(
+                &mut online,
+                [WorldEvent::Tracking(TrackingUpdate::Listed(
+                    [(31, 30.0), (32, 5.0), (30, 20.0)]
+                        .into_iter()
+                        .map(|(spawn_id, distance)| Tracked { spawn_id, distance })
+                        .collect(),
+                ))],
+            );
+            online
         };
-        class(&mut online, Some(1));
-        assert!(rangers_only("/tracksort 1", online.world()));
-        assert!(rangers_only("/TRACKFILTER", online.world()));
-        assert!(!rangers_only("/trackplayers on", online.world()));
-        class(&mut online, Some(RANGER));
-        assert!(!rangers_only("/tracksort 1", online.world()));
-        class(&mut online, None);
-        assert!(!rangers_only("/tracksort", online.world()));
+        let ids = |online: &OnlineState, choices| {
+            rows(online.world(), choices)
+                .iter()
+                .map(|row| row.spawn_id)
+                .collect::<Vec<_>>()
+        };
+        let sorted = |sort| Choices {
+            sort,
+            ..Choices::default()
+        };
+        let online = listing(Some(RANGER));
+        assert_eq!(ids(&online, Choices::default()), [31, 32, 30]);
+        assert_eq!(ids(&online, sorted(TrackSort::Distance)), [32, 30, 31]);
+        assert_eq!(
+            ids(&online, sorted(TrackSort::ReverseDistance)),
+            [31, 30, 32]
+        );
+        assert_eq!(ids(&online, sorted(TrackSort::Consider)), [31, 32, 30]);
+        assert_eq!(
+            ids(&online, sorted(TrackSort::ReverseConsider)),
+            [31, 32, 30]
+        );
+        // The bat (green, or light blue near the edge) hides; a player is
+        // never filtered by colour.
+        let filtered = Choices {
+            filter: TrackFilter(0x1 | 0x4 | 0x20),
+            ..Choices::default()
+        };
+        assert_eq!(ids(&online, filtered), [31, 32]);
+        // Players: none, or only the group's.
+        let players = |players| Choices {
+            players,
+            ..Choices::default()
+        };
+        assert_eq!(ids(&online, players(TrackPlayers::Off)), [31, 30]);
+        assert_eq!(ids(&online, players(TrackPlayers::Group)), [31, 30]);
+        // Another class: the server's order, nothing filtered by colour,
+        // but the players choice still holds.
+        let online = listing(Some(1));
+        let all = Choices {
+            sort: TrackSort::Distance,
+            filter: TrackFilter(0x3f),
+            players: TrackPlayers::Off,
+        };
+        assert_eq!(ids(&online, all), [31, 30]);
+        assert_eq!(
+            ids(
+                &online,
+                Choices {
+                    players: TrackPlayers::On,
+                    ..all
+                }
+            ),
+            [31, 32, 30]
+        );
+    }
+
+    fn answering(class: Option<u32>) -> App {
+        let mut online = admitted();
+        of_class(&mut online, class);
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(crate::options::OptionsState::default())
+            .init_resource::<crate::chat::ChatState>()
+            .add_systems(Update, answer_option);
+        app
+    }
+
+    fn answer(app: &mut App, option: TrackOption) -> Option<String> {
+        app.world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .track_option = Some(option);
+        app.update();
+        app.world()
+            .resource::<crate::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::All)
+            .last()
+            .map(|(_, line)| line.message.text.clone())
+    }
+
+    #[test]
+    fn each_option_word_sets_its_choice_and_says_its_line() {
+        use eq_client_core::track_options::{TrackFilter, TrackPlayers, TrackSort};
+        assert_eq!(
+            TrackOption::typed("/tracksort rd"),
+            Some(TrackOption::Sort("rd".into()))
+        );
+        assert_eq!(
+            TrackOption::typed("/TrackFilter  light blue "),
+            Some(TrackOption::Filter("light blue".into()))
+        );
+        assert_eq!(
+            TrackOption::typed("/trackplayers"),
+            Some(TrackOption::Players(String::new()))
+        );
+        assert_eq!(TrackOption::typed("/tracking"), None);
+
+        let mut app = answering(Some(RANGER));
+        let options = |app: &App| {
+            let state = app.world().resource::<crate::options::OptionsState>();
+            (
+                state.options.track_sort,
+                state.options.track_filter,
+                state.options.track_players,
+                state.track_filter,
+            )
+        };
+        answer(&mut app, TrackOption::Sort("rd".into()));
+        assert_eq!(options(&app).0, TrackSort::ReverseDistance);
+        // A word the sort doesn't take changes nothing.
+        let said = answer(&mut app, TrackOption::Sort("x".into()));
+        assert_eq!(said.as_deref(), Some("Use /tracksort N, D, C, RD or RC."));
+        assert_eq!(options(&app).0, TrackSort::ReverseDistance);
+        // The filter toggles for the session; the saved mask stays.
+        answer(&mut app, TrackOption::Filter("Green".into()));
+        answer(&mut app, TrackOption::Filter("light blue".into()));
+        assert_eq!(options(&app).3, TrackFilter(0x21));
+        answer(&mut app, TrackOption::Filter("green".into()));
+        assert_eq!(options(&app).3, TrackFilter(0x20));
+        assert_eq!(options(&app).1, TrackFilter(0));
+        // A word for no colour says nothing.
+        let before = answer(&mut app, TrackOption::Filter("purple".into()));
+        assert_eq!(before.as_deref(), Some("Tracking now shows that colour."));
+        answer(&mut app, TrackOption::Players("group".into()));
+        assert_eq!(options(&app).2, TrackPlayers::Group);
+        let said = answer(&mut app, TrackOption::Players("maybe".into()));
+        assert_eq!(said.as_deref(), Some("Use /trackplayers on, off or group."));
+        assert_eq!(options(&app).2, TrackPlayers::Group);
+
+        // Another class: sort and filter get the Rangers-only line and
+        // change nothing; the players choice is anyone's.
+        let mut app = answering(Some(1));
+        for option in [
+            TrackOption::Sort("d".into()),
+            TrackOption::Filter("green".into()),
+        ] {
+            assert_eq!(
+                answer(&mut app, option).as_deref(),
+                Some("Sorting and filtering tracking are for Rangers.")
+            );
+        }
+        assert_eq!(options(&app).0, TrackSort::Normal);
+        assert_eq!(options(&app).3, TrackFilter(0));
+        answer(&mut app, TrackOption::Players("off".into()));
+        assert_eq!(options(&app).2, TrackPlayers::Off);
     }
 
     #[test]

@@ -2,6 +2,31 @@
 
 ## Unreleased
 
+- The track window's options, as the Titanium program keeps them (read
+  R49-30 e, checklist 6.638):
+  - **`/tracksort`** (Rangers): N, D, C, RD or RC by their first letters,
+    with lines 0x335d-0x3361, or 0x3362 for any other word. Distance and
+    reverse distance order the list by the server's distances; normal,
+    consider and reverse consider keep the server's order, as the program's
+    sort does. Saved at once.
+  - **`/trackfilter`** (Rangers): a colour word (the installation's words
+    for green, blue, white, yellow, red and light blue) toggles hiding NPCs
+    of that colour, with line 0x336c or 0x336b. For the session only, as
+    the program's; the character's saved mask applies when they start
+    playing. A word for no colour says nothing (the program's answer is
+    unread).
+  - **`/trackplayers`** (anyone): on, off or group, with lines
+    0x3354-0x3357. Off hides players; group lists only your group's. Saved
+    at once.
+  - Another class's sort or filter still gets the Rangers-only line 0x3363,
+    and another class's list keeps the server's order with no colour
+    filter.
+  - Kept with each character's options, seeded once from an installed
+    `eqclient.ini` (`TrackSortType`, `TrackFilterType`, `TrackPlayers` in
+    `[Defaults]`); labelled departure: the program keeps them per
+    installation. The skin's controls for them (its sort and players
+    combo boxes and six colour checkboxes) stay greyed for now; wiring
+    them is a follow-up.
 - Follow program reads R49-25 and R49-25b on Titanium for the walk's edge climb (checklist 6.482). The lift over the origin is now worked out per body: at least 1.9, half the stand height for barbarians, trolls and ogres, and none while ducking or in posture 120. The climb is the sphere's bottom, S + L − r. Until the models' radii are read from their files, no body climbs more than the 1.25 over its origin a human was seen to climb, so races 2, 9 and 10 gain nothing yet, and a taller body of another race climbs a little less (a Vah Shir of size 7: 5.52). The walk stops climbing only when its origin is in water or lava, not when its feet are, so wading out over a pool's rim climbs as on dry ground.
 - Guild invitations follow the Titanium program further (read R49-33 d, checklist 6.633). An offer of a lower rank in your own guild is taken at once with that rank and no dialog, as the program does; only an offer of a member's rank prints its line. Before, a lower offer other than a member's went unanswered. And the invitation dialog's 10-second wait now answers as No does (response 5), where it used to send nothing; that the program's wait reaches that answer is inferred. Scripts answer the dialog with `click("answer", "yes")` or `"no"`, as before.
 - The track window draws light blue as the Titanium program does (read

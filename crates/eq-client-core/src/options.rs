@@ -11,6 +11,7 @@ use crate::{
     no_drop::LootNoDrop,
     player_models::LuclinModels,
     qol::{self, Fix},
+    track_options::{TrackFilter, TrackPlayers, TrackSort},
 };
 
 /// The first line of an options file.
@@ -30,6 +31,10 @@ const ALL_LUCLIN_MODELS_OFF: &str = "all_luclin_models_off";
 
 /// The name a file keeps [`Options::attack_on_assist`] under.
 const ATTACK_ON_ASSIST: &str = "attack_on_assist";
+/// The names a file keeps the track window's options under.
+const TRACK_SORT: &str = "track_sort";
+const TRACK_FILTER: &str = "track_filter";
+const TRACK_PLAYERS: &str = "track_players";
 /// The name a file keeps [`Options::channel_autojoin`] under.
 const CHANNEL_AUTOJOIN: &str = "channel_autojoin";
 
@@ -475,6 +480,16 @@ pub struct Options {
     /// default there is unread, so it starts off (inferred, checklist
     /// 6.490).
     pub attack_on_assist: bool,
+    /// How a Ranger's track list is ordered, as `/tracksort` sets it and
+    /// saves at once ([`crate::track_options`]).
+    pub track_sort: TrackSort,
+    /// The colours a Ranger's track list hides when the character starts
+    /// playing. `/trackfilter` changes the list for the session without
+    /// saving, as the program's does; the file sets it.
+    pub track_filter: TrackFilter,
+    /// Which players a track list shows, as `/trackplayers` sets it and
+    /// saves at once.
+    pub track_players: TrackPlayers,
     /// The chat server channels joined at each login, as `/autojoin` sets
     /// them (read R49-12 c, checklist 6.616). The official client writes
     /// `[ChatManager]` `ChannelAutoJoin` to the character's own ini; this
@@ -563,6 +578,9 @@ impl Default for Options {
             show_names: ShowNames::Everything,
             loot_no_drop: LootNoDrop::Ask,
             attack_on_assist: false,
+            track_sort: TrackSort::Normal,
+            track_filter: TrackFilter(0),
+            track_players: TrackPlayers::On,
             channel_autojoin: None,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
@@ -783,6 +801,9 @@ impl Options {
                 }
                 continue;
             }
+            if options.read_track_option(key.trim(), value.trim()) {
+                continue;
+            }
             if options.chat_filters.read(key.trim(), value) {
                 continue;
             }
@@ -808,6 +829,25 @@ impl Options {
             options.luclin_models = keys.over(options.luclin_models);
         }
         options
+    }
+
+    /// Reads a track window option's line; whether the key was one of those.
+    fn read_track_option(&mut self, key: &str, value: &str) -> bool {
+        match key {
+            TRACK_SORT => {
+                if let Some(sort) = TrackSort::saved(value) {
+                    self.track_sort = sort;
+                }
+            }
+            TRACK_FILTER => {
+                if let Ok(mask) = value.parse() {
+                    self.track_filter = TrackFilter(mask);
+                }
+            }
+            TRACK_PLAYERS => self.track_players = TrackPlayers::saved(value),
+            _ => return false,
+        }
+        true
     }
 
     /// Reads a chat font size, pointer speed or colour line; whether the key
@@ -864,6 +904,9 @@ impl Options {
         for part in [ATTACK_ON_ASSIST, " = ", &attack_on_assist, "\n"] {
             text.push_str(part);
         }
+        let _ = writeln!(text, "{TRACK_SORT} = {}", self.track_sort.word());
+        let _ = writeln!(text, "{TRACK_FILTER} = {}", self.track_filter.0);
+        let _ = writeln!(text, "{TRACK_PLAYERS} = {}", self.track_players.word());
         if let Some(list) = &self.channel_autojoin {
             for part in [CHANNEL_AUTOJOIN, " = ", list.as_str(), "\n"] {
                 text.push_str(part);
@@ -924,6 +967,9 @@ mod tests {
             eq_network_game::filters::FilterMode::Hide,
         );
         options.attack_on_assist = true;
+        options.track_sort = TrackSort::ReverseDistance;
+        options.track_filter = TrackFilter(0x21);
+        options.track_players = TrackPlayers::Group;
         options.channel_autojoin = AutoJoin::new(" general, trade:secret ");
         let text = options.text();
         assert!(text.contains("luclin_models = DAF\n"));
@@ -946,6 +992,9 @@ mod tests {
         assert!(text.contains("loot_no_drop = 1\n"));
         assert!(text.contains("Channel04 = 0\n"));
         assert!(text.contains("attack_on_assist = true\n"));
+        assert!(text.contains("track_sort = RDISTANCE\n"));
+        assert!(text.contains("track_filter = 33\n"));
+        assert!(text.contains("track_players = GROUP\n"));
         assert!(text.contains("channel_autojoin = general, trade:secret\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // Not set, it isn't written, and the installation's keys stay the
