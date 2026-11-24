@@ -542,13 +542,25 @@ pub(super) fn press_gem(
         &messages::Messages,
         &crate::ViewerSettings,
     ),
-    map: &super::keys::KeyMap,
+    (map, options): (&super::keys::KeyMap, Option<&crate::options::OptionsState>),
 ) {
+    const BARD: u32 = 8;
     let world = online.world();
     let Some(player) = world.player() else {
         return;
     };
     let spell = world.gem(usize::from(gem));
+    let checks = requests::CastChecks {
+        spell_level: spell
+            .zip(player.class)
+            .and_then(|(spell, class)| names.class_level(spell, class)),
+        song: spell.is_some_and(|spell| {
+            names
+                .class_level(spell, BARD)
+                .is_some_and(|level| level != 0 && level != u8::MAX)
+        }),
+        auto_stand: options.is_none_or(|options| options.options.allow_auto_stand),
+    };
     requests::spell(
         chat,
         world,
@@ -559,6 +571,7 @@ pub(super) fn press_gem(
             target_id: world.target().selected.unwrap_or(player.spawn_id),
             forgetting,
             linked_timer: spell.and_then(|spell| names.linked_timer(spell)),
+            checks,
         },
         (messages, map),
         || super::invisibility::drop_before_cast(world, outbox, names, settings.0.installed_client),
@@ -629,16 +642,18 @@ pub(super) fn actions(
         _ => None,
     });
     if let Some(gem) = gem {
-        // A gem click while singing also clears the melody (0x47e8e0, read
-        // R49-33 c), the user's and a script's alike.
-        if forget.is_none() && online.world().casting().singing.is_some() {
+        // A left click clears the melody before its cast, whatever comes of
+        // it (0x4eccc6, read R49-34 d); a key press clears it while singing
+        // (0x4ecb56's song stop, read R49-33 c). The user's and a script's
+        // alike.
+        if forget.is_none() && (clicked.is_some() || online.world().casting().singing.is_some()) {
             online.clear_melody();
         }
         press_gem(
             (gem, forget.is_some()),
             (&mut chat, &online, &outbox),
             (&definitions.0, &definitions.1, &definitions.2),
-            &keys.map,
+            (&keys.map, options.as_deref()),
         );
     }
     if let Some(hotbar::Action::Ability(ability)) = bar_action {
