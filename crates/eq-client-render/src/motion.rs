@@ -2911,17 +2911,6 @@ fn unsupported(
     world.support(feet).is_none() && world.ground(feet, 0.01, tolerance).is_none()
 }
 
-/// Walks like a grounded step but keeps going past ledges and falls under gravity,
-/// in the 50 ms slices the airborne controller steps; `jump` starts a jump
-/// in the first slice when the character stands on the ground. Each slice may
-/// climb, so the sample stops before its total rise passes what the session's
-/// movement guard accepts: `climb` (the body's reach a step, which the session
-/// has heard) in each program step the sample has spanned, or one riser a
-/// sample where none is told, or one riser for a sample that ends falling
-/// (the guard's fall rule); and while a jump rises, as far as the jump's
-/// speed less gravity carries it in the sample (the guard's own rule after
-/// the session's jump notice). A larger climb takes several accepted
-/// samples instead of one that would be refused and retried forever.
 /// Our own vertical speed for a sample, as the programs send their actor's
 /// (6.617): the jump's or fall's at that moment, in world units a second,
 /// up positive, while the body is in the air; none on the ground and on
@@ -2936,6 +2925,17 @@ fn own_vertical_speed(airborne: Option<&AirborneController>) -> Option<f32> {
         .filter(|speed| *speed != 0.0 && speed.is_finite())
 }
 
+/// Walks like a grounded step but keeps going past ledges and falls under gravity,
+/// in the 50 ms slices the airborne controller steps; `jump` starts a jump
+/// in the first slice when the character stands on the ground. Each slice may
+/// climb, so the sample stops before its total rise passes what the session's
+/// movement guard accepts: `climb` (the body's reach a step, which the session
+/// has heard) in each program step the sample has spanned, or one riser a
+/// sample where none is told, or one riser for a sample that ends falling
+/// (the guard's fall rule); and while a jump rises, as far as the jump's
+/// speed less gravity carries it in the sample (the guard's own rule after
+/// the session's jump notice). A larger climb takes several accepted
+/// samples instead of one that would be refused and retried forever.
 #[cfg(test)]
 #[allow(clippy::too_many_arguments)]
 pub(super) fn fall_step(
