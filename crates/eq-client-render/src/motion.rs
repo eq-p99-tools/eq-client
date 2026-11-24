@@ -2864,8 +2864,6 @@ fn lift_under(
     Some((door, Vec3::new(feet.x, floor, feet.z)))
 }
 
-/// Whether no ground is under the feet within the step the server's
-/// movement guard takes as grounded: the player there falls.
 /// Whether feet at rest are in the air: no floor under them within the
 /// generation's ground tolerance, so they fall. The programs' on-ground test
 /// takes feet up to 0.5 + 0.001 over a floor as on it (R-s: Titanium
