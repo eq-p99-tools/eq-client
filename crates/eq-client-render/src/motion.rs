@@ -7330,6 +7330,65 @@ pub(super) mod tests {
         }
     }
 
+    #[test]
+    fn every_titanium_water_kind_surfaces_into_ordinary_airborne_motion() {
+        use eq_client_assets::regions::RegionKind;
+        for kind in [
+            RegionKind::WATER,
+            RegionKind::SLIME,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::WATER_2,
+            RegionKind::WATER_3,
+        ] {
+            // Exercise ZoneLiquids, not a mock whose exit already accepts
+            // every wet kind. The ordinary session bounds every handoff.
+            let seen = swim_from(
+                kind_pool(kind),
+                Vec3::new(0.0, -3.76, 0.0),
+                0.0,
+                (Some(WET_SWIMMER), 0.4),
+                8,
+            )
+            .unwrap();
+            let exit = seen
+                .iter()
+                .position(|(mode, feet, _)| *mode == MovementMode::Swim && feet.y + 3.75 > 0.0)
+                .unwrap_or_else(|| panic!("{kind:?} never surfaced: {seen:?}"));
+            assert!(
+                seen[exit + 1..]
+                    .iter()
+                    .any(|(mode, _, _)| matches!(mode, MovementMode::Forward | MovementMode::Fall)),
+                "{kind:?} never handed off to ordinary motion: {seen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_titanium_water_kind_keeps_a_bank_that_stops_plain_water_solid() {
+        use eq_client_assets::regions::RegionKind;
+        let wall = [
+            [[0.0, -60.0, -20.0], [0.0, 20.0, -20.0], [0.0, 20.0, 20.0]],
+            [[0.0, -60.0, -20.0], [0.0, 20.0, 20.0], [0.0, -60.0, 20.0]],
+        ];
+        let mut baseline = None;
+        for kind in [
+            RegionKind::WATER,
+            RegionKind::SLIME,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::WATER_2,
+            RegionKind::WATER_3,
+        ] {
+            let mut world = kind_pool(kind);
+            world.set_obstacles(vec![std::sync::Arc::new(
+                eq_client_core::movement::CollisionMesh::new(wall).unwrap(),
+            )]);
+            let held = world.wet_step(Vec3::new(-0.8, -3.76, 0.0), Vec3::new(1.6, 0.1, 0.0), 7.5);
+            assert!(held.x < -0.4, "{kind:?}: {held:?}");
+            let plain_water = *baseline.get_or_insert(held);
+            assert!(held.abs_diff_eq(plain_water, 1e-6), "{kind:?}: {held:?}");
+        }
+    }
+
     /// A made-up ramp out of a pool whose surface is at -2: 14 wide,
     /// rising from 1 below the surface at its lip to 8 above it, in two
     /// overlapping faces split at a crease, with a wall along one side and
