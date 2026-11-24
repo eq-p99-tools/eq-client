@@ -65,6 +65,62 @@ pub enum Medium {
     OtherSubmerging,
 }
 
+/// The kind the Titanium program gives a region from its tag, the low byte
+/// its classifier (0x435ec9) sets and the origin and head probes keep (read
+/// R49-26): 5 `WT`, 6 `SL`, 7 `LA`, 8 `VW`, 9 `W2`, 10 `W3`; 0 is dry. Its
+/// motion step, swim choice and breath take 5 or more as in liquid; its
+/// liquid routine (0x41d4ba) takes 7 as lava and 8 as cold (R49-3 b).
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+pub struct RegionKind(pub u8);
+
+impl RegionKind {
+    /// No liquid.
+    pub const DRY: Self = Self(0);
+    /// `WT`: water.
+    pub const WATER: Self = Self(5);
+    /// `SL`: slime.
+    pub const SLIME: Self = Self(6);
+    /// `LA`: lava.
+    pub const LAVA: Self = Self(7);
+    /// `VW`: Velious water, which is cold.
+    pub const VELIOUS_WATER: Self = Self(8);
+    /// `W2`: the second water.
+    pub const WATER_2: Self = Self(9);
+    /// `W3`: the third water.
+    pub const WATER_3: Self = Self(10);
+
+    /// Whether the program counts the region as liquid: 5 or more.
+    #[must_use]
+    pub const fn is_liquid(self) -> bool {
+        self.0 >= 5
+    }
+
+    /// Whether the program's motion step damps it with its slower set: 6
+    /// to 8, slime, lava and Velious water (R49-26 a, R7).
+    #[must_use]
+    pub const fn is_slower(self) -> bool {
+        matches!(self.0, 6..=8)
+    }
+
+    /// Whether the program's liquid routine hurts with cold there: 4 or 8
+    /// (R49-3 b). No tag gives 4 (R49-26 c).
+    #[must_use]
+    pub const fn is_cold(self) -> bool {
+        matches!(self.0, 4 | 8)
+    }
+
+    /// The breathing medium this kind gives the Titanium hazards.
+    #[must_use]
+    pub const fn medium(self) -> Medium {
+        match self.0 {
+            5 => Medium::Water,
+            3 | 7 => Medium::Lava,
+            6 | 8..=10 => Medium::OtherSubmerging,
+            _ => Medium::Air,
+        }
+    }
+}
+
 /// Region prefixes checked by Awater's S3D converter.
 const REGION_KINDS: [&str; 7] = ["WT", "LA", "DRNTP", "DRP_", "SL", "DRN", "VWA"];
 
@@ -80,6 +136,7 @@ pub struct ZoneRegions {
     routes: BTreeMap<usize, ZoneLine>,
     liquids: BTreeMap<usize, Liquid>,
     media: BTreeMap<usize, Medium>,
+    kinds: BTreeMap<usize, RegionKind>,
 }
 
 impl ZoneRegions {
@@ -103,6 +160,19 @@ impl ZoneRegions {
     #[cfg(feature = "testing")]
     #[must_use]
     pub fn test_liquid_surface(height: f32, liquid: Liquid) -> Self {
+        let kind = match liquid {
+            Liquid::Water => RegionKind::WATER,
+            Liquid::Lava => RegionKind::LAVA,
+        };
+        Self::test_kind_surface(height, kind)
+    }
+
+    /// Constructs a horizontal surface over a region of one program kind for
+    /// other crates' synthetic tests. Water and lava kinds also fill the
+    /// liquid map, as a classic zone's would.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn test_kind_surface(height: f32, kind: RegionKind) -> Self {
         let leaf = |region| Node {
             normal: [0.0; 3],
             distance: 0.0,
@@ -110,9 +180,11 @@ impl ZoneRegions {
             front: None,
             back: None,
         };
-        let medium = match liquid {
-            Liquid::Water => Medium::Water,
-            Liquid::Lava => Medium::Lava,
+        let medium = kind.medium();
+        let liquids = match medium {
+            Medium::Water => BTreeMap::from([(1, Liquid::Water)]),
+            Medium::Lava => BTreeMap::from([(1, Liquid::Lava)]),
+            Medium::Air | Medium::OtherSubmerging => BTreeMap::new(),
         };
         Self {
             nodes: vec![
@@ -126,8 +198,9 @@ impl ZoneRegions {
                 leaf(0),
                 leaf(1),
             ],
-            liquids: BTreeMap::from([(1, liquid)]),
+            liquids,
             media: BTreeMap::from([(1, medium)]),
+            kinds: BTreeMap::from([(1, kind)]),
             routes: BTreeMap::new(),
         }
     }
@@ -207,13 +280,15 @@ impl ZoneRegions {
         let mut routes = BTreeMap::new();
         let mut liquids = BTreeMap::new();
         let mut media = BTreeMap::new();
+        let mut kinds = BTreeMap::new();
         for zone in doc.fragment_iter::<Zone>() {
             let name = doc.get_string(zone.name_reference).unwrap_or_default();
             // As the water maps mark them, the last list naming a region
             // decides what fills it. A region past the tree fills nothing,
             // and a list naming one does not cost the zone its other regions.
             let liquid = liquid_tag(name, &zone.user_data);
-            let medium = titanium_medium(name, &zone.user_data);
+            let kind = titanium_kind(name, &zone.user_data);
+            let medium = kind.medium();
             let listed = zone
                 .regions
                 .iter()
@@ -228,6 +303,11 @@ impl ZoneRegions {
                     media.remove(&region);
                 } else {
                     media.insert(region, medium);
+                }
+                if kind == RegionKind::DRY {
+                    kinds.remove(&region);
+                } else {
+                    kinds.insert(region, kind);
                 }
             }
             let tag = if zone.user_data.is_empty() {
@@ -254,6 +334,7 @@ impl ZoneRegions {
             routes,
             liquids,
             media,
+            kinds,
         })
     }
 
@@ -271,6 +352,15 @@ impl ZoneRegions {
     /// neither.
     pub fn liquid_at(&self, position: [f32; 3]) -> Option<Liquid> {
         self.liquids.get(&self.region_at(position)?).copied()
+    }
+
+    /// The Titanium program's kind for the region at a point ([`RegionKind`]);
+    /// dry where no tag gives one. Missing geometry or an ambiguous split
+    /// plane supplies none.
+    #[must_use]
+    pub fn kind_at(&self, position: [f32; 3]) -> Option<RegionKind> {
+        let region = self.region_at(position)?;
+        Some(self.kinds.get(&region).copied().unwrap_or(RegionKind::DRY))
     }
 
     /// Reads Titanium's classic WLD classification for a resolved leaf.
@@ -637,11 +727,18 @@ fn liquid_tag(name: &str, user_data: &str) -> Option<Liquid> {
     }
 }
 
-/// Titanium `eqgame.exe`'s classic region tag callback at 0x435db5,
-/// registered at 0x443f8f. The classic lookup uses the last region-list
-/// assignment and prefers nonempty user data. Movement's `liquid_tag` uses
-/// Awater's name-first rule.
+#[cfg(test)]
 fn titanium_medium(name: &str, user_data: &str) -> Medium {
+    titanium_kind(name, user_data).medium()
+}
+
+/// The program's kind for a region by its tag ([`RegionKind`]), as Titanium
+/// `eqgame.exe`'s classic region tag callback at 0x435db5 (registered at
+/// 0x443f8f) takes it, by the classifier's prefixes (R49-26), with that
+/// callback's `A` forms of water, lava and Velious water. The classic
+/// lookup uses the last region-list assignment and prefers nonempty user
+/// data. Movement's `liquid_tag` uses Awater's name-first rule.
+fn titanium_kind(name: &str, user_data: &str) -> RegionKind {
     // The region callback receives nonempty user data first and otherwise
     // the fragment name. Its tag must have at least four bytes.
     let tag = if user_data.is_empty() {
@@ -650,19 +747,23 @@ fn titanium_medium(name: &str, user_data: &str) -> Medium {
         user_data
     };
     if tag.len() < 4 {
-        return Medium::Air;
+        return RegionKind::DRY;
     }
-    if tag.starts_with("WT") || tag.starts_with("AWT") {
-        Medium::Water
-    } else if tag.starts_with("LA") || tag.starts_with("ALV") {
-        Medium::Lava
-    } else if ["SL", "VW", "AVW", "W2", "W3"]
-        .iter()
-        .any(|prefix| tag.starts_with(prefix))
-    {
-        Medium::OtherSubmerging
+    let starts = |prefixes: &[&str]| prefixes.iter().any(|prefix| tag.starts_with(prefix));
+    if starts(&["WT", "AWT"]) {
+        RegionKind::WATER
+    } else if starts(&["LA", "ALV"]) {
+        RegionKind::LAVA
+    } else if starts(&["SL"]) {
+        RegionKind::SLIME
+    } else if starts(&["VW", "AVW"]) {
+        RegionKind::VELIOUS_WATER
+    } else if starts(&["W2"]) {
+        RegionKind::WATER_2
+    } else if starts(&["W3"]) {
+        RegionKind::WATER_3
     } else {
-        Medium::Air
+        RegionKind::DRY
     }
 }
 
@@ -788,6 +889,7 @@ mod tests {
             routes: BTreeMap::from([(0, ZoneLine::Reference(7))]),
             liquids: BTreeMap::new(),
             media: BTreeMap::new(),
+            kinds: BTreeMap::new(),
         }
     }
 
@@ -815,6 +917,7 @@ mod tests {
             routes: BTreeMap::from([(0, ZoneLine::Reference(7))]),
             liquids: BTreeMap::new(),
             media: BTreeMap::new(),
+            kinds: BTreeMap::new(),
         };
         let start = [9.0, 0.0, 0.0];
         let end = [11.0, 0.0, 0.0];
@@ -887,6 +990,7 @@ mod tests {
             routes: BTreeMap::new(),
             liquids: BTreeMap::from([(1, Liquid::Lava), (2, Liquid::Water)]),
             media: BTreeMap::from([(1, Medium::Lava), (2, Medium::Water)]),
+            kinds: BTreeMap::new(),
         }
     }
 
@@ -952,6 +1056,21 @@ mod tests {
             Medium::OtherSubmerging
         );
         assert_eq!(titanium_medium("Z0001_ZONE", "LA"), Medium::Air);
+        for (tag, kind) in [
+            ("WT_ZONE", RegionKind::WATER),
+            ("AWT_", RegionKind::WATER),
+            ("SL_ZONE", RegionKind::SLIME),
+            ("LA_ZONE", RegionKind::LAVA),
+            ("ALV_", RegionKind::LAVA),
+            ("VWA_", RegionKind::VELIOUS_WATER),
+            ("AVW_", RegionKind::VELIOUS_WATER),
+            ("W2_ZONE", RegionKind::WATER_2),
+            ("W3_ZONE", RegionKind::WATER_3),
+            ("DRP_ZONE", RegionKind::DRY),
+            ("VW", RegionKind::DRY),
+        ] {
+            assert_eq!(titanium_kind("Z0001_ZONE", tag), kind, "{tag}");
+        }
 
         let regions = layers();
         assert_eq!(regions.medium_at([0.0, 1.0, 0.0]), Some(Medium::Air));
@@ -1021,6 +1140,7 @@ mod tests {
             routes: BTreeMap::new(),
             liquids: BTreeMap::from([(0, Liquid::Water), (2, Liquid::Water)]),
             media: BTreeMap::new(),
+            kinds: BTreeMap::new(),
         };
         let (a, b) = ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
         assert_eq!(
@@ -1053,6 +1173,7 @@ mod tests {
             routes: BTreeMap::new(),
             liquids: BTreeMap::from([(1, Liquid::Water)]),
             media: BTreeMap::from([(1, Medium::Water)]),
+            kinds: BTreeMap::new(),
         };
         let (water, air) = ([-1.0, -0.01, 0.0], [1.0, -0.01, 0.0]);
         assert!(regions.water_surface_exit(water, air));
@@ -1087,6 +1208,7 @@ mod tests {
             routes: BTreeMap::new(),
             liquids: BTreeMap::from([(0, Liquid::Water)]),
             media: BTreeMap::from([(0, Medium::Water), (1, Medium::OtherSubmerging)]),
+            kinds: BTreeMap::new(),
         };
         for medium in [Medium::OtherSubmerging, Medium::Lava] {
             regions.media.insert(1, medium);
