@@ -25,22 +25,86 @@ struct Water {
 @group(#{MATERIAL_BIND_GROUP}) @binding(103) var next_texture: texture_2d<f32>;
 @group(#{MATERIAL_BIND_GROUP}) @binding(104) var next_sampler: sampler;
 
-// The slope of a few travelling waves at a level point, in world units
-// (a person is about six tall).
-fn ripples(p: vec2<f32>, t: f32) -> vec2<f32> {
-    var directions = array<vec2<f32>, 6>(
-        vec2(0.80, 0.60), vec2(-0.45, 0.89), vec2(0.97, -0.24),
-        vec2(-0.71, -0.70), vec2(0.20, 0.98), vec2(-0.93, 0.37),
+// A hash of a lattice point, 0 to 1, that holds up at zone-sized coordinates.
+fn hash(p: vec2<f32>) -> f32 {
+    var q = vec2<u32>(bitcast<u32>(i32(p.x)), bitcast<u32>(i32(p.y)));
+    q = q * vec2(1597334673u, 3812015801u);
+    let n = (q.x ^ q.y) * 1597334673u;
+    return f32(n >> 8u) / 16777216.0;
+}
+
+// Smooth value noise and its slope (x: value, yz: d/dx, d/dy).
+fn noised(p: vec2<f32>) -> vec3<f32> {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+    let a = hash(i);
+    let b = hash(i + vec2(1.0, 0.0));
+    let c = hash(i + vec2(0.0, 1.0));
+    let d = hash(i + vec2(1.0, 1.0));
+    let k = vec3(b - a, c - a, a - b - c + d);
+    return vec3(
+        a + k.x * u.x + k.y * u.y + k.z * u.x * u.y,
+        du * vec2(k.x + k.z * u.y, k.y + k.z * u.x),
     );
-    var lengths = array<f32, 6>(29.0, 19.0, 12.5, 8.1, 5.3, 3.4);
-    var slopes = array<f32, 6>(0.035, 0.035, 0.04, 0.035, 0.03, 0.025);
+}
+
+// Plain fractal noise, 0 to 1, for slow patches across a surface.
+fn patches(p: vec2<f32>) -> f32 {
+    return noised(p).x * 0.6 + noised(p * 2.13 + vec2(17.3, 4.1)).x * 0.4;
+}
+
+// The water at a level point, in world units (a person is about six
+// tall): its height, -1 to 1 (x), and its slope (yz). A long swell, then
+// octaves of drifting noise, each turned and moving its own way so no
+// pattern repeats.
+fn waves(p: vec2<f32>, t: f32) -> vec3<f32> {
+    var height = 0.0;
     var slope = vec2(0.0);
-    for (var i = 0; i < 6; i++) {
-        let k = 6.2831853 / lengths[i];
-        let phase = dot(directions[i], p) * k - t * sqrt(9.8 * k) * 0.55;
-        slope += directions[i] * slopes[i] * cos(phase);
+    // Swell: two long, slow, crossing waves.
+    let s1 = vec2(0.80, 0.60);
+    let s2 = vec2(-0.45, 0.89);
+    let p1 = dot(s1, p) * 0.13 - t * 0.75;
+    let p2 = dot(s2, p) * 0.19 - t * 0.9;
+    height += 0.3 * sin(p1) + 0.2 * sin(p2);
+    slope += s1 * 0.07 * cos(p1) + s2 * 0.055 * cos(p2);
+    // Chop: noise octaves with their own drift, the first ones drawn out
+    // across the wind into long wave crests.
+    let across = vec2(-s1.y, s1.x);
+    var q = vec2(dot(p, s1) * 0.11, dot(p, across) * 0.035);
+    var amplitude = 0.5;
+    let turn = mat2x2<f32>(0.8, 0.6, -0.6, 0.8);
+    var drift = vec2(0.3, 0.18);
+    var scale = 0.09;
+    for (var i = 0; i < 5; i++) {
+        let n = noised(q + drift * t);
+        height += (n.x - 0.5) * amplitude;
+        // The noise's slope is per unit of q; bring it back to world units.
+        // Turned back to world axes, the stretch undone in the slope.
+        let stretched = n.yz * amplitude * select(vec2(0.11, 0.035), vec2(scale), i > 0);
+        slope += select(s1 * stretched.x + across * stretched.y, n.yz * amplitude * scale, i > 0) * 1.25;
+        q = select(turn * q * 2.03 + vec2(3.7, 1.3), turn * (p * 0.09 * 2.03) + vec2(3.7, 1.3), i == 0);
+        scale *= 2.03;
+        amplitude *= 0.48;
+        drift = turn * drift * 1.35;
     }
-    return slope;
+    return vec3(height, slope);
+}
+
+// A texture sampled with its repeat hidden: a slow noise picks one of many
+// offsets of the same texture and blends between neighbours (after Inigo
+// Quilez's "texture repetition", technique 3).
+fn untiled(texture: texture_2d<f32>, smp: sampler, uv: vec2<f32>, pick: f32) -> vec4<f32> {
+    let dx = dpdx(uv);
+    let dy = dpdy(uv);
+    let l = pick * 8.0;
+    let ia = floor(l);
+    let f = l - ia;
+    let ca = textureSampleGrad(texture, smp, uv + sin(vec2(3.0, 7.0) * ia), dx, dy);
+    let cb = textureSampleGrad(texture, smp, uv + sin(vec2(3.0, 7.0) * (ia + 1.0)), dx, dy);
+    let difference = ca.rgb - cb.rgb;
+    return mix(ca, cb, smoothstep(0.2, 0.8, f - 0.1 * (difference.x + difference.y + difference.z)));
 }
 
 fn luminance(c: vec3<f32>) -> f32 {
@@ -63,9 +127,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let flow = select(0.03, 0.008, lava);
     let uv1 = uv + vec2(t * flow, t * flow * 0.6);
     let uv2 = uv * 0.71 + vec2(-t * flow * 0.8, t * flow * 0.45) + vec2(0.37, 0.11);
-    let a = mix(textureSample(frame_texture, frame_sampler, uv1), textureSample(next_texture, next_sampler, uv1), blend);
-    let b = mix(textureSample(frame_texture, frame_sampler, uv2), textureSample(next_texture, next_sampler, uv2), blend);
-    let albedo = mix(a.rgb, b.rgb, 0.45);
+    // Each layer picks its offsets from its own slow noise across the zone.
+    let pick1 = patches(world.xz * 0.011);
+    let pick2 = patches(world.xz * 0.009 + vec2(41.0, 13.0));
+    let a = mix(untiled(frame_texture, frame_sampler, uv1, pick1), untiled(next_texture, next_sampler, uv1, pick1), blend);
+    let b = mix(untiled(frame_texture, frame_sampler, uv2, pick2), untiled(next_texture, next_sampler, uv2, pick2), blend);
+    // Wind: broad patches of rougher and calmer water drift across it.
+    let wind = smoothstep(0.2, 0.8, patches(world.xz * 0.0045 + vec2(t * 0.012, t * 0.007)));
+    let albedo = mix(a.rgb, b.rgb, 0.45) * (0.88 + 0.24 * wind);
     var light = vec3(1.0);
 #ifdef VERTEX_COLORS
     light = in.color.rgb;
@@ -85,18 +154,14 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
     let to_eye = normalize(view.world_position.xyz - world);
     let from_above = to_eye.y >= 0.0;
-    // The texture's own pattern, as bumps, breaks up the waves' regularity.
-    let e = 0.02;
-    let bump = vec2(
-        luminance(textureSample(frame_texture, frame_sampler, uv1 + vec2(e, 0.0)).rgb) - luminance(a.rgb)
-            + luminance(textureSample(frame_texture, frame_sampler, uv2 + vec2(e, 0.0)).rgb) - luminance(b.rgb),
-        luminance(textureSample(frame_texture, frame_sampler, uv1 + vec2(0.0, e)).rgb) - luminance(a.rgb)
-            + luminance(textureSample(frame_texture, frame_sampler, uv2 + vec2(0.0, e)).rgb) - luminance(b.rgb),
-    );
     // Far ripples are finer than a pixel: calm them rather than shimmer.
     let distance = length(view.world_position.xyz - world);
     let calm = 1.0 - 0.75 * smoothstep(80.0, 400.0, distance);
-    let slope = (ripples(world.xz, t) + bump * 1.6) * calm;
+    let wave = waves(world.xz, t);
+    let rough = calm * (0.55 + 0.9 * wind);
+    let slope = wave.yz * rough;
+    // Crests stand out and troughs sink back, more so where it is rough.
+    let crest = clamp(0.5 + wave.x * 0.6 * rough, 0.0, 1.0);
     var normal = normalize(vec3(-slope.x, 1.0, -slope.y));
     if !from_above {
         normal = -normal;
@@ -117,7 +182,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let absorbed = 1.0 - exp(-thickness * water.deep.a);
     // The texture's own detail stays faintly visible however deep it is.
     let deep_body = water.deep.rgb * max(light, vec3(0.35)) * (0.6 + 0.8 * luminance(albedo));
-    let body = mix(albedo * water.shallow.rgb * light, deep_body, absorbed * 0.85);
+    var body = mix(albedo * water.shallow.rgb * light, deep_body, absorbed * 0.85);
+    body *= 0.85 + 0.3 * crest;
 
     let sun = water.sun_direction;
     var color: vec3<f32>;
@@ -128,7 +194,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let sky = mix(horizon, zenith, smoothstep(0.0, 0.35, mirrored.y)) * 0.85;
         // Only the sky is mirrored, not the shore, walls and trees around
         // it, so it is held back rather than shown whole.
-        color = mix(body, sky, fresnel * 0.5);
+        // Calm patches mirror more than rough ones.
+        color = mix(body, sky, fresnel * (0.62 - 0.2 * wind));
         alpha = max(mix(0.12, 0.9, absorbed), fresnel * 0.8);
 
         // Foam where the water thins out against the shore.
@@ -137,6 +204,12 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let foam = (1.0 - smoothstep(0.0, 1.2, shore)) * (0.2 + 0.8 * broken);
         color = mix(color, vec3(0.9, 0.95, 0.95) * max(light, vec3(0.6)), foam * 0.75);
         alpha = max(alpha, foam * 0.85);
+
+        // Light passing through the thin tops of waves facing away from
+        // the sun turns them a brighter green-blue.
+        let back = pow(clamp(dot(-to_eye.xz, normalize(sun.xz + vec2(0.0001))) * 0.5 + 0.5, 0.0, 1.0), 2.0);
+        let through = smoothstep(0.55, 1.0, crest) * (0.35 + 0.65 * back) * (0.3 + 0.7 * sun.w) * 0.5;
+        color += vec3(0.05, 0.16, 0.14) * through * (1.0 - fresnel) * max(light, vec3(0.5));
 
         // The sun glints in the ripples.
         let toward = max(dot(mirrored, normalize(sun.xyz)), 0.0);
