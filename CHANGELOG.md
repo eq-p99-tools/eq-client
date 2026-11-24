@@ -11,6 +11,7 @@
   - The Mac-era client's `/surname` isn't read (R49-10d). Quarm's and TAKP's handlers say the client refuses under 20 and cuts to 19, so the same flow runs there (inferred), with the first use attended. Project 1999 stays unoffered.
   - A quoted surname's spaces go as typed, and an answer word other than 0 shows as taken, as the program shows it (eq-network #409, on main's pin).
 
+- **A body at rest more than half a unit above a floor falls onto it, as the programs' does** (checklist 6.648, read R-s: Titanium 0x48a2f4, Mac-era 0x50ba07). A still player counted any floor within 2 units under their feet as ground, so one left that high stayed in the air: a `#goto` onto a ship's deck put a rider 1.9 over the deck for a whole crossing, and watchers drew it on the deck with every report 1.9 above (the #631 riders look). The on-ground test now takes the generation's own tolerance, 0.5 + 0.001, on land too. A client with no read physics keeps the 2.
 - Buying from a merchant follows the Titanium program's order and lines
   (read R49-35 a, checklist 6.627), for the one-click buy and the quantity
   window alike. A pending trade, a ware the merchant no longer lists and a
