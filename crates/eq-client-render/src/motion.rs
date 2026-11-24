@@ -6363,6 +6363,33 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn a_jump_from_standing_still_drops_when_the_windup_duck_cannot_be_posted() {
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let (mut app, _) = standing_jump(client);
+            // A full ordinary command queue refuses the duck synchronously.
+            // No receiver is waiting on this zero-capacity channel.
+            let (sender, receiver) = mpsc::sync_channel(0);
+            app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+            let controls = app.world().resource::<Controls>();
+            assert_eq!((controls.crouch, controls.jump), (None, None));
+            assert_eq!(controls.held, Some(Held::Refused));
+            // Releasing Jump and making the queue available cannot revive
+            // the dropped request on a later frame.
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            let (sender, receiver) = mpsc::sync_channel(16);
+            app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+            let controls = app.world().resource::<Controls>();
+            assert_eq!((controls.crouch, controls.jump), (None, None));
+        }
+    }
+
+    #[test]
     fn a_running_drop_off_a_ledge_at_the_live_cadence_lands_at_the_read_steps_speed() {
         use eq_client_assets::falls::{FallLanding, TITANIUM};
         // The heights of live's local EQEmu drops (11-01): a run off a
