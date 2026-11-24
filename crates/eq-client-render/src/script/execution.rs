@@ -157,6 +157,12 @@ impl RunStatus {
         }
     }
 
+    /// The run this status belongs to: the same `Arc` for every copy of one
+    /// run's status, a new one for each run.
+    pub(crate) const fn run(&self) -> &Arc<()> {
+        &self.identity
+    }
+
     /// The immutable source snapshot used by this run.
     #[must_use]
     pub fn source(&self) -> &str {

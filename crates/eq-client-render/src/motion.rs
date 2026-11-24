@@ -1414,18 +1414,30 @@ type InputExtras<'w, 's> = (
 
 /// A script run that fails can no longer steer, so the autorun latch goes
 /// with the keys it held, and the character stops rather than running on
-/// unattended. A run the player stops, or one that completes, leaves the
-/// latch as it is. This is this client's rule for its scripts; the program
-/// has none.
+/// unattended. It comes off even when the player latched it themselves,
+/// before or during the run. A run the player stops, or one that completes,
+/// leaves the latch as it is. This acts once, when a run's status first
+/// reads Failed: the status is copied every frame while the finished run
+/// stays loaded, and a latch the player sets again afterwards stays on.
+/// This is this client's rule for its scripts; the program has none.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn stop_autorun_after_failed_script(
     status: Option<Res<crate::script::RunStatus>>,
+    mut seen: Local<Option<(std::sync::Arc<()>, crate::script::Phase)>>,
     mut controls: ResMut<Controls>,
 ) {
-    if status
-        .is_some_and(|status| status.is_changed() && status.phase() == crate::script::Phase::Failed)
-        && controls.autorun
+    let Some(status) = status else {
+        return;
+    };
+    let phase = status.phase();
+    if seen
+        .as_ref()
+        .is_some_and(|(run, seen)| std::sync::Arc::ptr_eq(run, status.run()) && *seen == phase)
     {
+        return;
+    }
+    *seen = Some((status.run().clone(), phase));
+    if phase == crate::script::Phase::Failed {
         controls.autorun = false;
     }
 }

@@ -119,7 +119,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `face()`: turn the camera toward the target.
 - `face(heading)`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
   The turn keys' rate is at most 240 heading units a second, after a short ramp, so a half turn takes over a second and a near-full turn over two. An autorunning character keeps running along the arc meanwhile. For a quick turn, use `look("world", x, 0, milliseconds)`, as a mouse turn would, or stop first.
-- A run that fails takes the autorun latch off with the keys it held, so the character stops. A run the player stops, or one that completes, leaves autorun as it is.
+- A run that fails takes the autorun latch off with the keys it held, so the character stops, even when the player latched autorun themselves before or during the run. A run the player stops, or one that completes, leaves autorun as it is.
 - `move(command, milliseconds)`: hold `forward`, `back`, `camera_forward`,
   `camera_back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`,
   independent of key bindings. In mapped water on Titanium, strokes follow
