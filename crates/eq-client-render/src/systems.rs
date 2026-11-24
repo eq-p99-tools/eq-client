@@ -231,7 +231,10 @@ pub(super) fn schedule(app: &mut App) {
                 crate::shield::answer,
                 crate::corpses::run,
                 inventory::auto::run,
-                crate::chat_channels::answers,
+                (
+                    crate::chat_channels::answers,
+                    crate::chat_channels::autojoin,
+                ),
                 (
                     crate::languages::command,
                     crate::languages::speak,
