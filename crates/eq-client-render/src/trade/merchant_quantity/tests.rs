@@ -61,7 +61,7 @@ fn submit(
     outbox: &Outbox,
     selection: Selection,
     count: u32,
-) -> Result<(), &'static str> {
+) -> Result<(), Refused> {
     trade.submit_quantity(
         online.world(),
         outbox,
@@ -522,4 +522,60 @@ fn merchant_quantity_pending_transfer_and_terminal_end_never_repeat_the_action()
         assert!(!selection.current(&trade, online.world()));
         assert!(rx.try_recv().is_err());
     }
+}
+
+#[test]
+fn a_buy_follows_the_programs_order_and_lines() {
+    let (mut online, mut trade, outbox, rx) = fixture();
+    let selection = trade.quantity_selection(online.world()).unwrap();
+    // A quantity below one, and a ware the merchant no longer lists, pass
+    // silently (read R49-35 a).
+    assert_eq!(
+        submit(&mut trade, &online, &outbox, selection, 0),
+        Err(Refused::Silent)
+    );
+    assert_eq!(
+        trade.quantity_limit(online.world(), Chosen::Ware(99)),
+        Err(Refused::Silent)
+    );
+    // A silent refusal can't read as a buy that went: nothing is sent and
+    // the merchant's action status, which a script's report shows as
+    // `merchant.action_status`, stays empty.
+    assert!(rx.try_recv().is_err());
+    assert_eq!(trade.merchant_status(), None);
+    // Something on the cursor: the program's line, before the coins.
+    let mut held = crate::preview::items().remove(4);
+    held.slot = InventorySlot::CURSOR;
+    testing::inventory(&mut online, InventoryUpdate::Set(vec![held]));
+    testing::news(&mut online, [WorldEvent::Coins(Coins::from_copper(1))]);
+    assert_eq!(
+        trade.quantity_limit(online.world(), Chosen::Ware(3)),
+        Err(Refused::CursorItem)
+    );
+    // Selling keeps this client's words for the cursor.
+    assert_eq!(
+        trade.quantity_limit(online.world(), Chosen::Carried(23)),
+        Err(Refused::Words("Place the cursor item before trading"))
+    );
+    // With the cursor clear, coins short of one ware: line 0x2f1c.
+    testing::inventory(&mut online, InventoryUpdate::Remove(InventorySlot::CURSOR));
+    assert_eq!(
+        trade.quantity_limit(online.world(), Chosen::Ware(3)),
+        Err(Refused::Short(3))
+    );
+    assert!(rx.try_recv().is_err());
+    // A pending action passes silently.
+    testing::news(&mut online, [WorldEvent::Coins(Coins::from_copper(1_000))]);
+    let selection = choose(&mut trade, online.world(), Chosen::Ware(3));
+    submit(&mut trade, &online, &outbox, selection, 1).unwrap();
+    assert!(matches!(rx.try_recv(), Ok(ClientCommand::Buy { .. })));
+    // A buy that went shows as waiting; the silent refusal of a second
+    // press neither sends nor changes that.
+    assert_eq!(trade.merchant_status(), Some("Waiting for merchant"));
+    assert_eq!(
+        trade.quantity_limit(online.world(), Chosen::Ware(3)),
+        Err(Refused::Silent)
+    );
+    assert!(rx.try_recv().is_err());
+    assert_eq!(trade.merchant_status(), Some("Waiting for merchant"));
 }
