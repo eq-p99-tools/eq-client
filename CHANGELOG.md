@@ -9,6 +9,32 @@
   - A fall whose origin has just left the water, the soles still in it, passes over what the walk would climb (origin + 1.25) and lands on it, inside the announced climb reach.
   - A body falling back into water keeps the fall's velocity, so a wall that stopped the move no longer stops the next stroke's forward speed.
   - A swimmer that surfaces under a ramp or deck over the water, its head inside it, drops back into the water instead of freezing in place (Temple of Life's north deck). The fall's downward sweep is led by the lower body when the whole body's is refused where it starts. Ours: the program's sphere differs (R40).
+- A knight's Lay on Hands or Harm Touch waits as the Titanium program's does
+  (read R49-29 b, checklist 6.626, slice B), with eq-network #433 in main's
+  pin. The session now waits the program's own gem-9 timer: 10 s from a
+  press, then the spell's recast
+  after the server refreshes the gem, saying the program's 0x2efd while it
+  runs. This client hands it the recast from the installed spell file
+  (field 15, the replayed table on P99 once ready). The server's long reuse
+  no longer holds the press: the button's hover shows it as "Server reuse
+  N s" (this client's label, "(estimated)" where the session estimated it)
+  and the button still dims while it runs, but the press goes after the
+  local wait and the server decides.
+- On Titanium, a right-click on a player inspects them, as the program's use
+  routine ends (reads R49-16 and R49-16e, checklist 6.644).
+  - The player is first considered, as before. Then, with Inspect Others
+    on and nothing on the cursor, a player under 20 away (3D) is inspected
+    through eq-network's new `InspectSpawn`. A player 20 or more away gets
+    the program's line 0x305a naming them, in this client's words where the
+    installation lacks the line.
+  - Right-clicking yourself inspects you with no consider. Nothing is
+    targeted.
+  - The Mac-era and RoF2 programs are unread, so they only consider, as
+    before.
+  - Not modelled yet: the program's busy gate before any right-click use
+    (mounted, dead, camping, a pending trade or merchant, certain windows
+    open; read R49-16e), the trader branches, and the body types the
+    consider skips.
 - The Player window's mana and endurance percents read as the Titanium program's label provider makes them (read R49-37b, gap 3.9, checklist 6.529): current x 100 / maximum in whole numbers, cut toward zero, at most 100, shown as a bare number, and "0" while the maximum is 0. Before our estimate has a maximum they show "0" too (inferred: the program always knows it). The "%" after each is the skin's own text, which the program never hides, so this client no longer hides the Player window's signs; that rule, from the earlier 6.529 entry, was inferred and is withdrawn. Hit points keep their current text, as R49-37 didn't read them.
 - A spawn whose model the installation lacks is drawn as the program draws it (read R49-37a, 0x43c84b): a Human of its gender, sized and footed as race 1 unless its race is 216 or 472. Before, it drew a marker. A carrier keeps its marker, and so does a race this client has no model name for yet, since that gap is ours.
 
