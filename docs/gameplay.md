@@ -353,6 +353,8 @@ server's updates. On P99 and Titanium EQEmu, when a song stops, the gems
 whose songs have no recast time are ready again at once, and so is the short
 wait before any spell, as in the official client. There, a Bard's songs also
 leave no such wait after they are sung, so the next song can follow at once.
+There, when the server interrupts a Bard's song or cast, its line shows in the
+song colour and follows the Bard songs filter, like the song stop line.
 
 On P99 and Titanium EQEmu, a Bard can type `/melody` followed by gem numbers,
 such as `/melody 1 3 2`, to play those songs in turn, as the official client

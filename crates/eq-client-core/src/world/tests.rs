@@ -1559,6 +1559,152 @@ fn superseding_an_old_cast_releases_it_before_the_new_pending_spell_begins() {
 }
 
 #[test]
+fn the_titanium_program_prints_interruptions_in_its_colour_and_a_bards_behind_its_filter() {
+    // OP_InterruptCast's print tail (0x45e233, reads R49-51 and R49-51b):
+    // colour 0x108 for every line, and the player's own as a Bard behind
+    // filter 9.
+    let interruption = |dialect, class| {
+        let mut world = ClientWorld::default();
+        world.carry_as(dialect);
+        let mut caster = player(9);
+        caster.class = class;
+        game(
+            &mut world,
+            WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(caster),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            },
+        );
+        connection(&mut world, true, false);
+        let now = Instant::now();
+        for update in [
+            SpellUpdate::Began {
+                caster_id: 9,
+                spell_id: 42,
+                duration_ms: 3000,
+            },
+            SpellUpdate::Interrupted {
+                caster_id: 9,
+                message_id: 0x318e,
+                caster_name: None,
+            },
+        ] {
+            let changes = world.apply(
+                &WorldUpdate::Game(WorldEvent::Spell(update)),
+                now,
+                &NoSpells,
+            );
+            if let [notice] = changes.notices.as_slice() {
+                return Some(notice.clone());
+            }
+        }
+        None
+    };
+    let line = |print| {
+        Some(Notice::CastInterrupted {
+            string_id: 0x318e,
+            print,
+        })
+    };
+    let titanium = crate::GameDialect::Titanium;
+    assert_eq!(
+        interruption(titanium, Some(8)),
+        line(InterruptPrint::TitaniumBard)
+    );
+    // Another class's own line always shows, in the same colour.
+    assert_eq!(
+        interruption(titanium, Some(2)),
+        line(InterruptPrint::Titanium)
+    );
+    assert_eq!(interruption(titanium, None), line(InterruptPrint::Titanium));
+    for print in [InterruptPrint::TitaniumBard, InterruptPrint::Titanium] {
+        assert_eq!(line(print).and_then(|n| n.message_type()), Some(0x108));
+    }
+    // The other programs are unread: this client's default.
+    for dialect in [crate::GameDialect::EqMac, crate::GameDialect::Rof2] {
+        assert_eq!(interruption(dialect, Some(8)), line(InterruptPrint::Unread));
+    }
+    assert_eq!(
+        line(InterruptPrint::Unread).and_then(|n| n.message_type()),
+        None
+    );
+}
+
+#[test]
+fn another_casters_interruption_says_who_they_are_for_the_titanium_filters() {
+    // OP_InterruptCast's print tail (0x45e233, read R49-51b) tests a Bard
+    // by class, a group member by the group's names, and an NPC.
+    let mut world = admitted();
+    let caster = |spawn_id, name: &str, kind, class| SpawnState {
+        name: name.into(),
+        kind,
+        class,
+        ..spawn(spawn_id)
+    };
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![
+            caster(20, "Friend", SpawnKind::Player, Some(8)),
+            caster(21, "Stranger", SpawnKind::Player, Some(8)),
+            caster(22, "friend_two", SpawnKind::Player, Some(2)),
+            caster(23, "Passerby", SpawnKind::Player, Some(2)),
+            caster(24, "a_bard_npc", SpawnKind::Npc, Some(8)),
+            caster(25, "a_rat", SpawnKind::Npc, Some(1)),
+        ]),
+    );
+    game(
+        &mut world,
+        WorldEvent::Group(crate::group::GroupUpdate::Members {
+            leader: "Friend".into(),
+            members: vec!["Friend".into(), "Friend_Two".into()],
+        }),
+    );
+    let who = |world: &mut ClientWorld, caster_id| {
+        let update = SpellUpdate::Interrupted {
+            caster_id,
+            message_id: 0x318e,
+            caster_name: Some("Someone".into()),
+        };
+        match game(world, WorldEvent::Spell(update)).notices.as_slice() {
+            [Notice::OtherCastInterrupted { print, .. }] => Some(*print),
+            _ => None,
+        }
+    };
+    let other = |caster| Some(InterruptPrint::TitaniumOther(caster));
+    assert_eq!(
+        who(&mut world, 20),
+        other(OtherCaster::Bard { grouped: true })
+    );
+    assert_eq!(
+        who(&mut world, 21),
+        other(OtherCaster::Bard { grouped: false })
+    );
+    assert_eq!(
+        who(&mut world, 22),
+        other(OtherCaster::Player { grouped: true })
+    );
+    assert_eq!(
+        who(&mut world, 23),
+        other(OtherCaster::Player { grouped: false })
+    );
+    assert_eq!(
+        who(&mut world, 24),
+        other(OtherCaster::Bard { grouped: false })
+    );
+    assert_eq!(who(&mut world, 25), other(OtherCaster::Npc));
+    assert_eq!(who(&mut world, 99), other(OtherCaster::Unknown));
+    // The other programs are unread.
+    world.carry_as(crate::GameDialect::EqMac);
+    assert_eq!(who(&mut world, 20), Some(InterruptPrint::Unread));
+}
+
+#[test]
 fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     let mut world = admitted();
     let now = Instant::now();
@@ -1596,6 +1742,7 @@ fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
         [Notice::OtherCastInterrupted {
             string_id: 444,
             caster: "Examplar".into(),
+            print: InterruptPrint::TitaniumOther(OtherCaster::Unknown),
         }]
     );
     assert!(world.casting().cast.is_some());
@@ -1603,7 +1750,10 @@ fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     // and an empty one says nothing.
     assert_eq!(
         spell(&mut world, named(9, "Examplar")).notices,
-        [Notice::CastInterrupted { string_id: 444 }]
+        [Notice::CastInterrupted {
+            string_id: 444,
+            print: InterruptPrint::Titanium,
+        }]
     );
     assert_eq!(spell(&mut world, began.clone()).cast, Some(CastNews::Began));
     assert_eq!(spell(&mut world, named(8, "")).notices, []);
@@ -1616,7 +1766,13 @@ fn an_interruption_is_the_players_own_and_mana_cannot_undo_it() {
     // The player's own interruption also tells them why.
     let own = spell(&mut world, interrupted(9));
     assert_eq!(own.cast, Some(CastNews::Interrupted));
-    assert_eq!(own.notices, [Notice::CastInterrupted { string_id: 439 }]);
+    assert_eq!(
+        own.notices,
+        [Notice::CastInterrupted {
+            string_id: 439,
+            print: InterruptPrint::Titanium,
+        }]
+    );
     assert!(world.casting().cast.is_none());
     assert_eq!(world.casting().interrupted, Some((now, 439)));
     spell(&mut world, mana(42, false));
