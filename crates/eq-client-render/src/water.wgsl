@@ -3,8 +3,8 @@
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::main_pass_post_lighting_processing,
     forward_io::{VertexOutput, FragmentOutput},
-    mesh_view_bindings::{view, globals},
-    view_transformations::depth_ndc_to_view_z,
+    mesh_view_bindings::{view, globals, view_transmission_texture, view_transmission_sampler},
+    view_transformations::{depth_ndc_to_view_z, frag_coord_to_uv, position_world_to_ndc, ndc_to_uv},
 }
 #ifdef DEPTH_PREPASS
 #import bevy_pbr::prepass_utils::prepass_depth
@@ -169,60 +169,134 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     let facing = clamp(dot(normal, to_eye), 0.0, 1.0);
     let fresnel = min(0.02 + 0.98 * pow(1.0 - facing, 5.0), 0.6);
     let mirrored = reflect(-to_eye, normal);
+    let screen = frag_coord_to_uv(in.position.xy);
+    let here_z = depth_ndc_to_view_z(in.position.z);
 
-    // How much water lies between the surface and what is behind it.
+    // What lies behind the surface, bent by the ripples. A bend that would
+    // land on something in front of the water is not taken.
+    var bend = slope * vec2(1.0, -1.0) * 0.12 / max(distance * 0.02, 1.0);
     var thickness = 12.0;
+    var behind_at = world - to_eye * 12.0;
 #ifdef DEPTH_PREPASS
     if water.timing.w > 0.5 {
-        let behind = depth_ndc_to_view_z(prepass_depth(in.position, 0u));
-        let here = depth_ndc_to_view_z(in.position.z);
-        thickness = max(here - behind, 0.0);
+        let straight = depth_ndc_to_view_z(prepass_depth(in.position, 0u));
+        let bent_coord = in.position.xy + bend * view.viewport.zw;
+        let bent_depth = prepass_depth(vec4(clamp(bent_coord, view.viewport.xy, view.viewport.xy + view.viewport.zw - 1.0), 0.0, 0.0), 0u);
+        let bent = depth_ndc_to_view_z(bent_depth);
+        if bent > here_z {
+            bend = vec2(0.0);
+            thickness = max(here_z - straight, 0.0);
+        } else {
+            thickness = max(here_z - bent, 0.0);
+        }
+        behind_at = world - to_eye * thickness;
     }
 #endif
-    let absorbed = 1.0 - exp(-thickness * water.deep.a);
-    // The texture's own detail stays faintly visible however deep it is.
-    let deep_body = water.deep.rgb * max(light, vec3(0.35)) * (0.6 + 0.8 * luminance(albedo));
-    var body = mix(albedo * water.shallow.rgb * light, deep_body, absorbed * 0.85);
-    body *= 0.85 + 0.3 * crest;
+    let behind = textureSampleLevel(view_transmission_texture, view_transmission_sampler, screen + bend, 0.0).rgb;
 
-    let sun = water.sun_direction;
     var color: vec3<f32>;
-    var alpha: f32;
+    var water_layer: vec3<f32>;
+    var opacity: f32;
+    let sun = water.sun_direction;
     if from_above {
+        // Light dancing on whatever lies under shallow water.
+        let under = max(world.y - behind_at.y, 0.0);
+        let caustic_depth = smoothstep(0.3, 2.5, under) * (1.0 - smoothstep(12.0, 45.0, under));
+        let c1 = noised(behind_at.xz * 0.35 + vec2(t * 0.21, t * 0.13)).yz;
+        let c2 = noised(behind_at.xz * 0.47 + vec2(-t * 0.17, t * 0.19) + 7.3).yz;
+        let caustic = pow(clamp(1.0 - length(c1 + c2) * 0.42, 0.0, 1.0), 6.0);
+        var seen = behind + behind * caustic * caustic_depth * 0.9 * (0.3 + 0.7 * sun.w);
+
+        // The water between: clear when thin, tinted and then dark when deep.
+        let absorbed = 1.0 - exp(-thickness * water.deep.a);
+        let deep_body = water.deep.rgb * max(light, vec3(0.35)) * (0.6 + 0.8 * luminance(albedo));
+        var body = mix(albedo * water.shallow.rgb * light, deep_body, absorbed * 0.85);
+        body *= 0.85 + 0.3 * crest;
+        opacity = mix(0.18, 0.92, absorbed);
+        water_layer = body;
+
+        // Reflections: trace the mirrored ray through what is on screen,
+        // falling back to the sky where it leaves the screen or finds
+        // nothing.
         let horizon = water.sky.rgb;
         let zenith = horizon * vec3(0.45, 0.6, 0.9);
-        let sky = mix(horizon, zenith, smoothstep(0.0, 0.35, mirrored.y)) * 0.85;
-        // Only the sky is mirrored, not the shore, walls and trees around
-        // it, so it is held back rather than shown whole.
+        var reflected = mix(horizon, zenith, smoothstep(0.0, 0.35, mirrored.y)) * 0.85;
+#ifdef DEPTH_PREPASS
+        if water.timing.w > 0.5 {
+            let found = trace(world, mirrored, distance);
+            reflected = mix(reflected, found.rgb, found.a);
+        }
+#endif
         // Calm patches mirror more than rough ones.
-        color = mix(body, sky, fresnel * (0.62 - 0.2 * wind));
-        alpha = max(mix(0.12, 0.9, absorbed), fresnel * 0.8);
-
-        // Foam where the water thins out against the shore.
-        let shore = thickness * max(abs(to_eye.y), 0.2);
-        let broken = smoothstep(0.35, 0.8, luminance(b.rgb) + 0.25 * sin(t * 1.3 + world.x * 0.3 + world.z * 0.23));
-        let foam = (1.0 - smoothstep(0.0, 1.2, shore)) * (0.2 + 0.8 * broken);
-        color = mix(color, vec3(0.9, 0.95, 0.95) * max(light, vec3(0.6)), foam * 0.75);
-        alpha = max(alpha, foam * 0.85);
+        let mirror = fresnel * (0.62 - 0.2 * wind);
+        water_layer = mix(water_layer, reflected, mirror / max(opacity + mirror * (1.0 - opacity), 0.001));
+        opacity = opacity + mirror * (1.0 - opacity);
 
         // Light passing through the thin tops of waves facing away from
         // the sun turns them a brighter green-blue.
         let back = pow(clamp(dot(-to_eye.xz, normalize(sun.xz + vec2(0.0001))) * 0.5 + 0.5, 0.0, 1.0), 2.0);
         let through = smoothstep(0.55, 1.0, crest) * (0.35 + 0.65 * back) * (0.3 + 0.7 * sun.w) * 0.5;
-        color += vec3(0.05, 0.16, 0.14) * through * (1.0 - fresnel) * max(light, vec3(0.5));
+        water_layer += vec3(0.05, 0.16, 0.14) * through * (1.0 - fresnel) * max(light, vec3(0.5));
+
+        // Foam where the water thins out against the shore.
+        let shore = thickness * max(abs(to_eye.y), 0.2);
+        let broken = smoothstep(0.35, 0.8, luminance(b.rgb) + 0.25 * sin(t * 1.3 + world.x * 0.3 + world.z * 0.23));
+        let foam = (1.0 - smoothstep(0.0, 1.2, shore)) * (0.2 + 0.8 * broken);
+        water_layer = mix(water_layer, vec3(0.9, 0.95, 0.95) * max(light, vec3(0.6)), foam * 0.75 / max(opacity, 0.05));
+        opacity = max(opacity, foam * 0.85);
 
         // The sun glints in the ripples.
         let toward = max(dot(mirrored, normalize(sun.xyz)), 0.0);
         let glint = (pow(toward, 600.0) * 5.0 + pow(toward, 60.0) * 0.18) * sun.w;
-        color += glint * water.sun_color.rgb;
-        alpha = min(1.0, alpha + glint);
+        water_layer += glint * water.sun_color.rgb / max(opacity, 0.2);
+        opacity = min(1.0, opacity + glint);
+
+        // The water's own colour takes the fog; what is behind already has.
+        let fogged = main_pass_post_lighting_processing(pbr_input, vec4(water_layer, 1.0)).rgb;
+        color = mix(seen, fogged, clamp(opacity, 0.0, 1.0));
     } else {
-        // Seen from below: the bright window overhead, darkening toward
-        // the slant where the surface mirrors the deep.
-        let window = smoothstep(0.55, 0.95, facing);
-        color = mix(water.deep.rgb * 1.5, water.sky.rgb * 1.1 + albedo * 0.2, window);
-        alpha = mix(0.92, 0.55, window);
+        // Seen from below: the world above through a bright window
+        // overhead, darkening toward the slant where the surface mirrors
+        // the deep.
+        let window = smoothstep(0.45, 0.9, facing);
+        let deep = water.deep.rgb * 1.6;
+        let above = behind * vec3(0.8, 0.95, 1.0) + albedo * 0.05;
+        color = mix(deep, above, window);
+        color = main_pass_post_lighting_processing(pbr_input, vec4(color, 1.0)).rgb;
     }
-    out.color = main_pass_post_lighting_processing(pbr_input, vec4(color, alpha));
+    out.color = vec4(color, 1.0);
     return out;
 }
+
+// The colour (rgb) the mirrored ray from `start` finds on screen and how
+// sure the find is (a), by marching it against the scene's depth.
+#ifdef DEPTH_PREPASS
+fn trace(start: vec3<f32>, direction: vec3<f32>, distance: f32) -> vec4<f32> {
+    let steps = 24;
+    let reach = clamp(distance * 1.5, 40.0, 400.0);
+    var travelled = 0.5;
+    var step = reach / f32(steps) * 0.25;
+    for (var i = 0; i < steps; i++) {
+        travelled += step;
+        step *= 1.12;
+        let point = start + direction * travelled;
+        let ndc = position_world_to_ndc(point);
+        if any(abs(ndc.xy) > vec2(1.0)) || ndc.z <= 0.0 {
+            return vec4(0.0);
+        }
+        let uv = ndc_to_uv(ndc.xy);
+        let coord = uv * view.viewport.zw + view.viewport.xy;
+        let scene = depth_ndc_to_view_z(prepass_depth(vec4(coord, 0.0, 0.0), 0u));
+        let ray = depth_ndc_to_view_z(ndc.z);
+        // The ray has gone behind something drawn, not far behind it.
+        let gap = scene - ray;
+        if gap > 0.0 && gap < max(step * 2.0, 3.0) {
+            let edge = smoothstep(0.0, 0.12, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+            let far = 1.0 - smoothstep(0.6, 1.0, travelled / reach);
+            let colour = textureSampleLevel(view_transmission_texture, view_transmission_sampler, uv, 0.0).rgb;
+            return vec4(colour, edge * far);
+        }
+    }
+    return vec4(0.0);
+}
+#endif

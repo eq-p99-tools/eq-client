@@ -16,10 +16,14 @@
 
 use bevy::{
     asset::embedded_asset,
-    core_pipeline::prepass::DepthPrepass,
+    core_pipeline::{
+        fullscreen_material::{FullscreenMaterial, FullscreenMaterialPlugin},
+        prepass::DepthPrepass,
+    },
     pbr::{DistanceFog, ExtendedMaterial, FogFalloff, MaterialExtension, MaterialPlugin},
     prelude::*,
     reflect::Reflect,
+    render::extract_component::ExtractComponent,
     render::render_resource::{AsBindGroup, Face, ShaderType},
     shader::ShaderRef,
 };
@@ -69,6 +73,12 @@ impl MaterialExtension for WaterLook {
     }
 
     fn enable_shadows() -> bool {
+        false
+    }
+
+    // Water reads the scene's depth behind it, so it must stay out of that
+    // depth itself.
+    fn enable_prepass() -> bool {
         false
     }
 }
@@ -177,19 +187,23 @@ fn centroid_key(point: Vec3) -> [i64; 3] {
 
 pub(super) fn register(app: &mut App) {
     embedded_asset!(app, "water.wgsl");
-    app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
-        .add_systems(
-            Update,
-            (wear, depth, animate, weather)
-                .chain()
-                .in_set(crate::Stage::Present),
-        )
-        .add_systems(
-            Update,
-            underwater
-                .after(crate::daylight::update)
-                .in_set(crate::Stage::Present),
-        );
+    embedded_asset!(app, "underwater.wgsl");
+    app.add_plugins((
+        MaterialPlugin::<WaterMaterial>::default(),
+        FullscreenMaterialPlugin::<UnderwaterView>::default(),
+    ))
+    .add_systems(
+        Update,
+        (wear, depth, animate, weather)
+            .chain()
+            .in_set(crate::Stage::Present),
+    )
+    .add_systems(
+        Update,
+        underwater
+            .after(crate::daylight::update)
+            .in_set(crate::Stage::Present),
+    );
 }
 
 fn better(options: &crate::options::OptionsState) -> bool {
@@ -245,12 +259,11 @@ fn new_look(surface: &WaterSurface, plain: Option<&StandardMaterial>) -> WaterMa
     let base = StandardMaterial {
         base_color: Color::WHITE,
         base_color_texture: None,
-        // Water is seen into and seen from below; lava is neither.
-        alpha_mode: if lava {
-            AlphaMode::Opaque
-        } else {
-            AlphaMode::Blend
-        },
+        // Water is drawn over a copy of the scene behind it (the
+        // transmissive pass), which it bends, tints and reflects itself;
+        // lava is plain and opaque.
+        alpha_mode: AlphaMode::Opaque,
+        specular_transmission: if lava { 0.0 } else { 1.0 },
         unlit: true,
         double_sided: !lava,
         cull_mode: if lava {
@@ -408,26 +421,84 @@ fn weather(
 /// The camera's own fog before the haze replaced it, if it had any.
 struct Before(Option<DistanceFog>);
 
-/// The haze over the view while the camera is under water or lava, and
-/// the zone's own fog put back when it comes out.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+/// What the view under the surface adds once the scene is drawn
+/// (`underwater.wgsl`): a gentle shimmer and light slanting down from the
+/// surface. Mirrors `Underwater` there.
+#[derive(Component, ExtractComponent, Clone, Copy, Default, ShaderType)]
+pub(crate) struct UnderwaterView {
+    /// The tint of the light shafts (rgb) and how strong they are (a).
+    shafts: Vec4,
+    /// Seconds on the wrapped clock (x), depth under the surface (y), 1
+    /// for lava (z), and how far the camera looks up, -1 to 1 (w).
+    state: Vec4,
+}
+
+impl FullscreenMaterial for UnderwaterView {
+    fn fragment_shader() -> ShaderRef {
+        "embedded://eq_client_render/underwater.wgsl".into()
+    }
+}
+
+/// How far above a point under the surface the surface is, found by
+/// stepping up until the liquid ends; none past `limit`.
+fn depth_below_surface(
+    world: &eq_client_core::movement::CollisionWorld,
+    at: Vec3,
+    limit: f32,
+) -> Option<f32> {
+    const STEP: f32 = 2.0;
+    let mut above = 0.0;
+    while above < limit {
+        above += STEP;
+        if world.liquid_at(at + Vec3::Y * above).is_none() {
+            // Halve back to the surface.
+            let (mut wet, mut dry) = (above - STEP, above);
+            for _ in 0..4 {
+                let middle = f32::midpoint(wet, dry);
+                if world.liquid_at(at + Vec3::Y * middle).is_some() {
+                    wet = middle;
+                } else {
+                    dry = middle;
+                }
+            }
+            return Some(f32::midpoint(wet, dry));
+        }
+    }
+    None
+}
+
+/// The camera's parts that [`underwater`] reads and changes.
+type Divers = (
+    Entity,
+    &'static GlobalTransform,
+    Option<&'static mut DistanceFog>,
+    Has<UnderwaterView>,
+);
+
+/// The haze over the view while the camera is under water or lava, deeper
+/// and darker the further down it is, with the shimmer and light shafts of
+/// [`UnderwaterView`]; the zone's own fog is put back when it comes out.
+/// Water stays easy to see through: the haze only closes in far off.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)] // Bevy system parameters.
 fn underwater(
     mut commands: Commands,
     options: Res<crate::options::OptionsState>,
     collision: Res<crate::Collision>,
-    mut cameras: Query<
-        (Entity, &GlobalTransform, Option<&mut DistanceFog>),
-        With<crate::camera::OrbitCamera>,
-    >,
+    time: Res<Time>,
+    suns: Query<&DirectionalLight, With<crate::daylight::Sun>>,
+    mut cameras: Query<Divers, With<crate::camera::OrbitCamera>>,
     mut saved: Local<Option<Before>>,
 ) {
-    let Ok((camera, place, fog)) = cameras.single_mut() else {
+    let Ok((camera, place, fog, viewed)) = cameras.single_mut() else {
         return;
     };
-    let under = better(&options)
-        .then(|| collision.0.as_ref()?.liquid_at(place.translation()))
-        .flatten();
+    let at = place.translation();
+    let world = collision.0.as_ref();
+    let under = better(&options).then(|| world?.liquid_at(at)).flatten();
     let Some(liquid) = under else {
+        if viewed {
+            commands.entity(camera).remove::<UnderwaterView>();
+        }
         if let Some(Before(before)) = saved.take() {
             match before {
                 Some(before) => {
@@ -443,8 +514,14 @@ fn underwater(
     if saved.is_none() {
         *saved = Some(Before(fog.as_deref().cloned()));
     }
-    let haze = match liquid {
-        eq_client_core::movement::Liquid::Lava => DistanceFog {
+    let lava = liquid == eq_client_core::movement::Liquid::Lava;
+    let depth = world
+        .and_then(|world| depth_below_surface(world, at, 400.0))
+        .unwrap_or(400.0);
+    // 0 just under the surface, 1 two hundred units down.
+    let down = (depth / 200.0).clamp(0.0, 1.0);
+    let haze = if lava {
+        DistanceFog {
             color: Color::srgb(0.55, 0.12, 0.02),
             directional_light_color: Color::NONE,
             directional_light_exponent: 8.0,
@@ -452,16 +529,20 @@ fn underwater(
                 start: 0.0,
                 end: 18.0,
             },
-        },
-        eq_client_core::movement::Liquid::Water => DistanceFog {
-            color: Color::srgb(0.06, 0.2, 0.24),
+        }
+    } else {
+        let shallow = Vec3::new(0.08, 0.26, 0.3);
+        let deep = Vec3::new(0.02, 0.07, 0.11);
+        let color = shallow.lerp(deep, down);
+        DistanceFog {
+            color: Color::srgb(color.x, color.y, color.z),
             directional_light_color: Color::NONE,
             directional_light_exponent: 8.0,
             falloff: FogFalloff::Linear {
-                start: 0.0,
-                end: 90.0,
+                start: 8.0 - 6.0 * down,
+                end: 170.0 - 70.0 * down,
             },
-        },
+        }
     };
     match fog {
         Some(mut fog) => *fog = haze,
@@ -469,6 +550,25 @@ fn underwater(
             commands.entity(camera).insert(haze);
         }
     }
+    let sun = suns.iter().next().map_or(1.0, |light| {
+        (light.illuminance / crate::daylight::DAY_SUN).clamp(0.0, 1.0)
+    });
+    let look_up = place.forward().y;
+    let shafts = if lava {
+        Vec4::ZERO
+    } else {
+        // Shafts fade with depth and at night.
+        Vec4::new(0.55, 0.85, 0.8, 0.22 * (1.0 - down) * (0.25 + 0.75 * sun))
+    };
+    commands.entity(camera).insert(UnderwaterView {
+        shafts,
+        state: Vec4::new(
+            time.elapsed_secs_wrapped(),
+            depth,
+            f32::from(u8::from(lava)),
+            look_up,
+        ),
+    });
 }
 
 #[cfg(test)]
