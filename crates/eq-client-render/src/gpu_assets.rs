@@ -129,6 +129,43 @@ pub(super) fn create_terrain_primitives(
         .collect()
 }
 
+/// A terrain primitive's full-colour texture frames, in animation order,
+/// and how long each shows: the still texture alone, and no length, when
+/// it doesn't animate. Better Water draws from these whatever the
+/// primitive's own blend, so water cut out by a colour key shows whole.
+pub(super) fn opaque_frames(
+    texture: Option<usize>,
+    authored: Option<&TerrainMaterial>,
+    texture_images: &[TextureImages],
+) -> (Vec<Handle<Image>>, Option<std::num::NonZeroU32>) {
+    let animated = authored
+        .and_then(|source| source.animation.as_ref())
+        .and_then(|animation| {
+            let frames: Option<Vec<_>> = animation
+                .frames
+                .iter()
+                .map(|index| {
+                    texture_images
+                        .get(*index)
+                        .map(|images| images.opaque.clone())
+                })
+                .collect();
+            frames
+                .filter(|frames| frames.len() > 1)
+                .map(|frames| (frames, Some(animation.frame_millis)))
+        });
+    animated.unwrap_or_else(|| {
+        (
+            texture
+                .and_then(|index| texture_images.get(index))
+                .map(|images| images.opaque.clone())
+                .into_iter()
+                .collect(),
+            None,
+        )
+    })
+}
+
 /// Swaps only terrain textures whose WLD animation advanced, retaining the
 /// material's alpha mode, color, sidedness and depth behavior on every frame.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
