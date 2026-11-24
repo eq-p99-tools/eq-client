@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Every liquid kind the Titanium program swims swims here too (read R49-26; checklist 6.483d): slime (`SL`), Velious water (`VW`, `AVW`) and the second and third waters (`W2`, `W3`) now move as water, where they were walkable floors or breath-only. Breath and lava heat are unchanged.
+  - Slime, lava and Velious water damp the stroke with the program's slower set (horizontal 0.02 and 0.94, vertical 0.8 and 0.15), so a swimmer there settles at about two thirds of water's speed. Each frame takes the set of the liquid at the body's origin, so crossing between kinds changes set on the next whole frame and keeps the velocity.
+  - The session's water bound already covers both sets (eq-network #412).
+  - Lava swimming (Adam's "always enter lava") follows in its own change.
 - Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). This repins eq-network to main 010536e, which carries #418's cold report and #424's event saves.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.

@@ -140,17 +140,20 @@ pub struct ZoneRegions {
 }
 
 impl ZoneRegions {
-    /// Reuses the spatial tree with the native classic water and lava
-    /// assignments. The server water map uses a different tag precedence.
+    /// Reuses the spatial tree with the Titanium program's liquids: every
+    /// kind of 5 or more is liquid its motion step swims (R33, R49-26), so
+    /// slime, Velious water and the second and third waters move as water,
+    /// and lava (7) stays lava. The server water map uses a different tag
+    /// precedence.
     #[must_use]
     pub fn with_titanium_liquids(mut self) -> Self {
         self.liquids = self
-            .media
+            .kinds
             .iter()
-            .filter_map(|(&region, &medium)| match medium {
-                Medium::Water => Some((region, Liquid::Water)),
-                Medium::Lava => Some((region, Liquid::Lava)),
-                Medium::Air | Medium::OtherSubmerging => None,
+            .filter_map(|(&region, &kind)| match kind {
+                RegionKind::LAVA => Some((region, Liquid::Lava)),
+                kind if kind.is_liquid() => Some((region, Liquid::Water)),
+                _ => None,
             })
             .collect();
         self
@@ -1088,12 +1091,37 @@ mod tests {
         // A native AWT assignment has no equivalent on the server-map side.
         regions.liquids.remove(&2);
         regions.media.insert(2, titanium_medium("OTHER", "AWT_"));
+        regions.kinds.insert(2, titanium_kind("OTHER", "AWT_"));
         assert!(!regions.passes_through(air, water, Liquid::Water));
         let regions = regions.with_titanium_liquids();
         assert_eq!(regions.liquid_at(water), Some(Liquid::Water));
         assert!(regions.passes_through(air, water, Liquid::Water));
         assert!(regions.first_outside(water, air, Liquid::Water).is_some());
         assert_eq!(regions.medium_at([0.0; 3]), None);
+    }
+
+    #[cfg(feature = "testing")]
+    #[test]
+    fn every_titanium_liquid_kind_moves_as_water_but_lava() {
+        // The program swims every kind of 5 or more (R33, R49-26): slime,
+        // Velious water and the second and third waters move as water;
+        // lava stays lava; dry stays dry.
+        for (tag, liquid) in [
+            ("WT_ZONE", Some(Liquid::Water)),
+            ("SL_ZONE", Some(Liquid::Water)),
+            ("VWA_", Some(Liquid::Water)),
+            ("AVW_", Some(Liquid::Water)),
+            ("W2_ZONE", Some(Liquid::Water)),
+            ("W3_ZONE", Some(Liquid::Water)),
+            ("LA_ZONE", Some(Liquid::Lava)),
+            ("ALV_", Some(Liquid::Lava)),
+            ("DRP_ZONE", None),
+        ] {
+            let kind = titanium_kind("Z0001_ZONE", tag);
+            let regions = ZoneRegions::test_kind_surface(0.0, kind).with_titanium_liquids();
+            assert_eq!(regions.liquid_at([0.0, -1.0, 0.0]), liquid, "{tag}");
+            assert_eq!(regions.liquid_at([0.0, 1.0, 0.0]), None, "{tag}");
+        }
     }
 
     #[test]
