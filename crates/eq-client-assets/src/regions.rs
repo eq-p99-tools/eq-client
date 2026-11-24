@@ -159,6 +159,22 @@ impl ZoneRegions {
         self
     }
 
+    /// Reuses the spatial tree with the liquids the Titanium program's own
+    /// moves meet: every kind of 5 or more swims (R33, R49-26), lava (7)
+    /// included, so lava moves as water here. The player's walks, falls
+    /// and strokes take these; routes this client chooses keep
+    /// [`Self::with_titanium_liquids`], which keeps lava apart.
+    #[must_use]
+    pub fn with_titanium_own_liquids(mut self) -> Self {
+        self.liquids = self
+            .kinds
+            .iter()
+            .filter(|(_, kind)| kind.is_liquid())
+            .map(|(&region, _)| (region, Liquid::Water))
+            .collect();
+        self
+    }
+
     /// Constructs a horizontal liquid surface for other crates' synthetic tests.
     #[cfg(feature = "testing")]
     #[must_use]
@@ -1128,6 +1144,16 @@ mod tests {
             let regions = ZoneRegions::test_kind_surface(0.0, kind).with_titanium_liquids();
             assert_eq!(regions.liquid_at([0.0, -1.0, 0.0]), liquid, "{tag}");
             assert_eq!(regions.liquid_at([0.0, 1.0, 0.0]), None, "{tag}");
+            // The player's own moves swim lava as water too.
+            let own = ZoneRegions::test_kind_surface(0.0, kind).with_titanium_own_liquids();
+            let swum = liquid.map(|_| Liquid::Water);
+            assert_eq!(own.liquid_at([0.0, -1.0, 0.0]), swum, "{tag}");
+            assert_eq!(own.liquid_at([0.0, 1.0, 0.0]), None, "{tag}");
+            assert_eq!(
+                own.kind_at([0.0, -1.0, 0.0]),
+                regions.kind_at([0.0, -1.0, 0.0]),
+                "{tag}"
+            );
         }
     }
 
@@ -1157,6 +1183,32 @@ mod tests {
         ] {
             let regions = ZoneRegions::test_kind_surface(0.0, kind);
             assert!(!regions.water_surface_exit([0.0, -0.01, 0.0], [0.0, 0.04, 0.0]));
+        }
+    }
+
+    #[cfg(feature = "testing")]
+    #[test]
+    fn every_titanium_own_liquid_surfaces_but_guarded_lava_does_not() {
+        for kind in [
+            RegionKind::WATER,
+            RegionKind::SLIME,
+            RegionKind::LAVA,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::WATER_2,
+            RegionKind::WATER_3,
+        ] {
+            let regions = ZoneRegions::test_kind_surface(0.0, kind);
+            let guarded = regions.clone().with_titanium_liquids();
+            let own = regions.with_titanium_own_liquids();
+            let (wet, air) = ([0.0, -0.01, 0.0], [0.0, 0.04, 0.0]);
+            assert_eq!(
+                guarded.water_surface_exit(wet, air),
+                kind != RegionKind::LAVA,
+                "guarded: {kind:?}"
+            );
+            assert!(own.water_surface_exit(wet, air), "own: {kind:?}");
+            assert!(!own.water_surface_exit(wet, [0.0; 3]), "{kind:?}");
+            assert_eq!(own.medium_at(wet), Some(kind.medium()));
         }
     }
 
@@ -1192,11 +1244,32 @@ mod tests {
             .with_titanium_liquids();
             let (wet, air) = ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
             assert!(!regions.water_surface_exit(wet, air), "lava: {kind:?}");
+            assert!(
+                regions
+                    .clone()
+                    .with_titanium_own_liquids()
+                    .water_surface_exit(wet, air),
+                "own lava: {kind:?}"
+            );
             regions.liquids.remove(&1);
+            regions.kinds.remove(&1);
             regions.media.insert(1, Medium::OtherSubmerging);
             assert!(!regions.water_surface_exit(wet, air), "unmapped: {kind:?}");
+            assert!(
+                !regions
+                    .clone()
+                    .with_titanium_own_liquids()
+                    .water_surface_exit(wet, air),
+                "own unmapped: {kind:?}"
+            );
             regions.nodes[2].back = None;
             assert!(!regions.water_surface_exit(wet, air), "unknown: {kind:?}");
+            assert!(
+                !regions
+                    .with_titanium_own_liquids()
+                    .water_surface_exit(wet, air),
+                "own unknown: {kind:?}"
+            );
         }
     }
 
