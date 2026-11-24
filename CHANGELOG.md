@@ -2,6 +2,13 @@
 
 ## Unreleased
 
+- A swimmer climbs out of a pool onto a rim up to about 3.3 above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483b, 6.483c):
+  - Stroking forward with the view pitched up toward dry ground just ahead hops, at most once in 1500 ms: three times the jump strength added to the rise and a push along the heading (0x48a793, 0x48a026, read R33b).
+  - The wet step ends on the frame that takes the origin out of the water, so the fall that follows keeps the velocity it left with instead of losing it to the water's damping for the rest of the sample.
+  - The walk loses its edge climb only with the origin in water or lava, the program's deep liquid (+0xad of 5 or more, R40), not whenever the feet are wet. Wading with the origin dry climbs edges.
+  - A fall whose origin has just left the water, the soles still in it, passes over what the walk would climb (origin + 1.25) and lands on it, inside the announced climb reach.
+  - A body falling back into water keeps the fall's velocity, so a wall that stopped the move no longer stops the next stroke's forward speed.
+  - A swimmer that surfaces under a ramp or deck over the water, its head inside it, drops back into the water instead of freezing in place (Temple of Life's north deck). The fall's downward sweep is led by the lower body when the whole body's is refused where it starts. Ours: the program's sphere differs (R40).
 - **A walker passes through trees, plants and grass, trunks included, as the engine's walking sweep does** (reads R49-49c, R49-49d, R49-49e). The sweep (EQGraphicsDX9.dll 0x10192400) returns no hit at once for an object mesh whose 0x36 flags lack 0x10000 and whose +0x14 reference is empty (read F4g), and every WLD placement reaches it on the player's walk. In the installed files that is every tree, plant and grass mesh (both pines' trunks among them) and about 280 meshes in all, among them some signs, lamps and jars and the generic Luclin and PoP shapes. Every building, rock, statue, ladder and the Neriak bars are referenced and stay solid.
   - Before, this client stood a walker on a tree's trunk faces, which let a walker climb a Firiona swamp tree.
   - Doors are unchanged: how the engine sets a door's collision mode (eqgame.exe 0x1006c2b0) is unread, so a door keeps every face it had.
