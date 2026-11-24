@@ -115,6 +115,8 @@ struct Loaded {
 pub(super) struct Preview {
     /// The highlighted character the preview should show.
     wanted: Option<Listed>,
+    /// Identity can arrive after the list; it also decides which history to read.
+    profile: Option<crate::profile_files::CharacterProfile>,
     /// The character standing on screen.
     shown: Option<Listed>,
     /// The latest load's number; an older load's result is dropped.
@@ -150,14 +152,17 @@ pub(super) fn show(
 ) {
     let wanted = wanted(&front, &online, settings.0.eq_directory.as_deref());
     let listed = wanted.as_ref().map(|(listed, ..)| *listed);
-    if listed != preview.wanted {
+    let profile = listed.and_then(|_| listed_profile(&online));
+    if listed != preview.wanted || profile != preview.profile {
         preview.wanted = listed;
+        preview.profile.clone_from(&profile);
+        preview.shown = None;
         preview.loading.clear();
         preview.job += 1;
         if let Some((_, zone, look, directory)) = wanted {
             let position = front
                 .location_scope()
-                .zip(listed_profile(&online))
+                .zip(profile)
                 .and_then(|(scope, profile)| {
                     history.position(
                         settings.0.settings_directory.as_ref(),
@@ -416,6 +421,51 @@ mod tests {
         preview.job += 1;
         assert!(preview.loading.poll(Some(preview.job)).is_none());
         assert!(!preview.showing());
+    }
+
+    #[test]
+    fn a_server_identity_after_the_list_reloads_the_actual_show_system() {
+        let directory =
+            std::env::temp_dir().join(format!("selection-no-assets-{}", std::process::id()));
+        assert!(!directory.exists());
+        let mut app = App::new();
+        app.init_resource::<Preview>()
+            .init_resource::<History>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .init_resource::<Assets<bevy::mesh::skinning::SkinnedMeshInverseBindposes>>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig {
+                eq_directory: Some(directory),
+                ..default()
+            }))
+            .insert_resource(crate::login::testing::scoped("synthetic-profile"))
+            .insert_resource(listed(Some(CharacterLook {
+                race: 1,
+                ..default()
+            })))
+            .add_systems(Update, show);
+        app.update();
+        let listed = app.world().resource::<Preview>().wanted;
+        assert!(listed.is_some());
+        assert_eq!(app.world().resource::<Preview>().job, 1);
+        // A completed curated scene must be veiled until the newly identified
+        // character's own history has been loaded, even with the same list/slot.
+        app.world_mut().resource_mut::<Preview>().shown = listed;
+        for (job, world) in [(2, "Synthetic World"), (3, "Another World")] {
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                [eq_client_core::WorldEvent::WorldName {
+                    short_name: world.into(),
+                }],
+            );
+            app.update();
+            let preview = app.world().resource::<Preview>();
+            assert_eq!(preview.wanted, listed);
+            assert_eq!(preview.job, job);
+            assert_eq!(preview.profile.as_ref().unwrap().world, world);
+            assert!(!preview.showing());
+        }
     }
 
     fn turning_app() -> (App, Entity, Entity) {
