@@ -575,7 +575,8 @@ mod tests {
         let names: Vec<_> = rows.iter().map(|row| row.name.as_str()).collect();
         assert_eq!(names, ["a snake", "a bat"]);
         assert_eq!(rows[0].color, Some(ConColor::Red));
-        assert_eq!(rows[1].color, Some(ConColor::Green));
+        // Level 14 against 20 is near the green edge: light blue.
+        assert_eq!(rows[1].color, Some(ConColor::LightBlue));
         online.select_tracked(Some(30));
         assert!(super::rows(online.world(), Choices::default())[1].chosen);
     }
