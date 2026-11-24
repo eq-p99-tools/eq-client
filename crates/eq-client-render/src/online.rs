@@ -755,7 +755,7 @@ impl Panels<'_> {
         ) {
             state.deletion.ended();
             // Requests and choices made in the old admission are void.
-            *self.combat = super::combat::CombatState::default();
+            self.combat.reset();
             *self.items = super::items::ItemState::default();
             self.trade.reset_opening_shop();
             if let Some(book) = self.book.as_mut() {
