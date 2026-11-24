@@ -226,7 +226,9 @@ fn titanium_hides(filters: &ChatFilters, notice: &crate::world::Notice) -> bool 
         // The song stop's line (0x40f06d, read R49-21) and a Bard's own
         // interruption (`OP_InterruptCast`'s print tail 0x45e233, read
         // R49-51) hide only where filter 9's value is 1 (off), which read
-        // R49-48 e finds is the row's last option, Hide.
+        // R49-48 e finds at the row's last option. That the options run in
+        // the Options window's order, so that it is Hide, is inferred: the
+        // labels' string ids are unread, and the read maps them by index.
         Notice::SongStopped { .. }
         | Notice::CastInterrupted {
             print: InterruptPrint::TitaniumBard,
@@ -234,7 +236,8 @@ fn titanium_hides(filters: &ChatFilters, notice: &crate::world::Notice) -> bool 
         } => filters.get(FilterCategory::BardSongs) == FilterMode::Hide,
         // Another caster's interruption (0x45e233, read R49-51b, values
         // R49-48 e): a group member's shows at show all and group only,
-        // anyone else's at show all only.
+        // anyone else's at show all only, by option index in the Options
+        // window's order (inferred, as above).
         Notice::OtherCastInterrupted {
             print: InterruptPrint::TitaniumOther(caster),
             ..
