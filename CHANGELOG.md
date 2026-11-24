@@ -1,5 +1,8 @@
 # Changelog
 
+Pull requests add their entry as a file in [`changelog.d/`](changelog.d/README.md)
+instead of editing this file; merged entries not yet folded in are listed there.
+
 ## Unreleased
 
 - Every liquid kind the Titanium program swims swims here too (read R49-26; checklist 6.483d): slime (`SL`), Velious water (`VW`, `AVW`) and the second and third waters (`W2`, `W3`) now move as water, where they were walkable floors or breath-only. Breath and lava heat are unchanged.

@@ -72,6 +72,13 @@ Keep proprietary assets, raw captures, credentials, account/character identifier
 and official-client text out of public fixtures and reports. Read installed text
 at runtime by its string identifier instead of copying it into tests.
 
+## Changelog
+
+Record a change's changelog entry as a new file in `changelog.d/`, not as an
+edit to `CHANGELOG.md`, so that pull requests never conflict over the
+changelog; [changelog.d/README.md](../changelog.d/README.md) has the details.
+Maintainers fold the fragments in with `python3 contrib/fold-changelog.py`.
+
 ## Dependency changes
 
 Update networking intentionally: record old/new commits, review lockfile changes,
