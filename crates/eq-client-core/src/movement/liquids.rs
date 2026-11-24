@@ -36,6 +36,12 @@ pub trait Liquids: Send + Sync {
     /// What fills the zone at a point, if anything.
     fn liquid_at(&self, point: Vec3) -> Option<Liquid>;
 
+    /// Which water set the liquid at a point takes: the program damps
+    /// slime, lava and Velious water with its slower set (R33, R49-26).
+    fn wet_kind_at(&self, _point: Vec3) -> super::water::WetKind {
+        super::water::WetKind::Normal
+    }
+
     /// Whether the provider resolved the region at this point.
     fn region_known(&self, point: Vec3) -> bool {
         point.is_finite()

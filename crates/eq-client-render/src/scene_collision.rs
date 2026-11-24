@@ -31,6 +31,18 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
         self.0.medium_at(point.to_array()).is_some()
     }
 
+    fn wet_kind_at(&self, point: Vec3) -> eq_client_core::movement::water::WetKind {
+        if self
+            .0
+            .kind_at(point.to_array())
+            .is_some_and(eq_client_assets::regions::RegionKind::is_slower)
+        {
+            eq_client_core::movement::water::WetKind::Slower
+        } else {
+            eq_client_core::movement::water::WetKind::Normal
+        }
+    }
+
     fn segment_known(&self, from: Vec3, to: Vec3) -> bool {
         self.0.segment_known(from.to_array(), to.to_array())
     }
