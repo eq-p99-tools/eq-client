@@ -39,8 +39,8 @@
   still left to the server, as only spells with the record's +0x1fc byte
   clear need standing and that byte isn't mapped; the same byte holds back
   0xd4 (a song while lying). The global recast the click also tests isn't
-  kept here. The local mana check stays for now: the program has none
-  (read R49-34 g), and dropping it is with the reviewer.
+  kept here. The program has no local mana check (read R49-34 g); the G5
+  entry above takes this client's out.
 - Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). It needs eq-network's #418 cold report and #424's event saves, which main's eq-network pin already carries, so it has no repin of its own.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.
