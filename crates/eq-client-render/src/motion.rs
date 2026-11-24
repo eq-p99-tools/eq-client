@@ -2123,13 +2123,16 @@ pub(super) fn input(
         mut speed,
         mut direction,
         mut turn,
-        preserve_facing,
+        mut preserve_facing,
         diagonal,
     } = intent;
     // The program's wet step for this sample, where the grant reads the
     // generation's water: the travel it gives, before collision.
     let mut wet_travel = None;
     if swimming && let Some(swim) = controls.swim {
+        // Residual water travel has no facing input of its own. Keep the
+        // turn keys' facing when no horizontal stroke was requested.
+        preserve_facing |= Vec2::new(direction.x, direction.z) == Vec2::ZERO;
         let caps = swim.caps();
         // The water leaves a strafe as on land, so its input keeps the
         // walking and ducking shares the grant gave the strafe (R28, R33).
@@ -8472,6 +8475,105 @@ pub(super) mod tests {
         let (_, y) = wet_expected(eq_client_core::movement::water::WetInput::default(), span);
         assert!(y < 0.0 && (moved.y - y).abs() < 1e-4, "{} vs {y}", moved.y);
         assert!(Vec2::new(moved.x, moved.z).length() < 1e-5);
+    }
+
+    /// One production movement sample with residual eastward water velocity
+    /// and a body facing away from that drift. Only the chosen input is held.
+    fn wet_drift_sample(
+        turn: Option<KeyCode>,
+        forward: bool,
+        autorun: bool,
+        water: bool,
+    ) -> (MovementRequest, f32) {
+        let (mut app, receiver) = app();
+        crate::keys::testing::bind(
+            &mut app,
+            Act::Forward,
+            crate::keys::Chord::key(KeyCode::KeyR),
+        );
+        if water {
+            app.insert_resource(Collision(Some(liquid_pool(Liquid::Water))));
+        }
+        let placed = world_position([0.0, if water { -4.0 } else { 3.0 }, 0.0], 64.0);
+        online::testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            placed,
+        );
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.swim = Some(WET_SWIMMER);
+            controls.autorun = autorun;
+            controls.wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
+                [0.0, 6.0],
+                0.0,
+            );
+            controls.last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+        }
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            if let Some(turn) = turn {
+                keys.press(turn);
+            }
+            if forward {
+                keys.press(KeyCode::KeyR);
+            }
+        }
+        app.update();
+        let ClientCommand::Move(sample) = receiver.try_recv().expect("a drift/control proposal")
+        else {
+            panic!("expected movement");
+        };
+        assert!(receiver.try_recv().is_err());
+        let span = app.world().resource::<Controls>().sent_span;
+        (sample, span)
+    }
+
+    #[test]
+    fn wet_drift_does_not_override_turn_only_facing() {
+        for (key, sign) in [(KeyCode::KeyQ, 1.0), (KeyCode::KeyE, -1.0)] {
+            let (sample, _) = wet_drift_sample(Some(key), false, false, true);
+            assert_eq!(sample.mode, MovementMode::Swim);
+            assert_eq!(sample.heading, HeadingUpdate::Rate);
+            // The first held turn frame turns at 20 heading units a second.
+            assert!((sample.position.heading - (64.0 + sign * 20.0 / 60.0)).abs() < 0.001);
+            // Turning does not cancel the previous stroke's displacement.
+            assert!(sample.position.x < -0.01);
+            assert!(sample.position.y.abs() < 1e-5);
+        }
+    }
+
+    #[test]
+    fn wet_drift_with_no_input_keeps_the_bodys_heading() {
+        let (sample, _) = wet_drift_sample(None, false, false, true);
+        assert_eq!(sample.mode, MovementMode::Swim);
+        assert_eq!(sample.position.heading, 64.0);
+        assert!(sample.position.x < -0.01);
+    }
+
+    #[test]
+    fn wet_drift_keeps_forward_and_autorun_turning() {
+        for (forward, autorun) in [(true, false), (false, true)] {
+            let (sample, _) = wet_drift_sample(Some(KeyCode::KeyQ), forward, autorun, true);
+            assert_eq!(sample.mode, MovementMode::Swim);
+            assert!((sample.position.heading - (64.0 + 20.0 / 60.0)).abs() < 0.001);
+            assert!(sample.position.x.hypot(sample.position.y) > 0.01);
+        }
+    }
+
+    #[test]
+    fn wet_drift_does_not_change_dry_turn_or_forward_controls() {
+        for (forward, autorun) in [(false, false), (true, false), (false, true)] {
+            let (sample, span) = wet_drift_sample(Some(KeyCode::KeyQ), forward, autorun, false);
+            assert_eq!(sample.mode, MovementMode::Forward);
+            assert!((sample.position.heading - (64.0 + 20.0 / 60.0)).abs() < 0.001);
+            let distance = sample.position.x.hypot(sample.position.y);
+            let expected = if forward || autorun { 6.0 * span } else { 0.0 };
+            assert!((distance - expected).abs() < 0.001);
+            assert_eq!(sample.position.z, 3.0);
+        }
     }
 
     #[test]
