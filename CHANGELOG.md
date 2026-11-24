@@ -8,6 +8,60 @@
   - **Jumps and falls of other spawns.** A spawn moving only up or down plays its jump (L04, L03 for race 49) or, faster than 45 a second down, its fall (L05), as the program's picker does, where it used to stand. Moving is now a speed of 2 a second in any direction.
   - **A passing ship no longer takes a rider's link.** With two ships alongside, part of a rider's footprint could meet the other ship's side and the link went to that ship, which carried the rider along its own deck. The ship a rider is linked to now stays its link while any part of the footprint is over its deck, for your own character and for others drawn aboard. The program's choice between two ships is unread: this is inferred, the stricter side (6.611).
   - Our own sender still reports no vertical speed on a jump or fall; that is a separate row.
+- `/surname` alone, with a surname already set, says this client's own line in colour 15 like the program's refusal lines; it had no colour (live row 6.507 item h).
+
+- A script run that fails takes the autorun latch off, so the character stops instead of running on unattended (seen when a failed run carried a character off a dock). It comes off even when the player latched it themselves, before or during the run, and only once: a latch set again afterwards stays on. A run the player stops, or one that completes, leaves autorun as it is. This is this client's rule for its scripts. The script reference also notes that `face(heading)` turns at the turn keys' rate (at most 240 heading units a second, so a near-full turn takes over two seconds), and that `look("world", …)` turns as a mouse does.
+- **The bug report window asks before it sends**, as the Titanium program does (reads R49-52, R49-52b and R49-52c; checklist 6.647). Send asks the official question (line 0x1aa3) in the skin's confirmation dialog, with Yes and No, every time, unless the installation's `eqclient.ini` has `[Defaults] SendSystemInfo=1` (read only).
+  - Every answer sends, and so does the question's own close after 60 seconds. After the answer, the empty-box and sent lines follow as before.
+  - Cancel leaves the question up, and its answer still sends what the box holds (read); the close box and Esc do the same (inferred).
+  - The official client adds the machine's processor, video card and driver on Yes or with `SendSystemInfo=1`. This client never sends anything about the machine, so the report is the same either way, and a line of its own says so (a labelled departure).
+  - A second Send while the question is up does nothing (a departure: the program would ask in a second dialog). Leaving the world while it is up (zoning, a camp, a drop, `/quit`) loses the report, as the program's does (reads R49-52d, R49-52e); the program then still clears the words and says its sent line, while this client keeps the words and says nothing (a labelled departure). A script's `Script report windows` event has `question_up`.
+- `/surname` runs as read R49-10 reads the Titanium program (checklist 6.507). This supersedes the earlier draft #565.
+  - **Checks, in order, each sending nothing:** under level 20 (line 0x328c); a bare `/surname` with no surname set (usage 0x328d); words 32 bytes or more (0x8bf). The read gives `strlen >= 0x20` on the argument, and that this is the whole argument rather than the first word is inferred.
+  - **A bare `/surname` with one set:** the program asks a question whose yes path isn't read (R49-10e), so this client says in its own words that it waits for that read (a gap).
+  - **The question:** the first word, with `'` and `"` quotes taken, cut to 19 bytes at a character boundary and its case kept. Question 0x235a names exactly that word for 10 seconds. Yes sends it and says 0x235b. No, the time running out or the session ending sends nothing.
+  - **The answer** is always shown, as the program shows it: refused 0x55e, taken 0x55f with the player's name and the surname. No gate on our own request, and nothing local changes. The name tag follows the zone's last-name update.
+  - The lines come in colour 15. Scripts run the same handler through `slash("surname Name")` and answer the question with its buttons (Scripts = Users, 11-23).
+  - The Mac-era client's `/surname` isn't read (R49-10d). Quarm's and TAKP's handlers say the client refuses under 20 and cuts to 19, so the same flow runs there (inferred), with the first use attended. Project 1999 stays unoffered.
+  - A quoted surname's spaces go as typed, and an answer word other than 0 shows as taken, as the program shows it (eq-network #409, on main's pin).
+
+- **A body at rest more than half a unit above a floor falls onto it, as the programs' does** (checklist 6.648, read R-s: Titanium 0x48a2f4, Mac-era 0x50ba07). A still player counted any floor within 2 units under their feet as ground, so one left that high stayed in the air: a `#goto` onto a ship's deck put a rider 1.9 over the deck for a whole crossing, and watchers drew it on the deck with every report 1.9 above (the #631 riders look). The on-ground test now takes the generation's own tolerance, 0.5 + 0.001, on land too. A client with no read physics keeps the 2.
+- Buying from a merchant follows the Titanium program's order and lines
+  (read R49-35 a, checklist 6.627), for the one-click buy and the quantity
+  window alike. A pending trade, a ware the merchant no longer lists and a
+  quantity below one pass silently, as the program's do. Something on the
+  cursor is refused with the program's line 0x2164 (colour 0x114) before
+  the coins are counted, and coins short of one of the ware with line
+  0x2f1c (colour 0x111), both from the installation, in this client's
+  words where it lacks them. There is still no room check: the program has
+  none, and the server says when the item doesn't fit. The program's
+  +0x2a8 guard is unread and not built. Selling and the Mac-era buy are
+  unchanged.
+- **`/bugreport` and `/feedback` open their windows**, as the Titanium program does (read R49-23 and the bug report window's fill and send passes; checklist 6.511, C1b client half). The installed skin's `BugReportWindow` and `FeedbackWindow` are drawn and work:
+  - Opening the bug report fills its place labels with the player's place, each truncated to a whole number as the program's ftol does, keeps the heading the same way, and clears its four check boxes and the target's name. The report sends that place and heading. This client resets it on every open (inferred).
+  - **Location** fills the place again. **Target**, checked with a target, names it (the cleaned name) and carries it; checked with none it stays unchecked; unchecked it clears. **Dup**, **Crash**, **Flags** and **Target** send the report's bits 1, 2, 8 and 4, carried by eq-network #443.
+  - The category drop-down lists this client's own names for the categories (the program's come from a table in itself). Scripts reach it as `dropdown bug_type`, the text boxes as `report bug_text` and `report feedback_text`, and the buttons by ScreenID. A script's `report()` adds a `Script report windows` event with what both windows show.
+  - **Send** with an empty box says line 0x22b0 and sends nothing; otherwise it sends, clears the box and says 0x22ae once the session says it went. **Cancel** says 0x22af and keeps the words. The window hides either way. Send first asks the program's question (see the entry above).
+  - The feedback window's **Send** sends the words with the player's place and heading, clears and closes, with no line; empty, it only closes. **Cancel** clears and closes.
+  - **Typed Reports is now off by default**, so the commands behave as the program's. On, it sends the typed words as before. It changes nothing on EqMac and RoF2, which always send the typed words.
+  - If the installed skin lacks a window, a line says so and points to Typed Reports (a departure; the program always has them).
+  - Comboboxes now honour the skin's anchors (`AutoStretch`), as the bug report's drop-down needs.
+- **A bash or a kick can stun or interrupt you on your side, as the Titanium program rolls it** (eq-network #446 and #447, reads R49-50 and R49-50b, checklist 6.646 and 6.645 S2). On P99 and Titanium EQEmu alike, with no setting. Nothing is sent.
+  - A saved stun prints the program's line by id (0x1679 or 0x2375) in its colour 10.
+  - A cast cleared locally drops the cast bar with no line, and the next gem press casts. A song cleared locally ends with line 0x318e and resets the gems as any song stop does; `/melody` sees it as it sees the server's stop.
+  - The roll's chance and resists are your buffs' totals from the spell file at the caster's level (`effect_total`); a landing counts only for a spell that lasts. Worn items count 0 (inferred, in the gap log).
+  - Repins eq-network to ae61866 (network main with #446 and #447).
+- A skinned hot button's tooltip says what the button holds and how long it waits, as the client's own hotbar window says in its detail line: a knight's special shows "Server reuse N s", with "(estimated)" where the session estimated it, a gem its spell and timer, an empty slot "Unassigned". Before, the skin's fixed words showed (checklist 6.626, look L8). The wording is this client's.
+- A script's `gm` line is a user's typed `#` line (6.584, scripts are
+  users). `gm` takes any line a player could type after `#`, on any server,
+  with only the chat line's own limits (no control characters, the chat
+  length counting the `#`), and it goes the typed way under the same chat
+  pace. The server decides what a `#` line does; a player who is not a GM
+  gets the server's answer. The old word list, argument filters and the
+  local-session and generation gates are gone, and `chat("say #...")` is no
+  longer refused. The `gm("depop")` helper for a selected NPC stays a local
+  Titanium test convenience; elsewhere `#depop` goes as typed. Breaking for
+  scripts that relied on the old refusals: those lines now send.
 - **An interruption the server names prints as the Titanium program prints it** (reads R49-51 and R49-51b, checklist 6.645 S1). On P99 and Titanium EQEmu, your own interruption line and another caster's take the program's colour 0x108. As a Bard, your own line is hidden where the song stop line is: only with the Bard songs filter at Hide (read R49-48 e: the program's filter 9 value 1 is that row's last option; that the options run in the Options window's order is inferred, as the read maps them by index with their labels unread). Another class's own line always shows, as before. Another caster's line follows the filter for who they are: a Bard's the Bard songs filter, another player's the other players' spells filter, an NPC's the NPC spells filter. A group member's shows at Show and Group only, anyone else's at Show only (options by index, inferred as above). A caster this client doesn't know shows (inferred). The Mac and RoF2 programs are unread and keep this client's colour and show every line.
 - **Fix: the Bard songs filter hides the song stop line at Hide, not Mine only** (read R49-48 e). The earlier entry below took the program's filter 9 value 1 for Mine only; it is the row's last option, Hide.
 - **Chat server channel commands follow the Titanium program** (read R49-12, checklist 6.616).
@@ -18,7 +72,7 @@
   - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure. It is said, and nothing is sent, whenever no link is up: before the chat server takes the login, and after a link ends.
   - The autojoin waits for the character to be in the world: the chat server can take the login while the character is still entering, and the list is that character's. `/autojoin NONE` says you will join no channels.
   - `/announce` and `/chat words` go after a `/` too (`/announce on`, `/kick general Someone`). Inferred: `/announce`'s handler is unread and `/chat`'s sent form only partly read; the chat server skips a command's first byte, so this is the form it takes.
-  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422), and works against a stock chat server: one-byte opcodes, its keep-alive read past, commands as typed, and a log line saying why a link ended (eq-network #438, pinned at bb4c8d7). The repin also takes #443's bug-report fields, which this client leaves unticked.
+  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422), and works against a stock chat server: one-byte opcodes, its keep-alive read past, commands as typed, and a log line saying why a link ended (eq-network #438, pinned at bb4c8d7). The repin also takes #443's bug-report fields, which the typed line leaves unticked and the bug report window (below) ticks.
 - A swimmer climbs out of a pool onto a rim up to about 3.3 above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483b, 6.483c):
   - Stroking forward with the view pitched up toward dry ground just ahead hops, at most once in 1500 ms: three times the jump strength added to the rise and a push along the heading (0x48a793, 0x48a026, read R33b).
   - The wet step ends on the frame that takes the origin out of the water, so the fall that follows keeps the velocity it left with instead of losing it to the water's damping for the rest of the sample.

@@ -176,6 +176,9 @@ pub(super) struct ChatState {
     pub(crate) report_echo: Option<super::reports::ReportLine>,
     /// Lines a report command prints at once, for [`super::reports::say`].
     pub(crate) report_lines: Vec<super::reports::ReportLine>,
+    /// The report window a typed command asked to open, for
+    /// [`super::report_windows::open`].
+    pub(crate) report_window: Option<super::report_windows::Report>,
     /// A `/loc` or `/time`, waiting to be answered.
     pub asked: Option<super::whereabouts::Asked>,
     /// A `/yell` or `/stopcast` waiting for its line and send.
@@ -246,6 +249,8 @@ pub(super) struct ChatState {
     pub(crate) boat_interacted: Option<u16>,
     /// `/follow` typed or pressed, for [`super::motion::input`] to start.
     pub(crate) follow_asked: Option<super::motion::FollowAsked>,
+    /// The words of a `/surname` typed or run, for [`super::surname::command`].
+    pub(crate) surname_asked: Option<String>,
     /// A Ranger's tracking option typed by another class, for
     /// [`super::tracking::say_rangers_only`] to answer.
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
@@ -280,6 +285,7 @@ struct ScriptRequests {
     sharing: Option<crate::script::ExpectedWorld>,
     follow: Option<crate::script::ExpectedWorld>,
     boat: Option<crate::script::ExpectedWorld>,
+    surname: Option<crate::script::ExpectedWorld>,
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -314,6 +320,11 @@ pub(crate) fn guard_script_requests(
     }
     if let Some(reason) = withdraw(&mut chat.script_requests.follow, &online)
         && chat.follow_asked.take().is_some()
+    {
+        refusal = Some(reason);
+    }
+    if let Some(reason) = withdraw(&mut chat.script_requests.surname, &online)
+        && chat.surname_asked.take().is_some()
     {
         refusal = Some(reason);
     }
@@ -371,7 +382,7 @@ impl ChatState {
         serde_json::json!({
             "composing": typing.composing,
             "composition_window": composition_window,
-            "other_text_input_active": typing.counting || typing.logging_in || typing.map_search
+            "other_text_input_active": typing.counting || typing.logging_in || typing.map_search || typing.reporting
                 || typing.spell_search || typing.spell_search_claimed || typing.spell_set_name
                 || typing.rebinding || typing.editing_script || typing.creating_character,
         })
@@ -565,6 +576,7 @@ impl ChatState {
             boat_asked,
             boat_interacted,
             follow_asked,
+            surname_asked,
             rangers_only,
             load_skin,
             pet_targeted,
@@ -589,6 +601,7 @@ impl ChatState {
             paced,
             shield_words,
             report_echo,
+            report_window,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -631,6 +644,7 @@ impl ChatState {
         *boat_asked = None;
         *boat_interacted = None;
         *follow_asked = None;
+        *surname_asked = None;
         *rangers_only = None;
         *load_skin = None;
         *pet_targeted = None;
@@ -655,6 +669,7 @@ impl ChatState {
         *shield_words = None;
         // An echo waits on the ended session's answer.
         *report_echo = None;
+        *report_window = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -1344,7 +1359,7 @@ pub(super) fn input(
         .next()
         .is_some_and(|Send(id)| state.groups.focus(*id));
     // Local text fields keep their keys out of chat.
-    if typing.counting || typing.map_search || typing.spell_search_claimed {
+    if typing.counting || typing.map_search || typing.reporting || typing.spell_search_claimed {
         keyboard.clear();
         paste.clear();
     }
@@ -2061,6 +2076,7 @@ fn typed_report(
             state.report_echo = echo;
         }
         Answer::Say(line) => state.report_lines.push(line),
+        Answer::Open(report) => state.report_window = Some(report),
         Answer::Nothing => {}
     }
     Ok(())
@@ -2394,6 +2410,21 @@ fn word_asked(input: &str, state: &mut ChatState) -> bool {
     false
 }
 
+/// A typed command that only shows one of this client's own windows or
+/// toggles its log, sending nothing; false for any other line.
+fn window_asked(input: &str, state: &mut ChatState) -> bool {
+    if typed_command(input, "/filter") {
+        // `/filter` reads no words and sends nothing: it shows the Options
+        // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
+        state.filter_page = Some(FilterPage);
+    } else if input.eq_ignore_ascii_case("/log") {
+        state.log_toggle = true;
+    } else {
+        return false;
+    }
+    true
+}
+
 pub(super) fn client_request_in_scope(
     input: &str,
     state: &mut ChatState,
@@ -2424,6 +2455,11 @@ pub(super) fn client_request_in_scope(
     if let Some(guild) = super::guild::Command::typed(input) {
         state.script_requests.guild = scope;
         state.guild_asked = Some(guild);
+        return Some(Ok(()));
+    }
+    if let Some(words) = super::surname::typed(input) {
+        state.script_requests.surname = scope;
+        state.surname_asked = Some(words);
         return Some(Ok(()));
     }
     if let Some(words) = super::languages::typed(input) {
@@ -2464,14 +2500,7 @@ pub(super) fn client_request_in_scope(
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
-    // `/filter` reads no words and sends nothing: it shows the Options
-    // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
-    if typed_command(input, "/filter") {
-        state.filter_page = Some(FilterPage);
-        return Some(Ok(()));
-    }
-    if input.eq_ignore_ascii_case("/log") {
-        state.log_toggle = true;
+    if window_asked(input, state) {
         return Some(Ok(()));
     }
     if let Some(request) = super::skin::LoadSkin::typed(input) {
@@ -4774,8 +4803,25 @@ mod tests {
 
     #[test]
     fn a_typed_line_sends_a_report_to_the_staff() {
+        use crate::report_windows::Report;
         use eq_client_core::reports::BugCategory;
         let (mut app, receiver) = slash_app(true);
+        // As the program does, a bug report or feedback opens its window
+        // and leaves the words aside, unless Typed Reports is on.
+        for (line, report) in [
+            ("/bug doors: it will not open", Report::Bug),
+            ("/feedback a note", Report::Feedback),
+        ] {
+            send_typed(&mut app, line);
+            assert!(receiver.try_recv().is_err(), "{line}");
+            let mut chat = app.world_mut().resource_mut::<ChatState>();
+            assert_eq!(chat.report_window.take(), Some(report), "{line}");
+        }
+        let mut typed = Settings::default();
+        typed.set(Fix::TypedReports, true);
+        let mut options = crate::options::OptionsState::default();
+        options.options.qol = typed;
+        app.insert_resource(options);
         send_typed(&mut app, "/petition  I am stuck in the wall. ");
         assert!(matches!(
             receiver.try_recv(),
@@ -4847,7 +4893,7 @@ mod tests {
             );
             assert!(receiver.try_recv().is_err(), "{line}");
             assert_eq!(
-                submit_typed_line(line, &mut chat, &mut online, &outbox, &Settings::default()),
+                submit_typed_line(line, &mut chat, &mut online, &outbox, &typed),
                 Ok(()),
                 "{line}"
             );
