@@ -13,6 +13,40 @@
   the program sends this choice as `OP_TargetCommand`, and this client
   sends it as the ordinary target choice, which EQEmu handles alike. The
   Mac-era rule is unchanged.
+- The scribe press and the gems follow the Titanium program further (reads
+  R49-34 a, d and i, slice G, G2 and G4, checklist 6.639). A scroll skips
+  the race mask, as the program's usability test does, so a scroll no race
+  may use still scribes for its class. Lines 0x2f0f (your class can't) and
+  0x2f12 (already in your book) name the cursor item, as R49-34 i reads,
+  where they named nothing and the spell. A left click on a gem clears the
+  melody before its cast, whatever comes of the cast; a gem key clears it
+  only while singing, as before. A right click forgets a filled gem at once
+  even mid-cast, and does nothing and says nothing while a request is
+  pending, where it was refused with this client's words. The session lets
+  the mid-cast forget go (eq-network #445), and a song stop is said only for
+  a Bard, not at another class's cast end (#444); both ride main's eq-network
+  pin. Not built yet,
+  labelled: the deity and level tests of the usability check (the item
+  fields aren't decoded here), an Alt left click picking the gem up (read
+  R49-34 n names the keys, but what 0x4ebe36 puts on the cursor isn't
+  read, so ours keeps its hold), and the popup menu on an empty gem.
+- A gem cast meets the Titanium program's own checks before it goes, in its
+  order (reads R49-34 e and h-j, slice G, checklist 6.639; audit table in
+  the PR). The gem click comes first (0x4ecb56): while a cast is under way
+  or the gem's refresh runs it says 0x2efd in colour 0x108, where it said
+  this client's words (kept as the fallback), and a Bard's song still
+  passes; while a request waits on the server it does nothing and says
+  nothing, where it said "Waiting for the server". Then the cast start
+  (0x411f3d): a sitting player stands first when Allow Auto Stand is on
+  (step 4); stunned says 0xae (5); a level below the spell's for the class
+  says 0x309b (10), from the installed spell data; and a spell that isn't a
+  song, cast while crouched, says 0xd5 (16), these in colour 0x121. A song
+  is one a Bard has a level for [I]. Sitting without Allow Auto Stand is
+  still left to the server, as only spells with the record's +0x1fc byte
+  clear need standing and that byte isn't mapped; the same byte holds back
+  0xd4 (a song while lying). The global recast the click also tests isn't
+  kept here. The local mana check stays for now: the program has none
+  (read R49-34 g), and dropping it is with the reviewer.
 - Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). It needs eq-network's #418 cold report and #424's event saves, which main's eq-network pin already carries, so it has no repin of its own.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.

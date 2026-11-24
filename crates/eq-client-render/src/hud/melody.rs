@@ -25,6 +25,7 @@ pub(crate) fn melody(
         Res<super::messages::Messages>,
         Res<crate::ViewerSettings>,
     ),
+    options: Option<Res<crate::options::OptionsState>>,
 ) {
     let definitions = (&*definitions.0, &*definitions.1, &*definitions.2);
     if let Some(words) = chat.melody_asked.take()
@@ -34,7 +35,7 @@ pub(crate) fn melody(
             (gem, false),
             (&mut chat, &online, &outbox),
             definitions,
-            &map,
+            (&map, options.as_deref()),
         );
     }
     if let Some(gem) = online.take_melody_step() {
@@ -43,7 +44,7 @@ pub(crate) fn melody(
             (gem, false),
             (&mut chat, &online, &outbox),
             definitions,
-            &map,
+            (&map, options.as_deref()),
         );
     }
 }
