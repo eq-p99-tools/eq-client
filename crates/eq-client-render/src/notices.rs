@@ -541,6 +541,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::Camp(camp) => in_chat(camp_lines(camp, messages)),
         Notice::LootCoins(coins) => chat(loot_coins(*coins, messages)),
         Notice::LootRefused(response) => chat(loot_line(*response, messages)),
+        Notice::SurnameAnswer {
+            accepted,
+            name,
+            last_name,
+        } => chat(crate::surname::answer(*accepted, name, last_name, messages)),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
         Notice::ProgramLine {

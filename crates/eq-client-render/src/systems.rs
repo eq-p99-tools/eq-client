@@ -7,8 +7,8 @@ use crate::{
     motion, move_player, names, navigation, navmesh_prebuild, notices, online, options,
     orbit_camera, outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading,
     resources, schedule_screenshot, select_preview, sharing, sheets, skills, skin, skinned, sounds,
-    speed, spell_effects, spell_icons, spellbook, target, tooltip, tracking, trade, tradeskills,
-    training, translocate, update_hud, weather, whereabouts, who, windows, zone_audio,
+    speed, spell_effects, spell_icons, spellbook, surname, target, tooltip, tracking, trade,
+    tradeskills, training, translocate, update_hud, weather, whereabouts, who, windows, zone_audio,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -55,6 +55,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<abilities::choices::Files>()
         .init_resource::<abilities::picker::Picker>()
         .init_resource::<guild::Invitations>()
+        .init_resource::<surname::Pending>()
         .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
         .init_resource::<target::ScenePointer>()
@@ -222,6 +223,7 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     crate::report_windows::open,
                     crate::report_windows::buttons,
+                    crate::report_windows::question,
                     crate::report_windows::show,
                 )
                     .chain(),
@@ -243,7 +245,12 @@ pub(super) fn schedule(app: &mut App) {
                     .chain(),
                 (contacts::answers, contacts::persist).chain(),
                 abilities::choices::persist,
-                (guild::invitations, guild::commands, sharing::commands),
+                (
+                    guild::invitations,
+                    guild::commands,
+                    sharing::commands,
+                    surname::command,
+                ),
                 pet::window,
                 (group::window, group::join),
                 raid::window,

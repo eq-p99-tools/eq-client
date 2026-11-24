@@ -4,7 +4,8 @@
 //! challenge to a duel (`duel`), since the server waits for their answers,
 //! then a question of the client's own before something
 //! that cannot be undone, as Ask Before Deleting Spells asks before a spell
-//! leaves the book. Whoever asked acts on the answer.
+//! leaves the book, or before a bug report goes. Whoever asked acts on the
+//! answer.
 use crate::{
     online::OnlineState,
     outbox::Outbox,
@@ -58,6 +59,9 @@ pub(crate) enum Question {
     /// Whether to join a guild, or take a higher rank in it, as the player
     /// was invited ([`crate::guild::Invitations`] holds the words).
     GuildInvite,
+    /// Whether to send the surname named ([`crate::surname::Pending`] holds
+    /// the word).
+    Surname,
     /// Whether to loot a NO DROP item from this place on this corpse
     /// ([`crate::trade::no_drop`]).
     LootNoDrop {
@@ -66,6 +70,9 @@ pub(crate) enum Question {
         place: u16,
         item_id: u32,
     },
+    /// The bug report window's question before its report goes
+    /// ([`crate::report_windows`]): every answer sends.
+    BugReport,
 }
 
 impl Question {
@@ -115,9 +122,16 @@ impl Question {
                     names.label(spell)
                 )
             }
-            // The invitation's own words; see [`show`].
-            Self::GuildInvite => String::new(),
+            // The invitation's and the surname's own words; see [`show`].
+            Self::GuildInvite | Self::Surname => String::new(),
             Self::LootNoDrop { .. } => crate::trade::no_drop::text(online.world(), self, messages),
+            Self::BugReport => {
+                // The program asks with its own string (read R49-52b).
+                let ours = "Send your system information with this bug report?";
+                messages.map_or_else(|| ours.to_owned(), |messages| {
+                    messages.official(crate::report_windows::SYSTEM_INFO_QUESTION, &[], ours)
+                })
+            }
         }
     }
 }
@@ -273,6 +287,12 @@ pub(crate) fn buttons(
     }
 }
 
+/// Those who hold the words of a question of the client's own.
+type Holders<'w> = (
+    Option<Res<'w, crate::guild::Invitations>>,
+    Option<Res<'w, crate::surname::Pending>>,
+);
+
 /// Shows the dialog's question.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
@@ -282,10 +302,10 @@ pub(crate) fn show(
         Res<crate::ViewerSettings>,
         Option<Res<crate::options::OptionsState>>,
     ),
-    (messages, names, invitations): (
+    (messages, names, (invitations, surname)): (
         Option<Res<crate::hud::messages::Messages>>,
         Res<crate::spellbook::SpellNames>,
-        Option<Res<crate::guild::Invitations>>,
+        Holders,
     ),
     mut texts: Query<&mut Text, With<QuestionText>>,
     controls: Query<Entity, With<AnswerButton>>,
@@ -325,6 +345,9 @@ pub(crate) fn show(
         None => match asked.question {
             Some(Question::GuildInvite) => invitations
                 .map(|invitations| invitations.question())
+                .unwrap_or_default(),
+            Some(Question::Surname) => surname
+                .map(|surname| surname.question(messages.as_deref()))
                 .unwrap_or_default(),
             question => question
                 .map(|question| question.text(&names, &online, messages.as_deref()))
