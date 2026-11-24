@@ -7,6 +7,17 @@
   - A cast cleared locally drops the cast bar with no line, and the next gem press casts. A song cleared locally ends with line 0x318e and resets the gems as any song stop does; `/melody` sees it as it sees the server's stop.
   - The roll's chance and resists are your buffs' totals from the spell file at the caster's level (`effect_total`); a landing counts only for a spell that lasts. Worn items count 0 (inferred, in the gap log).
   - Repins eq-network to ae61866 (network main with #446 and #447).
+- A skinned hot button's tooltip says what the button holds and how long it waits, as the client's own hotbar window says in its detail line: a knight's special shows "Server reuse N s", with "(estimated)" where the session estimated it, a gem its spell and timer, an empty slot "Unassigned". Before, the skin's fixed words showed (checklist 6.626, look L8). The wording is this client's.
+- A script's `gm` line is a user's typed `#` line (6.584, scripts are
+  users). `gm` takes any line a player could type after `#`, on any server,
+  with only the chat line's own limits (no control characters, the chat
+  length counting the `#`), and it goes the typed way under the same chat
+  pace. The server decides what a `#` line does; a player who is not a GM
+  gets the server's answer. The old word list, argument filters and the
+  local-session and generation gates are gone, and `chat("say #...")` is no
+  longer refused. The `gm("depop")` helper for a selected NPC stays a local
+  Titanium test convenience; elsewhere `#depop` goes as typed. Breaking for
+  scripts that relied on the old refusals: those lines now send.
 - **An interruption the server names prints as the Titanium program prints it** (reads R49-51 and R49-51b, checklist 6.645 S1). On P99 and Titanium EQEmu, your own interruption line and another caster's take the program's colour 0x108. As a Bard, your own line is hidden where the song stop line is: only with the Bard songs filter at Hide (read R49-48 e: the program's filter 9 value 1 is that row's last option; that the options run in the Options window's order is inferred, as the read maps them by index with their labels unread). Another class's own line always shows, as before. Another caster's line follows the filter for who they are: a Bard's the Bard songs filter, another player's the other players' spells filter, an NPC's the NPC spells filter. A group member's shows at Show and Group only, anyone else's at Show only (options by index, inferred as above). A caster this client doesn't know shows (inferred). The Mac and RoF2 programs are unread and keep this client's colour and show every line.
 - **Fix: the Bard songs filter hides the song stop line at Hide, not Mine only** (read R49-48 e). The earlier entry below took the program's filter 9 value 1 for Mine only; it is the row's last option, Hide.
 - **Chat server channel commands follow the Titanium program** (read R49-12, checklist 6.616).
