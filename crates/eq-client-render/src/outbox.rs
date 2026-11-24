@@ -116,6 +116,19 @@ pub(crate) struct Outbox {
     /// (read R49-4 (b): the builder takes the last window's choice), kept
     /// by [`crate::languages::speak`].
     language: Arc<AtomicU8>,
+    /// Whether this facade sent chat, which the session paces (6.523): a
+    /// script step's typed line may send it, and a later refusal is then
+    /// the step's.
+    sent_chat: Arc<AtomicBool>,
+}
+
+/// Whether a command goes as chat, which the session paces (6.523). An emote
+/// or a roll is its own request, outside the pace.
+pub(crate) const fn is_chat(command: &ClientCommand) -> bool {
+    matches!(
+        command,
+        ClientCommand::SendChat(_) | ClientCommand::SendChatInAdmission { .. }
+    )
 }
 
 fn interrupts_apply(command: &ClientCommand) -> bool {
@@ -142,6 +155,7 @@ impl Outbox {
             book: Arc::default(),
             chat_admission: None,
             language: Arc::default(),
+            sent_chat: Arc::default(),
         }
     }
 
@@ -155,7 +169,13 @@ impl Outbox {
             book: self.book.clone(),
             chat_admission,
             language: self.language.clone(),
+            sent_chat: Arc::default(),
         }
+    }
+
+    /// Whether this outbox has sent chat (see [`is_chat`]).
+    pub(crate) fn sent_chat(&self) -> bool {
+        self.sent_chat.load(Ordering::Relaxed)
     }
 
     pub(crate) fn script_world(&self, world: &ClientWorld) -> Option<crate::script::ExpectedWorld> {
@@ -366,6 +386,7 @@ impl Outbox {
         };
         let edit = Expected::from_command(&command);
         let interrupt = interrupts_apply(&command);
+        let chat = is_chat(&command);
         self.check(world, &command).and_then(|queue| {
             let mut book = (edit.is_some() || interrupt)
                 .then(|| self.book.lock().map_err(|_| Refusal::Busy))
@@ -381,6 +402,9 @@ impl Outbox {
                 TrySendError::Full(_) => Refusal::Busy,
                 TrySendError::Disconnected(_) => Refusal::Ended,
             })?;
+            if chat {
+                self.sent_chat.store(true, Ordering::Relaxed);
+            }
             if let Some(book) = book.as_mut() {
                 if let Some((expected, session, now)) = edit {
                     book.sent(expected, session, now, receipt.cloned());
