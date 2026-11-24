@@ -2045,7 +2045,7 @@ mod tests {
             for face in &placed.collision {
                 assert!(actor.collision.contains(face));
             }
-            assert!(actor.no_hit_collision.is_empty());
+            assert_eq!(actor.no_hit_collision, Vec::<[[f32; 3]; 3]>::new());
         }
     }
 
