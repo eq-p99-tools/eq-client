@@ -675,12 +675,14 @@ pub(super) fn interpolate(
             entity.seen = Some(spawn.reported);
             entity.soles = None;
             entity.carried = None;
+            let current = entity.ride.map(|(sample, ..)| sample.spawn_id);
             let linked = world.zip(entity.feet).and_then(|(world, feet)| {
                 ride(
                     world,
                     state.world().carriers(),
                     &spawn.state,
                     feet,
+                    current,
                     spawn.reported,
                 )
             });
@@ -809,11 +811,15 @@ pub(super) fn interpolate(
 /// (0x48a0fc, 0x48c285, 0x479e37, read R49-27 (d)). Taken at every report
 /// here (inferred, 6.611), and only in a zone with a boat in it. The
 /// player's bound of 600 from the boat's origin holds here too (6.469).
+/// The boat it was drawn on stays its boat while any part of its footprint
+/// is over that boat's deck, as the player's own link does
+/// ([`eq_client_core::movement::CollisionWorld::spawn_floor_keeping`]).
 fn ride(
     world: &eq_client_core::movement::CollisionWorld,
     carriers: &eq_client_core::movement::Carriers,
     spawn: &eq_client_core::SpawnState,
     feet: f32,
+    current: Option<u16>,
     reported: std::time::Instant,
 ) -> Option<(
     eq_client_core::movement::CarrierSample,
@@ -823,7 +829,8 @@ fn ride(
     use eq_client_core::movement::{CARRIER_REACH, carrier_local};
     carriers.reports().next()?;
     let soles = Vec3::from_array(render_position(spawn.position)) - Vec3::Y * feet;
-    let (id, deck) = world.spawn_floor(soles, 0.01, crate::motion::sweep_depth(soles))?;
+    let (id, deck) =
+        world.spawn_floor_keeping(soles, 0.01, crate::motion::sweep_depth(soles), current)?;
     let report = carriers.latest(id)?;
     let pose = report.pose(reported);
     let local = carrier_local(pose, spawn.position);

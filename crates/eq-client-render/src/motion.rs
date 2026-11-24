@@ -1848,6 +1848,7 @@ pub(super) fn input(
     if boat.is_none() {
         controls.boat = None;
     }
+    let linked = boat.map(|riding| riding.sample.spawn_id);
     let carried_position = boat.map_or(accepted.position, |riding| riding.position);
     let origin = Vec3::from_array(eq_client_core::render_position(carried_position));
     let feet = origin - Vec3::Y * body.feet_offset;
@@ -2285,7 +2286,8 @@ pub(super) fn input(
         if !placement_blocked
             && !flying
             && !swimming
-            && let Some((sample, pose)) = boats::under(world, online.world().carriers(), feet, now)
+            && let Some((sample, pose)) =
+                boats::under(world, online.world().carriers(), feet, linked, now)
         {
             let position = world_position(origin.to_array(), current_heading);
             let sent = outbox.post(online.world(), |stamp| {
@@ -2624,7 +2626,7 @@ pub(super) fn input(
     let boat_under = if placement_blocked || flying || swimming {
         None
     } else {
-        boats::under(world, online.world().carriers(), landing, now)
+        boats::under(world, online.world().carriers(), landing, linked, now)
     };
     // The sample that walks off still removes the carrying motion from its
     // own budget. Only the floor under the landing carries the next pass.
