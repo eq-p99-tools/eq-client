@@ -873,6 +873,13 @@ fn a_slash_step_runs_its_line_as_typing_would() {
             message: "thanks".into(),
         })]
     );
+    // A surname waits for the typed command's question.
+    let (app, sent) = slash_step("surname Exemplum", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<ChatState>().surname_asked.as_deref(),
+        Some("Exemplum")
+    );
     // The friends list is the typed command's to change.
     let (app, sent) = slash_step("friend Example", |_| ());
     assert_eq!(sent, []);
@@ -912,13 +919,21 @@ fn a_slash_step_runs_its_line_as_typing_would() {
 fn a_slash_report_takes_the_typed_route_and_its_pace() {
     // A script may do what a player types: its report runs the typed line,
     // stamped with its admission, and nothing more is sent than typing the
-    // same line sends.
+    // same line sends. Typed Reports is on here, so the bug report and
+    // feedback go from the line.
+    let mut qol = eq_client_core::qol::Settings::default();
+    qol.set(eq_client_core::qol::Fix::TypedReports, true);
+    let typed_reports = |app: &mut App| {
+        let mut options = crate::options::OptionsState::default();
+        options.options.qol = qol;
+        app.insert_resource(options);
+    };
     for line in [
         "petition I am stuck",
         "bug doors: it will not open",
         "feedback a note",
     ] {
-        let (app, sent) = slash_step(line, |_| ());
+        let (app, sent) = slash_step(line, typed_reports);
         assert_eq!(
             app.world().resource::<RunStatus>().phase(),
             Phase::Completed,
@@ -933,7 +948,7 @@ fn a_slash_report_takes_the_typed_route_and_its_pace() {
             &mut typed,
             &mut online,
             &Outbox::new(Some(sender)),
-            &eq_client_core::qol::Settings::default(),
+            &qol,
         )
         .unwrap();
         let typed: Vec<ClientCommand> = typed_rx.try_iter().collect();
@@ -959,6 +974,23 @@ fn a_slash_report_takes_the_typed_route_and_its_pace() {
                 }
             ),
             "{line}: {sent:?}"
+        );
+    }
+    // With it off, as by default, they open their windows as the
+    // program's do, and send nothing.
+    for (line, report) in [
+        (
+            "bug doors: it will not open",
+            crate::report_windows::Report::Bug,
+        ),
+        ("feedback a note", crate::report_windows::Report::Feedback),
+    ] {
+        let (app, sent) = slash_step(line, |_| ());
+        assert_eq!(sent, [], "{line}");
+        assert_eq!(
+            app.world().resource::<ChatState>().report_window,
+            Some(report),
+            "{line}"
         );
     }
     // Two reports in a row go as a script's steps go, one a frame, each
@@ -1120,6 +1152,35 @@ fn a_chat_pace_refusal_after_a_scripts_chat_fails_the_run() {
     frame_at(&mut app, 30);
     refused(&app, 1, reason);
     assert!(app.world().resource::<ChatState>().paced.is_none());
+}
+
+#[test]
+fn a_burst_of_gm_lines_off_a_local_session_goes_as_typed_under_the_chat_pace() {
+    // A script's `#` lines are a user's (6.584): on a session that is not a
+    // local test one, each goes as the typed line, and the pace that holds
+    // typed chat holds them, failing the run at the held line.
+    let reason = "You are sending chat too fast. Wait 3 seconds.";
+    let (mut app, rx) = app();
+    let program = Program::parse(
+        "gm(\"show zone_status\")\ngm(\"set invulnerable on\")\ngm(\"depop\")\nwait(5000)",
+        Path::new("."),
+    )
+    .unwrap();
+    app.insert_resource(Script::from_program(program));
+    let mut sent = Vec::new();
+    for ms in (0..=1_000).step_by(10) {
+        frame_at(&mut app, ms);
+        sent.extend(rx.try_iter());
+    }
+    assert_eq!(
+        sent,
+        ["#show zone_status", "#set invulnerable on", "#depop"]
+            .map(|line| ClientCommand::SendChat(eq_client_core::OutboundChat::Say(line.into())))
+    );
+    app.world_mut().resource_mut::<ChatState>().paced =
+        Some((std::time::Instant::now(), reason.into()));
+    frame_at(&mut app, 1_010);
+    refused(&app, 3, reason);
 }
 
 #[test]
