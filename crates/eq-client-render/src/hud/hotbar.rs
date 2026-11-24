@@ -439,34 +439,11 @@ pub(crate) fn presentation(
                         .is_zero()
             });
         if skinned {
-            // The skin's button lights itself under the pointer; it shows a
-            // running timer in its disabled look.
-            if waiting && !greyed {
-                commands.entity(entity).insert(crate::skinned::Greyed);
-            } else if !waiting && greyed {
-                commands.entity(entity).remove::<crate::skinned::Greyed>();
-            }
-            // The skin has no detail line, so the hovered button's tooltip
-            // says what the client's own window says there, in place of the
-            // skin's fixed words. Written only when it changes.
-            if *interaction != Interaction::None {
-                let detail = hovered_detail(
-                    &bindings,
-                    Some(slot.0),
-                    (online.world(), qol),
-                    (&names, &map),
-                    now,
-                );
-                match tooltip {
-                    Some(mut tooltip) if tooltip.0 != detail => tooltip.0 = detail,
-                    Some(_) => {}
-                    None => {
-                        commands
-                            .entity(entity)
-                            .insert(crate::tooltip::Tooltip(detail));
-                    }
-                }
-            }
+            let detail = (*interaction != Interaction::None).then(|| {
+                let world = (online.world(), qol);
+                hovered_detail(&bindings, Some(slot.0), world, (&names, &map), now)
+            });
+            present_skinned(&mut commands, entity, (waiting, greyed), tooltip, detail);
         } else if let Some(mut color) = color {
             color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
         }
@@ -506,6 +483,33 @@ pub(crate) fn presentation(
         if page.is_some() {
             text.0 = (bindings.page() + 1).to_string();
         }
+    }
+}
+
+/// A skinned slot's button: it lights itself under the pointer and shows a
+/// running timer in its disabled look. The skin has no detail line, so the
+/// hovered button's tooltip says what the client's own window says there,
+/// in place of the skin's fixed words, written only when it changes.
+fn present_skinned(
+    commands: &mut Commands,
+    entity: Entity,
+    (waiting, greyed): (bool, bool),
+    tooltip: Option<Mut<crate::tooltip::Tooltip>>,
+    detail: Option<String>,
+) {
+    if waiting && !greyed {
+        commands.entity(entity).insert(crate::skinned::Greyed);
+    } else if !waiting && greyed {
+        commands.entity(entity).remove::<crate::skinned::Greyed>();
+    }
+    match (tooltip, detail) {
+        (Some(mut tooltip), Some(detail)) if tooltip.0 != detail => tooltip.0 = detail,
+        (None, Some(detail)) => {
+            commands
+                .entity(entity)
+                .insert(crate::tooltip::Tooltip(detail));
+        }
+        _ => {}
     }
 }
 
