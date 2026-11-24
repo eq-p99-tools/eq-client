@@ -1013,6 +1013,15 @@ pub trait OfficialSettings {
         None
     }
 
+    /// Whether the program sends a bug report with the machine's details
+    /// without asking first: `SendSystemInfo=1` in `[Defaults]`. The
+    /// program keeps it at 0 until its own window sets it, and asks on
+    /// every bug report until then (read R49-52b). This client never
+    /// writes it.
+    fn sends_system_info(&self) -> bool {
+        false
+    }
+
     /// The options in `eqclient.ini`.
     fn options(&self) -> OfficialOptions {
         OfficialOptions::default()
@@ -1157,6 +1166,18 @@ impl OfficialSettings for Titanium<'_> {
         Some(character_contacts_from_ini(&String::from_utf8_lossy(
             &bytes,
         )))
+    }
+
+    /// `SendSystemInfo` in `[Defaults]` of `eqclient.ini`, set to 1.
+    fn sends_system_info(&self) -> bool {
+        std::fs::read(self.0.join("eqclient.ini")).is_ok_and(|bytes| {
+            ini_value(
+                &String::from_utf8_lossy(&bytes),
+                "Defaults",
+                "SendSystemInfo",
+            )
+            .is_some_and(|value| value.trim() == "1")
+        })
     }
 
     /// `LastSysInfoDate` in `[Defaults]` of `eqclient.ini`, else of
@@ -2272,6 +2293,25 @@ Log=maybe
         )
         .expect("ini");
         assert_eq!(settings.last_sysinfo_date(), Some(9));
+        // The bug report's question is asked until SendSystemInfo is 1.
+        assert!(!settings.sends_system_info());
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nSendSystemInfo=0\nLastSysInfoDate=9\n",
+        )
+        .expect("ini");
+        assert!(!settings.sends_system_info());
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nSendSystemInfo=1\nLastSysInfoDate=9\n",
+        )
+        .expect("ini");
+        assert!(settings.sends_system_info());
+        assert!(
+            !InstalledClient::Titanium
+                .settings(&root.join("missing"))
+                .sends_system_info()
+        );
         // Ours is kept in our own folder, made where missing, and replaced
         // in place; the installed files are left exactly as they were.
         let official = std::fs::read(install.join("eqclient.ini")).expect("ini");

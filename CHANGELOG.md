@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **The bug report window asks before it sends**, as the Titanium program does (reads R49-52, R49-52b and R49-52c; checklist 6.647). Send asks the official question (line 0x1aa3) in the skin's confirmation dialog, with Yes and No, every time, unless the installation's `eqclient.ini` has `[Defaults] SendSystemInfo=1` (read only).
+  - Every answer sends, and so does the question's own close after 60 seconds. After the answer, the empty-box and sent lines follow as before.
+  - Cancel leaves the question up, and its answer still sends what the box holds (read); the close box and Esc do the same (inferred).
+  - The official client adds the machine's processor, video card and driver on Yes or with `SendSystemInfo=1`. This client never sends anything about the machine, so the report is the same either way, and a line of its own says so (a labelled departure).
+  - A second Send while the question is up does nothing (a departure: the program would ask in a second dialog). Leaving the world while it is up (zoning, a camp, a drop, `/quit`) loses the report, as the program's does (reads R49-52d, R49-52e); the program then still clears the words and says its sent line, while this client keeps the words and says nothing (a labelled departure). A script's `Script report windows` event has `question_up`.
 - `/surname` runs as read R49-10 reads the Titanium program (checklist 6.507). This supersedes the earlier draft #565.
   - **Checks, in order, each sending nothing:** under level 20 (line 0x328c); a bare `/surname` with no surname set (usage 0x328d); words 32 bytes or more (0x8bf). The read gives `strlen >= 0x20` on the argument, and that this is the whole argument rather than the first word is inferred.
   - **A bare `/surname` with one set:** the program asks a question whose yes path isn't read (R49-10e), so this client says in its own words that it waits for that read (a gap).
@@ -26,7 +31,7 @@
   - Opening the bug report fills its place labels with the player's place, each truncated to a whole number as the program's ftol does, keeps the heading the same way, and clears its four check boxes and the target's name. The report sends that place and heading. This client resets it on every open (inferred).
   - **Location** fills the place again. **Target**, checked with a target, names it (the cleaned name) and carries it; checked with none it stays unchecked; unchecked it clears. **Dup**, **Crash**, **Flags** and **Target** send the report's bits 1, 2, 8 and 4, carried by eq-network #443.
   - The category drop-down lists this client's own names for the categories (the program's come from a table in itself). Scripts reach it as `dropdown bug_type`, the text boxes as `report bug_text` and `report feedback_text`, and the buttons by ScreenID. A script's `report()` adds a `Script report windows` event with what both windows show.
-  - **Send** with an empty box says line 0x22b0 and sends nothing; otherwise it sends, clears the box and says 0x22ae once the session says it went. **Cancel** says 0x22af and keeps the words. The window hides either way. The program may ask to confirm first (line 0x1aa3) depending on a setting this client has not read; this client sends at once, a labelled departure.
+  - **Send** with an empty box says line 0x22b0 and sends nothing; otherwise it sends, clears the box and says 0x22ae once the session says it went. **Cancel** says 0x22af and keeps the words. The window hides either way. Send first asks the program's question (see the entry above).
   - The feedback window's **Send** sends the words with the player's place and heading, clears and closes, with no line; empty, it only closes. **Cancel** clears and closes.
   - **Typed Reports is now off by default**, so the commands behave as the program's. On, it sends the typed words as before. It changes nothing on EqMac and RoF2, which always send the typed words.
   - If the installed skin lacks a window, a line says so and points to Typed Reports (a departure; the program always has them).

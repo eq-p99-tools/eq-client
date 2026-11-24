@@ -223,6 +223,7 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     crate::report_windows::open,
                     crate::report_windows::buttons,
+                    crate::report_windows::question,
                     crate::report_windows::show,
                 )
                     .chain(),
