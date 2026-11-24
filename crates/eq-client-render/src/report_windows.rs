@@ -428,19 +428,30 @@ fn target(world: &ClientWorld) -> Option<BugTarget> {
     })
 }
 
-/// Opens the window a typed command asked for, where the skin has it.
+/// Opens the window a typed command asked for, where the skin has it. The
+/// window has no frame until it opens, so the skin's file is asked, not
+/// what has been drawn.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn open(
     mut chat: ResMut<ChatState>,
-    online: Res<OnlineState>,
-    skin: Option<Res<crate::skinned::Skinned>>,
+    (online, settings, skin): (
+        Res<OnlineState>,
+        Res<crate::ViewerSettings>,
+        Res<crate::skin::UiSkin>,
+    ),
+    mut screens: ResMut<crate::skinned::Screens>,
     mut shown: ResMut<Shown>,
     mut windows: ResMut<ReportWindows>,
 ) {
     let Some(report) = chat.report_window.take() else {
         return;
     };
-    if skin.as_ref().is_some_and(|skin| skin.has(report.window())) {
+    let drawn = settings
+        .0
+        .eq_directory
+        .as_deref()
+        .is_some_and(|directory| screens.defines(directory, &skin.0, report.window()));
+    if drawn {
         windows.open(report, online.world(), &mut shown);
     } else {
         // A departure: the program always has its window.

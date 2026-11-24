@@ -284,3 +284,36 @@ fn the_category_drop_down_lists_every_category_in_order() {
     form.category = 0;
     assert_eq!(form.category(), BugCategory::ALL[0]);
 }
+
+#[test]
+fn both_windows_get_a_frame_while_open_and_close_on_their_close_box() {
+    // Without a frame of their own the skin never draws them (live look,
+    // 11-24): they are framed while open, as the note and book are.
+    for id in [WindowId::BugReport, WindowId::Feedback] {
+        assert!(crate::skinned::closes_here(id), "{id:?}");
+    }
+}
+
+#[test]
+fn without_an_installation_the_command_says_there_is_no_window() {
+    let mut app = crate::testing::app();
+    app.init_resource::<ChatState>()
+        .init_resource::<crate::skinned::Screens>()
+        .add_systems(Update, open);
+    app.world_mut().resource_mut::<ChatState>().report_window = Some(Report::Bug);
+    app.update();
+    assert!(
+        !app.world()
+            .resource::<Shown>()
+            .displayed(WindowId::BugReport)
+    );
+    let chat = app.world().resource::<ChatState>();
+    assert_eq!(chat.report_window, None);
+    assert!(
+        format!(
+            "{:?}",
+            chat.history.lines(eq_client_core::chat::ChatTab::All)
+        )
+        .contains("Turn on Typed Reports")
+    );
+}

@@ -239,6 +239,16 @@ impl Screens {
         self.screen(directory, skin, (file, name))
     }
 
+    /// Whether this skin defines a window, before its frame is ever drawn.
+    pub(crate) fn defines(
+        &mut self,
+        directory: &std::path::Path,
+        skin: &str,
+        id: WindowId,
+    ) -> bool {
+        self.get(directory, skin, id).is_some()
+    }
+
     /// A screen of this skin's file, if the file defines it: a window's, or
     /// one that is no window, as the cursor's attachment.
     pub(crate) fn screen(
