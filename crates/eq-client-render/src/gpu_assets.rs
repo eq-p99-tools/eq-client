@@ -129,17 +129,32 @@ pub(super) fn create_terrain_primitives(
         .collect()
 }
 
+/// An animated surface's plain material: drawn, or parked while Rich
+/// Lighting draws the surface.
+type AnimatedSurface = AnyOf<(
+    &'static MeshMaterial3d<StandardMaterial>,
+    &'static crate::rich_light::Parked,
+)>;
+
 /// Swaps only terrain textures whose WLD animation advanced, retaining the
 /// material's alpha mode, color, sidedness and depth behavior on every frame.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(super) fn animate_terrain(
     time: Res<Time>,
-    mut terrain: Query<(&MeshMaterial3d<StandardMaterial>, &mut TerrainAnimation)>,
+    mut terrain: Query<(AnimatedSurface, &mut TerrainAnimation)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (handle, mut animation) in &mut terrain {
+    for ((drawn, parked), mut animation) in &mut terrain {
+        // A surface Rich Lighting draws keeps its plain material parked,
+        // which its rich one follows.
+        let Some(handle) = drawn
+            .map(|drawn| &drawn.0)
+            .or(parked.map(|parked| &parked.0))
+        else {
+            continue;
+        };
         if let Some(image) = animation.advance(time.delta())
-            && let Some(mut material) = materials.get_mut(&handle.0)
+            && let Some(mut material) = materials.get_mut(handle)
         {
             material.base_color_texture = Some(image);
         }

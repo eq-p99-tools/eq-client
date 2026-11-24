@@ -90,6 +90,16 @@ pub enum Fix {
     /// stays off the view, and any rain or snow stays out of sight.
     /// Nothing the world sees changes.
     ClearView,
+    /// Lights every zone by this client's own look rather than the original
+    /// engine's: lamps and carried lights shine per pixel with a soft
+    /// falloff and a flame's flicker, the player's light and the nearest
+    /// lamps cast shadows, surfaces take a soft highlight and the camera a
+    /// soft glow. Without a sky, each room keeps its lamps' colours as a
+    /// smooth wash and a tone curve takes the place of clipped colours;
+    /// with one, the day is unchanged and the lamps and torches show by
+    /// night. Experimental (Adam's request of 11-24); off, every zone draws
+    /// as before.
+    RichLighting,
     /// Allows horizontal movement while stunned; other stun restrictions remain.
     WalkWhileWinded,
     /// The Feign Death press sends the feign request alone, without the
@@ -194,7 +204,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -205,6 +215,7 @@ impl Fix {
         Self::FreeChaseTilt,
         Self::FreeCamera,
         Self::ClearView,
+        Self::RichLighting,
         Self::WalkWhileWinded,
         Self::MoveWhileFeigned,
         Self::StandWhenHit,
@@ -253,6 +264,7 @@ impl Fix {
             Self::FreeChaseTilt => "free_chase_tilt",
             Self::FreeCamera => "free_camera",
             Self::ClearView => "clear_view",
+            Self::RichLighting => "rich_lighting",
             Self::WalkWhileWinded => "walk_while_winded",
             Self::MoveWhileFeigned => "move_while_feigned",
             Self::StandWhenHit => "stand_when_hit",
@@ -303,6 +315,7 @@ impl Fix {
             Self::FreeChaseTilt => "Free Chase Tilt",
             Self::FreeCamera => "Free Camera",
             Self::ClearView => "See the World Clearly",
+            Self::RichLighting => "Rich Lighting",
             Self::WalkWhileWinded => "Walk While Winded",
             Self::MoveWhileFeigned => "Move While Feigned",
             Self::StandWhenHit => "Stand When Hit",
@@ -376,6 +389,9 @@ impl Fix {
             }
             Self::ClearView => {
                 "Light the night as if it were noon, brighten supported dark interiors, and hide distance fog, rain and snow in your view."
+            }
+            Self::RichLighting => {
+                "Light every zone with soft, flickering lamp and torch light, shadows from your own light and a gentle glow; outdoors the lamps show at night. Experimental: departs from the original client's look."
             }
             Self::WalkWhileWinded => {
                 "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."
@@ -478,6 +494,7 @@ impl Fix {
             | Self::FreeChaseTilt
             | Self::FreeCamera
             | Self::ClearView
+            | Self::RichLighting
             | Self::ReadWhileStanding
             | Self::ShowInvisible
             | Self::FloatingCombatText
@@ -534,6 +551,7 @@ impl Fix {
             | Self::FreeChaseTilt
             | Self::FreeCamera
             | Self::ClearView
+            | Self::RichLighting
             | Self::ShowInvisible
             | Self::FloatingCombatText
             | Self::FrameCap
@@ -579,6 +597,7 @@ impl Fix {
             | Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::ClearView
+            | Self::RichLighting
             | Self::WalkWhileWinded
             | Self::MoveWhileFeigned
             | Self::AutoLoot
@@ -736,6 +755,7 @@ mod tests {
                 Fix::FreeChaseTilt,
                 Fix::FreeCamera,
                 Fix::ClearView,
+                Fix::RichLighting,
                 Fix::WalkWhileWinded,
                 Fix::MoveWhileFeigned,
                 Fix::StandWhenHit,
@@ -768,6 +788,7 @@ mod tests {
         let settings = Settings::default();
         for fix in [
             Fix::ClearView,
+            Fix::RichLighting,
             Fix::WalkWhileWinded,
             Fix::MoveWhileFeigned,
             Fix::AutoLoot,
