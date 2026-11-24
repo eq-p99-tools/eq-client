@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). It needs eq-network's #418 cold report and #424's event saves, which main's eq-network pin already carries, so it has no repin of its own.
+  - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
+  - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.
+  - The cold total follows the program's: the profile base (byte 12872; a Barbarian's 35, an Iksar's 10 lower), effects 47 and 111, the Ranger and Beastlord term, and worn items' cold (field 16). The resist cap of 500 can't change a cold amount and isn't applied.
+  - Rune absorbs aren't taken off the amount for any hazard yet: a labelled departure, and the server applies its own.
+  - When the fire or cold resist total can't be worked out yet, no lava or cold report goes out, where the program reports by its own total. That's a labelled departure, counted in the gap log each time it holds a report back (checklist 6.632).
 - **A lift's rider reach now comes from the door model's own radius, and the session uses the same number** (eqgame.exe 0x4368b3, reads R49-28 (b), R49-28c and R49-28d; checklist 6.426). The program carries a rider within 10 + the door actor's radius + 200. That radius is the actor definition's model radius × the door's scale × the model's own scale, or 100 with no actor.
   - **Radius:** a WLD door model's authored bounding radius: its one mesh's 0x36 radius field, or its skeleton's 0x10 bounding radius (new `ZoneModel::radius`). This replaces the farthest solid point. That these fields are the program's radius is inferred, until an offline comparison or the 0x14 builder's read settles it. An EQG model, which the reads don't cover, and a WLD model with neither field keep the farthest solid point.
   - **Scale:** size / 100, with a size of 0, below 0 or 255 counted as 100 (0x48f826). Open types 50 and 54, and 57 standing at its base, take scale 1. A type 57 door is taken to stand at its base, as at spawn (inferred). The model's own scale (model +0x60) is unread and taken as 1 (inferred).
