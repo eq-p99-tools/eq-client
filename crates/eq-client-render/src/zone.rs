@@ -44,11 +44,13 @@ impl PreparedEntry {
         self.entry.placed = placement(position);
     }
 
-    /// A remembered preview origin must still fit the installed zone after
+    /// Remembered feet must still fit the installed zone after
     /// an installation update. Keep its actual height, including water/air;
     /// never snap it to a different floor of a multi-level zone.
-    pub(super) fn preview_place(&mut self, position: eq_client_core::WorldPosition) -> bool {
-        let Some(placed) = selection_placement(position, self.entry.zone.bounds()) else {
+    pub(super) fn preview_place(&mut self, feet: eq_client_core::WorldPosition) -> bool {
+        let Some(placed) =
+            selection_placement(feet, self.entry.zone.bounds(), self.entry.body.feet_offset)
+        else {
             return false;
         };
         self.entry.placed = placed;
@@ -272,6 +274,7 @@ pub(super) fn placement(position: eq_client_core::WorldPosition) -> Transform {
 fn selection_placement(
     position: eq_client_core::WorldPosition,
     bounds: Option<([f32; 3], [f32; 3])>,
+    feet_offset: f32,
 ) -> Option<Transform> {
     let (min, max) = bounds?;
     let origin = Vec3::from_array(render_position(position));
@@ -279,7 +282,11 @@ fn selection_placement(
     (origin.cmpge(Vec3::from_array(min) - margin).all()
         && origin.cmple(Vec3::from_array(max) + margin).all()
         && position.heading.is_finite())
-    .then(|| placement(position))
+    .then(|| {
+        let mut placed = placement(position);
+        placed.translation.y += feet_offset;
+        placed
+    })
 }
 
 /// The zone shown, and what entering and leaving one builds and clears.
@@ -484,19 +491,23 @@ mod tests {
             heading: 192.0,
         };
         let bounds = Some(([-128.0; 3], [128.0; 3]));
-        let placed = selection_placement(position, bounds).unwrap();
-        assert_eq!(placed, placement(position));
+        let placed = selection_placement(position, bounds, 3.0).unwrap();
+        assert_eq!(placed.rotation, placement(position).rotation);
         assert_eq!(
-            placed.translation.y, 18.0,
+            placed.translation.y, 21.0,
             "keep a point between floors or afloat"
         );
-        assert!(selection_placement(position, None).is_none());
+        assert!(selection_placement(position, None, 3.0).is_none());
         // This installation no longer has geometry near the recorded point.
-        assert!(selection_placement(position, Some(([500.0; 3], [600.0; 3]))).is_none());
+        assert!(selection_placement(position, Some(([500.0; 3], [600.0; 3])), 3.0).is_none());
         for bad in [f32::NAN, f32::INFINITY, 10_000.0] {
             assert!(
-                selection_placement(eq_client_core::WorldPosition { x: bad, ..position }, bounds)
-                    .is_none()
+                selection_placement(
+                    eq_client_core::WorldPosition { x: bad, ..position },
+                    bounds,
+                    3.0
+                )
+                .is_none()
             );
         }
     }

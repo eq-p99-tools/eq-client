@@ -19,6 +19,7 @@ type Key = (String, String, String);
 #[derive(Clone, Debug, PartialEq)]
 struct Location {
     zone: String,
+    /// EQ coordinates at the feet, independent of the actor's current size.
     position: WorldPosition,
 }
 
@@ -91,7 +92,7 @@ impl History {
         })
     }
 
-    /// No history from another login profile, server, character or zone is used.
+    /// Last-known feet; no other login profile, server, character or zone is used.
     pub(super) fn position(
         &mut self,
         root: Option<&std::path::PathBuf>,
@@ -177,7 +178,8 @@ fn decode(text: &str) -> Option<Location> {
 
 /// Read the current admission's actual session position, never the scene's
 /// default origin, a selection model, or a delayed interpolation from another
-/// admission. Accepted local movement is last-known client state, not a server ACK.
+/// admission. Project feet by the admitted body's own size rule. Accepted local
+/// movement is last-known client state, not a server ACK.
 fn current(
     online: &OnlineState,
     front: &FrontEnd,
@@ -202,9 +204,12 @@ fn current(
         profile.world,
         profile.character,
     );
+    let player = world.player()?;
+    let mut position = player.position;
+    position.z -= eq_client_core::z_offset(player.race, player.size);
     let location = Location {
         zone: world.zone().to_owned(),
-        position: world.player()?.position,
+        position,
     };
     valid(&location).then_some((key, location))
 }
@@ -464,5 +469,28 @@ mod tests {
         );
         testing::connect(&mut online, false);
         assert!(current(&online, &front, Some(&scene)).is_none());
+    }
+
+    #[test]
+    fn feet_height_is_stable_when_the_admitted_actor_size_changes() {
+        let mut online = OnlineState::new(true);
+        let front = crate::login::testing::scoped("scope");
+        let scene = crate::SceneInfo {
+            zone_name: "qeytoqrg".into(),
+        };
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::WorldName {
+                short_name: "World".into(),
+            }],
+        );
+        for (admission, size) in [(1, 6.0), (2, 12.0)] {
+            let mut player = testing::player(7);
+            player.size = size;
+            player.position.z = 8.0 + eq_client_core::z_offset(player.race, size);
+            testing::admit(&mut online, admission, player);
+            let feet = current(&online, &front, Some(&scene)).unwrap().1.position.z;
+            assert!((feet - 8.0).abs() < 1e-5, "feet height {feet}");
+        }
     }
 }
