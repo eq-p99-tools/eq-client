@@ -11,6 +11,12 @@
   - **Typed Reports is now off by default**, so the commands behave as the program's. On, it sends the typed words as before. It changes nothing on EqMac and RoF2, which always send the typed words.
   - If the installed skin lacks a window, a line says so and points to Typed Reports (a departure; the program always has them).
   - Comboboxes now honour the skin's anchors (`AutoStretch`), as the bug report's drop-down needs.
+- **A bash or a kick can stun or interrupt you on your side, as the Titanium program rolls it** (eq-network #446 and #447, reads R49-50 and R49-50b, checklist 6.646 and 6.645 S2). On P99 and Titanium EQEmu alike, with no setting. Nothing is sent.
+  - A saved stun prints the program's line by id (0x1679 or 0x2375) in its colour 10.
+  - A cast cleared locally drops the cast bar with no line, and the next gem press casts. A song cleared locally ends with line 0x318e and resets the gems as any song stop does; `/melody` sees it as it sees the server's stop.
+  - The roll's chance and resists are your buffs' totals from the spell file at the caster's level (`effect_total`); a landing counts only for a spell that lasts. Worn items count 0 (inferred, in the gap log).
+  - Repins eq-network to ae61866 (network main with #446 and #447).
+- A skinned hot button's tooltip says what the button holds and how long it waits, as the client's own hotbar window says in its detail line: a knight's special shows "Server reuse N s", with "(estimated)" where the session estimated it, a gem its spell and timer, an empty slot "Unassigned". Before, the skin's fixed words showed (checklist 6.626, look L8). The wording is this client's.
 - A script's `gm` line is a user's typed `#` line (6.584, scripts are
   users). `gm` takes any line a player could type after `#`, on any server,
   with only the chat line's own limits (no control characters, the chat

@@ -8064,3 +8064,128 @@ fn a_mac_tracking_press_before_the_zone_type_is_known_takes_the_smaller_range() 
         .collect();
     assert_eq!(listed, [5, 44]);
 }
+
+#[test]
+fn a_saved_stun_prints_its_line_by_id_in_colour_ten_for_this_admission_only() {
+    // The Titanium program's stun roll saved by a stun resist (hit routine
+    // 0x41c905, read R49-50; 6.646): line 0x1679 or 0x2375, colour 10.
+    for string_id in [0x1679, 0x2375] {
+        let mut world = admitted();
+        let saved = |session_id| WorldEvent::StunSaved {
+            session_id,
+            string_id,
+        };
+        let changes = game(&mut world, saved(1));
+        assert!(!changes.ignored);
+        assert_eq!(
+            changes.notices,
+            [Notice::ServerString {
+                id: string_id,
+                arguments: Vec::new(),
+                message_type: Some(10),
+            }]
+        );
+        assert_eq!(changes.notices[0].message_type(), Some(10));
+        let stale = game(&mut world, saved(7));
+        assert!(stale.ignored);
+        assert_eq!(stale.notices, []);
+    }
+}
+
+#[test]
+fn a_local_cast_clear_drops_the_cast_bar_with_no_line() {
+    // The program's own hit roll cleared the cast (mode 1 of 0x40f8a0,
+    // read R49-50; 6.645 S2): the bar drops and nothing prints.
+    let pending = |spell_id| WorldEvent::CastPending {
+        session_id: 1,
+        spell_id,
+    };
+    let begin = |spell_id| {
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id,
+            duration_ms: 3000,
+        })
+    };
+    let cleared = |session_id| WorldEvent::CastCleared {
+        session_id,
+        spell_id: 42,
+    };
+    let mut world = admitted();
+    game(&mut world, pending(Some(42)));
+    game(&mut world, pending(None));
+    game(&mut world, begin(42));
+    assert!(game(&mut world, cleared(7)).ignored);
+    assert_eq!(world.casting().cast.map(|(spell, ..)| spell), Some(42));
+
+    let dropped = game(&mut world, cleared(1));
+    assert!(!dropped.ignored);
+    assert_eq!(dropped.notices, []);
+    assert_eq!(dropped.cast, None);
+    assert!(world.casting().cast.is_none());
+    assert!(!world.zone.casts.contains_key(&9));
+    // Nothing left to clear: the next gem press casts.
+    assert!(game(&mut world, cleared(1)).ignored);
+    assert_eq!(game(&mut world, begin(43)).cast, Some(CastNews::Began));
+}
+
+#[test]
+fn a_melody_sees_the_local_song_stop_as_it_sees_a_server_stop() {
+    // The hit roll's local stop says line 0x318e (6.645 S2); the server's
+    // OP_InterruptCast tail says 0x318f. /melody moves only at a gem
+    // refresh, so both leave it, and the gems, the same.
+    let stopped = |string_id| {
+        let mut world = ClientWorld::default();
+        let mut bard = player(9);
+        bard.class = Some(8);
+        bard.memorized_spells[0] = Some(42);
+        bard.memorized_spells[1] = Some(43);
+        bard.spell_refresh_ms = Some([5000, 5000, 0, 0, 0, 0, 0, 0]);
+        let now = Instant::now();
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::Entered {
+                capabilities: Vec::new(),
+                choices: Vec::new(),
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(bard),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }),
+            now,
+            &SongFortyTwo,
+        );
+        connection(&mut world, true, false);
+        assert_eq!(world.start_melody(vec![0, 1]), Some(0));
+        let changes = world.apply(
+            &WorldUpdate::Game(WorldEvent::SongStopped {
+                session_id: 1,
+                spell_id: 42,
+                string_id,
+            }),
+            now,
+            &SongFortyTwo,
+        );
+        world.tick(now, &SongFortyTwo);
+        assert_eq!(
+            changes.notices,
+            [Notice::SongStopped {
+                spell_id: 42,
+                string_id
+            }]
+        );
+        let melody = world.casting().melody.clone();
+        let gems = [42, 43].map(|spell| world.casting().cooldowns.remaining(spell, now));
+        let step = world.take_melody_step();
+        (melody, gems, step)
+    };
+    let local = stopped(0x318e);
+    assert_eq!(local, stopped(0x318f));
+    let (melody, gems, step) = local;
+    assert_eq!(melody.gems(), [0, 1]);
+    assert!(!melody.due());
+    assert_eq!(step, None);
+    assert!(gems[0].is_zero());
+    assert_eq!(gems[1], std::time::Duration::from_secs(5));
+}

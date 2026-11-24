@@ -356,6 +356,16 @@ leave no such wait after they are sung, so the next song can follow at once.
 There, when the server interrupts a Bard's song or cast, its line shows in the
 song colour and follows the Bard songs filter, like the song stop line.
 
+On P99 and Titanium EQEmu, a bash from a player, or a kick from a Warrior above
+level 54, can also stun you or interrupt your cast or song on your side alone,
+as the official client rolls it (read R49-50). Ogres and Oggok citizens are
+spared. Nothing is sent, so the server may still finish the cast or keep the
+song going. An interrupted song ends with the program's own line and resets the
+gems as any song stop does, and an interrupted cast drops the cast bar with no
+line. When a stun resist saves you instead, its line shows in the official
+client's colour. Your buffs' stun chances and resists count; worn items do not
+yet. There is no setting for this.
+
 On P99 and Titanium EQEmu, a Bard can type `/melody` followed by gem numbers,
 such as `/melody 1 3 2`, to play those songs in turn, as the official client
 does. The first gem is pressed at once. Each time your own gem refreshes after
