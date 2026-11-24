@@ -123,11 +123,12 @@ pub(super) fn input(
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<Outbox>,
-    (ui, escape, presses, mut trade, options): (
+    (ui, escape, presses, mut trade, messages, options): (
         super::windows::pointer::PointerUi,
         Res<super::escape::Escape>,
         Res<super::hud::hotbar::carry::Presses>,
         ResMut<super::trade::TradeState>,
+        Option<Res<super::hud::messages::Messages>>,
         Option<Res<crate::options::OptionsState>>,
     ),
 ) {
@@ -203,9 +204,37 @@ pub(super) fn input(
         let rule = settings.as_ref().map_or(TargetByName::Nearest, |s| {
             s.0.installed_client.target_by_name()
         });
-        match named(rule, &ids, &online, &name) {
-            Some(id) => proposal = Some(Some(id)),
-            None => chat.refuse(format!("No nearby target named {name}")),
+        match rule {
+            // Titanium (read R49-33 b): an empty name says 0x33d3; any other
+            // looks over every known spawn, drawn or not, and a name that
+            // matches none sends the target naming no one, with no line.
+            // Spawns this client can't target are skipped, Adam's call, a
+            // labelled departure from the program's look over all of them.
+            TargetByName::Nearest if name.is_empty() => {
+                let said = messages.as_ref().map_or_else(
+                    || super::chat::Said::own(EMPTY_TARGET_NAME),
+                    |messages| messages.said_text(EMPTY_TARGET_LINE, EMPTY_TARGET_NAME),
+                );
+                chat.refuse(said.typed(EMPTY_TARGET_COLOUR));
+            }
+            TargetByName::Nearest => {
+                let known = targetable(
+                    online
+                        .world()
+                        .spawns()
+                        .keys()
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                    &online,
+                );
+                proposal = Some(named(rule, &known, &online, &name));
+            }
+            TargetByName::Shortest if name.is_empty() => chat.refuse(EMPTY_TARGET_NAME.to_owned()),
+            TargetByName::Shortest => match named(rule, &ids, &online, &name) {
+                Some(id) => proposal = Some(Some(id)),
+                None => chat.refuse(format!("No nearby target named {name}")),
+            },
         }
     } else if let Some(id) = assisted {
         proposal = Some(Some(id));
@@ -979,10 +1008,25 @@ fn named(rule: TargetByName, ids: &[u16], online: &OnlineState, query: &str) -> 
     }
 }
 
-/// Titanium: the nearest drawn visible spawn whose shown name, or full
-/// server name such as `a_whiskered_bat002` (as `/target` also accepts),
-/// starts with `query`, ignoring case.
+/// Titanium's `/target` with no name: line 0x33d3, colour 0x111 (read
+/// R49-33 b), in these words where the installation lacks it.
+const EMPTY_TARGET_LINE: u32 = 0x33d3;
+const EMPTY_TARGET_COLOUR: u32 = 0x111;
+const EMPTY_TARGET_NAME: &str = "Use /target Name";
+
+/// Titanium (read R49-33 b): a spawn whose full server name is exactly
+/// `query` (underscores read as spaces) first; otherwise the nearest whose
+/// shown name, or full server name such as `a_whiskered_bat002`, starts
+/// with `query`, ignoring case. `ids` are the spawns it may pick.
 fn nearest_named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
+    if let Some(exact) = ids.iter().copied().find(|id| {
+        online
+            .world()
+            .spawn(*id)
+            .is_some_and(|spawn| spawn.state.name.replace('_', " ") == query)
+    }) {
+        return Some(exact);
+    }
     let query = query.to_lowercase();
     let origin = online
         .world()
@@ -1249,8 +1293,27 @@ mod tests {
         // Digits in the text are dropped as they are from the names.
         assert_eq!(pick("a bat003"), Some(3));
         assert_eq!(pick("a cat"), None);
-        // Titanium's rule only looks at drawn spawns.
+        // Titanium's rule picks only among the spawns it is given.
         assert_eq!(named(TargetByName::Nearest, &[], &online, "a bat"), None);
+        // An exact full name is picked first; otherwise the nearest of the
+        // prefix matches, the first of equals (read R49-33 b).
+        assert_eq!(
+            named(TargetByName::Nearest, &[2, 3, 4], &online, "a bat003"),
+            Some(4)
+        );
+        assert_eq!(
+            named(TargetByName::Nearest, &[2, 3, 4], &online, "a bat"),
+            Some(2)
+        );
+        assert_eq!(
+            named(TargetByName::Nearest, &[3, 4], &online, "A BAT"),
+            Some(3)
+        );
+        // Exact is exact: another case falls back to the nearest prefix.
+        assert_eq!(
+            named(TargetByName::Nearest, &[3, 4], &online, "A BAT003"),
+            Some(4)
+        );
     }
 
     #[test]
@@ -1354,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_spawn_keeps_the_target_by_click_cycle_or_name_with_nothing_sent_or_said() {
+    fn a_refused_spawn_keeps_the_target_by_click_or_cycle_and_a_name_matching_none_clears_it() {
         use crate::online::testing as session;
         const GUARD: u16 = 41;
         const CONTROLLER: u16 = 42;
@@ -1449,13 +1512,20 @@ mod tests {
         assert_eq!(selected(&app), Some(GUARD));
         assert!(commands.try_recv().is_err());
 
-        // `/target` by its name finds no target, as for a spawn not there.
+        // `/target` by its name finds no target, as for a spawn not there:
+        // Titanium then sends the target naming no one, with no line (read
+        // R49-33 b).
         app.world_mut()
             .resource_mut::<super::super::chat::ChatState>()
             .requested_target = Some("zone controller".into());
         app.update();
-        assert_eq!(selected(&app), Some(GUARD));
+        assert_eq!(selected(&app), None);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ClientCommand::SelectTarget { spawn_id: None, .. })
+        ));
         assert!(commands.try_recv().is_err());
+        assert_eq!(said(&app), lines);
     }
 
     #[test]

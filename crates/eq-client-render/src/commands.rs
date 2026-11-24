@@ -9,11 +9,19 @@
 //! table's second `/quit`, which nothing reaches, and its empty terminator
 //! are left out.
 //!
+//! The table matches the program's row for row (read R49-33e): names, the
+//! order, the game master's rows (level byte +0xc above 0), and the names
+//! that share a handler. No row has an alias (+4), so the program's alias
+//! pass before its name pass finds nothing and the order is the names'.
+//!
 //! A word that starts no name is not the official client's. Only such a
 //! word reaches this client's own commands (`/social`, `/pause` inside a
-//! social, `/ranged`, `/harmtouch`, `/layonhands`, `/uiscale`); any other is passed over
-//! without a line, as the official client's own answer to an unknown word
-//! has not been read (recording checklist 6.413).
+//! social, `/ranged`, `/harmtouch`, `/layonhands`, `/uiscale`). Any other,
+//! and a game master's command for a player who isn't one, gets the
+//! program's line 0x305c ([`unknown`], read R49-33 a, checklist 6.634).
+//! The program's other answer, line 0x21a for a row without flag bit 1 run in
+//! character states 3 or 4, waits on a read of that state byte [I]: not
+//! built.
 
 /// What a name in the table does.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -390,12 +398,7 @@ pub(crate) enum Resolved {
 
 /// The command a typed word, without its slash, resolves to.
 pub(crate) fn resolve(word: &str) -> Resolved {
-    let starts = |name: &str| {
-        name.len() >= word.len()
-            && name.is_char_boundary(word.len())
-            && name[..word.len()].eq_ignore_ascii_case(word)
-    };
-    match NAMES.iter().find(|(name, _)| starts(name)) {
+    match NAMES.iter().find(|(name, _)| starts(name, word)) {
         Some((name, Own) | (_, Same(name))) => Resolved::Official(name),
         Some((_, Gm)) => Resolved::Nothing,
         None => OURS
@@ -403,6 +406,49 @@ pub(crate) fn resolve(word: &str) -> Resolved {
             .find(|name| name.eq_ignore_ascii_case(word))
             .map_or(Resolved::Nothing, |name| Resolved::Ours(name)),
     }
+}
+
+/// The program's line for a slash word with no command (0x498b78).
+pub(crate) const UNKNOWN_LINE: u32 = 0x305c;
+/// Its chat colour.
+pub(crate) const UNKNOWN_COLOUR: u32 = 0xd;
+/// This client's words for it where the installation lacks the line.
+pub(crate) const UNKNOWN_WORDS: &str = "That is not a command.";
+
+/// Whether a typed slash line's word is first matched by a game master's
+/// command, which the program runs for a GM (spawn +0x256) and answers as
+/// an unknown word for anyone else (0x498eda-0x498ef0).
+pub(crate) fn game_masters(line: &str) -> bool {
+    line.strip_prefix('/').is_some_and(|command| {
+        let end = command.find(char::is_whitespace).unwrap_or(command.len());
+        let word = &command[..end];
+        NAMES
+            .iter()
+            .find(|(name, _)| starts(name, word))
+            .is_some_and(|(_, kind)| *kind == Gm)
+    })
+}
+
+/// Whether a slash line that resolved to nothing gets the program's line
+/// 0x305c: always, but for a game master's command typed by a GM. The
+/// program runs that one; its handlers are game master tools this client
+/// hasn't built, so it passes over without a line [I] (a GM's `#` line
+/// reaches the server instead). Titanium's line only: the Mac program's
+/// answer is unread, so a Mac-era or `RoF2` session stays silent as before.
+pub(crate) fn unknown(line: &str, world: &eq_client_core::world::ClientWorld) -> bool {
+    let titanium = match world.generation() {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    };
+    let gm = world.player().is_some_and(crate::languages::game_master);
+    titanium && line.starts_with('/') && !(gm && game_masters(line))
+}
+
+/// Whether `word` starts `name`, letter case aside.
+fn starts(name: &str, word: &str) -> bool {
+    name.len() >= word.len()
+        && name.is_char_boundary(word.len())
+        && name[..word.len()].eq_ignore_ascii_case(word)
 }
 
 /// A typed line as the commands read it: a slash command with its word
@@ -468,6 +514,41 @@ mod tests {
         assert_eq!(resolve("group"), Resolved::Nothing);
         assert_eq!(resolve("whoever"), Resolved::Nothing);
         assert_eq!(resolve("splits"), Resolved::Nothing);
+    }
+
+    #[test]
+    fn an_unknown_word_gets_the_programs_line_but_a_gms_own_command_runs() {
+        use crate::online::{OnlineState, testing as session};
+        use eq_client_core::GameDialect;
+        let world = |gm: bool, generation| {
+            let mut online = OnlineState::new(true);
+            let mut player = session::player(7);
+            player.appearance.titanium_gm = Some(u32::from(gm));
+            session::admit(&mut online, 1, player);
+            session::generation(&mut online, generation);
+            online
+        };
+        // A player who isn't a GM: no command and a GM's command alike.
+        let player = world(false, GameDialect::Titanium);
+        for line in ["/zone qeynos", "/b", "/group hi", "/whoever", "/soc"] {
+            assert!(unknown(line, player.world()), "{line}");
+        }
+        // A GM: the program runs the GM's command (its handler is unbuilt
+        // here, so nothing is said); a word that is no command still gets
+        // the line.
+        let gm = world(true, GameDialect::Titanium);
+        for line in ["/zone qeynos", "/b", "/shownp", "/summoncorpse"] {
+            assert!(game_masters(line), "{line}");
+            assert!(!unknown(line, gm.world()), "{line}");
+        }
+        assert!(unknown("/group hi", gm.world()));
+        assert!(!game_masters("/who"));
+        assert!(!game_masters("zone"));
+        // Only a slash line, and only where the Titanium program is read.
+        assert!(!unknown("zone", player.world()));
+        for generation in [GameDialect::EqMac, GameDialect::Rof2] {
+            assert!(!unknown("/whoever", world(false, generation).world()));
+        }
     }
 
     #[test]

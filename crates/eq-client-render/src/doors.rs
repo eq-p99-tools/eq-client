@@ -245,8 +245,8 @@ impl DoorEntity {
         if let Some(fraction) = hinge {
             self.swing = open_swing(definition).unwrap_or(0.0) * fraction;
         } else if replaced {
-            self.swing = hinge_target(definition).unwrap_or(0.0);
-        } else if let Some(target) = hinge_target(definition) {
+            self.swing = hinge_target(definition, generation).unwrap_or(0.0);
+        } else if let Some(target) = hinge_target(definition, generation) {
             self.swing = advance_hinge(self.swing, target, seconds);
         }
         let (distance, slide) = slide_pose(
@@ -406,13 +406,34 @@ pub(super) struct Hinges(pub BTreeMap<u8, f32>);
 /// A hinged door's swing: a quarter turn, in EQ heading units.
 pub(super) const QUARTER_TURN: f32 = eq_client_core::FULL_TURN / 4.0;
 
+/// Which end a door stands at or heads for, by its generation's rule:
+/// Titanium's mover ([`eq_client_core::doors::titanium::endpoint`]: a door
+/// spawned in state 1 or 2 opens from its base, read R49-28b), inferred for
+/// `RoF2` (6.489); `EQMac`'s server state as received.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
+fn endpoint(door: &Door, generation: GameDialect) -> Option<bool> {
+    match generation {
+        GameDialect::Titanium => eq_client_core::doors::titanium::endpoint(door),
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 => eq_client_core::doors::titanium::endpoint(door),
+        GameDialect::EqMac => door.active_endpoint(),
+    }
+}
+
 /// Hinged types turn a quarter of the way around, to opposite sides, from their
 /// placed heading. The turn is in EQ's own heading units, so it shows the right
 /// way round in the renderer like every other heading. Other mechanisms need
 /// their own motion.
-fn hinge_target(door: &Door) -> Option<f32> {
+fn hinge_target(door: &Door, generation: GameDialect) -> Option<f32> {
     let open = open_swing(door)?;
-    Some(if door.active_endpoint()? { open } else { 0.0 })
+    Some(if endpoint(door, generation)? {
+        open
+    } else {
+        0.0
+    })
 }
 
 /// How far a hinged door turns from its placed heading to stand open.
@@ -432,8 +453,8 @@ fn open_swing(door: &Door) -> Option<f32> {
 /// walked against. Its state now does not matter, since an open door shuts
 /// again on its own before the walker may reach it. Other mechanisms stay
 /// walls to a route.
-pub(super) fn swings(door: &Door) -> bool {
-    hinge_target(door).is_some()
+pub(super) fn swings(door: &Door, generation: GameDialect) -> bool {
+    hinge_target(door, generation).is_some()
 }
 
 /// Titanium's slides (type 15, and 78-81, which also rise or sink) move along
@@ -462,9 +483,7 @@ fn slide_pose(
     else {
         return (0.0, Vec3::ZERO);
     };
-    let target = door
-        .active_endpoint()
-        .map(|active| if active { slide.distance } else { 0.0 });
+    let target = endpoint(door, generation).map(|active| if active { slide.distance } else { 0.0 });
     let distance = match (previous, target) {
         (Some(current), Some(target)) => advance_toward(current, target, seconds, slide.speed),
         (Some(current), None) => current,
@@ -476,12 +495,17 @@ fn slide_pose(
     )
 }
 
-/// Cosmetic interpolation only, half a turn a second; this rate does not drive
-/// packets or claim original-client timing. A frame swings the hinge by at
-/// most a tenth of a second's turn, and the last one lands it exactly on its
-/// target, so a walk waiting for the swing to end sees it end.
+/// Heading units a hinged door (types 0-8) swings in a second, both ways:
+/// 8 a step of elapsed ms x 0.02, so a quarter turn in 0.8 s (0x4368b3,
+/// read R49-28b).
+const HINGE_SPEED: f32 = 8.0 * 20.0;
+
+/// A hinged door's swing toward `target` over a frame, at the program's
+/// rate; it drives no packets. A frame swings the hinge by at most a tenth
+/// of a second's turn, and the last one lands it exactly on its target, so a
+/// walk waiting for the swing to end sees it end.
 pub(super) fn advance_hinge(current: f32, target: f32, seconds: f32) -> f32 {
-    advance_toward(current, target, seconds, 2.0 * QUARTER_TURN)
+    advance_toward(current, target, seconds, HINGE_SPEED)
 }
 
 fn advance_toward(current: f32, target: f32, seconds: f32, speed: f32) -> f32 {
@@ -725,7 +749,7 @@ pub(super) fn reconcile(
             .doors()
             .hinge_fraction(id)
             .and_then(|fraction| open_swing(door).map(|open| open * fraction))
-            .unwrap_or_else(|| hinge_target(door).unwrap_or(0.0));
+            .unwrap_or_else(|| hinge_target(door, generation).unwrap_or(0.0));
         if let Some(open) = open_swing(door) {
             hinges.0.insert(id, hinge_fraction(swing, open));
         }
@@ -1157,6 +1181,33 @@ mod tests {
     }
 
     #[test]
+    fn a_titanium_hinge_spawned_opening_swings_open_at_the_programs_rate() {
+        let mut door = sliding_door();
+        door.open_type = 0;
+        // Read R49-28b: spawn states 1 and 2 both swing open from the base.
+        for state in [1, 2] {
+            door.state_at_spawn = state;
+            assert_eq!(
+                hinge_target(&door, GameDialect::Titanium),
+                Some(QUARTER_TURN)
+            );
+            assert_eq!(hinge_target(&door, GameDialect::Rof2), Some(QUARTER_TURN));
+        }
+        // EQMac keeps its own reading of the received state.
+        door.state_at_spawn = 2;
+        assert_eq!(hinge_target(&door, GameDialect::EqMac), None);
+        door.state_at_spawn = 3;
+        assert_eq!(hinge_target(&door, GameDialect::Titanium), Some(0.0));
+        // 8 a step of ms x 0.02: a quarter turn in 0.8 s, not sooner.
+        let mut swing = 0.0;
+        for _ in 0..7 {
+            swing = advance_hinge(swing, QUARTER_TURN, 0.1);
+        }
+        assert!(swing < QUARTER_TURN);
+        assert_eq!(advance_hinge(swing, QUARTER_TURN, 0.1), QUARTER_TURN);
+    }
+
+    #[test]
     fn a_route_may_open_only_a_hinged_door_open_or_shut() {
         let mut door = eq_client_core::doors::Door {
             id: 1,
@@ -1170,21 +1221,30 @@ mod tests {
             parameter: 0,
             action: None,
         };
-        assert!(swings(&door));
+        assert!(swings(&door, GameDialect::Titanium));
         door.action = Some(2);
-        assert!(swings(&door), "open now, shut again later");
+        assert!(
+            swings(&door, GameDialect::Titanium),
+            "open now, shut again later"
+        );
         door.action = Some(3);
-        assert!(swings(&door));
+        assert!(swings(&door, GameDialect::Titanium));
         for open_type in [9, 15, 58, 255] {
-            assert!(!swings(&eq_client_core::doors::Door {
-                open_type,
-                ..door.clone()
-            }));
+            assert!(!swings(
+                &eq_client_core::doors::Door {
+                    open_type,
+                    ..door.clone()
+                },
+                GameDialect::Titanium
+            ));
         }
-        assert!(!swings(&eq_client_core::doors::Door {
-            incline: 90,
-            ..door
-        }));
+        assert!(!swings(
+            &eq_client_core::doors::Door {
+                incline: 90,
+                ..door
+            },
+            GameDialect::Titanium
+        ));
     }
 
     #[test]
@@ -1202,25 +1262,31 @@ mod tests {
             panic!("spawn")
         };
         let door = &mut doors[0];
-        assert_eq!(hinge_target(door), Some(0.0));
+        assert_eq!(hinge_target(door, GameDialect::Titanium), Some(0.0));
         let shut_action = door.action;
         door.action = Some(2);
-        let swing = hinge_target(door).unwrap();
+        let swing = hinge_target(door, GameDialect::Titanium).unwrap();
         assert_eq!(swing, QUARTER_TURN);
         door.open_type = 5;
-        assert_eq!(hinge_target(door), Some(-swing));
+        assert_eq!(hinge_target(door, GameDialect::Titanium), Some(-swing));
         // A door first drawn while the server holds it open is drawn at its
         // open pose, so a walk reads its hinge as fully swung, whichever way
         // it turns; one drawn shut reads 0.
         for open_type in [0, 5] {
             door.open_type = open_type;
             let open = open_swing(door).unwrap();
-            assert_eq!(hinge_fraction(hinge_target(door).unwrap(), open), 1.0);
+            assert_eq!(
+                hinge_fraction(hinge_target(door, GameDialect::Titanium).unwrap(), open),
+                1.0
+            );
             let shut = eq_client_core::doors::Door {
                 action: shut_action,
                 ..door.clone()
             };
-            assert_eq!(hinge_fraction(hinge_target(&shut).unwrap(), open), 0.0);
+            assert_eq!(
+                hinge_fraction(hinge_target(&shut, GameDialect::Titanium).unwrap(), open),
+                0.0
+            );
         }
         door.open_type = 5;
         let partway = advance_hinge(0.0, swing, 0.1);
@@ -1233,13 +1299,13 @@ mod tests {
         }
         assert_eq!(turned, swing);
         door.action = Some(255);
-        assert_eq!(hinge_target(door), None);
+        assert_eq!(hinge_target(door, GameDialect::Titanium), None);
         door.action = Some(2);
         door.open_type = 59;
-        assert_eq!(hinge_target(door), None);
+        assert_eq!(hinge_target(door, GameDialect::Titanium), None);
         door.open_type = 5;
         door.incline = 1;
-        assert_eq!(hinge_target(door), None);
+        assert_eq!(hinge_target(door, GameDialect::Titanium), None);
     }
 
     #[test]
