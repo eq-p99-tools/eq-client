@@ -4,6 +4,7 @@ mod belongings_tests;
 #[cfg(test)]
 mod boat_pace_tests;
 mod boats;
+pub(crate) use boats::sweep_depth;
 mod follow;
 mod placement;
 mod shoreline;
@@ -1877,6 +1878,7 @@ pub(super) fn input(
     if boat.is_none() {
         controls.boat = None;
     }
+    let linked = boat.map(|riding| riding.sample.spawn_id);
     let carried_position = boat.map_or(accepted.position, |riding| riding.position);
     let origin = Vec3::from_array(eq_client_core::render_position(carried_position));
     let feet = origin - Vec3::Y * body.feet_offset;
@@ -2316,7 +2318,8 @@ pub(super) fn input(
         if !placement_blocked
             && !flying
             && !swimming
-            && let Some((sample, pose)) = boats::under(world, online.world().carriers(), feet, now)
+            && let Some((sample, pose)) =
+                boats::under(world, online.world().carriers(), feet, linked, now)
         {
             let position = world_position(origin.to_array(), current_heading);
             let sent = outbox.post(online.world(), |stamp| {
@@ -2655,7 +2658,7 @@ pub(super) fn input(
     let boat_under = if placement_blocked || flying || swimming {
         None
     } else {
-        boats::under(world, online.world().carriers(), landing, now)
+        boats::under(world, online.world().carriers(), landing, linked, now)
     };
     // The sample that walks off still removes the carrying motion from its
     // own budget. Only the floor under the landing carries the next pass.
@@ -10096,6 +10099,181 @@ pub(super) mod tests {
         };
         assert!(ordinary.support.is_none());
         assert_diagonal_step(&app, retry.position, &ordinary, StrafeSide::Right);
+    }
+
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "two samples of one jump on a moving, turning boat"
+    )]
+    fn a_jump_on_a_moving_boat_stays_linked_and_gains_only_the_boats_motion() {
+        use eq_client_core::movement::{
+            CollisionInstance, CollisionMesh, carrier_local, carrier_world,
+        };
+        use eq_client_core::{GameDialect, SpawnKind, SpawnState, WorldEvent, WorldPosition};
+        // The program's floor sweep links the first carrier below on every
+        // move step, so a body in the air over the deck is carried with it
+        // (read R49-27 (d), 6.611). The boat moves 5 and turns 8 between
+        // samples; the jump goes straight up.
+        let (mut app, receiver) = stationary_airborne_app();
+        let origin = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        let start = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        let boat = SpawnState {
+            body_type: None,
+            spawn_id: 8,
+            race: 72,
+            kind: SpawnKind::Npc,
+            position: WorldPosition::default(),
+            class: None,
+            name: String::new(),
+            gender: 2,
+            velocity: [0.0; 3],
+            forward: 0.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            size: 1.0,
+            invisible: false,
+            appearance: eq_client_core::outfit::Appearance::default(),
+            level: 1,
+            listing: eq_client_core::listing::Listing::default(),
+            pet_owner: None,
+            hp_percent: None,
+            posture: None,
+            name_parts: eq_client_core::names::NameParts::default(),
+        };
+        let mut carriers = eq_client_core::movement::Carriers::default();
+        let spawned = carriers.observe(
+            &WorldEvent::Spawns(vec![boat]),
+            GameDialect::Titanium,
+            start,
+        );
+        let deck = std::sync::Arc::new(
+            CollisionMesh::new([
+                [
+                    [-200.0, 0.0, -200.0],
+                    [200.0, 0.0, -200.0],
+                    [200.0, 0.0, 200.0],
+                ],
+                [
+                    [-200.0, 0.0, -200.0],
+                    [200.0, 0.0, 200.0],
+                    [-200.0, 0.0, 200.0],
+                ],
+            ])
+            .unwrap(),
+        );
+        let water_floor = [
+            [
+                [-2000.0, -30.0, -2000.0],
+                [2000.0, -30.0, -2000.0],
+                [2000.0, -30.0, 2000.0],
+            ],
+            [
+                [-2000.0, -30.0, -2000.0],
+                [2000.0, -30.0, 2000.0],
+                [-2000.0, -30.0, 2000.0],
+            ],
+        ];
+        // The boat reaches `pose`, and its collision is placed there.
+        let sail = |app: &mut App, carriers: &mut eq_client_core::movement::Carriers, pose| {
+            let moved = carriers.observe(
+                &WorldEvent::Position {
+                    spawn_id: 8,
+                    position: pose,
+                    velocity: [0.0; 3],
+                    forward: 0.0,
+                },
+                GameDialect::Titanium,
+                Instant::now(),
+            );
+            online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [WorldEvent::Carriers(moved)],
+            );
+            let mut world = CollisionWorld::new(water_floor).unwrap();
+            world.set_spawn_instances(vec![(
+                8,
+                CollisionInstance::new(
+                    std::sync::Arc::clone(&deck),
+                    Vec3::from_array(eq_client_core::render_position(pose)),
+                    Quat::from_rotation_y(eq_client_core::static_yaw(pose.heading)),
+                )
+                .unwrap(),
+            )]);
+            app.insert_resource(Collision(Some(world)));
+        };
+        online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [WorldEvent::Carriers(spawned)],
+        );
+        let local = carrier_local(WorldPosition::default(), origin);
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.boat = Some(boats::Riding {
+                sample: carriers.latest(8).unwrap().sample(),
+                pose: WorldPosition::default(),
+                position: origin,
+            });
+            controls.last_sent = Some(start);
+            controls.last_accepted = start;
+            // The standing jump's crouch is over, so it goes at once.
+            controls.jump = Some(Instant::now());
+            controls.crouch = Some(Crouch::Over);
+        }
+        let mut pose = WorldPosition::default();
+        let mut previous = origin;
+        for step in 1..=2 {
+            pose = WorldPosition {
+                x: pose.x + 5.0,
+                heading: pose.heading + 8.0,
+                ..pose
+            };
+            sail(&mut app, &mut carriers, pose);
+            app.update();
+            let request = std::iter::from_fn(|| past_climb(&receiver).ok())
+                .find_map(|command| match command {
+                    ClientCommand::Move(request) => Some(request),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("step {step}: no sample"));
+            assert!(
+                matches!(request.support, Some(Support::Spawn(sample)) if sample.spawn_id == 8),
+                "step {step}: {:?}",
+                request.support
+            );
+            // Across, exactly where the boat took the rider's point; only
+            // the jump's own height on top.
+            let carried = carrier_world(pose, local);
+            assert!(
+                (request.position.x - carried.x).abs() < 0.001
+                    && (request.position.y - carried.y).abs() < 0.001,
+                "step {step}: {:?} against {carried:?}",
+                request.position
+            );
+            assert!(request.position.z > previous.z - 0.001, "step {step}");
+            // Still linked for the next pass, in the air over the deck.
+            let pending = app.world().resource::<Controls>().boat_pending;
+            assert!(
+                pending.is_some_and(|(_, riding)| riding.is_some()),
+                "step {step}: the jump unlinked"
+            );
+            accept(&mut app, &request);
+            app.world_mut()
+                .resource_mut::<Controls>()
+                .resolve_carrier(request.created, false);
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+            previous = request.position;
+        }
     }
 
     #[test]

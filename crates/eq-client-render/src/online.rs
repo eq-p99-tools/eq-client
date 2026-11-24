@@ -1194,6 +1194,7 @@ fn start_entry(
                 eq_client_core::SpawnKind::Player,
             ),
             luclin_models,
+            eq_client_core::player_models::offered(state.world.expansions()),
         );
         let titanium_swimming = match drawn_by.0 {
             eq_client_assets::ui::InstalledClient::Titanium => true,

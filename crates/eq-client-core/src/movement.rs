@@ -530,6 +530,45 @@ impl CollisionWorld {
         None
     }
 
+    /// [`Self::spawn_floor`], keeping the carrier a rider is linked to: while
+    /// the first floor straight down under any part of the footprint is
+    /// still `current`'s, it stays the link, with the height of the highest
+    /// such floor, though another carrier's floor stands higher or level
+    /// under the rest. Only once no part of the footprint meets it does
+    /// the link go to whichever floor [`Self::spawn_floor`] finds. So a
+    /// ship passing alongside never takes the rider off the deck it stands
+    /// on. The program's choice between two carriers is unread: this is
+    /// inferred, and the stricter side (6.611).
+    #[must_use]
+    pub fn spawn_floor_keeping(
+        &self,
+        position: Vec3,
+        step_up: f32,
+        drop: f32,
+        current: Option<u16>,
+    ) -> Option<(u16, f32)> {
+        const EDGE: f32 = 0.000_1;
+        let kept = current.and_then(|current| {
+            let (_, instance) = self.spawn_obstacles.iter().find(|(id, _)| *id == current)?;
+            SUPPORT_OFFSETS
+                .into_iter()
+                .filter_map(|(x, z)| {
+                    let sample = position + Vec3::new(x, step_up + EDGE, z);
+                    let ray = Ray::new(Vector::from_array(sample.to_array()), -Vector::Y);
+                    let reach = step_up + drop + 2.0 * EDGE;
+                    let time = instance.surface().cast_ray(&ray, reach, false)?;
+                    let first = self
+                        .floor_meshes()
+                        .filter_map(|mesh| mesh.cast_ray(&ray, reach, false))
+                        .min_by(f32::total_cmp)?;
+                    (time <= first + EDGE).then_some(sample.y - time)
+                })
+                .max_by(f32::total_cmp)
+                .map(|height| (current, height))
+        });
+        kept.or_else(|| self.spawn_floor(position, step_up, drop))
+    }
+
     /// Returns the nearest solid obstruction along a normalized viewing ray.
     pub fn ray_distance(&self, origin: Vec3, direction: Vec3, max_distance: f32) -> Option<f32> {
         if !origin.is_finite()
