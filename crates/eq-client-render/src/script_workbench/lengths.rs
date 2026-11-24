@@ -301,6 +301,32 @@ mod tests {
     }
 
     #[test]
+    fn a_new_session_resets_the_choice_and_uses_its_own_cli_length() {
+        let mut previous = app(RunLength::Default);
+        let (button, menu) = selector(&mut previous, Tab::Editor);
+        click(&mut previous, button);
+        let row = choice(&mut previous, menu, RunLength::Unlimited);
+        click(&mut previous, row);
+        assert_eq!(
+            previous.world().resource::<Workbench>().run_length,
+            RunLength::Unlimited
+        );
+        drop(previous);
+
+        for configured in [RunLength::Default, RunLength::Minutes(45)] {
+            let mut next = crate::testing::app();
+            next.world_mut()
+                .resource_mut::<crate::ViewerSettings>()
+                .0
+                .script_run_length = configured;
+            // Each new launch goes through production state construction;
+            // the prior session's UI choice is not a stored preference.
+            super::super::seed(&mut next);
+            assert_eq!(next.world().resource::<Workbench>().run_length, configured);
+        }
+    }
+
+    #[test]
     fn outside_escape_hidden_and_tab_changes_dismiss_without_changing_length() {
         let mut app = app(RunLength::Minutes(45));
         app.init_resource::<crate::escape::Escape>().add_systems(

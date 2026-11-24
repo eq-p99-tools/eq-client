@@ -85,6 +85,10 @@ Background mode does not enable `gm` or `chat`, change the selected server, or i
 
 How long a run may go is your choice, on every server. The dropdown beside the run controls in both the Editor and Execution tabs names the length the next Run uses. Open it and choose default (15 minutes), 30 minutes, 1, 2, 4, 8 or 24 hours, or no limit. Opening or dismissing the list does not change the length. Both tabs show the same choice; it cannot change during a run. It starts at the default on each launch, or at what `--script-run-length` gives: `default`, a number of minutes from 1 to 1440, or `none`. A custom number of minutes from the flag remains in the dropdown. Runs started from `--script` and the control inbox use the flag. No statement or line in a script can set or raise its own length.
 
+The dropdown choice lasts for the current session and is not saved between
+launches. A new session starts at the default 15 minutes unless its command line
+supplies a different length.
+
 - **Default** keeps the bounds above: 15 minutes, 5,000 statements, 500 actions and loops of at most 100.
 - **Minutes** caps the run's time at that many minutes and lifts the counts of statements, actions and loop iterations.
 - **No limit** has neither: the run goes until it ends or you press Stop.
