@@ -183,7 +183,14 @@ impl ChatFilters {
 // TODO(6.494, C2): PCSpells, NPCSpells and BardSongs (0x40f303, 0x45e257
 // and the rest): others' spell-effect and casting lines, when this client
 // prints them; which lines each site tests is unread. BardSongs' test in the
-// song stop (0x40f06d) is wired below.
+// song stop (0x40f06d) and in a Bard's own interruption (0x45e233) is wired
+// below.
+// TODO(6.645): OP_InterruptCast's filters for another caster (read
+// R49-51b: 9 for a Bard, 7 for another player, each by group, and 8 for an
+// NPC), once read R49-48 e says what 0x60ca90 returns for a row. R49-51b's
+// values (2 or 4 for a group member, 2 for anyone else) don't fit the
+// Options rows' indices this file keeps, and the song stop's test rests on
+// the same answer.
 // TODO(6.494, C2): BadWord's chat-text sites (0x454c12 and the rest): the
 // bad-word mask, once the list's source is read.
 // TODO(6.494, C2): the group index's site (0x4602a0), once its use is read.
@@ -224,9 +231,13 @@ fn titanium_hides(filters: &ChatFilters, notice: &crate::world::Notice) -> bool 
         // The song stop's line (0x40f06d): read R49-21 gives the test as
         // filter 9 holding 1, which read R49-2 names mine only (read R49-48 e
         // asks to confirm the compare).
-        crate::world::Notice::SongStopped { .. } => {
-            filters.get(FilterCategory::BardSongs) == FilterMode::MineOnly
-        }
+        // A Bard's own interruption (`OP_InterruptCast`'s print tail
+        // 0x45e233, read R49-51) takes the same test.
+        crate::world::Notice::SongStopped { .. }
+        | crate::world::Notice::CastInterrupted {
+            print: crate::world::InterruptPrint::TitaniumBard,
+            ..
+        } => filters.get(FilterCategory::BardSongs) == FilterMode::MineOnly,
         _ => false,
     }
 }
@@ -318,6 +329,46 @@ mod tests {
             );
             // The unread programs hide nothing here.
             assert!(!hidden_locally(&filters, GameDialect::EqMac, &stopped));
+        }
+    }
+
+    #[test]
+    fn titanium_hides_a_bards_own_interruption_as_the_song_stop_line() {
+        // OP_InterruptCast's print tail (0x45e233, read R49-51) tests filter
+        // 9 as the song stop does for the player a Bard.
+        use crate::world::InterruptPrint;
+        let line = |print| crate::world::Notice::CastInterrupted {
+            string_id: 0x318e,
+            print,
+        };
+        let mut filters = ChatFilters::default();
+        for (mode, hidden) in [
+            (FilterMode::Show, false),
+            (FilterMode::MineOnly, true),
+            (FilterMode::GroupOnly, false),
+            (FilterMode::Hide, false),
+        ] {
+            filters.set(FilterCategory::BardSongs, mode);
+            assert_eq!(
+                hidden_locally(
+                    &filters,
+                    GameDialect::Titanium,
+                    &line(InterruptPrint::TitaniumBard)
+                ),
+                hidden,
+                "{mode:?}"
+            );
+            // Another class's own line always shows (R49-51b).
+            assert!(!hidden_locally(
+                &filters,
+                GameDialect::Titanium,
+                &line(InterruptPrint::Titanium)
+            ));
+            assert!(!hidden_locally(
+                &filters,
+                GameDialect::EqMac,
+                &line(InterruptPrint::TitaniumBard)
+            ));
         }
     }
 

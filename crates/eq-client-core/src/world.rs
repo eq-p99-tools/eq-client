@@ -45,7 +45,9 @@ pub use landings::Landing;
 pub use link::Link;
 pub use melody::{Melody, melody_gems};
 pub use motions::{CastDone, Motion};
-pub use notice::{ChannelLine, DuelNotice, ListingNotice, Notice, Party, YellBearing};
+pub use notice::{
+    ChannelLine, DuelNotice, InterruptPrint, ListingNotice, Notice, Party, YellBearing,
+};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};

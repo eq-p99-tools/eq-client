@@ -1,8 +1,20 @@
 //! News about the player's spells: gems and the book, casts, buffs and
 //! lasting effects, and spellbook changes.
-use super::{CastNews, Changes, ClientWorld, Notice, SpellCatalog};
+use super::{CastNews, Changes, ClientWorld, InterruptPrint, Notice, SpellCatalog};
 use crate::{BookActionStatus, Buff, BuffUpdate, SpellEffect, SpellUpdate, buffs::Landing};
 use std::time::Instant;
+
+/// How a generation's program prints an interruption the server names,
+/// the player's own when `own_bard` says the player is a Bard: the Titanium
+/// program's `OP_InterruptCast` print tail (0x45e233, reads R49-51 and
+/// R49-51b). The others are unread and keep this client's line.
+const fn interrupt_print(dialect: crate::GameDialect, own_bard: bool) -> InterruptPrint {
+    match dialect {
+        crate::GameDialect::Titanium if own_bard => InterruptPrint::TitaniumBard,
+        crate::GameDialect::Titanium => InterruptPrint::Titanium,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => InterruptPrint::Unread,
+    }
+}
 
 impl ClientWorld {
     /// A spell notice: the book and gems change, and the player's own casts
@@ -34,17 +46,21 @@ impl ClientWorld {
             changes.notices.push(Notice::OtherCastInterrupted {
                 string_id: *message_id,
                 caster: caster.clone(),
+                print: interrupt_print(self.generation, false),
             });
         }
         changes.cast = self
             .casting
             .observe(player.spawn_id, &player.memorized_spells, update, now);
         let own_id = player.spawn_id;
+        let print = interrupt_print(self.generation, player.class == Some(super::casting::BARD));
         self.own_cast_news(own_id, changes.cast);
         if let (Some(CastNews::Interrupted), Some((_, string_id))) =
             (changes.cast, self.casting.interrupted)
         {
-            changes.notices.push(Notice::CastInterrupted { string_id });
+            changes
+                .notices
+                .push(Notice::CastInterrupted { string_id, print });
         }
     }
 
