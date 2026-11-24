@@ -625,7 +625,7 @@ pub struct TextBox {
     /// How its frame is drawn; None for a box without one, such as a page
     /// of a book, drawn on the window's own art.
     pub template: Option<WindowTemplate>,
-    /// The colour of its text, where the skin sets one.
+    /// The skin's text colour, or white for an STML box without one.
     pub color: Option<[u8; 3]>,
     /// The official client's font number for its text, where the skin gives
     /// one.
@@ -1333,7 +1333,10 @@ impl Library {
                             && text_of(node, "Style_Border") != Some("false")
                     })
                     .and_then(|template| self.templates.get(template).cloned()),
-                color: color(node, "TextColor"),
+                // The STML constructor starts with white; other widget
+                // classes keep their existing renderer fallback.
+                color: color(node, "TextColor")
+                    .or_else(|| node.has_tag_name("STMLbox").then_some([255; 3])),
                 font: number(node, "Font"),
                 scrollbar: self.scrollbar(node),
             }),
@@ -2428,6 +2431,65 @@ mod tests {
                 height: 144.0
             }
         );
+    }
+
+    #[test]
+    fn an_stml_box_without_a_text_color_defaults_to_white() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library
+            .screen(
+                r#"<XML><STMLbox item="Question"/>
+                <Screen item="Dialog"><Pieces>Question</Pieces></Screen></XML>"#,
+                "Dialog",
+            )
+            .unwrap();
+        let Element::TextBox(text) = &screen.pieces[0].1 else {
+            panic!("an STML text box")
+        };
+        assert_eq!(text.color, Some([255, 255, 255]));
+    }
+
+    #[test]
+    fn an_stml_box_keeps_its_authored_text_color() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library
+            .screen(
+                r#"<XML><STMLbox item="Question">
+                <TextColor><R>0</R><G>37</G><B>129</B></TextColor></STMLbox>
+                <Screen item="Dialog"><Pieces>Question</Pieces></Screen></XML>"#,
+                "Dialog",
+            )
+            .unwrap();
+        let Element::TextBox(text) = &screen.pieces[0].1 else {
+            panic!("an STML text box")
+        };
+        assert_eq!(text.color, Some([0, 37, 129]));
+    }
+
+    #[test]
+    fn the_stml_default_does_not_change_other_widget_classes() {
+        let library = Library::parse(ANIMATIONS, TEMPLATES).unwrap();
+        let screen = library
+            .screen(
+                r#"<XML><Editbox item="Entry"/><Label item="Label"/>
+                <Button item="Button"/>
+                <Screen item="Dialog"><Pieces>Entry</Pieces><Pieces>Label</Pieces>
+                <Pieces>Button</Pieces></Screen></XML>"#,
+                "Dialog",
+            )
+            .unwrap();
+        let Element::TextBox(edit) = &screen.pieces[0].1 else {
+            panic!("an edit box")
+        };
+        let Element::Label(label) = &screen.pieces[1].1 else {
+            panic!("a label")
+        };
+        let Element::Button(button) = &screen.pieces[2].1 else {
+            panic!("a button")
+        };
+        assert_eq!(edit.color, None);
+        assert_eq!(label.color, None);
+        assert_eq!(button.text_color, None);
     }
 
     #[test]

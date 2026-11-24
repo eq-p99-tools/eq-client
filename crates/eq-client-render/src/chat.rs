@@ -3845,6 +3845,7 @@ mod tests {
                     heard: heard.clone(),
                 }),
                 Some(Session {
+                    location_scope: None,
                     classic_npc_consider: false,
                     chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                     inventory_move_rules: None,

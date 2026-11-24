@@ -55,6 +55,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<abilities::choices::Files>()
         .init_resource::<abilities::picker::Picker>()
         .init_resource::<guild::Invitations>()
+        .init_resource::<guild::management::State>()
         .init_resource::<surname::Pending>()
         .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
@@ -87,6 +88,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<projectiles::Flights>()
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<select_preview::Preview>()
+        .init_resource::<select_preview::History>()
         .init_resource::<windows::DragState>()
         .init_resource::<windows::Layouts>()
         .init_resource::<windows::Shown>()
@@ -94,6 +96,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::menu::Menu>()
         .init_resource::<keys::Typing>()
         .init_resource::<keys::presses::Presses>()
+        .init_resource::<crate::window_mode::Windowed>()
         .init_resource::<character_create::Editor>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
@@ -140,6 +143,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::poison_wait::report,
                 login::watch,
                 online::tick,
+                select_preview::remember,
                 daylight::update,
                 spell_effects::load,
                 sounds::load,
@@ -166,8 +170,12 @@ pub(super) fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Scene),
             (
-                keys::bindings::persist,
-                keys::bindings::capture,
+                (
+                    keys::bindings::persist,
+                    keys::bindings::capture,
+                    crate::window_mode::input,
+                )
+                    .chain(),
                 login::claim,
                 character_create::claim,
                 character_create::input,
@@ -250,6 +258,7 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     guild::invitations,
                     guild::commands,
+                    guild::management::input,
                     sharing::commands,
                     surname::command,
                 ),
@@ -478,7 +487,11 @@ pub(super) fn schedule(app: &mut App) {
                         (training::fill, tracking::fill, abilities::picker::fill),
                         skills::fill,
                         raid::fill,
-                        (guild::roster::fill, crate::combat_abilities::fill),
+                        (
+                            guild::roster::fill,
+                            guild::management::present,
+                            crate::combat_abilities::fill,
+                        ),
                         confirm::show,
                         reading::show,
                         tradeskills::show,

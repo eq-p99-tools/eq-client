@@ -33,6 +33,7 @@ use eq_client_core::{
 };
 use std::time::{Duration, Instant};
 
+pub(crate) mod management;
 pub(crate) mod roster;
 
 /// How long the official client's invitation dialog waits: 10000 ms from

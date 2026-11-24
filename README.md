@@ -37,7 +37,8 @@ been checked against that kind of server. The full per-feature table is in
 ## What it does
 
 - **Logging in:** login presets for each server, the world list, character
-  selection that shows the chosen character dressed and standing in its zone,
+  selection that shows the chosen character dressed at its last known location
+  in the same zone (or a curated spot when no matching history exists),
   and character
   creation with faces, hair and other appearance choices drawn from your
   installation. See [Logging in](docs/login.md).

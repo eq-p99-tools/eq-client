@@ -100,6 +100,9 @@ pub enum Connection {
 /// A session running on its own thread: its news, the queue for the
 /// player's requests, and the thread.
 pub struct Session {
+    /// Stable, non-secret login profile identity for private location history.
+    /// None keeps selection previews on their curated spots.
+    pub location_scope: Option<String>,
     /// Present NPC difficulty using the classic level scale for this session.
     pub classic_npc_consider: bool,
     /// How the server's chat handler grows Titanium item links before its own
@@ -196,6 +199,7 @@ pub(crate) struct FrontEnd {
 
 /// A session the front end started, or the launch began.
 struct Running {
+    location_scope: Option<String>,
     worker: Box<dyn Worker>,
     /// The login server and the account the player logged in with; none for
     /// the session the launch began.
@@ -214,6 +218,11 @@ struct Running {
 }
 
 impl FrontEnd {
+    /// The connected profile, independent of edits to the login form.
+    pub(crate) fn location_scope(&self) -> Option<&str> {
+        self.session.as_ref()?.location_scope.as_deref()
+    }
+
     /// The front end of a run with a login screen.
     pub(crate) fn new(logins: Box<dyn Logins>) -> Self {
         let mut front = Self {
@@ -241,6 +250,7 @@ impl FrontEnd {
             return (front, None, None);
         };
         front.session = Some(Running {
+            location_scope: session.location_scope,
             worker: session.worker,
             login: None,
             chose: None,
@@ -430,6 +440,7 @@ impl FrontEnd {
         link.bind_spells(session.spell_provider);
         link.attach(Some(session.updates), Some(session.commands));
         self.session = Some(Running {
+            location_scope: session.location_scope,
             worker: session.worker,
             login,
             chose: None,
@@ -795,6 +806,7 @@ pub(crate) mod testing {
     pub(crate) fn past_login() -> FrontEnd {
         FrontEnd {
             session: Some(Running {
+                location_scope: None,
                 worker: Box::new(Thread::default()),
                 login: None,
                 chose: None,
@@ -804,6 +816,13 @@ pub(crate) mod testing {
             }),
             ..FrontEnd::default()
         }
+    }
+
+    /// A connected synthetic profile, without storing any credentials.
+    pub(crate) fn scoped(scope: &str) -> FrontEnd {
+        let mut front = past_login();
+        front.session.as_mut().unwrap().location_scope = Some(scope.to_owned());
+        front
     }
 
     /// What a test's app heard from the front end.
@@ -857,6 +876,7 @@ pub(crate) mod testing {
             let thread = Thread::default();
             heard.sessions.push((updates, queue, thread.clone()));
             Ok(Connection::Session(Session {
+                location_scope: None,
                 classic_npc_consider: false,
                 chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
@@ -964,6 +984,7 @@ mod tests {
         let (mut front, updates, commands) = FrontEnd::launched(
             Box::new(fake),
             Some(Session {
+                location_scope: None,
                 classic_npc_consider: false,
                 chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
@@ -1015,6 +1036,7 @@ mod tests {
         let (mut front, updates, commands) = FrontEnd::launched(
             Box::new(fake),
             Some(Session {
+                location_scope: None,
                 classic_npc_consider: false,
                 chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),
