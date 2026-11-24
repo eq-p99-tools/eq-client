@@ -3,6 +3,12 @@
 ## Unreleased
 
 - Guild invitations follow the Titanium program further (read R49-33 d, checklist 6.633). An offer of a lower rank in your own guild is taken at once with that rank and no dialog, as the program does; only an offer of a member's rank prints its line. Before, a lower offer other than a member's went unanswered. And the invitation dialog's 10-second wait now answers as No does (response 5), where it used to send nothing; that the program's wait reaches that answer is inferred. Scripts answer the dialog with `click("answer", "yes")` or `"no"`, as before.
+- The track window draws light blue as the Titanium program does (read
+  R49-30 d, checklist 6.637): a green entry near the green edge is light
+  blue instead, when e = their level less the green threshold, less 1 for
+  each of your level under 55, under 41 and under 31, is above -6 and your
+  level is above 7. Those entries were drawn green. The green threshold's
+  rounding (down) and its strict edge are now read, no longer inferred.
 - Ride boats as the Titanium client does (read R49-27, checklist 6.611).
   - **A jump on a moving boat comes down on its deck.** The link to the boat was the floor within 0.05 under the feet, so a jump on a moving ferry let go of it and the boat sailed out from under you. Now, as the program's floor sweep does, the first floor under the feet links you however far down it is: a body in the air over the deck stays with the boat, and one over the water or a dock doesn't. The link still ends 600 from the boat's origin, the session guard's bound (6.469), which is ours.
   - **Other riders move with the boat between their reports.** Another player or NPC standing on a moving ferry was left standing in the water until its next report, then jumped on. Now a spawn whose report puts it over a boat's deck is carried with the boat, by its own motion across the deck. This is only in zones with a boat.
