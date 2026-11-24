@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- `/surname` alone, with a surname already set, says this client's own line in colour 15 like the program's refusal lines; it had no colour (live row 6.507 item h).
 - **The bug report window asks before it sends**, as the Titanium program does (reads R49-52, R49-52b and R49-52c; checklist 6.647). Send asks the official question (line 0x1aa3) in the skin's confirmation dialog, with Yes and No, every time, unless the installation's `eqclient.ini` has `[Defaults] SendSystemInfo=1` (read only).
   - Every answer sends, and so does the question's own close after 60 seconds. After the answer, the empty-box and sent lines follow as before.
   - Cancel leaves the question up, and its answer still sends what the box holds (read); the close box and Esc do the same (inferred).

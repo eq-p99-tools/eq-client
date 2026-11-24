@@ -183,6 +183,8 @@ fn a_bare_surname_with_one_set_waits_for_its_read() {
     let said = lines(&app);
     assert_eq!(said.len(), 1);
     assert!(said[0].0.contains("waits for its program read"), "{said:?}");
+    // In the same colour as the program's own refusal lines.
+    assert_eq!(said[0].1, Some(15));
     assert_eq!(question(&app), None);
     assert!(receiver.try_recv().is_err());
 }
