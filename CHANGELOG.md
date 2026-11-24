@@ -2,6 +2,24 @@
 
 ## Unreleased
 
+- On Titanium, a right-click on a player inspects them, as the program's use
+  routine ends (reads R49-16 and R49-16e, checklist 6.644).
+  - The player is first considered, as before. Then, with Inspect Others
+    on and nothing on the cursor, a player under 20 away (3D) is inspected
+    through eq-network's new `InspectSpawn`. A player 20 or more away gets
+    the program's line 0x305a naming them, in this client's words where the
+    installation lacks the line.
+  - Right-clicking yourself inspects you with no consider. Nothing is
+    targeted.
+  - The Mac-era and RoF2 programs are unread, so they only consider, as
+    before.
+  - Not modelled yet: the program's busy gate before any right-click use
+    (mounted, dead, camping, a pending trade or merchant, certain windows
+    open; read R49-16e), the trader branches, and the body types the
+    consider skips.
+- The Player window's mana and endurance percents read as the Titanium program's label provider makes them (read R49-37b, gap 3.9, checklist 6.529): current x 100 / maximum in whole numbers, cut toward zero, at most 100, shown as a bare number, and "0" while the maximum is 0. Before our estimate has a maximum they show "0" too (inferred: the program always knows it). The "%" after each is the skin's own text, which the program never hides, so this client no longer hides the Player window's signs; that rule, from the earlier 6.529 entry, was inferred and is withdrawn. Hit points keep their current text, as R49-37 didn't read them.
+- A spawn whose model the installation lacks is drawn as the program draws it (read R49-37a, 0x43c84b): a Human of its gender, sized and footed as race 1 unless its race is 216 or 472. Before, it drew a marker. A carrier keeps its marker, and so does a race this client has no model name for yet, since that gap is ours.
+
 - Languages train on TAKP and Quarm as the `EQMac` program does (checklist 6.597; eq-network #427, already in the pin). The program keeps its language minimum levels inside itself, so the client reads them from the installed program at its addresses, checks their shape, and hands them to the session. Without a table that passes, Mac language training stays shut. No table values are kept in this repository.
   - The training window lists only the languages the player already speaks. The program's gate runs before anything is sent, and each refusal says the program's line: too young for the language, no practice points, already mastered (naming the language), or at the guildmaster's limit. A purse short of the program's figure gets its coin line, in its colour.
   - A practice resolves at once, as the program does, since neither server answers it. The program's line for a first point or a further one names the guildmaster and the language, in its colour. The next profile replaces the prediction either way.
