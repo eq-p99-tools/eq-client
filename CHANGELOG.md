@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A skinned hot button's tooltip says what the button holds and how long it waits, as the client's own hotbar window says in its detail line: a knight's special shows "Server reuse N s", with "(estimated)" where the session estimated it, a gem its spell and timer, an empty slot "Unassigned". Before, the skin's fixed words showed (checklist 6.626, look L8). The wording is this client's.
 - A script's `gm` line is a user's typed `#` line (6.584, scripts are
   users). `gm` takes any line a player could type after `#`, on any server,
   with only the chat line's own limits (no control characters, the chat
