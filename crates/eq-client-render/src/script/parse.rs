@@ -468,6 +468,11 @@ pub enum ClickTarget {
     Slider(SliderClick, u8),
     /// The Keyboard page's filter drop-down, which opens or closes its list.
     KeyFilter,
+    /// The bug report window's category drop-down.
+    BugType,
+    /// The bug report or feedback window's text box, which takes the
+    /// keyboard as a player's click does.
+    ReportBox(crate::report_windows::Report),
     /// A choice in the open drop-down's list, from zero.
     Choice(usize),
     /// A row of the Training window's list, its Train button or its Done
@@ -1063,6 +1068,19 @@ fn window_control(target: ClickTarget) -> Result<ClickTarget, String> {
     }
 }
 
+/// A drop-down, or a report window's text box.
+fn form_click(kind: &str, which: &str) -> Result<ClickTarget, String> {
+    use crate::report_windows::Report;
+    Ok(match (kind, which) {
+        ("dropdown", "key_filter") => ClickTarget::KeyFilter,
+        ("dropdown", "bug_type") => ClickTarget::BugType,
+        ("report", "bug_text") => ClickTarget::ReportBox(Report::Bug),
+        ("report", "feedback_text") => ClickTarget::ReportBox(Report::Feedback),
+        ("dropdown", _) => return Err("expected key_filter or bug_type".into()),
+        _ => return Err("expected bug_text or feedback_text".into()),
+    })
+}
+
 fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
     if let Some(training) = training_click(words)? {
         return Ok(ClickTarget::Training(training));
@@ -1131,7 +1149,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
                 .filter(|percent| *percent <= 100)
                 .ok_or_else(|| String::from("expected a percentage from 0 to 100"))?,
         ),
-        ["dropdown", "key_filter"] => ClickTarget::KeyFilter,
+        ["dropdown" | "report", which] => form_click(words[0], which)?,
         ["choice", choice] => ClickTarget::Choice(ordinal(choice, "a choice")?),
         ["tab", tab] => ClickTarget::Tab(ordinal(tab, "a tab")?),
         ["ability", page, place] => ClickTarget::Ability(

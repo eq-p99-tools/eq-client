@@ -113,6 +113,7 @@ mod profile_files;
 mod projectiles;
 mod raid;
 mod reading;
+mod report_windows;
 mod reports;
 mod resources;
 mod resurrection;

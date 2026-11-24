@@ -279,8 +279,10 @@ or occluded. The counters are independent of damage and inventory.
   `auction`), `reply`, `friend`, `ignore`, `quit` and `exit` work as typed. The line is at
   most 512 bytes counting the slash, as the chat line is, and takes no control characters.
   A social goes through the named `social` step instead. `petition`, `guidehelp`,
-  `bugreport` (`bug`) and `feedback` send their report as typed, with the same lines and
-  the Typed Reports setting: a person on the staff reads each one.
+  `bugreport` (`bug`) and `feedback` run as typed, with the same lines and the Typed
+  Reports setting: on Titanium they open their windows unless that setting is on (see
+  `report` and `button bug-report ...` in [targets](targets.md)). A person on the staff
+  reads each report.
   `slash("follow")` queues the ordinary local follow request for the targeted group
   member. Its deferred request keeps the script's expected admission and zone;
   a changed world withdraws it before movement handles it. Completion of the

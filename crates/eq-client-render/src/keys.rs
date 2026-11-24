@@ -648,6 +648,8 @@ pub(crate) struct Typing {
     pub logging_in: bool,
     /// The map's local entity search owns text input.
     pub map_search: bool,
+    /// The bug report or feedback window's box owns text input.
+    pub reporting: bool,
     /// The spellbook's local search owns text input.
     pub spell_search: bool,
     /// The saved spell set name owns text input.
@@ -718,6 +720,7 @@ impl Keys<'_, '_> {
             && !self.typing.counting
             && !self.typing.logging_in
             && !self.typing.map_search
+            && !self.typing.reporting
             && !self.typing.spell_search
             && !self.typing.spell_set_name
             && !self.typing.rebinding

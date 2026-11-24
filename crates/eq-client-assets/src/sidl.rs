@@ -479,6 +479,8 @@ pub struct Combobox {
     pub id: Option<String>,
     /// Where it sits in its window.
     pub area: Area,
+    /// How it stretches with its window, when the skin anchors it.
+    pub anchors: Option<Anchors>,
     /// How its frame is drawn.
     pub template: Option<WindowTemplate>,
     /// The button that opens the list.
@@ -1234,6 +1236,7 @@ impl Library {
             "Combobox" => Element::Combobox(Combobox {
                 id: id(),
                 area: at(),
+                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
                 template: template(),
                 button: text_of(node, "Button")
                     .and_then(|button| self.buttons.get(button).cloned())

@@ -938,6 +938,7 @@ type Buttons<'w, 's> = Query<
                         Has<super::tracking::TrackButton>,
                         Option<&'static super::abilities::picker::PickRow>,
                     ),
+                    Option<&'static super::report_windows::ReportBox>,
                 ),
             ),
         ),
@@ -3320,7 +3321,13 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             slider,
             drop_down,
             choice,
-            (dialog, page, combine, map, (raid_row, raid_action, shows, skin_id, tracking)),
+            (
+                dialog,
+                page,
+                combine,
+                map,
+                (raid_row, raid_action, shows, skin_id, tracking, report_box),
+            ),
         ),
     ) in buttons
     {
@@ -3348,6 +3355,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::KeyFilter => drop_down.is_some_and(|drop_down| {
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
+            ClickTarget::BugType => drop_down
+                .is_some_and(|drop_down| drop_down.choosing() == super::skinned::Choosing::BugType),
+            ClickTarget::ReportBox(report) => report_box.is_some_and(|boxed| boxed.0 == report),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
             ClickTarget::Answer(_)
             | ClickTarget::Training(_)
