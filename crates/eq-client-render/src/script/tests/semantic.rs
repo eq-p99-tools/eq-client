@@ -873,6 +873,13 @@ fn a_slash_step_runs_its_line_as_typing_would() {
             message: "thanks".into(),
         })]
     );
+    // A surname waits for the typed command's question.
+    let (app, sent) = slash_step("surname Exemplum", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<ChatState>().surname_asked.as_deref(),
+        Some("Exemplum")
+    );
     // The friends list is the typed command's to change.
     let (app, sent) = slash_step("friend Example", |_| ());
     assert_eq!(sent, []);
