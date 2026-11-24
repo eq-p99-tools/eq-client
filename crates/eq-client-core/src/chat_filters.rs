@@ -232,7 +232,9 @@ fn titanium_hides(filters: &ChatFilters, notice: &crate::world::Notice) -> bool 
         // filter 9 holding 1, which read R49-2 names mine only (read R49-48 e
         // asks to confirm the compare).
         // A Bard's own interruption (`OP_InterruptCast`'s print tail
-        // 0x45e233, read R49-51) takes the same test.
+        // 0x45e233, read R49-51) takes the same test. That the value 1 is
+        // Mine only is inferred and awaits read R49-48 e (it may be Hide);
+        // keep both lines on this one arm so its answer fixes both.
         crate::world::Notice::SongStopped { .. }
         | crate::world::Notice::CastInterrupted {
             print: crate::world::InterruptPrint::TitaniumBard,
