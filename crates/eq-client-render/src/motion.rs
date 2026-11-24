@@ -1057,6 +1057,12 @@ impl Controls {
         self.visual_boat.map(|frame| (frame.sample, frame.pose))
     }
 
+    /// The lift the latest movement sample stood on. Its vertical travel
+    /// does not make the drawn player walk across its deck.
+    pub(crate) fn drawn_lift(&self) -> Option<u8> {
+        self.riding.map(|(door, _, _)| door)
+    }
+
     /// Whether a jump in water strokes up this frame, given whether the jump
     /// key is `held` now. The program strokes up for 500 ms from a jump
     /// request in water (0x4ac9f3-0x4acbac, read R39 B); a key still held
