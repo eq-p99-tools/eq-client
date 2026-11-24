@@ -121,6 +121,17 @@ impl CollisionWorld {
             .is_some_and(|liquids| liquids.liquid_at(feet + self.swim_probe(height)).is_some())
     }
 
+    /// Which water set the liquid at the origin takes, where the program's
+    /// motion step reads it (+0xad, R33): Normal with no liquid there.
+    #[must_use]
+    pub fn wet_kind(&self, feet: Vec3, height: f32) -> super::water::WetKind {
+        self.liquids
+            .as_ref()
+            .map_or_else(super::water::WetKind::default, |liquids| {
+                liquids.wet_kind_at(feet + self.swim_probe(height))
+            })
+    }
+
     fn swim_probe(&self, height: f32) -> Vec3 {
         Vec3::Y * self.swim_origin.unwrap_or(height * 0.5)
     }
