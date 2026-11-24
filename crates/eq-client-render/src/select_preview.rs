@@ -1,5 +1,6 @@
 //! The character at character select: the highlighted character stands in
-//! its own zone, at the zone's spot from the spots file (Adam's choice,
+//! its own zone, at its last known location on this profile when the zone
+//! agrees, otherwise at the zone's spot from the spots file (Adam's choice,
 //! 10-19, over the official client's small themed arena), dressed from its
 //! list's look by the same code that dresses everyone in the game, and the
 //! camera orbits it. It shows only where the server type's list carries the
@@ -7,6 +8,9 @@
 use super::{OrbitCamera, ViewerSettings, background::Background, online::OnlineState};
 use bevy::prelude::*;
 use eq_client_core::{outfit::Appearance, select_spots::Spots};
+
+mod history;
+pub(super) use history::{History, remember};
 
 /// How fast the camera circles a character shown at select by itself, in
 /// radians a second: one turn in about 20 s. Adam's choice (10-19 20:17Z,
@@ -94,10 +98,17 @@ pub(super) struct Look {
 }
 
 /// A listed character: the list's identity and the character's slot.
-type Listed = (u64, u8);
+type Listed = (u64, u64, u8);
 
 /// The camera's yaw, pitch and distance.
 type View = (f32, f32, f32);
+
+struct Loaded {
+    entry: super::zone::PreparedEntry,
+    look: Look,
+    zone: String,
+    position: Option<eq_client_core::WorldPosition>,
+}
 
 /// What the preview shows, and what it is loading.
 #[derive(Resource, Default)]
@@ -108,7 +119,7 @@ pub(super) struct Preview {
     shown: Option<Listed>,
     /// The latest load's number; an older load's result is dropped.
     job: u64,
-    loading: Background<Result<(super::zone::PreparedEntry, Look, String), String>>,
+    loading: Background<Result<Loaded, String>>,
     /// The view to give the camera once the character stands.
     frame: Option<View>,
     /// The view last seen, so a change the player makes stops the turning.
@@ -134,6 +145,7 @@ pub(super) fn show(
     mut online: ResMut<OnlineState>,
     (front, settings): (Res<super::login::FrontEnd>, Res<ViewerSettings>),
     offline: Option<Res<super::preview::Switches>>,
+    mut history: ResMut<History>,
     mut scene: super::zone::Scene,
 ) {
     let wanted = wanted(&front, &online, settings.0.eq_directory.as_deref());
@@ -143,6 +155,17 @@ pub(super) fn show(
         preview.loading.clear();
         preview.job += 1;
         if let Some((_, zone, look, directory)) = wanted {
+            let position = front
+                .location_scope()
+                .zip(listed_profile(&online))
+                .and_then(|(scope, profile)| {
+                    history.position(
+                        settings.0.settings_directory.as_ref(),
+                        scope,
+                        &profile,
+                        &zone,
+                    )
+                });
             let job = preview.job;
             preview.loading.start(job, move || {
                 super::zone::Entry::preview(&zone, (look.race, look.gender), &directory).map(
@@ -151,7 +174,12 @@ pub(super) fn show(
                             race: look.race,
                             appearance: look.appearance,
                         };
-                        (entry.prepare(false, false), appearance, zone)
+                        Loaded {
+                            entry: entry.prepare(false, false),
+                            look: appearance,
+                            zone,
+                            position,
+                        }
                     },
                 )
             });
@@ -166,14 +194,27 @@ pub(super) fn show(
         return;
     };
     match result {
-        Ok((mut entry, look, zone)) => {
+        Ok(Loaded {
+            mut entry,
+            look,
+            zone,
+            position,
+        }) => {
             let audit = offline
                 .as_ref()
                 .and_then(|switches| switches.0.selection.as_ref());
             let spot = audit
                 .map(|audit| &audit.spot)
                 .or_else(|| Spots::built_in().get(&zone));
-            entry.stand(spot);
+            let remembered =
+                audit.is_none() && position.is_some_and(|position| entry.preview_place(position));
+            if !remembered {
+                entry.stand(spot);
+            }
+            info!(
+                source = if remembered { "last_known" } else { "curated" },
+                "Character select placement"
+            );
             let facing = entry.facing();
             scene.leave(&mut commands, &mut online.regions);
             let player = scene.enter(
@@ -228,11 +269,19 @@ fn wanted(
     let entry = selection.entry(slot)?;
     let zone = eq_client_core::zones::short_name(entry.zone_id?)?;
     Some((
-        (selection.id(), slot),
+        (online.connection_revision, selection.id(), slot),
         zone.to_owned(),
         entry.look?,
         directory?.to_owned(),
     ))
+}
+
+fn listed_profile(online: &OnlineState) -> Option<crate::profile_files::CharacterProfile> {
+    let selection = online.selection.as_ref()?;
+    Some(crate::profile_files::CharacterProfile {
+        world: online.world().world_name()?.to_owned(),
+        character: selection.entry(selection.chosen()?)?.name.clone(),
+    })
 }
 
 /// Frames the camera on a character as it comes to stand, then circles the
@@ -345,7 +394,7 @@ mod tests {
         };
         let online = listed(Some(look));
         let (key, zone, shown, _) = wanted(&front, &online, Some(directory)).unwrap();
-        assert_eq!((key, zone.as_str(), shown), ((7, 2), "ecommons", look));
+        assert_eq!((key, zone.as_str(), shown), ((0, 7, 2), "ecommons", look));
         assert!(wanted(&front, &online, None).is_none());
         // A server type whose list isn't checked to carry looks.
         assert!(wanted(&front, &listed(None), Some(directory)).is_none());
@@ -357,12 +406,12 @@ mod tests {
     #[test]
     fn a_new_highlight_drops_the_load_in_progress() {
         let mut preview = Preview {
-            wanted: Some((7, 2)),
+            wanted: Some((0, 7, 2)),
             job: 1,
             ..Preview::default()
         };
         preview.loading.start(1, || Err("first".to_owned()));
-        preview.wanted = Some((7, 3));
+        preview.wanted = Some((0, 7, 3));
         preview.loading.clear();
         preview.job += 1;
         assert!(preview.loading.poll(Some(preview.job)).is_none());
@@ -372,8 +421,8 @@ mod tests {
     fn turning_app() -> (App, Entity, Entity) {
         let mut app = App::new();
         app.init_resource::<Time>().insert_resource(Preview {
-            wanted: Some((7, 2)),
-            shown: Some((7, 2)),
+            wanted: Some((0, 7, 2)),
+            shown: Some((0, 7, 2)),
             frame: Some((1.0, -0.2, 25.0)),
             turning: true,
             ..Preview::default()
@@ -541,8 +590,8 @@ mod tests {
         assert_eq!(visibility(&app, hud), Visibility::Inherited);
         {
             let mut preview = app.world_mut().resource_mut::<Preview>();
-            preview.wanted = Some((7, 2));
-            preview.shown = Some((7, 2));
+            preview.wanted = Some((0, 7, 2));
+            preview.shown = Some((0, 7, 2));
         }
         app.update();
         assert_eq!(visibility(&app, hud), Visibility::Hidden);

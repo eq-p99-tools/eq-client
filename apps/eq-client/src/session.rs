@@ -105,6 +105,17 @@ pub struct Login {
     pub character: String,
 }
 
+/// Stable across sessions and password changes; never includes credentials.
+fn location_scope(login: &Login) -> Option<String> {
+    serde_json::to_string(&(
+        format!("{:?}", login.protocol),
+        &login.host,
+        login.port,
+        &login.account,
+    ))
+    .ok()
+}
+
 /// What every session of a run shares.
 #[derive(Clone)]
 pub struct SessionOptions {
@@ -149,6 +160,7 @@ impl SessionWorker {
         spell_definitions: Arc<Definitions>,
     ) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
+        let location_scope = location_scope(&login);
         let client = client(login, options)?;
         let classic_npc_consider = client.consider_npcs_by_level();
         let chat_link_expansion = client.titanium_chat_link_expansion();
@@ -262,6 +274,7 @@ impl SessionWorker {
             }
         });
         Ok(eq_client_render::Session {
+            location_scope,
             classic_npc_consider,
             chat_link_expansion,
             inventory_move_rules,
@@ -557,6 +570,34 @@ fn end_updates(sender: relay::Relay, closed: &AtomicBool) {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn select_preview_profile_scope_excludes_secrets_and_isolates_logins() {
+        let mut login = super::Login {
+            protocol: eq_network::client::ServerProtocol::EqEmu,
+            host: "example.invalid".into(),
+            port: 5998,
+            account: "synthetic".into(),
+            password: zeroize::Zeroizing::new("first-secret".into()),
+            server: "World".into(),
+            character: "One".into(),
+        };
+        let original = super::location_scope(&login).unwrap();
+        assert!(!original.contains("first-secret"));
+        login.password = zeroize::Zeroizing::new("rotated-secret".into());
+        assert_eq!(super::location_scope(&login).as_ref(), Some(&original));
+        login.account = "other-account".into();
+        assert_ne!(super::location_scope(&login).as_ref(), Some(&original));
+        login.account = "synthetic".into();
+        login.port = 5999;
+        assert_ne!(super::location_scope(&login).as_ref(), Some(&original));
+        login.port = 5998;
+        login.host = "another.invalid".into();
+        assert_ne!(super::location_scope(&login).as_ref(), Some(&original));
+        login.host = "example.invalid".into();
+        login.protocol = eq_network::client::ServerProtocol::Project1999;
+        assert_ne!(super::location_scope(&login).as_ref(), Some(&original));
+    }
+
     use super::*;
 
     #[test]
