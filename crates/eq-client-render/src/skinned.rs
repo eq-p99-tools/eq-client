@@ -19,7 +19,7 @@ use tree::{augment_section, text_box};
 mod presentation;
 pub(crate) use presentation::show;
 #[cfg(test)]
-use presentation::{fraction, gauge_text, label_text, raid_text, shown_now, vital_sign};
+use presentation::{fraction, gauge_text, label_text, raid_text, shown_now};
 
 mod bindings;
 pub(crate) use bindings::PET_COMMANDS;
@@ -105,6 +105,8 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Skills => "EQUI_SkillsWindow.xml",
         WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
         WindowId::Note => "EQUI_NoteWindow.xml",
+        WindowId::BugReport => "EQUI_BugReportWnd.xml",
+        WindowId::Feedback => "EQUI_FeedbackWnd.xml",
         WindowId::Book => "EQUI_BookWindow.xml",
         WindowId::Map => "EQUI_MapViewWnd.xml",
         WindowId::Actions => "EQUI_HotButtonWnd.xml",
@@ -188,10 +190,6 @@ pub(crate) enum Shows {
     /// The sign after a group member's health, said only while their health
     /// shows.
     MemberPercent(usize),
-    /// The sign after the player's own hit points, mana or endurance in
-    /// percent (the number's `EQType`: 19, 20 or 21), said only while the
-    /// number shows (inferred, 6.529).
-    VitalPercent(u32),
     /// The group window's Follow and Decline buttons (true) or its Invite
     /// and Disband: the skin keeps each pair in the other's places, and the
     /// one for whether an invitation waits shows.
@@ -239,6 +237,16 @@ impl Screens {
     fn get(&mut self, directory: &std::path::Path, skin: &str, id: WindowId) -> Option<&Screen> {
         let (file, name) = source(id)?;
         self.screen(directory, skin, (file, name))
+    }
+
+    /// Whether this skin defines a window, before its frame is ever drawn.
+    pub(crate) fn defines(
+        &mut self,
+        directory: &std::path::Path,
+        skin: &str,
+        id: WindowId,
+    ) -> bool {
+        self.get(directory, skin, id).is_some()
     }
 
     /// A screen of this skin's file, if the file defines it: a window's, or
@@ -1238,6 +1246,14 @@ fn behave(
         Does::Answers(accept) => {
             drawn.insert((Button, super::confirm::AnswerButton(accept), skin()))
         }
+        // The skin lists the bug report's drop-down last, over the left of
+        // Location (x 130-196 of both installed skins, live look 11-24). The
+        // button stays on top so all of it takes a click; the program's own
+        // stacking there is unread, so this is inferred.
+        Does::Report(button @ crate::report_windows::ReportButton::Location) => {
+            drawn.insert((Button, button, skin(), ZIndex(1)))
+        }
+        Does::Report(button) => drawn.insert((Button, button, skin())),
         Does::TurnsPage(forward) => {
             drawn.insert((Button, super::reading::PageButton(forward), skin()))
         }
@@ -1493,6 +1509,7 @@ fn caption(
         | Does::Tracks
         | Does::StopsTracking
         | Does::Answers(_)
+        | Does::Report(_)
         | Does::TurnsPage(_)
         | Does::Combines(_)
         | Does::Maps(_)
@@ -1590,6 +1607,7 @@ type Stateful<'w, 's> = Query<
             Has<Greyed>,
             Has<scrollbar::ScrollArrow>,
             Option<&'static crate::character_select::Action>,
+            Option<&'static crate::report_windows::ReportButton>,
         ),
         &'static Interaction,
         &'static mut ImageNode,
@@ -1607,7 +1625,10 @@ pub(crate) fn buttons(
         Res<super::options::OptionsState>,
         Res<super::online::OnlineState>,
     ),
-    combat: Res<super::combat::CombatState>,
+    (combat, reports): (
+        Res<super::combat::CombatState>,
+        Res<crate::report_windows::ReportWindows>,
+    ),
     mut art: crate::sheets::Art,
     mut buttons: Stateful,
 ) {
@@ -1620,12 +1641,14 @@ pub(crate) fn buttons(
         selector,
         attack,
         checkbox,
-        (greyed, arrow, character),
+        (greyed, arrow, character, report),
         interaction,
         mut image,
     ) in &mut buttons
     {
         let on = match (selector, checkbox, character) {
+            // The bug report's check boxes show what they carry.
+            _ if let Some(report) = report => reports.checked(*report),
             (Some(selector), ..) => shown.displayed(selector.0),
             (None, Some(checkbox), _) => options.on(checkbox.0),
             (None, None, Some(crate::character_select::Action::Choose(slot))) => {
@@ -2206,9 +2229,6 @@ fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
             _ => None,
         };
     }
-    if owner == WindowId::Player {
-        return vital_percent(name);
-    }
     if owner == WindowId::Group {
         return name
             .strip_prefix("GW_HPPercLabel")
@@ -2223,20 +2243,6 @@ fn window_label(owner: WindowId, name: &str) -> Option<Shows> {
         (WindowId::Merchant, "MW_SelectedPriceLabel") => Shows::ChosenPrice,
         _ => return None,
     })
-}
-
-/// The Player window's sign after a percent, by the number it follows. The
-/// names are inferred from the Group window's `GW_HPPercLabel1` to `5`,
-/// until the default skin's Player window is looked at (6.529); a skin
-/// naming its signs otherwise keeps its own text.
-fn vital_percent(name: &str) -> Option<Shows> {
-    let kind = match name {
-        "PW_HPPercLabel" => 19,
-        "PW_ManaPercLabel" => 20,
-        "PW_FatiguePercLabel" | "PW_EndurancePercLabel" | "PW_StaminaPercLabel" => 21,
-        _ => return None,
-    };
-    Some(Shows::VitalPercent(kind))
 }
 
 /// The training window's practice points or carried coin value.
@@ -2285,7 +2291,10 @@ fn label(
         _ => None,
     };
     let hotbar_page = owner == WindowId::Actions && name == "HB_CurrentPageLabel";
+    // The bug report's place and target, and the feedback window's name.
+    let reported = crate::report_windows::ReportLabel::of(name, owner);
     let filled = label.eq_type.is_some()
+        || reported.is_some()
         || bag.is_some()
         || banker
         || partner
@@ -2355,6 +2364,9 @@ fn label(
         }
         (None, None) if let Some(shows) = named => {
             aligned_in(window, node, label.align, (text, shows), geometry);
+        }
+        (None, None) if let Some(reported) = reported => {
+            aligned_in(window, node, label.align, (text, reported), geometry);
         }
         (None, None) => plain_label(window, name, label, text, node, geometry, owner),
     }
@@ -4384,7 +4396,7 @@ mod tests {
         // Mana and stamina need their maxima, here estimated.
         assert_eq!(label_text(world, Some((100, 100)), None, 20), "50");
         assert_eq!(label_text(world, Some((100, 100)), None, 21), "25");
-        assert_eq!(label_text(world, None, None, 20), "");
+        assert_eq!(label_text(world, None, None, 20), "0");
         // What the player carries and can carry, as the speed inputs count
         // them; capacity is unknown before the profile.
         assert_eq!(label_text(world, None, Some((123, Some(150))), 24), "123");
@@ -4682,57 +4694,40 @@ mod tests {
     }
 
     #[test]
-    fn the_player_windows_signs_follow_their_numbers_only() {
-        for (name, kind) in [
-            ("PW_HPPercLabel", 19),
-            ("PW_ManaPercLabel", 20),
-            ("PW_FatiguePercLabel", 21),
-            ("PW_EndurancePercLabel", 21),
-            ("PW_StaminaPercLabel", 21),
+    fn the_player_windows_signs_keep_their_skin_text() {
+        // The sign after a percent is the skin's own text, which the program
+        // never hides (read R49-37b), so no name is taken over for it.
+        for name in [
+            "PW_HPPercLabel",
+            "PW_ManaPercLabel",
+            "PW_FatiguePercLabel",
+            "PW_EndurancePercLabel",
+            "PW_StaminaPercLabel",
         ] {
-            assert_eq!(
-                window_label(WindowId::Player, name),
-                Some(Shows::VitalPercent(kind)),
-                "{name}"
-            );
-            // Elsewhere the same name keeps its own text.
-            for owner in [WindowId::Group, WindowId::Target, WindowId::Inventory] {
-                assert_eq!(window_label(owner, name), None, "{name} in {owner:?}");
-            }
-        }
-        for near in [
-            "PW_ManaPercLabel2",
-            "PW_ManaPerc",
-            "pw_manapérclabel",
-            "PW_ManaPercLabel ",
-            "GW_HPPercLabel1",
-            "PW_HPNumber",
-        ] {
-            assert_eq!(window_label(WindowId::Player, near), None, "{near}");
+            assert_eq!(window_label(WindowId::Player, name), None, "{name}");
         }
     }
 
     #[test]
-    fn a_vital_sign_shows_only_with_its_number() {
-        // Before the player is known, no sign.
+    fn mana_and_endurance_percents_are_whole_and_zero_without_a_maximum() {
+        // Before the player is known, both read 0.
         let state = OnlineState::new(true);
-        for kind in [19, 20, 21] {
-            assert_eq!(vital_sign(state.world(), Some((100, 100)), None, kind), "");
+        for kind in [20, 21] {
+            assert_eq!(label_text(state.world(), Some((100, 100)), None, kind), "0");
         }
         let mut state = OnlineState::new(true);
-        let mut player = testing::player(7);
-        player.hp_percent = Some(40);
-        testing::admit(&mut state, 1, player);
-        testing::resources(&mut state, 50, 25);
+        testing::admit(&mut state, 1, testing::player(7));
+        testing::resources(&mut state, 2, 150);
         let world = state.world();
-        // Hit points known: the sign shows at once.
-        assert_eq!(label_text(world, None, None, 19), "40");
-        assert_eq!(vital_sign(world, None, None, 19), "%");
-        // Mana and endurance with no maximum: neither number nor sign.
-        for kind in [20, 21] {
-            assert_eq!(label_text(world, None, None, kind), "");
-            assert_eq!(vital_sign(world, None, None, kind), "");
-            assert_eq!(vital_sign(world, Some((100, 100)), None, kind), "%");
+        // Whole numbers, cut toward zero: 2 of 3 is 66, not 67.
+        assert_eq!(label_text(world, Some((3, 100)), None, 20), "66");
+        // At most 100, though the estimate is below what the server said.
+        assert_eq!(label_text(world, Some((3, 100)), None, 21), "100");
+        // No maximum, or a maximum of 0: "0", never an empty label.
+        for estimate in [None, Some((0, 0))] {
+            for kind in [20, 21] {
+                assert_eq!(label_text(world, estimate, None, kind), "0", "{estimate:?}");
+            }
         }
     }
 

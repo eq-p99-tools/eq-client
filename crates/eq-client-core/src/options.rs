@@ -31,6 +31,8 @@ const ATTACK_ON_ASSIST: &str = "attack_on_assist";
 const TRACK_SORT: &str = "track_sort";
 const TRACK_FILTER: &str = "track_filter";
 const TRACK_PLAYERS: &str = "track_players";
+/// The name a file keeps [`Options::channel_autojoin`] under.
+const CHANNEL_AUTOJOIN: &str = "channel_autojoin";
 
 /// An option the player turns on or off.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -96,6 +98,12 @@ pub enum Toggle {
     /// `SpellParticleDensity`), this client per character. The Options
     /// window's Particles page is its official home.
     SpellEffects,
+    /// Inspects another player (or the player themself) on a right-click,
+    /// as the official client's `InspectOthers` in `[Defaults]` of
+    /// `eqclient.ini` and its `/toggleinspect` (read R49-16; TRUE when
+    /// missing). It gates only the player's own right-click inspects, not
+    /// answering others'. This client keeps it per character.
+    InspectOthers,
     /// A quality-of-life setting, on the Options window's quality-of-life
     /// page, which only this client has.
     Qol(Fix),
@@ -104,7 +112,7 @@ pub enum Toggle {
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them; a
     /// file is read back by name, so the order is only how it is written.
-    pub const OFFICIAL: [Self; 15] = [
+    pub const OFFICIAL: [Self; 16] = [
         Self::PetWindowPopup,
         Self::AutoStand,
         Self::TargetRing,
@@ -123,6 +131,7 @@ impl Toggle {
         Self::EnvironmentSounds,
         Self::CombatMusic,
         Self::SpellEffects,
+        Self::InspectOthers,
     ];
 
     /// Every toggle, in the order a file lists them: the official client's,
@@ -152,6 +161,7 @@ impl Toggle {
             Self::EnvironmentSounds => "environment_sounds",
             Self::CombatMusic => "combat_music",
             Self::SpellEffects => "spell_effects",
+            Self::InspectOthers => "inspect_others",
             Self::Qol(fix) => fix.key(),
         }
     }
@@ -175,7 +185,8 @@ impl Toggle {
             | Self::Music
             | Self::EnvironmentSounds
             | Self::CombatMusic
-            | Self::SpellEffects => None,
+            | Self::SpellEffects
+            | Self::InspectOthers => None,
             Self::Qol(fix) => fix.needs(),
         }
     }
@@ -372,6 +383,43 @@ impl Level {
     }
 }
 
+/// The chat server channels `/autojoin` keeps: the words after it, as
+/// typed, such as `general, trade:secret`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AutoJoin {
+    bytes: [u8; AutoJoin::MAX],
+    len: u8,
+}
+
+impl AutoJoin {
+    /// The longest list kept: this client's own bound, since the program's
+    /// is unread (inferred).
+    pub const MAX: usize = 255;
+
+    /// The list, trimmed; None when it is empty, longer than [`Self::MAX`],
+    /// or holds a line break, which an options file could not keep.
+    #[must_use]
+    pub fn new(list: &str) -> Option<Self> {
+        let list = list.trim();
+        if list.is_empty() || list.len() > Self::MAX || list.contains(['\n', '\r']) {
+            return None;
+        }
+        let mut bytes = [0; Self::MAX];
+        bytes[..list.len()].copy_from_slice(list.as_bytes());
+        Some(Self {
+            bytes,
+            len: u8::try_from(list.len()).ok()?,
+        })
+    }
+
+    /// The list as typed.
+    #[must_use]
+    pub fn as_str(&self) -> &str {
+        // Built only from a whole `&str`, so always whole characters.
+        std::str::from_utf8(&self.bytes[..usize::from(self.len)]).unwrap_or_default()
+    }
+}
+
 /// Every option the client keeps.
 #[derive(Clone, Copy, Debug, PartialEq)]
 #[allow(
@@ -409,6 +457,8 @@ pub struct Options {
     pub combat_music: bool,
     /// See [`Toggle::SpellEffects`].
     pub spell_effects: bool,
+    /// See [`Toggle::InspectOthers`].
+    pub inspect_others: bool,
     /// Which quality-of-life fixes are on ([`Toggle::Qol`]).
     pub qol: qol::Settings,
     /// How much of a player's name shows over their head, as `/shownames`
@@ -436,6 +486,13 @@ pub struct Options {
     /// Which players a track list shows, as `/trackplayers` sets it and
     /// saves at once.
     pub track_players: TrackPlayers,
+    /// The chat server channels joined at each login, as `/autojoin` sets
+    /// them (read R49-12 c, checklist 6.616). The official client writes
+    /// `[ChatManager]` `ChannelAutoJoin` to the character's own ini; this
+    /// client keeps it here, per character, and never writes that file.
+    /// None until the player sets it, when the installation's keys are the
+    /// defaults.
+    pub channel_autojoin: Option<AutoJoin>,
     /// See [`Level::ClipPlane`].
     pub clip_plane: u16,
     /// See [`Level::MaxFps`].
@@ -510,6 +567,7 @@ impl Default for Options {
             environment_sounds: true,
             combat_music: true,
             spell_effects: true,
+            inspect_others: true,
             qol,
             show_names: ShowNames::Everything,
             loot_no_drop: LootNoDrop::Ask,
@@ -517,6 +575,7 @@ impl Default for Options {
             track_sort: TrackSort::Normal,
             track_filter: TrackFilter(0),
             track_players: TrackPlayers::On,
+            channel_autojoin: None,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
             mouse_sensitivity: 50,
@@ -552,6 +611,7 @@ impl Options {
             Toggle::EnvironmentSounds => self.environment_sounds,
             Toggle::CombatMusic => self.combat_music,
             Toggle::SpellEffects => self.spell_effects,
+            Toggle::InspectOthers => self.inspect_others,
             Toggle::Qol(fix) => self.qol.on(fix),
         }
     }
@@ -574,6 +634,7 @@ impl Options {
             Toggle::EnvironmentSounds => &mut self.environment_sounds,
             Toggle::CombatMusic => &mut self.combat_music,
             Toggle::SpellEffects => &mut self.spell_effects,
+            Toggle::InspectOthers => &mut self.inspect_others,
             Toggle::Qol(fix) => {
                 self.qol.set(fix, on);
                 return;
@@ -715,6 +776,10 @@ impl Options {
                 }
                 continue;
             }
+            if key.trim() == CHANNEL_AUTOJOIN {
+                options.channel_autojoin = AutoJoin::new(value);
+                continue;
+            }
             if key.trim() == ATTACK_ON_ASSIST {
                 if let Ok(on) = value.trim().parse() {
                     options.attack_on_assist = on;
@@ -824,6 +889,11 @@ impl Options {
         let _ = writeln!(text, "{TRACK_SORT} = {}", self.track_sort.word());
         let _ = writeln!(text, "{TRACK_FILTER} = {}", self.track_filter.0);
         let _ = writeln!(text, "{TRACK_PLAYERS} = {}", self.track_players.word());
+        if let Some(list) = &self.channel_autojoin {
+            for part in [CHANNEL_AUTOJOIN, " = ", list.as_str(), "\n"] {
+                text.push_str(part);
+            }
+        }
         for level in Level::ALL {
             for part in [level.key(), " = ", &self.level(level).to_string(), "\n"] {
                 text.push_str(part);
@@ -869,6 +939,7 @@ mod tests {
         options.track_sort = TrackSort::ReverseDistance;
         options.track_filter = TrackFilter(0x21);
         options.track_players = TrackPlayers::Group;
+        options.channel_autojoin = AutoJoin::new(" general, trade:secret ");
         let text = options.text();
         assert!(text.contains("luclin_models = DAF\n"));
         assert!(text.starts_with(HEADER));
@@ -883,7 +954,14 @@ mod tests {
         assert!(text.contains("track_sort = RDISTANCE\n"));
         assert!(text.contains("track_filter = 33\n"));
         assert!(text.contains("track_players = GROUP\n"));
+        assert!(text.contains("channel_autojoin = general, trade:secret\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
+        // Not set, it isn't written, and the installation's keys stay the
+        // defaults (6.616 H2).
+        assert!(!Options::default().text().contains("channel_autojoin"));
+        assert_eq!(AutoJoin::new("  "), None);
+        assert_eq!(AutoJoin::new(&"a".repeat(AutoJoin::MAX + 1)), None);
+        assert_eq!(AutoJoin::new("a\nb"), None);
         // A file from before the QoL page keeps its choices there.
         let before = Options::read(
             "# eq-client options v1\nskip_modified_food = false\nhidden_windows = true\n",

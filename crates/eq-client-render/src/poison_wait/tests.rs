@@ -53,6 +53,7 @@ fn online(capabilities: Vec<Capability>, holds_aa: bool) -> OnlineState {
     player.titanium_environment = Some(TitaniumEnvironment {
         zone_id: 27,
         base_fire_resistance: 25,
+        base_cold_resistance: 25,
         has_alternate_advancement: holds_aa,
     });
     let mut online = OnlineState::new(true);

@@ -113,6 +113,7 @@ mod profile_files;
 mod projectiles;
 mod raid;
 mod reading;
+mod report_windows;
 mod reports;
 mod resources;
 mod resurrection;
@@ -121,6 +122,7 @@ mod script_workbench;
 mod select_preview;
 mod sharing;
 mod sheets;
+mod shield;
 mod skills;
 mod skin;
 mod skinned;
@@ -131,7 +133,9 @@ mod speed;
 mod spell_effects;
 mod spell_icons;
 mod spellbook;
+mod surname;
 mod target;
+mod targeted;
 mod theme;
 mod tooltip;
 mod tracking;
@@ -388,6 +392,7 @@ fn seed_official_options(
             (Toggle::Sound, official.sound),
             (Toggle::EnvironmentSounds, official.env_sounds),
             (Toggle::CombatMusic, official.combat_music),
+            (Toggle::InspectOthers, official.inspect_others),
             // A music volume of 0 is silent; another value leaves music on,
             // its scale unread [I].
             (
@@ -979,14 +984,15 @@ fn spawn_static_zone(
                     additive: source.material_mode == MaterialMode::Additive,
                 });
             }
-            door_models.0.insert(
-                doors::model_key(&model.name),
+            door_models.0.insert(doors::model_key(&model.name), {
+                let collision = doors::collision(model.collision, model.no_hit_collision);
                 doors::Model {
+                    radius: doors::model_radius(model.radius, &collision),
                     primitives: primitives.clone(),
-                    collision: model.collision,
+                    collision,
                     pick,
-                },
-            );
+                }
+            });
             drawn_models.push(drawn);
             primitives
         })
@@ -1329,7 +1335,10 @@ fn update_hud(
     online: Res<online::OnlineState>,
     players: Query<&Transform, With<Player>>,
     mut labels: Query<(&mut Text, &mut Visibility), With<HudText>>,
-    free: Query<(), With<camera::FreeCamera>>,
+    (free, options): (
+        Query<(), With<camera::FreeCamera>>,
+        Option<Res<options::OptionsState>>,
+    ),
 ) {
     let (Ok(player), Ok((mut label, mut visibility))) = (players.single(), labels.single_mut())
     else {
@@ -1340,7 +1349,10 @@ fn update_hud(
         lines.push(map.named(keys::Act::FreeCamera, "Free camera - return to character"));
     }
     let nearest = interact::nearest(&online);
-    lines.push(match nearest {
+    // Where the key casts the centre ray, the nearest thing is not what it
+    // uses, so it is not offered (the program shows no such hint).
+    let by_ray = interact::by_ray(&online, &interact::qol(options.as_deref()));
+    lines.push(match nearest.as_ref().filter(|_| !by_ray) {
         Some(interact::Use::Door(..)) => map.help(&[(keys::Act::Use, "use the door")]),
         Some(interact::Use::Object(_)) => {
             map.help(&[(keys::Act::Use, "pick up or open what is here")])

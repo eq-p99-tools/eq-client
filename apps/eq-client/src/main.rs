@@ -422,8 +422,8 @@ fn launch_preset(
 
 /// A script on a stock server (`EQEmu` or TAKP) is a local test run: its
 /// session refuses every server outside this machine's network, and only then
-/// may it send `gm` steps and run without anyone watching the window. P99 and
-/// Quarm scripts stay attended.
+/// may a `gm` step's fixture helpers run and the script run without anyone
+/// watching the window. P99 and Quarm scripts stay attended.
 fn local_session(script: bool, protocol: Option<ServerProtocol>) -> bool {
     script && protocol.is_some_and(ServerProtocol::is_stock)
 }
@@ -438,11 +438,8 @@ fn script_session(
     if local_test && !local {
         return Err("--local-test requires an EQEmu or TAKP server preset".into());
     }
-    if let Some(program) = script {
-        program
-            .check_local_commands(local)
-            .map_err(|error| format!("{error} Select an EQEmu or TAKP server preset."))?;
-    }
+    // A `gm` line may run on any server, as the user may type it (6.584);
+    // only its local fixture form needs this session.
     Ok(local)
 }
 
@@ -1020,12 +1017,13 @@ mod tests {
         ])
         .unwrap();
         assert!(background.script_background);
-        // Input ownership grants no local-server or command permission.
+        // Input ownership grants no local-server session; a `gm` line, as
+        // a user may type it, launches anywhere (6.584).
         let allowed = Program::parse("face()", Path::new(".")).unwrap();
-        let restricted = Program::parse("gm(\"stun 8000\")", Path::new(".")).unwrap();
+        let typed = Program::parse("gm(\"stun 8000\")", Path::new(".")).unwrap();
         for provider in [ServerProtocol::Project1999, ServerProtocol::Quarm] {
             assert!(!script_session(Some(&allowed), false, Some(provider)).unwrap());
-            assert!(script_session(Some(&restricted), false, Some(provider)).is_err());
+            assert!(!script_session(Some(&typed), false, Some(provider)).unwrap());
         }
     }
 
@@ -1287,12 +1285,14 @@ mod tests {
     }
 
     #[test]
-    fn only_gm_fixture_steps_are_refused_outside_a_local_session() {
+    fn a_gm_fixture_line_launches_on_any_session_and_only_a_stock_one_is_local() {
+        // Off a local session it goes as the user's typed # line (6.584).
         let fixture = "if False:\n    for _ in range(1):\n        gm(\"stun 8000\")\n";
         let program = Program::parse(fixture, Path::new(".")).unwrap();
-        let error =
-            script_session(Some(&program), false, Some(ServerProtocol::Project1999)).unwrap_err();
-        assert!(error.starts_with("script line 3:"), "{error}");
+        assert_eq!(
+            script_session(Some(&program), false, Some(ServerProtocol::Project1999)),
+            Ok(false)
+        );
         assert_eq!(
             script_session(Some(&program), false, Some(ServerProtocol::EqEmu)),
             Ok(true)

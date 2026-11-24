@@ -58,6 +58,14 @@ impl OptionsState {
         }
     }
 
+    /// For a test: the options in effect are `profile`'s, as after their
+    /// load.
+    #[cfg(test)]
+    pub(crate) fn following(&mut self, profile: Option<CharacterProfile>) {
+        self.store.loaded = true;
+        self.store.profile = profile;
+    }
+
     /// Whether the toggle is on.
     pub(crate) const fn on(&self, toggle: Toggle) -> bool {
         self.options.get(toggle)

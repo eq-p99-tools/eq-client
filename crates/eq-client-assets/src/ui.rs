@@ -643,6 +643,21 @@ impl InstalledClient {
         }
     }
 
+    /// Whether a right-click on a player inspects them (checklist 6.644):
+    /// the Titanium program's use routine 0x4a7356 ends, for a player or
+    /// the player's own spawn, with an inspect when `InspectOthers` is on
+    /// and nothing is on the cursor (reads R49-16 and R49-16e). The Mac-era
+    /// and `RoF2` programs are unread, so they keep this client's rule:
+    /// consider only.
+    #[must_use]
+    pub const fn right_click_inspects(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            // Not read for the Mac era or RoF2.
+            Self::EqMac | Self::Rof2 => false,
+        }
+    }
+
     /// How a typed `/target Name` picks among the spawns it matches.
     #[must_use]
     pub const fn target_by_name(self) -> TargetByName {
@@ -998,6 +1013,15 @@ pub trait OfficialSettings {
         None
     }
 
+    /// Whether the program sends a bug report with the machine's details
+    /// without asking first: `SendSystemInfo=1` in `[Defaults]`. The
+    /// program keeps it at 0 until its own window sets it, and asks on
+    /// every bug report until then (read R49-52b). This client never
+    /// writes it.
+    fn sends_system_info(&self) -> bool {
+        false
+    }
+
     /// The options in `eqclient.ini`.
     fn options(&self) -> OfficialOptions {
         OfficialOptions::default()
@@ -1080,6 +1104,14 @@ pub trait OfficialSettings {
         None
     }
 
+    /// The chat server channels the official client joins for a character
+    /// at login: `ChannelAutoJoin` in `[ChatManager]` of the character's
+    /// own ini (read R49-12 c), as written. Which of the character's files
+    /// the program means is inferred: the one that keeps its inspect text.
+    fn channel_autojoin(&self, _character: &str, _world: &str) -> Option<String> {
+        None
+    }
+
     /// The account and world the official login screen last used.
     fn login(&self) -> LoginMemory {
         LoginMemory::default()
@@ -1134,6 +1166,18 @@ impl OfficialSettings for Titanium<'_> {
         Some(character_contacts_from_ini(&String::from_utf8_lossy(
             &bytes,
         )))
+    }
+
+    /// `SendSystemInfo` in `[Defaults]` of `eqclient.ini`, set to 1.
+    fn sends_system_info(&self) -> bool {
+        std::fs::read(self.0.join("eqclient.ini")).is_ok_and(|bytes| {
+            ini_value(
+                &String::from_utf8_lossy(&bytes),
+                "Defaults",
+                "SendSystemInfo",
+            )
+            .is_some_and(|value| value.trim() == "1")
+        })
     }
 
     /// `LastSysInfoDate` in `[Defaults]` of `eqclient.ini`, else of
@@ -1239,6 +1283,19 @@ impl OfficialSettings for Titanium<'_> {
         .ok()
     }
 
+    fn channel_autojoin(&self, character: &str, world: &str) -> Option<String> {
+        if !plain_name(character) || !plain_name(world) {
+            return None;
+        }
+        let bytes = std::fs::read(self.0.join(format!("{character}_{world}.ini"))).ok()?;
+        ini_value(
+            &String::from_utf8_lossy(&bytes),
+            "ChatManager",
+            "ChannelAutoJoin",
+        )
+        .map(|list| list.trim().to_owned())
+    }
+
     fn inspect_text(&self, character: &str, world: &str) -> Option<String> {
         if !plain_name(character) || !plain_name(world) {
             return None;
@@ -1286,7 +1343,7 @@ impl OfficialSettings for Unchecked {}
 /// What the official client's `eqclient.ini` says of the options this
 /// client keeps per character; each None when the file or setting is missing
 /// or says neither on nor off.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OfficialOptions {
     /// Whether the chat is logged from login: `Log` in `[Defaults]`, which
     /// the official `/log` saves.
@@ -1302,6 +1359,10 @@ pub struct OfficialOptions {
     /// Whether combat music plays: `CombatMusic` in `[Defaults]` (read
     /// R49-7 c), TRUE when missing.
     pub combat_music: Option<bool>,
+    /// Whether the player's right-click inspects other players:
+    /// `InspectOthers` in `[Defaults]` (read R49-16), on when its first
+    /// letter is t, T or 1 and off otherwise, TRUE when missing.
+    pub inspect_others: Option<bool>,
     /// Whether spell-effect particles play: `ShowSpellEffects` in
     /// `[Defaults]`, or a non-zero `SpellParticleDensity` where that is the
     /// key the installation carries.
@@ -1345,6 +1406,10 @@ pub struct OfficialOptions {
     /// Which players a track list shows: `TrackPlayers` in `[Defaults]`,
     /// TRUE, FALSE or GROUP; only its first letter is read.
     pub track_players: Option<char>,
+    /// The chat server channels joined at login for a character that keeps
+    /// none of its own: `ChannelAutoJoin` in `[Defaults]` (read R49-12 c),
+    /// as written. The program's default is `NONE`.
+    pub channel_autojoin: Option<String>,
 }
 
 /// The `[Defaults]` keys this client takes the official client's Luclin
@@ -1398,6 +1463,8 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         music: ini_value(text, "Defaults", "Music").and_then(|v| v.trim().parse().ok()),
         env_sounds: flag("Defaults", "EnvSounds"),
         combat_music: flag("Defaults", "CombatMusic"),
+        inspect_others: ini_value(text, "Defaults", "InspectOthers")
+            .map(|value| matches!(value.trim().chars().next(), Some('t' | 'T' | '1'))),
         spell_effects: flag("Defaults", "ShowSpellEffects").or_else(|| {
             // Some installations carry the choice as the particles page's
             // density instead; zero density means the same "off".
@@ -1428,6 +1495,8 @@ fn options_from_ini(text: &str) -> OfficialOptions {
             .and_then(|mask| mask.trim().parse().ok()),
         track_players: ini_value(text, "Defaults", "TrackPlayers")
             .and_then(|word| word.trim().chars().next()),
+        channel_autojoin: ini_value(text, "Defaults", "ChannelAutoJoin")
+            .map(|list| list.trim().to_owned()),
     }
 }
 
@@ -2242,6 +2311,25 @@ Log=maybe
         )
         .expect("ini");
         assert_eq!(settings.last_sysinfo_date(), Some(9));
+        // The bug report's question is asked until SendSystemInfo is 1.
+        assert!(!settings.sends_system_info());
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nSendSystemInfo=0\nLastSysInfoDate=9\n",
+        )
+        .expect("ini");
+        assert!(!settings.sends_system_info());
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nSendSystemInfo=1\nLastSysInfoDate=9\n",
+        )
+        .expect("ini");
+        assert!(settings.sends_system_info());
+        assert!(
+            !InstalledClient::Titanium
+                .settings(&root.join("missing"))
+                .sends_system_info()
+        );
         // Ours is kept in our own folder, made where missing, and replaced
         // in place; the installed files are left exactly as they were.
         let official = std::fs::read(install.join("eqclient.ini")).expect("ini");
@@ -2296,6 +2384,21 @@ Log=maybe
     }
 
     #[test]
+    fn eqclient_ini_inspect_others_is_on_by_its_first_letter_and_when_missing() {
+        let read = |value: &str| {
+            options_from_ini(&format!("[Defaults]\nInspectOthers={value}\n")).inspect_others
+        };
+        for on in ["TRUE", "true", "1", "Turnip"] {
+            assert_eq!(read(on), Some(true), "{on}");
+        }
+        for off in ["FALSE", "0", "yes", ""] {
+            assert_eq!(read(off), Some(false), "{off:?}");
+        }
+        // Missing: the client's own default, which is on, stands.
+        assert_eq!(options_from_ini("[Defaults]\n").inspect_others, None);
+    }
+
+    #[test]
     fn eqclient_ini_says_whether_music_ambient_and_combat_music_play() {
         let read = options_from_ini("[Defaults]\nMusic=0\nEnvSounds=FALSE\nCombatMusic=TRUE\n");
         assert_eq!(
@@ -2338,6 +2441,7 @@ LookSpring=1
                 music: None,
                 env_sounds: None,
                 combat_music: None,
+                inspect_others: None,
                 spell_effects: None,
                 pc_names: Some(true),
                 npc_names: Some(false),
@@ -2352,6 +2456,7 @@ LookSpring=1
                 track_sort: None,
                 track_filter: None,
                 track_players: None,
+                channel_autojoin: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
@@ -2361,6 +2466,12 @@ LookSpring=1
         assert_eq!(
             (track.track_sort, track.track_filter, track.track_players),
             (Some("RDISTANCE"), Some(5), Some('G'))
+        );
+        assert_eq!(
+            options_from_ini("[Defaults]\nChannelAutoJoin= general, trade \n")
+                .channel_autojoin
+                .as_deref(),
+            Some("general, trade")
         );
         assert_eq!(
             options_from_ini("[Defaults]\nAttackOnAssist=1\n").attack_on_assist,
@@ -2781,6 +2892,25 @@ LookSpring=1
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(chosen.as_deref(), Some("velious"));
         assert_eq!((unsafe_skin, missing, escaping), (None, None, None));
+    }
+
+    #[test]
+    fn a_characters_autojoin_list_is_read_from_its_own_ini_only() {
+        let install =
+            std::env::temp_dir().join(format!("eq-autojoin-profile-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(
+            install.join("Example_One.ini"),
+            "[ChatManager]\r\nChannelAutoJoin= general, trade \r\n",
+        )
+        .unwrap();
+        let settings = InstalledClient::Titanium.settings(&install);
+        let read = settings.channel_autojoin("Example", "One");
+        let other = settings.channel_autojoin("Example", "Two");
+        let escaping = settings.channel_autojoin("../Example", "One");
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!(read.as_deref(), Some("general, trade"));
+        assert_eq!((other, escaping), (None, None));
     }
 
     #[test]
