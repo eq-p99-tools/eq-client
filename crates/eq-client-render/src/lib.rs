@@ -973,7 +973,7 @@ fn spawn_static_zone(
                 doors::model_key(&model.name),
                 doors::Model {
                     primitives: primitives.clone(),
-                    collision: model.collision,
+                    collision: doors::collision(model.collision, model.no_hit_collision),
                     pick,
                 },
             );
