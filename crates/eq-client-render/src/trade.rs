@@ -78,6 +78,12 @@ pub(crate) enum Chosen {
 }
 
 impl TradeState {
+    /// The spawn a scene click or the Use key asked to use, until taken.
+    #[cfg(test)]
+    pub(crate) fn right_clicked(&self) -> Option<u16> {
+        self.right_clicked.map(|(_, id)| id)
+    }
+
     fn open_loot(
         &mut self,
         online: &mut OnlineState,
@@ -457,12 +463,35 @@ pub(super) fn input(
     if trade.chosen().is_some() && trade.merchant_choice.is_none() {
         trade.merchant_choice = trade.quantity_selection(online.world());
     }
-    let right_clicked =
-        trade.take_right_click(online.world(), settings.0.installed_client, &outbox);
-    // A right-click on a boat goes to the piloting request, which sends
-    // nothing unless the player stands on it (read R35).
-    if let Some(spawn_use::Use::Boat(boat)) = right_clicked {
-        chat.interact_with_boat(boat, None);
+    let inspect_others = options.as_ref().is_none_or(|options| {
+        options
+            .options
+            .get(eq_client_core::options::Toggle::InspectOthers)
+    });
+    let right_clicked = trade.take_right_click(
+        online.world(),
+        settings.0.installed_client,
+        &outbox,
+        inspect_others,
+    );
+    match right_clicked {
+        // A right-click on a boat goes to the piloting request, which sends
+        // nothing unless the player stands on it (read R35).
+        Some(spawn_use::Use::Boat(boat)) => chat.interact_with_boat(boat, None),
+        // A player too far to inspect: the program names them by line
+        // 0x305a (read R49-16).
+        Some(spawn_use::Use::TooFarToInspect(id)) => {
+            if let Some(spawn) = online.world().spawn(id) {
+                let name = eq_client_core::entities::display_name(&spawn.state.name);
+                chat.history.push(super::chat::system_line(messages.said_or(
+                    spawn_use::TOO_FAR_TO_INSPECT,
+                    std::slice::from_ref(&name),
+                    &format!("{name} is too far away to inspect."),
+                )));
+            }
+            return;
+        }
+        _ => (),
     }
     // Only a player in the world trades; the outbox stamps what they ask.
     let (Some(stamp), Some(own_id)) = (

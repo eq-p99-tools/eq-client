@@ -111,6 +111,16 @@ impl CollisionWorld {
         self
     }
 
+    /// Whether this body's origin is in water or lava: the program's deep
+    /// liquid, the origin's region byte +0xad of 5 or more (0x489b0a;
+    /// reads R40 and R49-26). Wading feet with the origin dry are not.
+    #[must_use]
+    pub fn origin_in_liquid(&self, feet: Vec3, height: f32) -> bool {
+        self.liquids
+            .as_ref()
+            .is_some_and(|liquids| liquids.liquid_at(feet + self.swim_probe(height)).is_some())
+    }
+
     fn swim_probe(&self, height: f32) -> Vec3 {
         Vec3::Y * self.swim_origin.unwrap_or(height * 0.5)
     }

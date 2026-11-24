@@ -1375,6 +1375,49 @@ fn a_song_stop_for_this_admission_resets_the_gems_with_no_recast() {
 }
 
 #[test]
+fn only_a_bard_where_the_session_offers_it_refreshes_with_no_recovery() {
+    let refreshed = |class, capabilities: Vec<crate::Capability>| {
+        let mut world = ClientWorld::default();
+        let mut caster = player(9);
+        caster.class = Some(class);
+        caster.memorized_spells[0] = Some(42);
+        let now = Instant::now();
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::Entered {
+                capabilities,
+                choices: Vec::new(),
+                session_id: 1,
+                zone: "qeytoqrg".into(),
+                player: Box::new(caster),
+                far_clip: None,
+                spell_landing_flag: None,
+                zone_id: 0,
+            }),
+            now,
+            &SongFortyTwo,
+        );
+        connection(&mut world, true, false);
+        world.apply(
+            &WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::BarRefresh {
+                slot: 0,
+                spell_id: 42,
+                reduction_ms: 0,
+            })),
+            now,
+            &SongFortyTwo,
+        );
+        world.tick(now, &SongFortyTwo);
+        // Spell 43 is in no gem here: only the shared recovery holds it.
+        world.casting().cooldowns.remaining(43, now)
+    };
+    let offered = vec![crate::Capability::BardRefreshTimers];
+    let recovery = std::time::Duration::from_millis(1500);
+    assert!(refreshed(8, offered.clone()).is_zero());
+    assert_eq!(refreshed(2, offered), recovery);
+    assert_eq!(refreshed(8, Vec::new()), recovery);
+}
+
+#[test]
 fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
     let mut world = admitted();
     game(
@@ -4500,13 +4543,91 @@ fn training_opens_raises_skills_with_a_line_and_closes() {
         WorldEvent::TrainingRefused {
             session_id: 1,
             reason: "No practice points".into(),
-            string_id: None,
+            string_id: Some(0x327d),
             arguments: Vec::new(),
         },
     );
     assert_eq!(
         changes.notices,
-        [Notice::TrainingRefused("No practice points".into())]
+        [Notice::TrainingRefused {
+            reason: "No practice points".into(),
+            string_id: Some(0x327d),
+            arguments: Vec::new(),
+            common_alternate: None,
+        }]
+    );
+}
+
+#[test]
+fn a_mac_language_practice_says_the_programs_line_naming_the_guildmaster_as_shown() {
+    use crate::training::{TrainingOffer, TrainingUpdate};
+    let mut world = trainee_with_skills_and_languages();
+    world.carry_as(crate::GameDialect::EqMac);
+    let mut guildmaster = spawn(42);
+    guildmaster.name = "Guildmaster_Synthetic000".into();
+    game(&mut world, WorldEvent::Spawns(vec![guildmaster]));
+    game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Offered(TrainingOffer {
+            trainer: 42,
+            caps: vec![0; 100],
+            language_caps: vec![201; 26],
+            price_scale: None,
+        })),
+    );
+    for (value, first) in [(1, true), (2, false)] {
+        let changes = game(
+            &mut world,
+            WorldEvent::Training(TrainingUpdate::Trained {
+                skill: 105,
+                value,
+                cost: 0,
+            }),
+        );
+        assert_eq!(
+            changes.notices,
+            [Notice::LanguagePracticed {
+                trainer: "Guildmaster Synthetic".into(),
+                language: 5,
+                first,
+                common_alternate: None,
+            }]
+        );
+    }
+    // The coin refusal names the guildmaster the same way.
+    let changes = game(
+        &mut world,
+        WorldEvent::TrainingRefused {
+            session_id: 1,
+            reason: "own words".into(),
+            string_id: Some(0x2f21),
+            arguments: vec!["Guildmaster_Synthetic000".into()],
+        },
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::TrainingRefused {
+            reason: "own words".into(),
+            string_id: Some(0x2f21),
+            arguments: vec!["Guildmaster Synthetic".into()],
+            common_alternate: None,
+        }]
+    );
+    // A skill practice says only its skill-up.
+    let changes = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Trained {
+            skill: 30,
+            value: 1,
+            cost: 0,
+        }),
+    );
+    assert_eq!(
+        changes.notices,
+        [Notice::SkillUp {
+            skill: 30,
+            value: 1
+        }]
     );
 }
 
@@ -7401,8 +7522,13 @@ fn chat_channel_lines_take_their_slot_from_the_last_joined_list() {
     assert_eq!(listed.notices, []);
     assert_eq!(world.chat_channels(), ["general", "Trade"]);
     assert_eq!(slot_of(&game(&mut world, message("trade"))), Some(2));
+    // The link counts as up from its login until it ends, across zones.
+    assert!(!world.chat_link_up());
+    game(&mut world, WorldEvent::ChannelLink(ChannelLink::Up));
+    assert!(world.chat_link_up());
     // A zone change keeps the list.
     game(&mut world, entered(2));
+    assert!(world.chat_link_up());
     assert_eq!(slot_of(&game(&mut world, message("general"))), Some(1));
     // A lost link says so once and forgets the list.
     let lost = game(
@@ -7413,6 +7539,7 @@ fn chat_channel_lines_take_their_slot_from_the_last_joined_list() {
     );
     assert_eq!(lost.notices, [Notice::Channel(ChannelLine::Lost)]);
     assert_eq!(world.chat_channels().len(), 0);
+    assert!(!world.chat_link_up());
     // A refusal for this admission is told; one for another is not.
     let refused = game(
         &mut world,
@@ -7648,4 +7775,136 @@ fn the_players_own_report_prints_its_amount_then_its_record_line() {
         game(&mut world, reported(1, Hazard::Falling, true)).notices,
         []
     );
+}
+
+#[test]
+fn the_mac_tracking_range_follows_the_zone_type_and_skill() {
+    use super::tracking::eqmac_track_range;
+    // Zone types 1, 2 and 5: skill × 10 + 500.
+    assert!((eqmac_track_range(50, 1) - 1000.0).abs() < f32::EPSILON);
+    assert!((eqmac_track_range(50, 5) - 1000.0).abs() < f32::EPSILON);
+    // Others: skill / 2 + 500, in whole units.
+    assert!((eqmac_track_range(51, 0) - 525.0).abs() < f32::EPSILON);
+    // Above 100 the extra term adds to the same formula.
+    assert!((eqmac_track_range(150, 2) - 2500.0).abs() < f32::EPSILON);
+    assert!((eqmac_track_range(150, 3) - 775.0).abs() < f32::EPSILON);
+}
+
+#[test]
+fn a_mac_tracking_press_lists_the_group_then_the_spawns_in_range() {
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    let mut skills = vec![0; 100];
+    skills[53] = 50;
+    world.player.as_mut().unwrap().skills = Some(skills);
+    // Zone type 0: the range is 50 / 2 + 500 = 525.
+    game(
+        &mut world,
+        WorldEvent::Sky(crate::clock::ZoneSky {
+            sky: 0,
+            time_type: 0,
+            fog: [crate::clock::Fog {
+                color: [0; 3],
+                near: 0.0,
+                far: 0.0,
+            }; 4],
+        }),
+    );
+    let at = |spawn_id, x: f32| {
+        let mut spawn = spawn(spawn_id);
+        spawn.position.x = x;
+        spawn
+    };
+    let mut friend = at(40, 3000.0);
+    friend.kind = SpawnKind::Player;
+    friend.name = "Friend".into();
+    let mut corpse = at(41, 10.0);
+    corpse.kind = SpawnKind::NpcCorpse;
+    let mut untracked = at(42, 10.0);
+    untracked.race = 0x8f;
+    let mut unseen = at(43, 10.0);
+    unseen.invisible = true;
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![
+            friend,
+            corpse,
+            untracked,
+            unseen,
+            at(44, 525.0),
+            at(45, 526.0),
+        ]),
+    );
+    game(
+        &mut world,
+        WorldEvent::Group(crate::group::GroupUpdate::Members {
+            leader: "Example".into(),
+            members: vec!["Friend".into()],
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::AbilityUsed {
+            session_id: 1,
+            ability: crate::abilities::Ability::Tracking,
+            ready_in: std::time::Duration::from_secs(10),
+            string_id: None,
+        },
+    );
+    let window = world.track_window();
+    assert!(window.open);
+    let listed: Vec<_> = window.entries.iter().map(|entry| entry.spawn_id).collect();
+    // The group member at any range first, then the rat (5) at the player's
+    // feet and the spawn at the edge; the corpse, the untracked race, the
+    // invisible spawn and the one beyond the range are left out.
+    assert_eq!(listed, [40, 5, 44]);
+    assert!((window.entries[0].distance - 3000.0).abs() < f32::EPSILON);
+
+    // Titanium's press still waits for the server's list.
+    world.carry_as(crate::GameDialect::Titanium);
+    game(
+        &mut world,
+        WorldEvent::AbilityUsed {
+            session_id: 1,
+            ability: crate::abilities::Ability::Tracking,
+            ready_in: std::time::Duration::from_secs(10),
+            string_id: None,
+        },
+    );
+    assert_eq!(world.track_window().entries, []);
+}
+
+#[test]
+fn a_mac_tracking_press_before_the_zone_type_is_known_takes_the_smaller_range() {
+    let mut world = admitted();
+    world.carry_as(crate::GameDialect::EqMac);
+    let mut skills = vec![0; 100];
+    skills[53] = 50;
+    world.player.as_mut().unwrap().skills = Some(skills);
+    let at = |spawn_id, x: f32| {
+        let mut spawn = spawn(spawn_id);
+        spawn.position.x = x;
+        spawn
+    };
+    // No zone header yet: 50 / 2 + 500 = 525, not 50 × 10 + 500 = 1000.
+    game(
+        &mut world,
+        WorldEvent::Spawns(vec![at(44, 525.0), at(45, 900.0)]),
+    );
+    game(
+        &mut world,
+        WorldEvent::AbilityUsed {
+            session_id: 1,
+            ability: crate::abilities::Ability::Tracking,
+            ready_in: std::time::Duration::from_secs(10),
+            string_id: None,
+        },
+    );
+    let listed: Vec<_> = world
+        .track_window()
+        .entries
+        .iter()
+        .map(|entry| entry.spawn_id)
+        .collect();
+    assert_eq!(listed, [5, 44]);
 }

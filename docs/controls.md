@@ -32,7 +32,7 @@ defaults:
 | Consider | C | C |
 | Duck | D | D |
 | Sit/stand toggle | Ctrl+S | Ctrl+S |
-| Use nearby door/object | U | U |
+| Use what is at the centre of the view | U | U |
 | Inventory / spellbook | I / Ctrl+B | I / Ctrl+B |
 | Target self / next | F1 / Tab | F1 / Tab |
 | Spell gems / hotbuttons | Alt+1…8 / 1…0 | Alt+1…8 / 1…0 |
@@ -71,10 +71,26 @@ considered through the normal session command. This keeps the current target.
 The server still checks each requested action; an unread interaction radius
 is left to its existing checks.
 
+On Titanium, a right-click on another player then also inspects them, as the
+original does (reads R49-16 and R49-16e, checklist 6.644). This happens when
+[Inspect Others](settings.md#inspect-others) is on and nothing is on your
+cursor. A player 20 or more away is not inspected; the original's line names
+them instead. Right-clicking yourself inspects you, with no consider. The
+Mac-era and RoF2 programs are unread there, so on them a right-click only
+considers, as before.
+
 Double-click a visible door with the left button to use it within reach.
-Two clicks must land on the same door. The Use key still finds a door or
-object near the character. The double-click itself, its 500 ms window and
-its 4-pixel slop are inferred (recording checklist 6.385).
+Two clicks must land on the same door. The double-click itself, its 500 ms
+window and its 4-pixel slop are inferred (recording checklist 6.385).
+
+The Use key casts the program's ray through the centre of the 3D view (read
+R49-19): it targets the first character there, and uses an NPC as a right
+click does; with no character there, it clicks a door on that ray at the
+point it meets it; otherwise it does nothing. It never reaches an item on
+the ground or a world container, which open by their own click. The quality-of-life
+setting Use Picks Nearest, off by default, keeps the older rule instead: the
+nearest door or object within reach, wherever you face. EQMac keeps the
+nearest rule until its key is read.
 
 ## Pets
 

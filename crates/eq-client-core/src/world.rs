@@ -220,6 +220,16 @@ enum NpcConsider {
     ClassicLevel,
 }
 
+/// The chat server link as the session told it.
+#[derive(Clone, Copy, Debug, Default)]
+struct ChatLinkState {
+    /// How many times a link has taken the login, so the autojoin goes once
+    /// for each (read R49-12 c, checklist 6.616).
+    logins: u64,
+    /// Whether a link has taken the login and not ended since.
+    up: bool,
+}
+
 /// What the server has told the client, kept by one writer. Its fields go
 /// in order of how long they last: the connection's, the admission's, the
 /// character's, and the zone's, which leaving the zone forgets in one step.
@@ -358,6 +368,8 @@ pub struct ClientWorld {
     /// chat server's last list named them; kept across zones until the link
     /// ends or the character leaves the world.
     chat_channels: Vec<String>,
+    /// The chat server link's logins taken, and whether one is up.
+    chat_link: ChatLinkState,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -662,6 +674,20 @@ impl ClientWorld {
     /// first is `/1`.
     pub fn chat_channels(&self) -> &[String] {
         &self.chat_channels
+    }
+
+    /// How many times a chat server link has taken the login: a change says
+    /// a link has just come up.
+    #[must_use]
+    pub const fn chat_links_up(&self) -> u64 {
+        self.chat_link.logins
+    }
+
+    /// Whether a chat server link is up: it has taken the login and not
+    /// ended since.
+    #[must_use]
+    pub const fn chat_link_up(&self) -> bool {
+        self.chat_link.up
     }
 
     /// Puts away the received equipment report.
@@ -1598,8 +1624,12 @@ impl ClientWorld {
             // The chat server's channels (recording checklist 6.509).
             WorldEvent::Channel(event) => self.channel_event(event, news),
             WorldEvent::ChannelLink(link) => match link {
-                eq_network_game::chat_server::ChannelLink::Up => {}
+                eq_network_game::chat_server::ChannelLink::Up => {
+                    self.chat_link.logins = self.chat_link.logins.wrapping_add(1);
+                    self.chat_link.up = true;
+                }
                 eq_network_game::chat_server::ChannelLink::Lost { .. } => {
+                    self.chat_link.up = false;
                     self.chat_channels.clear();
                     news.notices.push(Notice::Channel(ChannelLine::Lost));
                 }
@@ -1956,14 +1986,31 @@ impl ClientWorld {
             }
             // Training at a guildmaster, and the practice points it spends.
             WorldEvent::Training(update) => self.training_news(update, news),
-            // The program's own words (`string_id`, `arguments`) are the
-            // language-training client half's (6.597); this keeps the
-            // library's words, as before.
             WorldEvent::TrainingRefused {
-                session_id, reason, ..
+                session_id,
+                reason,
+                string_id,
+                arguments,
             } => {
                 if self.session_id == Some(*session_id) {
-                    news.notices.push(Notice::TrainingRefused(reason.clone()));
+                    // The coin line (0x2f21) names the guildmaster, shown
+                    // as the program shows a spawn's name.
+                    let arguments = if *string_id == Some(0x2f21) {
+                        arguments
+                            .iter()
+                            .map(|name| crate::entities::display_name(name))
+                            .collect()
+                    } else {
+                        arguments.clone()
+                    };
+                    news.notices.push(Notice::TrainingRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                        arguments,
+                        common_alternate: self
+                            .language_zero_selector
+                            .map(crate::rules::LanguageZeroSelector::alternate_name),
+                    });
                 } else {
                     news.ignored = true;
                 }
@@ -2391,6 +2438,7 @@ impl ClientWorld {
                 self.connected = false;
                 // A camp ends the chat server link.
                 self.chat_channels.clear();
+                self.chat_link.up = false;
             }
             Reset::Lost {
                 ended,
@@ -2424,6 +2472,7 @@ impl ClientWorld {
             self.pending_transfer = None;
             self.inventory = Inventory::default();
             self.chat_channels.clear();
+            self.chat_link.up = false;
             self.forget_zone();
         }
     }
