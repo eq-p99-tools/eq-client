@@ -274,6 +274,27 @@ pub(crate) fn capture(
 mod tests {
     use super::*;
 
+    #[test]
+    fn fullscreen_has_an_editable_saved_desktop_binding() {
+        for client in [
+            eq_client_assets::ui::InstalledClient::Titanium,
+            eq_client_assets::ui::InstalledClient::EqMac,
+            eq_client_assets::ui::InstalledClient::Rof2,
+        ] {
+            let mut map = KeyMap::for_client(client);
+            assert_eq!(map.label(Act::Fullscreen), "Alt+Enter");
+            map.assign(
+                Assignment {
+                    act: Act::Fullscreen,
+                    slot: 0,
+                },
+                Some(Chord::key(KeyCode::F11)),
+            );
+            let read = KeyMap::read(&map.text(), KeyMap::for_client(client)).unwrap();
+            assert_eq!(read.label(Act::Fullscreen), "F11");
+        }
+    }
+
     fn cell() -> Assignment {
         Assignment {
             act: Act::FreeCamera,

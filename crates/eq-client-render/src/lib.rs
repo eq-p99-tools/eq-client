@@ -147,6 +147,7 @@ mod water;
 mod weather;
 mod whereabouts;
 mod who;
+mod window_mode;
 mod window_size;
 mod windows;
 mod zone;
