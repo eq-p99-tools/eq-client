@@ -7,6 +7,23 @@
   - **Returns:** a door spawned away from its rest goes back its delay after spawn, even while still opening. With rest 1 it heads for the open end it already has, so nothing visible changes. A door spawned shut or in state 3 with rest 0 no longer goes back. Types 110-152 but 115 close as soon as a vertical one stands open.
   - **Hinge speed:** a hinged door swings at the program's 8 a step of ms x 0.02, a quarter turn in 0.8 s (was half a turn a second, faster than the program). A script walk waits 1.8 s for a door's swing (was 1.5 s).
   - Not built, as gap rows: a door entity first drawn after its spawn is posed at its target at once, not at the swing it would have reached (at most 0.8 s). The rest are listed in eq-network #450.
+- A slash word with no command now gets the Titanium program's line 0x305c
+  (colour 0xd) instead of passing over silently (read R49-33 a, checklist
+  6.634), from the keyboard, a hotbutton, a social or a script's `slash`
+  step alike. A game master's command typed by a player who isn't one gets
+  the same line, as the program's search stops there. For a GM the program
+  runs it; those handlers aren't built here, so it still passes over
+  silently [I], and a GM's `#` line reaches the server. The command table
+  was checked against the program's table row by row (read R49-33e): same
+  names, order, game master rows and shared handlers, and no row has an
+  alias, so no prefix changes. Mac-era and RoF2 sessions stay silent, as
+  their program's answer is unread. Line 0x21a (a command run in character
+  states 3 or 4) waits on a read and isn't built.
+- A gem cast short of mana goes to the server, as the Titanium program's
+  does: it compares no mana before it sends the cast, and never prints the
+  low-mana line itself (read R49-34 g, slice G, G5). Before, this client
+  refused it locally with line 199. The server's answer prints as it
+  arrives, in whatever words it uses, and ends the cast's hold.
 - `/guildstatus` answers on the Mac-era client as its program does (checklist 6.623, TAKP program read 6.575m: 0x4f4bb1 and 0x52f36b). It is local only and sends nothing. It uses the same string ids as Titanium's, colour 0x111:
   - Unlike Titanium, it answers for any spawn but a corpse, so an NPC is answered (usually as not in a guild).
   - The line for a rank past the three (12259, 0x2fe3) also names the guild.
@@ -46,8 +63,8 @@
   still left to the server, as only spells with the record's +0x1fc byte
   clear need standing and that byte isn't mapped; the same byte holds back
   0xd4 (a song while lying). The global recast the click also tests isn't
-  kept here. The local mana check stays for now: the program has none
-  (read R49-34 g), and dropping it is with the reviewer.
+  kept here. The program has no local mana check (read R49-34 g); the G5
+  entry above takes this client's out.
 - Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). It needs eq-network's #418 cold report and #424's event saves, which main's eq-network pin already carries, so it has no repin of its own.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.
