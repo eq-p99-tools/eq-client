@@ -297,8 +297,7 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
             _ => None,
         };
     }
-    // The skin keeps Switch to Windowed under Switch to Fullscreen; the
-    // client runs in a window.
+    // The skin overlaps its two mode buttons; the keyboard action switches modes.
     if owner == WindowId::Options && id == "ODP_SetWindowedButton" {
         return None;
     }

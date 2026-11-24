@@ -95,6 +95,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::menu::Menu>()
         .init_resource::<keys::Typing>()
         .init_resource::<keys::presses::Presses>()
+        .init_resource::<crate::window_mode::Windowed>()
         .init_resource::<character_create::Editor>()
         .init_resource::<training::Chosen>()
         .init_resource::<raid::RaidChoice>()
@@ -167,8 +168,12 @@ pub(super) fn schedule(app: &mut App) {
                 .chain()
                 .in_set(Stage::Scene),
             (
-                keys::bindings::persist,
-                keys::bindings::capture,
+                (
+                    keys::bindings::persist,
+                    keys::bindings::capture,
+                    crate::window_mode::input,
+                )
+                    .chain(),
                 login::claim,
                 character_create::claim,
                 character_create::input,
