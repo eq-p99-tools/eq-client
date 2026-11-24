@@ -9,7 +9,7 @@ use std::time::Duration;
 pub(super) const DEFAULT_RUNTIME: Duration = Duration::from_mins(15);
 /// The longest timed run the player can ask for: one day.
 pub const MAX_MINUTES: u16 = 1440;
-/// The timed lengths the workbench's selector steps through, in minutes.
+/// The timed lengths offered by the workbench, in minutes.
 const OFFERED_MINUTES: [u16; 6] = [30, 60, 120, 240, 480, MAX_MINUTES];
 
 /// A run's length, the player's choice.
@@ -27,6 +27,22 @@ pub enum RunLength {
 }
 
 impl RunLength {
+    /// The workbench's choices, including a custom length from the command line.
+    #[must_use]
+    pub(crate) fn choices(self) -> Vec<Self> {
+        let mut minutes = OFFERED_MINUTES.to_vec();
+        if let Self::Minutes(custom) = self
+            && !minutes.contains(&custom)
+        {
+            minutes.push(custom);
+            minutes.sort_unstable();
+        }
+        std::iter::once(Self::Default)
+            .chain(minutes.into_iter().map(Self::Minutes))
+            .chain(std::iter::once(Self::Unlimited))
+            .collect()
+    }
+
     /// Reads `default`, `none` or a number of minutes, as
     /// `--script-run-length` takes them.
     ///
@@ -65,8 +81,8 @@ impl RunLength {
         matches!(self, Self::Default)
     }
 
-    /// The next choice on the workbench's selector: the default, then each
-    /// offered time, then no limit, then the default again.
+    /// The next standard length: the default, then each offered time, then
+    /// no limit, then the default again.
     #[must_use]
     pub fn next(self) -> Self {
         match self {
