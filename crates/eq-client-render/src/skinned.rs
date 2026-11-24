@@ -2260,6 +2260,10 @@ fn training_label(owner: WindowId, name: &str) -> Option<Shows> {
 
 /// A label: fixed text, or what its number says it shows; a bag's window
 /// names its bag.
+#[allow(
+    clippy::too_many_lines,
+    reason = "Keep the skin label's mutually exclusive roles together"
+)]
 fn label(
     window: &mut ChildSpawnerCommands,
     name: &str,
@@ -2363,7 +2367,15 @@ fn label(
             aligned_in(window, node, label.align, (text, Shows::Trader), geometry);
         }
         (None, None) if let Some(shows) = named => {
-            aligned_in(window, node, label.align, (text, shows), geometry);
+            // A book name's authored top follows its icon. Some skins give
+            // individual rows taller text boxes even when NoWrap is set;
+            // centering in those boxes shifts only those names down a row.
+            let vertical = if matches!(shows, Shows::BookName(_)) && !label.wraps {
+                AlignItems::FlexStart
+            } else {
+                AlignItems::Center
+            };
+            aligned_vertically(window, node, label.align, (text, shows), geometry, vertical);
         }
         (None, None) if let Some(reported) = reported => {
             aligned_in(window, node, label.align, (text, reported), geometry);
@@ -2472,20 +2484,30 @@ pub(crate) fn aligned(
 
 fn aligned_in(
     window: &mut ChildSpawnerCommands,
+    node: Node,
+    align: Align,
+    text: impl Bundle,
+    geometry: Option<reflow::Geometry>,
+) {
+    aligned_vertically(window, node, align, text, geometry, AlignItems::Center);
+}
+
+fn aligned_vertically(
+    window: &mut ChildSpawnerCommands,
     mut node: Node,
     align: Align,
     text: impl Bundle,
     geometry: Option<reflow::Geometry>,
+    vertical: AlignItems,
 ) {
     node.justify_content = match align {
         Align::Left => JustifyContent::FlexStart,
         Align::Center => JustifyContent::Center,
         Align::Right => JustifyContent::FlexEnd,
     };
-    // The one line sits in the middle of the box's height, so a box taller
-    // than its text, such as a gem's name row, doesn't leave it at the top
-    // (inferred, recording item 6.220).
-    node.align_items = AlignItems::Center;
+    // Ordinary labels, including gem names, center in their own boxes.
+    // Spellbook names instead follow their authored row tops.
+    node.align_items = vertical;
     node.overflow = Overflow::clip();
     let mut drawn = window.spawn(node);
     if let Some(geometry) = geometry {
@@ -3640,6 +3662,109 @@ mod tests {
             Some(Shows::BookPage(true))
         );
         assert_eq!(window_label(book, "SBW_SpellName16"), None);
+    }
+
+    #[test]
+    fn unwrapped_book_names_keep_their_row_top_without_changing_other_label_boxes() {
+        let mut app = App::new();
+        app.add_systems(Update, |mut commands: Commands| {
+            let inside = Area {
+                x: 0.0,
+                y: 0.0,
+                width: 370.0,
+                height: 221.0,
+            };
+            commands.spawn(Node::default()).with_children(|window| {
+                // Velious and rustle2 give only the third left row 32px.
+                for (place, x, y, height, wraps) in [
+                    (1, 34.0, 38.0, 16.0, false),
+                    (2, 34.0, 59.0, 32.0, false),
+                    (3, 34.0, 80.0, 16.0, false),
+                    (10, 214.0, 59.0, 16.0, false),
+                    // Wrapped default/default_old names retain their policy.
+                    (11, 214.0, 80.0, 32.0, true),
+                ] {
+                    let name = format!("SBW_SpellName{place}");
+                    label(
+                        window,
+                        &name,
+                        &Label {
+                            area: Area {
+                                x,
+                                y,
+                                width: 148.0,
+                                height,
+                            },
+                            anchors: None,
+                            eq_type: None,
+                            text: String::new(),
+                            color: None,
+                            align: Align::Left,
+                            font: Some(2),
+                            wraps,
+                        },
+                        &inside,
+                        WindowId::Spellbook,
+                    );
+                }
+                label(
+                    window,
+                    "CSPW_Spell0_Name",
+                    &Label {
+                        area: Area {
+                            x: 25.0,
+                            y: 15.0,
+                            width: 95.0,
+                            height: 23.0,
+                        },
+                        anchors: None,
+                        eq_type: Some(60),
+                        text: String::new(),
+                        color: None,
+                        align: Align::Center,
+                        font: Some(1),
+                        wraps: true,
+                    },
+                    &inside,
+                    WindowId::Spells,
+                );
+            });
+        });
+        app.update();
+        let mut query = app.world_mut().query::<(&Shows, &ChildOf)>();
+        let mut count = 0;
+        for (shows, parent) in query.iter(app.world()) {
+            let node = app.world().get::<Node>(parent.parent()).unwrap();
+            match shows {
+                Shows::BookName(place) => {
+                    let (x, y, height, vertical) = match place {
+                        1 => (34.0, 38.0, 16.0, AlignItems::FlexStart),
+                        2 => (34.0, 59.0, 32.0, AlignItems::FlexStart),
+                        3 => (34.0, 80.0, 16.0, AlignItems::FlexStart),
+                        10 => (214.0, 59.0, 16.0, AlignItems::FlexStart),
+                        11 => (214.0, 80.0, 32.0, AlignItems::Center),
+                        _ => unreachable!(),
+                    };
+                    assert_eq!(
+                        (node.left, node.top, node.width, node.height),
+                        (px(x), px(y), px(148), px(height))
+                    );
+                    assert_eq!(node.align_items, vertical);
+                    assert_eq!(node.justify_content, JustifyContent::FlexStart);
+                }
+                Shows::GemName(0) => {
+                    assert_eq!(
+                        (node.left, node.top, node.width, node.height),
+                        (px(25), px(15), px(95), px(23))
+                    );
+                    assert_eq!(node.align_items, AlignItems::Center);
+                    assert_eq!(node.justify_content, JustifyContent::Center);
+                }
+                _ => unreachable!(),
+            }
+            count += 1;
+        }
+        assert_eq!(count, 6);
     }
 
     /// The item display's icon boxes drawn for an icon button at `area`

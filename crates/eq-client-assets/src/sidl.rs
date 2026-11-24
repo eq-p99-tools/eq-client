@@ -439,8 +439,8 @@ pub struct SpellGem {
     pub background: Option<Piece>,
     /// Over the gem while it is under the pointer.
     pub highlight: Option<Piece>,
-    /// Where the spell's gem icon sits in the gem (`SpellIconOffset`), if
-    /// the skin says.
+    /// Where the spell's gem icon sits in the gem (`SpellIconOffset` or
+    /// `SpellIconOffsetX`/`SpellIconOffsetY`), if the skin says.
     pub icon_offset: Option<(f32, f32)>,
     /// The skin's gem icons (`A_SpellGems`), if it has them.
     pub icons: Option<IconGrid>,
@@ -1056,7 +1056,13 @@ impl Library {
             background: part("Background"),
             highlight: part("Highlight"),
             icon_offset: child(node, "SpellIconOffset")
-                .and_then(|at| Some((number(at, "X")?, number(at, "Y")?))),
+                .and_then(|at| Some((number(at, "X")?, number(at, "Y")?)))
+                .or_else(|| {
+                    Some((
+                        number(node, "SpellIconOffsetX")?,
+                        number(node, "SpellIconOffsetY")?,
+                    ))
+                }),
             icons: self.grids.get("A_SpellGems").cloned(),
         }
     }
@@ -2110,6 +2116,25 @@ mod tests {
                 Some(([0.0, 0.0, 40.0, 40.0], false)),
             ]
         );
+    }
+
+    #[test]
+    fn a_wide_spell_gem_keeps_the_skins_scalar_icon_offset() {
+        let window = r#"<XML>
+            <SpellGem item="Gem0"><ScreenID>CSPW_Spell0</ScreenID>
+                <Location><X>1</X><Y>15</Y></Location>
+                <Size><CX>120</CX><CY>23</CY></Size>
+                <SpellIconOffsetX>5</SpellIconOffsetX>
+                <SpellIconOffsetY>0</SpellIconOffsetY>
+            </SpellGem>
+            <Screen item="Gems"><Pieces>Gem0</Pieces></Screen></XML>"#;
+        let library = Library::parse("<XML/>", "<XML/>").unwrap();
+        let screen = library.screen(window, "Gems").unwrap();
+        let Element::SpellGem(gem) = &screen.pieces[0].1 else {
+            panic!("a gem")
+        };
+        assert_eq!(gem.icon_offset, Some((5.0, 0.0)));
+        assert_eq!((gem.area.width, gem.area.height), (120.0, 23.0));
     }
 
     #[test]
