@@ -643,9 +643,11 @@ pub(super) fn actions(
         _ => None,
     });
     if let Some(gem) = gem {
-        // A gem click while singing also clears the melody (0x47e8e0, read
-        // R49-33 c), the user's and a script's alike.
-        if forget.is_none() && online.world().casting().singing.is_some() {
+        // A left click clears the melody before its cast, whatever comes of
+        // it (0x4eccc6, read R49-34 d); a key press clears it while singing
+        // (0x4ecb56's song stop, read R49-33 c). The user's and a script's
+        // alike.
+        if forget.is_none() && (clicked.is_some() || online.world().casting().singing.is_some()) {
             online.clear_melody();
         }
         press_gem(
