@@ -561,11 +561,11 @@ recording checklist 6.511), in the installation's own lines:
     answer still sends what the box holds, as the official client does.
   - A second Send while the question is up does nothing (a departure: the
     official client would ask again in a second dialog).
-  - If the session the question was asked in ends, the question goes away
-    and nothing is sent. After a disconnect or `/quit` the official client
-    cannot send either. After a camp it still sends the report as a No
-    before it logs out; this client does not (a departure), and what it
-    does on zoning is unread.
+  - If you leave the world while the question is up (zoning, camping, a
+    disconnect, `/quit`), the question goes away and nothing is sent, as
+    with the official client. The official client then still clears the
+    box and prints its sent line; this client keeps the words and prints
+    no sent line for a report that never went (a departure).
   - The feedback window's **Send** sends the words with your place and
     heading, clears the box and closes, with no line; empty, it only
     closes. Its **Cancel** clears the box and closes.

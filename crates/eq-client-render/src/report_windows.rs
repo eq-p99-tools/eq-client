@@ -302,21 +302,15 @@ enum Outcome {
 /// session it was asked in has ended.
 ///
 /// The program closes every question at once in a sweep (0x548256, from
-/// 0x437bcd), answering as No, so the report still goes (read R49-52d).
-/// The sweep runs on a UI reload, a change of screen size or display mode,
-/// and as the in-zone loop ends (0x4acf33):
-/// - after a camp, while the connection is still open, before the logout,
-///   so the program still sends the report there;
-/// - after a server drop or a `/quit`, with the connection already gone, so
-///   nothing can go;
-/// - on zoning, where the old connection's close against the sweep is
-///   unread.
-///
+/// 0x437bcd), answering as No (reads R49-52d, R49-52e). On every way out of
+/// the world (zoning, a camp, a server drop, `/quit`) the old connection
+/// is already closed when the sweep runs, so the report is lost, though
+/// the program still clears the words and says its sent line 0x22ae.
 /// This client takes the question back unanswered when the session it was
-/// asked in ends, by any of these, so nothing goes to a later session. For
-/// a drop or a quit that is the program's result. For a camp it is a
-/// departure, labelled: this client's camp ends inside the session, which
-/// logs out before the window can answer. For zoning it is inferred.
+/// asked in ends, so nothing goes either; it keeps the words and says no
+/// sent line for a report that never went (a departure, labelled). The
+/// program's other sweeps (a UI reload, a change of screen size or display
+/// mode) have no counterpart here, so the question stays up.
 fn outcome(
     deadline: std::time::Duration,
     now: std::time::Duration,
