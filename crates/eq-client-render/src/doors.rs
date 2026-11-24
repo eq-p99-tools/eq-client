@@ -1,7 +1,8 @@
 //! Local-model presentation of server-defined doors. Door actions remain separate from placement.
 use bevy::prelude::*;
+use eq_client_core::doors::{DoorRadius, titanium::rider_reach};
 use eq_client_core::movement::CollisionMesh;
-use eq_client_core::{GameDialect, doors::Door};
+use eq_client_core::{ClientCommand, GameDialect, doors::Door};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -15,6 +16,27 @@ pub(super) struct Model {
     pub primitives: Primitives,
     pub collision: Vec<[[f32; 3]; 3]>,
     pub pick: Vec<PickMesh>,
+    /// The model's radius at size 100, which measures a lift's riders
+    /// ([`rider_radius`]); None for a model with no geometry.
+    pub radius: Option<f32>,
+}
+
+/// A door model's radius at size 100: its WLD sprite's authored bounding
+/// radius where the archive gives one (read R49-28c/d: the program's is
+/// its door actor's definition radius, and that these fields are that
+/// radius is inferred), else the farthest point of its solid triangles from
+/// its origin, as for an EQG model, which the reads don't cover.
+pub(super) fn model_radius(authored: Option<f32>, collision: &[[[f32; 3]; 3]]) -> Option<f32> {
+    authored.or_else(|| {
+        Some(
+            collision
+                .iter()
+                .flatten()
+                .map(|point| Vec3::from_array(*point).length())
+                .fold(0.0, f32::max),
+        )
+        .filter(|radius| *radius > 0.0)
+    })
 }
 
 /// A door's solid triangles from its model's: the faces a placement of
@@ -249,27 +271,88 @@ fn rise(lift: Option<f32>) -> Vec3 {
 }
 
 /// Where each Titanium lift the player may ride stands and how near the
-/// player must be for its motion to sweep them onto its floor: the door
-/// model's radius, scaled, plus the player's 10 and 200 (0x4368b3; the
-/// model's radius is inferred from its geometry, recording checklist 6.426).
+/// player must be for its motion to sweep them onto its floor: the player's
+/// 10, the door's [`rider_radius`] and 200 (0x4368b3, read R49-28 (b),
+/// recording checklist 6.426). The session measures by the same radius,
+/// which [`report_radii`] gives it.
 #[derive(Resource, Default)]
 pub(crate) struct LiftReach(pub BTreeMap<u8, (Vec3, f32)>);
 
-/// The radius of a door model at its size: the farthest point of its solid
-/// geometry from its origin; the program's 100 where it has none.
-fn reach_of(model: Option<&Model>, size: u16) -> f32 {
-    let radius = model
-        .map(|model| {
-            model
-                .collision
-                .iter()
-                .flatten()
-                .map(|point| Vec3::from_array(*point).length())
-                .fold(0.0, f32::max)
+/// How far from a door the program carries its riders: the door actor's
+/// radius times its scale times its model's own scale (reads R49-28 (b),
+/// R49-28c and R49-28d), or 100 with no actor. The model's radius is
+/// [`model_radius`]; its own scale (model +0x60) is unread and taken as 1,
+/// inferred.
+pub(super) fn rider_radius(model: Option<&Model>, door: &Door) -> f32 {
+    model
+        .and_then(|model| model.radius)
+        .map_or(100.0, |radius| radius * rider_scale(door))
+}
+
+/// A door actor's scale (0x48f826): its size over 100, a size of 0, below 0
+/// or 255 counting as 100. Open types 50 and 54, and 57 standing at its
+/// base, are built at scale 1 (actor virtual +0x18(1), read R49-28 (b)); a
+/// door is taken to stand at its base, as at spawn, inferred.
+fn rider_scale(door: &Door) -> f32 {
+    if matches!(door.open_type, 50 | 54 | 57) {
+        return 1.0;
+    }
+    match door.size.cast_signed() {
+        size if size <= 0 || size == 255 => 1.0,
+        size => f32::from(size) / 100.0,
+    }
+}
+
+/// Each door's [`rider_radius`] where its model is loaded, by door ID, as
+/// the session's lift carry takes it (`DoorRadii`).
+fn radii(doors: &eq_client_core::doors::DoorTable, models: &Models) -> Vec<DoorRadius> {
+    doors
+        .entries()
+        .values()
+        .filter_map(|door| {
+            let model = models.0.get(&model_key(&door.model))?;
+            model.radius?;
+            Some(DoorRadius {
+                door_id: door.id,
+                model: door.model.clone(),
+                radius: rider_radius(Some(model), door),
+            })
         })
-        .filter(|radius| *radius > 0.0)
-        .map_or(100.0, |radius| radius * f32::from(size) / 100.0);
-    10.0 + radius + 200.0
+        .collect()
+}
+
+/// Tells the session each door's rider radius, so that its lift carry and
+/// this client's agree on who rides: at each admission, and whenever the
+/// doors or their models change. A door the list leaves out keeps the
+/// program's no-actor reach on both sides.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn report_radii(
+    state: Res<super::online::OnlineState>,
+    models: Option<Res<Models>>,
+    outbox: Res<crate::outbox::Outbox>,
+    mut sent: Local<Option<(u64, Vec<DoorRadius>)>>,
+) {
+    let (Some(session), Some(models)) = (state.world().session_id(), models) else {
+        return;
+    };
+    let current = radii(state.world().doors(), &models);
+    let told = sent
+        .as_ref()
+        .filter(|(admission, _)| *admission == session)
+        .map_or(&[][..], |(_, told)| told.as_slice());
+    if current == told {
+        return;
+    }
+    let radii = current.clone();
+    if outbox
+        .try_post(state.world(), |stamp| ClientCommand::DoorRadii {
+            session_id: stamp.session_id,
+            radii,
+        })
+        .is_ok()
+    {
+        *sent = Some((session, current));
+    }
 }
 
 /// How far each drawn hinged door has swung toward its open pose, from 0
@@ -572,7 +655,10 @@ pub(super) fn reconcile(
                 let model = models.as_ref().and_then(|models| models.0.get(&door.model));
                 reach.0.insert(
                     door.id,
-                    (next.translation, reach_of(model, definition.size)),
+                    (
+                        next.translation,
+                        rider_reach(rider_radius(model, definition)),
+                    ),
                 );
             }
         }
@@ -611,7 +697,10 @@ pub(super) fn reconcile(
         if rideable(id) {
             reach.0.insert(
                 id,
-                (transform.translation, reach_of(Some(model), door.size)),
+                (
+                    transform.translation,
+                    rider_reach(rider_radius(Some(model), door)),
+                ),
             );
         }
         commands
@@ -645,6 +734,93 @@ pub(super) fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn model_with_radius(radius: Option<f32>) -> Model {
+        Model {
+            primitives: Vec::new(),
+            collision: Vec::new(),
+            pick: Vec::new(),
+            radius,
+        }
+    }
+
+    #[test]
+    fn a_door_model_measures_its_riders_by_its_authored_radius() {
+        let far = [[[0.0, 0.0, 0.0], [30.0, 0.0, 0.0], [0.0, 40.0, 0.0]]];
+        // The sprite's own radius wins over the geometry's 40.
+        assert_eq!(model_radius(Some(7.5), &far), Some(7.5));
+        // Without one, as an EQG model, the farthest solid point.
+        assert_eq!(model_radius(None, &far), Some(40.0));
+        assert_eq!(model_radius(None, &[]), None);
+    }
+
+    #[test]
+    fn a_doors_rider_radius_takes_the_programs_scale() {
+        let mut door = sliding_door();
+        door.open_type = 59;
+        let model = model_with_radius(Some(20.0));
+        let radius = |door: &Door| rider_radius(Some(&model), door);
+        door.size = 150;
+        assert!((radius(&door) - 30.0).abs() < 1e-4);
+        // A size of 0, 255 or below 0 counts as 100 (0x48f826).
+        for size in [0, 255, 0x8000, 0xffff] {
+            door.size = size;
+            assert_eq!(radius(&door), 20.0, "{size}");
+        }
+        // Types 50 and 54, and 57 at its base, are built at scale 1.
+        door.size = 300;
+        for open_type in [50, 54, 57] {
+            door.open_type = open_type;
+            assert_eq!(radius(&door), 20.0, "{open_type}");
+        }
+        door.open_type = 53;
+        assert!((radius(&door) - 60.0).abs() < 1e-4);
+        // With no model drawn, or one without geometry, the program's 100.
+        assert_eq!(rider_radius(None, &door), 100.0);
+        assert_eq!(rider_radius(Some(&model_with_radius(None)), &door), 100.0);
+        assert_eq!(rider_reach(rider_radius(None, &door)), 310.0);
+    }
+
+    #[test]
+    fn the_session_hears_the_rider_radius_its_lifts_measure_by() {
+        let mut state = super::super::online::OnlineState::new(true);
+        crate::online::testing::enter(&mut state, 3, crate::online::testing::player(1), None);
+        let mut bytes = [0u8; 80];
+        bytes[..4].copy_from_slice(b"TEST");
+        bytes[52] = 150;
+        let update = eq_client_core::doors::decode(0x4c24, &bytes)
+            .unwrap()
+            .unwrap();
+        crate::online::testing::doors(&mut state, &update, std::time::Instant::now());
+        let mut models = Models::default();
+        models.0.insert("TEST".into(), model_with_radius(Some(8.0)));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(models)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, report_radii);
+        app.update();
+        let expected = |radius| ClientCommand::DoorRadii {
+            session_id: 3,
+            radii: vec![DoorRadius {
+                door_id: 0,
+                model: "TEST".into(),
+                radius,
+            }],
+        };
+        assert_eq!(receiver.try_recv().unwrap(), expected(12.0));
+        // Once for a list that doesn't change.
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        // Again when a model's radius does.
+        app.world_mut()
+            .resource_mut::<Models>()
+            .0
+            .insert("TEST".into(), model_with_radius(Some(10.0)));
+        app.update();
+        assert_eq!(receiver.try_recv().unwrap(), expected(15.0));
+    }
     #[test]
     fn door_collision_follows_the_visible_hinge_pose() {
         use eq_client_core::movement::CollisionWorld;
@@ -655,6 +831,7 @@ mod tests {
                 [[0.0, 0.0, 0.0], [4.0, 10.0, 0.0], [0.0, 10.0, 0.0]],
             ],
             pick: Vec::new(),
+            radius: None,
         };
         let mut world = CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
@@ -698,6 +875,7 @@ mod tests {
             collision: Vec::new(),
             no_hit_collision: Vec::new(),
             vertex_count: None,
+            radius: None,
         };
         let mut models = Models::default();
         models.0.insert(
@@ -706,6 +884,7 @@ mod tests {
                 primitives: Vec::new(),
                 collision: Vec::new(),
                 pick: PickMesh::from_model(&source),
+                radius: None,
             },
         );
         let mut definition = sliding_door();
@@ -808,6 +987,7 @@ mod tests {
                     indices: vec![0, 1, 2],
                     double_sided: true,
                 }],
+                radius: None,
             },
         )]));
         let terrain =
@@ -1021,6 +1201,7 @@ mod tests {
                     [[-10.0, 0.5, -10.0], [10.0, 0.5, 10.0], [-10.0, 0.5, 10.0]],
                 ],
                 pick: Vec::new(),
+                radius: None,
             },
         );
         let mut app = App::new();

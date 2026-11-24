@@ -2,7 +2,7 @@
 //! the motion and returns that clients do on their own.
 use crate::{GameDialect, WorldPosition};
 pub use eq_network_game::doors::titanium::{Slide, Solidity, Vertical};
-pub use eq_network_game::doors::{Door, DoorUpdate, Doors, decode, eqmac, titanium};
+pub use eq_network_game::doors::{Door, DoorRadius, DoorUpdate, Doors, decode, eqmac, titanium};
 use std::collections::BTreeMap;
 use std::time::Instant;
 

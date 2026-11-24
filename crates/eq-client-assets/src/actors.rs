@@ -104,6 +104,8 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
             collision,
             no_hit_collision: Vec::new(),
             vertex_count: None,
+            // A carrier is never a door, whose riders the radius measures.
+            radius: None,
         },
         textures,
     })
