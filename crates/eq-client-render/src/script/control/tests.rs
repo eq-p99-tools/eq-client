@@ -344,11 +344,13 @@ fn an_explicitly_paused_run_still_owns_the_executor_until_stop() {
 #[test]
 fn the_existing_local_command_and_program_limits_are_preserved() {
     let mut app = app();
-    // Only a gm fixture form needs a local session; chat runs anywhere.
-    let receipt = start(&mut app, 1, "gm(\"stun 8000\")\n");
+    // No gm line needs a local session (6.584): a bad one is refused only
+    // for what the chat line could not take.
+    let receipt = start(&mut app, 1, "gm(\"#stun 8000\")\n");
     assert_eq!(receipt.code, "invalid_program");
     assert_eq!(receipt.line, Some(1));
     assert!(!app.world().contains_resource::<Script>());
+    assert!(prepare("gm(\"stun 8000\")\n", std::path::Path::new(".")).is_ok());
     assert_eq!(
         start(&mut app, 3, &"wait(1)\n".repeat(501)).code,
         "invalid_program"
@@ -366,7 +368,7 @@ fn the_existing_local_command_and_program_limits_are_preserved() {
         .resource_mut::<crate::ViewerSettings>()
         .0
         .local_session = true;
-    let program = prepare("gm(\"level 1\")\n", std::path::Path::new("."), true).unwrap();
+    let program = prepare("gm(\"level 1\")\n", std::path::Path::new(".")).unwrap();
     let runner = Script::for_viewer(
         program,
         &app.world().resource::<crate::ViewerSettings>().0,

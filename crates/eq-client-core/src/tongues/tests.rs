@@ -95,12 +95,12 @@ fn a_swapped_word_keeps_its_capital() {
 fn letters_change_only_past_both_rolls() {
     // Skill 90 or more can't pass the second roll (above 100 is needed).
     let text = "abcdefghij".repeat(200);
-    let changed = |skill, threshold| {
+    let changed = |skill, stage| {
         let mut word = text.clone().into_bytes();
         letters(
             &mut word,
             skill,
-            threshold,
+            stage,
             Letters::Titanium,
             &mut Rolls::new(0x5eed),
         );
@@ -109,32 +109,63 @@ fn letters_change_only_past_both_rolls() {
             .filter(|(a, b)| **a != *b)
             .count()
     };
-    assert_eq!(changed(90, 41), 0);
+    assert_eq!(changed(90, Stage::Speaker), 0);
     // At skill 0 the first roll passes 60 in 100 (41 to 100) and the
     // second 95 in 100 (6 to 100); a same-kind letter may come out the same.
-    let low = changed(0, 41);
+    let low = changed(0, Stage::Speaker);
     assert!((900..=1_200).contains(&low), "{low}");
     // The listener's first roll passes 50 in 100.
-    let listener = changed(0, 51);
+    let listener = changed(0, Stage::Listener);
     assert!(listener < low, "{listener} {low}");
 }
 
 #[test]
-fn a_random_letter_is_a_to_y_on_titanium_and_may_be_a_backtick_on_the_mac() {
+fn a_random_letter_may_be_a_backtick_but_in_titaniums_listener_stage() {
     let text = "z".repeat(4_000);
-    let draw = |kind| {
+    let draw = |stage, kind| {
         let mut word = text.clone().into_bytes();
-        letters(&mut word, 0, 41, kind, &mut Rolls::new(3));
+        letters(&mut word, 0, stage, kind, &mut Rolls::new(3));
         word
     };
-    let titanium = draw(Letters::Titanium);
-    assert!(
-        titanium
-            .iter()
-            .all(|letter| *letter == b' ' || letter.is_ascii_lowercase())
-    );
-    assert!(!titanium.contains(&b'`'));
-    assert!(draw(Letters::EqMac).contains(&b'`'));
+    let plain = |word: &[u8]| {
+        word.iter()
+            .all(|letter| *letter == b' ' || *letter == b'z' || (b'`'..=b'y').contains(letter))
+    };
+    // Titanium's listener stage: 'a' to 'y' only (R49-4).
+    let listener = draw(Stage::Listener, Letters::Titanium);
+    assert!(plain(&listener));
+    assert!(!listener.contains(&b'`'));
+    // Its speaker stage draws from the backtick (R49-4b), and so does the
+    // Mac's in both (R49-4m, and inferred for its speaker stage).
+    for (stage, kind) in [
+        (Stage::Speaker, Letters::Titanium),
+        (Stage::Speaker, Letters::EqMac),
+        (Stage::Listener, Letters::EqMac),
+    ] {
+        let word = draw(stage, kind);
+        assert!(plain(&word));
+        assert!(word.contains(&b'`'), "{stage:?} {kind:?}");
+    }
+}
+
+#[test]
+fn a_space_may_take_a_words_last_letter_but_never_its_first() {
+    // Every roll of 99 or 100 past the first letter, with no space beside
+    // it, may make a space, the last letter included (R49-4b).
+    let mut spaced_last = false;
+    for seed in 0..400 {
+        let mut word = b"zzzz".to_vec();
+        letters(
+            &mut word,
+            0,
+            Stage::Speaker,
+            Letters::Titanium,
+            &mut Rolls::new(seed),
+        );
+        assert_ne!(word[0], b' ');
+        spaced_last |= word[3] == b' ' && word[2] != b' ';
+    }
+    assert!(spaced_last);
 }
 
 #[test]
