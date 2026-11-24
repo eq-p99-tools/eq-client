@@ -7,6 +7,13 @@
   - **Returns:** a door spawned away from its rest goes back its delay after spawn, even while still opening. With rest 1 it heads for the open end it already has, so nothing visible changes. A door spawned shut or in state 3 with rest 0 no longer goes back. Types 110-152 but 115 close as soon as a vertical one stands open.
   - **Hinge speed:** a hinged door swings at the program's 8 a step of ms x 0.02, a quarter turn in 0.8 s (was half a turn a second, faster than the program). A script walk waits 1.8 s for a door's swing (was 1.5 s).
   - Not built, as gap rows: a door entity first drawn after its spawn is posed at its target at once, not at the swing it would have reached (at most 0.8 s). The rest are listed in eq-network #450.
+- `/guildstatus` answers on the Mac-era client as its program does (checklist 6.623, TAKP program read 6.575m: 0x4f4bb1 and 0x52f36b). It is local only and sends nothing. It uses the same string ids as Titanium's, colour 0x111:
+  - Unlike Titanium, it answers for any spawn but a corpse, so an NPC is answered (usually as not in a guild).
+  - The line for a rank past the three (12259, 0x2fe3) also names the guild.
+  - A typed name or the target picks the spawn, as on Titanium.
+  - A player in no guild still gets this client's words, because the program's are its own; the name is shown as players see it.
+  - The program also refuses a game master (spawn +0x109, inferred to be the spawn record's GM byte). The session doesn't decode that byte for Mac spawns yet, so no Mac spawn is refused for it. That is a labelled follow-up.
+  - `/played` on the Mac client still waits for its read.
 - The scribe press and the gems follow the Titanium program further (reads
   R49-34 a, d and i, slice G, G2 and G4, checklist 6.639). A scroll skips
   the race mask, as the program's usability test does, so a scroll no race
