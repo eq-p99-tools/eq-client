@@ -1246,6 +1246,13 @@ fn behave(
         Does::Answers(accept) => {
             drawn.insert((Button, super::confirm::AnswerButton(accept), skin()))
         }
+        // The skin lists the bug report's drop-down last, over the left of
+        // Location (x 130-196 of both installed skins, live look 11-24). The
+        // button stays on top so all of it takes a click; the program's own
+        // stacking there is unread, so this is inferred.
+        Does::Report(button @ crate::report_windows::ReportButton::Location) => {
+            drawn.insert((Button, button, skin(), ZIndex(1)))
+        }
         Does::Report(button) => drawn.insert((Button, button, skin())),
         Does::TurnsPage(forward) => {
             drawn.insert((Button, super::reading::PageButton(forward), skin()))
