@@ -9,8 +9,6 @@ pub(super) struct Request {
     pub gem: u8,
     pub target_id: u16,
     pub forgetting: bool,
-    /// Unmodified installation mana cost; None leaves the decision to the server.
-    pub mana_cost: Option<u32>,
     pub linked_timer: Option<u32>,
     /// What the program's cast start tests of the spell and the options.
     pub checks: CastChecks,
@@ -81,10 +79,9 @@ pub(crate) fn busy(
 }
 
 /// The gem's spell, if the request can go now; otherwise the line that says
-/// why not, or None where the program says nothing. A cast also refuses
-/// locally when the server-reported mana is short (P99 otherwise answers
-/// with a generic interruption); the program has no such test (read R49-34
-/// g), which is with the reviewer. Forgetting never needs mana.
+/// why not, or None where the program says nothing. Mana is the server's to
+/// judge: the Titanium program compares none before it sends the cast (read
+/// R49-34 g), and the server's answer, in its own words, ends the cast.
 pub(super) fn check(
     world: &eq_client_core::world::ClientWorld,
     player: &PlayerState,
@@ -96,7 +93,6 @@ pub(super) fn check(
     let Request {
         gem,
         forgetting,
-        mana_cost,
         linked_timer,
         checks,
         ..
@@ -174,14 +170,6 @@ pub(super) fn check(
     // way. A song while lying (0xd4) waits on that field too.
     if !checks.song && posture == Some(PostureState::Ducking) {
         return Err(Some(line(DUCKING, "You must be standing to cast that.")));
-    }
-    if mana_cost
-        .zip(world.vitals().mana)
-        .is_some_and(|(cost, mana)| cost > mana)
-    {
-        return Err(Some(
-            messages.said_text(199, "Not enough mana for that spell"),
-        ));
     }
     Ok(Checked {
         spell_id,
