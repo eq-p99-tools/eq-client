@@ -1642,7 +1642,21 @@ pub(super) fn input(
     // a script's held keys and strokes, autorun, and the falls they make.
     // Following and a script's route keep this client's guard against it,
     // a labelled safety, not the program's rule (review K1).
-    let own_world = (controls.following.is_none() && !keys.script_routing())
+    // A body already in lava keeps swimming it whatever moves it, so a
+    // follow or route started there carries it out instead of dropping it
+    // through the lava onto its floor; the guard only keeps them from going
+    // in (review L2). The view shares the world's geometry and obstacles,
+    // so taking it costs a few reference counts (review L1).
+    let in_lava = collision
+        .0
+        .as_ref()
+        .zip(online.world().player())
+        .is_some_and(|(world, player)| {
+            // The origin, where the program reads deep liquid (R40).
+            let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+            world.liquid_at(origin) == Some(eq_client_core::movement::Liquid::Lava)
+        });
+    let own_world = (in_lava || controls.following.is_none() && !keys.script_routing())
         .then(|| collision.0.as_ref().and_then(CollisionWorld::own_moves))
         .flatten();
     let moving_world = own_world.as_ref().or(collision.0.as_ref());
@@ -7039,6 +7053,31 @@ pub(super) mod tests {
                     assert!(farthest > start.x + 1.0, "{mover:?} never moved: {seen:?}");
                 }
             }
+        }
+        // A body already in lava keeps swimming it whatever moves it: a
+        // follow or route started there carries it on, never drops it
+        // through the lava to its floor or holds it (review L2).
+        let deep = Vec3::new(0.0, -8.0, 0.0);
+        for mover in [Mover::Key, Mover::Script, Mover::ScriptRoute, Mover::Follow] {
+            let seen = move_from(
+                kind_pool(RegionKind::LAVA),
+                deep,
+                east,
+                (Some(WET_SWIMMER), 0.0),
+                30,
+                mover,
+            )
+            .unwrap_or_else(|error| panic!("{mover:?} in lava: {error}"));
+            assert!(
+                seen.iter().all(|(mode, ..)| *mode == MovementMode::Swim),
+                "{mover:?} in lava: {seen:?}"
+            );
+            let farthest = seen.iter().map(|(_, at, _)| at.x).fold(deep.x, f32::max);
+            let deepest = seen.iter().map(|(_, at, _)| at.y).fold(deep.y, f32::min);
+            assert!(
+                farthest > deep.x + 5.0 && deepest > deep.y - 2.0,
+                "{mover:?} in lava: {seen:?}"
+            );
         }
         // Water is entered by every one of them, as before.
         for mover in [Mover::ScriptRoute, Mover::Follow] {

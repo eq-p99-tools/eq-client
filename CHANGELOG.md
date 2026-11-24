@@ -7,7 +7,10 @@
   - The session's water bound already covers both sets (eq-network #412).
 - Your own moves enter lava and swim it, as the Titanium program's do (read R49-26; checklist 6.483e). Walking or falling into lava by your keys, autorun or a script's held keys swims there with the slower set while the heat goes on as before.
   - `/follow` and a script's `walk` route keep this client's guard and stop at lava's edge: a labelled safety, not the program's rule (review K1).
-  - Zone entry gives movement two views of the zone's liquids, the guarded one and the player's own, where lava swims as water (`CollisionWorld::with_own_liquids`, `own_moves`). Jesus Mode keeps standing on lava. EQMac-era sessions keep today's guard.
+  - A body already in lava keeps swimming it whatever moves it, so a follow or route started there carries it on rather than dropping it through to the lava's floor (review L2).
+  - Zone entry gives movement two views of the zone's liquids, the guarded one and the player's own, where lava swims as water (`CollisionWorld::with_own_liquids`, `own_moves`). The view shares the world's geometry and obstacles: a collision world's obstacles are now shared slices, so any clone costs a few reference counts. Jesus Mode keeps standing on lava.
+  - The heat goes on while swimming lava: it reads the origin's region kind, not movement's liquids.
+  - EQMac-era sessions keep stopping at lava. That's an unread gap, not a choice: the Mac-era program's liquid kinds and wet step aren't read yet (gap row, 3.2).
 - Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). This repins eq-network to main 010536e, which carries #418's cold report and #424's event saves.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.

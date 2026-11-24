@@ -524,6 +524,13 @@ mod tests {
             .with_own_liquids(Boxes(vec![water()]));
         let own = world.own_moves().unwrap();
         assert!(own.own_moves().is_none());
+        // The view shares the world's geometry and obstacles (review L1).
+        assert!(std::sync::Arc::ptr_eq(&own.terrain, &world.terrain));
+        assert!(std::sync::Arc::ptr_eq(&own.obstacles, &world.obstacles));
+        assert!(std::sync::Arc::ptr_eq(
+            &own.spawn_obstacles,
+            &world.spawn_obstacles
+        ));
         assert!(
             CollisionWorld::new(flat(-12.0))
                 .unwrap()

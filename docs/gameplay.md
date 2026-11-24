@@ -159,8 +159,10 @@ On Titanium your own moves enter lava as the original's do: walking or
 falling into it, by your keys, autorun or a script's held keys, swims there
 with the slower set while the heat burns (read R49-26). `/follow` and a
 script's `walk` route keep this client's guard and stop at lava's edge, a
-safety of this client's, not the original's. On EQMac-era sessions every
-move still stops at lava.
+safety of this client's, not the original's. A body already in lava keeps
+swimming whatever moves it, so a follow or route started there carries it
+on. On EQMac-era sessions every move still stops at lava: the Mac-era
+program's liquids are unread, an open gap, not a choice.
 
 Group-member `/follow` keeps its horizontal input when entering water, including
 while typing in chat or the window is unfocused, and uses the ordinary swim rate

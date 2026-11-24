@@ -109,6 +109,88 @@ fn due_lava_heat_waits_for_the_matching_move_in_the_update_schedule() {
 }
 
 #[test]
+fn lava_heat_still_burns_while_the_player_swims_it() {
+    // The player's own moves swim lava as water (R49-26), but the heat
+    // reads the origin's region kind, and the script report's contact the
+    // guarded world, so both still say lava (review L3).
+    let (mut app, commands, updates) = scheduled();
+    prepare_submerged(&mut app);
+    let lava = || ZoneRegions::test_liquid_surface(4.0, Liquid::Lava);
+    app.world_mut().resource_mut::<OnlineState>().regions = lava();
+    let pool = CollisionWorld::new([[
+        [-40.0, -40.0, -40.0],
+        [40.0, -40.0, -40.0],
+        [0.0, -40.0, 40.0],
+    ]])
+    .unwrap()
+    .with_liquids(crate::scene_collision::ZoneLiquids(
+        lava().with_titanium_liquids(),
+    ))
+    .with_own_liquids(crate::scene_collision::ZoneLiquids(
+        lava().with_titanium_own_liquids(),
+    ))
+    .with_swim_origin(3.0);
+    app.insert_resource(Collision(Some(pool)));
+    app.update();
+    let pending = next_move(&commands);
+    assert_eq!(pending.mode, MovementMode::Swim, "{pending:?}");
+    {
+        let world = app.world_mut();
+        let collision = world.resource::<Collision>().0.as_ref().unwrap();
+        let origin = Vec3::from_array(eq_client_core::render_position(pending.position));
+        let feet = origin - Vec3::Y * 3.0;
+        assert_eq!(
+            collision.liquid_contact(feet, 6.0),
+            eq_client_core::movement::LiquidContact::Lava
+        );
+        let own = collision.own_moves().unwrap();
+        assert!(own.in_swimmable_water(feet, 6.0));
+    }
+    let started = Instant::now().checked_sub(Duration::from_secs(2)).unwrap();
+    app.world_mut()
+        .resource_scope(|world, mut state: Mut<State>| {
+            state.heat = lava::Heat::default();
+            assert_eq!(
+                state.heat.advance(
+                    started,
+                    world.resource::<OnlineState>(),
+                    &world.resource::<OptionsState>().options.qol,
+                    world.resource::<SpellNames>(),
+                    LiquidBasis::Observed,
+                ),
+                None
+            );
+        });
+    let created = crate::motion::tests::age_pending(&mut app);
+    app.update();
+    push(
+        &updates,
+        WorldEvent::MotionSent {
+            session_id: 11,
+            created,
+            position: pending.position,
+            refused: None,
+        },
+    );
+    push(
+        &updates,
+        WorldEvent::LiquidHazardRevision {
+            session_id: 11,
+            revision: 10,
+        },
+    );
+    app.update();
+    let reports: Vec<_> = commands
+        .try_iter()
+        .filter_map(|command| match command {
+            ClientCommand::LiquidDamage { hazard, amount, .. } => Some((hazard, amount)),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(reports, [(LiquidHazard::Lava, 42)]);
+}
+
+#[test]
 fn a_due_observation_goes_before_a_new_move_in_the_input_stage() {
     let (mut app, commands, _updates) = scheduled();
     let placement = prepare_submerged(&mut app);
