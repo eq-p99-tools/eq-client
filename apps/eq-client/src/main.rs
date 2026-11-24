@@ -1004,6 +1004,28 @@ mod tests {
     }
 
     #[test]
+    fn normal_script_and_background_launches_do_not_request_the_editor() {
+        for flags in [
+            vec![],
+            vec!["--script", "scenario.eqscript"],
+            vec!["--script-control", "new-control"],
+            vec!["--script", "scenario.eqscript", "--script-background"],
+            vec!["--script-control", "new-control", "--script-background"],
+        ] {
+            let args = Arguments::try_parse_from(
+                std::iter::once("eq-client").chain(flags.iter().copied()),
+            )
+            .unwrap();
+            assert!(!args.script_editor, "{flags:?}");
+        }
+        assert!(
+            Arguments::try_parse_from(["eq-client", "--script-editor"])
+                .unwrap()
+                .script_editor
+        );
+    }
+
+    #[test]
     fn background_scripts_are_explicit_and_require_an_execution_source() {
         assert!(Arguments::try_parse_from(["eq-client", "--script-background"]).is_err());
         let default =

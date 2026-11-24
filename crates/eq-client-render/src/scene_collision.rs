@@ -31,6 +31,18 @@ impl eq_client_core::movement::Liquids for ZoneLiquids {
         self.0.medium_at(point.to_array()).is_some()
     }
 
+    fn wet_kind_at(&self, point: Vec3) -> eq_client_core::movement::water::WetKind {
+        if self
+            .0
+            .kind_at(point.to_array())
+            .is_some_and(eq_client_assets::regions::RegionKind::is_slower)
+        {
+            eq_client_core::movement::water::WetKind::Slower
+        } else {
+            eq_client_core::movement::water::WetKind::Normal
+        }
+    }
+
     fn segment_known(&self, from: Vec3, to: Vec3) -> bool {
         self.0.segment_known(from.to_array(), to.to_array())
     }
@@ -339,8 +351,12 @@ pub(super) fn collision_world(
             Some(if regions.liquid_region_count() == 0 {
                 world
             } else {
+                // The player's own moves swim lava too, as the program's
+                // do (R49-26); routes this client chooses keep it apart.
+                let own = zone.regions.clone().with_titanium_own_liquids();
                 world
                     .with_liquids(ZoneLiquids(regions))
+                    .with_own_liquids(ZoneLiquids(own))
                     .with_swim_origin(origin)
             })
         }

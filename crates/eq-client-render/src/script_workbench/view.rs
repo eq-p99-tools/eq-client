@@ -49,8 +49,9 @@ pub(super) enum Action {
     StepInto,
     StepOut,
     Stop,
-    /// Steps the run length the next Run uses.
+    /// Opens the choices for the next Run's length.
     Length,
+    SetLength(crate::script::RunLength),
     Discard,
     Cancel,
     Tab(Tab),
@@ -69,7 +70,8 @@ impl Action {
             | Self::Save
             | Self::Reload
             | Self::Discard
-            | Self::Length => !active && !busy,
+            | Self::Length
+            | Self::SetLength(_) => !active && !busy,
             // Before a run it starts one; while paused it resumes to the line.
             Self::RunToCursor => (!active && !busy) || phase == Phase::Paused,
             Self::Pause => active && phase != Phase::Paused,
@@ -275,30 +277,13 @@ pub(super) fn length_label(
 
 /// The run and debugging controls as icons, for the right end of the row
 /// above a page's script area, after the run length selector.
-fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
-    let text = label(
-        commands,
-        crate::script::RunLength::Default.label(),
-        13.0,
-        theme::INK_BRIGHT,
-    );
-    commands.entity(text).insert(LengthLabel);
-    let length = commands
-        .spawn((
-            Button,
-            Action::Length,
-            Tooltip("How long the next run may go. Click for the next length.".to_owned()),
-            Node {
-                padding: UiRect::axes(px(9), px(5)),
-                border: UiRect::all(px(1)),
-                flex_shrink: 0.0,
-                ..default()
-            },
-            BackgroundColor(theme::BUTTON),
-            BorderColor::all(theme::EDGE),
-        ))
-        .add_child(text)
-        .id();
+fn run_controls(
+    commands: &mut Commands,
+    images: &mut Assets<Image>,
+    tab: Tab,
+    length: crate::script::RunLength,
+) -> Entity {
+    let length = super::lengths::selector(commands, tab, length);
     let children = [
         (icons::Icon::Run, "Run", Action::Run),
         (
@@ -331,9 +316,11 @@ fn run_controls(commands: &mut Commands, images: &mut Assets<Image>) -> Entity {
 fn with_run_controls(
     commands: &mut Commands,
     images: &mut Assets<Image>,
+    tab: Tab,
+    length: crate::script::RunLength,
     left: Option<Entity>,
 ) -> Entity {
-    let controls = run_controls(commands, images);
+    let controls = run_controls(commands, images, tab, length);
     let row = commands
         .spawn(Node {
             width: percent(100),
@@ -471,7 +458,13 @@ pub(super) fn spawn(
             ("Reload", Action::Reload),
         ],
     );
-    let file_controls = with_run_controls(&mut commands, &mut images, Some(file_buttons));
+    let file_controls = with_run_controls(
+        &mut commands,
+        &mut images,
+        Tab::Editor,
+        state.run_length,
+        Some(file_buttons),
+    );
     let source = commands
         .spawn((
             Field::Source,
@@ -581,7 +574,13 @@ pub(super) fn spawn(
         })
         .add_children(&[lines, flow_pane])
         .id();
-    let execution_controls = with_run_controls(&mut commands, &mut images, None);
+    let execution_controls = with_run_controls(
+        &mut commands,
+        &mut images,
+        Tab::Execution,
+        state.run_length,
+        None,
+    );
     commands
         .entity(execution)
         .add_children(&[execution_controls, source_row, history]);
@@ -861,7 +860,8 @@ pub(super) fn refresh(
         let usable = action.usable(status.phase(), state.busy());
         let on = matches!(action, Action::Tab(tab) if *tab == state.tab)
             || matches!(action, Action::Help(page) if *page == state.help_page)
-            || matches!(action, Action::ToggleLibrary) && !state.library_collapsed;
+            || matches!(action, Action::ToggleLibrary) && !state.library_collapsed
+            || matches!(action, Action::SetLength(length) if *length == state.run_length);
         *color = BackgroundColor(theme::button(usable, on, *interaction));
     }
     for (icon, mut image) in &mut icons {

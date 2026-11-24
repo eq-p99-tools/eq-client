@@ -669,8 +669,8 @@ pub(crate) struct Typing {
     pub editing_script: bool,
     /// The character creation form owns the keyboard.
     pub creating_character: bool,
-    /// This frame's Escape closed the chat line or left the quantity
-    /// window's number, so nothing else takes it.
+    /// This frame's Escape closed the chat line, dismissed a dropdown or
+    /// left the quantity window's number, so nothing else takes it.
     pub escape_consumed: bool,
 }
 
@@ -730,6 +730,12 @@ impl Keys<'_, '_> {
     /// The movement acts a running script holds itself.
     pub(crate) fn scripted(&self) -> &[Act] {
         self.script.as_ref().map_or(&[], |script| script.acts())
+    }
+
+    /// Whether a running script's `walk` steers by a route this client
+    /// chose, whose moves keep the routes' guards.
+    pub(crate) fn script_routing(&self) -> bool {
+        self.script.as_ref().is_some_and(|script| script.routing())
     }
 
     /// The heading a running script's `face` step turns the player to.
