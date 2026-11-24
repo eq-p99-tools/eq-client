@@ -5,12 +5,6 @@ instead of editing this file; merged entries not yet folded in are listed there.
 
 ## Unreleased
 
-- Every liquid kind the Titanium program swims swims here too (read R49-26; checklist 6.483d): slime (`SL`), Velious water (`VW`, `AVW`) and the second and third waters (`W2`, `W3`) now move as water, where they were walkable floors or breath-only. Breath and lava heat are unchanged.
-  - Slime, lava and Velious water damp the stroke with the program's slower set (horizontal 0.02 and 0.94, vertical 0.8 and 0.15), so a swimmer there settles at about two thirds of water's speed. Each frame takes the set of the liquid at the body's origin, so crossing between kinds changes set on the next whole frame and keeps the velocity.
-  - The session's water bound already covers both sets (eq-network #412).
-  - Surfacing uses the same liquid view as the stroke: slime, Velious water and the other waters can rise into known air and hand off to ordinary falling like plain water. Solid banks, guarded lava and unknown space keep the same checks.
-  - Lava swimming (Adam's "always enter lava") follows in its own change.
-- Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). This repins eq-network to main 010536e, which carries #418's cold report and #424's event saves.
 - eq-network is repinned to bd80661, which carries #441 (the program's line for a refused item use, and refusal before an item's recast), #440 (the Titanium scribe waits out the program's gauge) and #436 (the bind landing decision, off here until the client sets `bind_slot`). A refused bind landing (`WorldEvent::BindRefused`) counts in the gap file with the other news this client doesn't show yet.
 - Follow program reads R49-24 and R49-24b on Titanium for the per-frame steps (checklists 6.416, 6.418, 6.419).
   - **Falls and jumps:** the air slows a body once a program frame, three frames each 50 ms step at the 60 frames a second taken (inferred), with gravity and the move in each frame's share. Falls now reach about a third of the old top speed, and a jump rises about 5.25 rather than 4.95, as the official client does at 60 frames a second. The program has no frame cap by default, so the official client on a present-day PC falls no faster than this. A fall's damage follows the slower landing. The first fall on P99 or Quarm with this build is attended.
