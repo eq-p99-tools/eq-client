@@ -351,8 +351,12 @@ pub(super) fn collision_world(
             Some(if regions.liquid_region_count() == 0 {
                 world
             } else {
+                // The player's own moves swim lava too, as the program's
+                // do (R49-26); routes this client chooses keep it apart.
+                let own = zone.regions.clone().with_titanium_own_liquids();
                 world
                     .with_liquids(ZoneLiquids(regions))
+                    .with_own_liquids(ZoneLiquids(own))
                     .with_swim_origin(origin)
             })
         }
