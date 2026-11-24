@@ -1412,6 +1412,36 @@ type InputExtras<'w, 's> = (
     Option<Res<'w, crate::doors::LiftReach>>,
 );
 
+/// A script run that fails can no longer steer, so the autorun latch goes
+/// with the keys it held, and the character stops rather than running on
+/// unattended. It comes off even when the player latched it themselves,
+/// before or during the run. A run the player stops, or one that completes,
+/// leaves the latch as it is. This acts once, when a run's status first
+/// reads Failed: the status is copied every frame while the finished run
+/// stays loaded, and a latch the player sets again afterwards stays on.
+/// This is this client's rule for its scripts; the program has none.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn stop_autorun_after_failed_script(
+    status: Option<Res<crate::script::RunStatus>>,
+    mut seen: Local<Option<(std::sync::Arc<()>, crate::script::Phase)>>,
+    mut controls: ResMut<Controls>,
+) {
+    let Some(status) = status else {
+        return;
+    };
+    let phase = status.phase();
+    if seen
+        .as_ref()
+        .is_some_and(|(run, seen)| std::sync::Arc::ptr_eq(run, status.run()) && *seen == phase)
+    {
+        return;
+    }
+    *seen = Some((status.run().clone(), phase));
+    if phase == crate::script::Phase::Failed {
+        controls.autorun = false;
+    }
+}
+
 /// Produces at most one in-flight proposal; renderer stalls never accumulate distance.
 #[allow(
     clippy::needless_pass_by_value,
@@ -6089,6 +6119,38 @@ pub(super) mod tests {
         assert!(summary.net < 1e-5);
     }
     use std::sync::mpsc;
+
+    #[test]
+    fn a_failed_script_run_stops_autorun_and_a_stopped_or_completed_one_does_not() {
+        use crate::script::{Phase, RunStatus};
+        for (phase, runs_on) in [
+            (Phase::Failed, false),
+            (Phase::Stopped, true),
+            (Phase::Completed, true),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<Controls>()
+                .add_systems(Update, stop_autorun_after_failed_script);
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.update();
+            assert!(app.world().resource::<Controls>().autorun, "no run yet");
+            app.insert_resource(RunStatus::ended(phase));
+            app.update();
+            assert_eq!(
+                app.world().resource::<Controls>().autorun,
+                runs_on,
+                "{phase:?}"
+            );
+            // The player latches it again after the run: the old outcome
+            // no longer takes it off.
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.update();
+            assert!(
+                app.world().resource::<Controls>().autorun,
+                "{phase:?} later"
+            );
+        }
+    }
 
     #[test]
     fn autorun_runs_forward_with_no_key_held_until_back_is() {

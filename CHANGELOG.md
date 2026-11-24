@@ -2,6 +2,9 @@
 
 ## Unreleased
 
+- `/surname` alone, with a surname already set, says this client's own line in colour 15 like the program's refusal lines; it had no colour (live row 6.507 item h).
+
+- A script run that fails takes the autorun latch off, so the character stops instead of running on unattended (seen when a failed run carried a character off a dock). It comes off even when the player latched it themselves, before or during the run, and only once: a latch set again afterwards stays on. A run the player stops, or one that completes, leaves autorun as it is. This is this client's rule for its scripts. The script reference also notes that `face(heading)` turns at the turn keys' rate (at most 240 heading units a second, so a near-full turn takes over two seconds), and that `look("world", …)` turns as a mouse does.
 - **The bug report window asks before it sends**, as the Titanium program does (reads R49-52, R49-52b and R49-52c; checklist 6.647). Send asks the official question (line 0x1aa3) in the skin's confirmation dialog, with Yes and No, every time, unless the installation's `eqclient.ini` has `[Defaults] SendSystemInfo=1` (read only).
   - Every answer sends, and so does the question's own close after 60 seconds. After the answer, the empty-box and sent lines follow as before.
   - Cancel leaves the question up, and its answer still sends what the box holds (read); the close box and Esc do the same (inferred).
