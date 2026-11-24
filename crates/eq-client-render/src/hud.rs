@@ -570,7 +570,6 @@ pub(super) fn press_gem(
             gem,
             target_id: world.target().selected.unwrap_or(player.spawn_id),
             forgetting,
-            mana_cost: spell.and_then(|spell| names.mana(spell)),
             linked_timer: spell.and_then(|spell| names.linked_timer(spell)),
             checks,
         },
