@@ -6131,6 +6131,56 @@ mod tests {
     }
 
     #[test]
+    fn a_run_that_fails_stops_autorun_once_and_a_relatched_autorun_stays_on() {
+        // The real status copy (`observe`) rewrites the status every frame
+        // while the finished run stays loaded; the stop acts only when the
+        // run first reads Failed.
+        let autorun = |app: &App| app.world().resource::<crate::motion::Controls>().autorun();
+        let (mut app, window) = background(Vec::new());
+        app.init_resource::<crate::motion::Controls>().add_systems(
+            Update,
+            crate::motion::stop_autorun_after_failed_script.after(observe),
+        );
+        app.insert_resource(Script::new(vec![Step::Hold(
+            vec![KeyCode::KeyW],
+            Duration::from_secs(1),
+        )]));
+        app.world_mut()
+            .resource_mut::<crate::motion::Controls>()
+            .set_autorun(true);
+        set_focus(&mut app, window, true);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 10);
+        assert!(autorun(&app), "the run is under way");
+        set_focus(&mut app, window, false);
+        frame_at(&mut app, 20);
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+        assert!(
+            app.world().get_resource::<Script>().is_some(),
+            "the run stays loaded"
+        );
+        assert!(!autorun(&app), "a failed run takes the latch off");
+        app.world_mut()
+            .resource_mut::<crate::motion::Controls>()
+            .set_autorun(true);
+        for ms in (30..=200).step_by(10) {
+            frame_at(&mut app, ms);
+        }
+        assert!(autorun(&app), "the player's latch after the run stays on");
+        // A run that completes leaves the latch.
+        app.insert_resource(Script::new(vec![Step::Wait(Duration::from_millis(10))]));
+        set_focus(&mut app, window, true);
+        for ms in (210..=400).step_by(10) {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed
+        );
+        assert!(autorun(&app), "a completed run leaves the latch");
+    }
+
+    #[test]
     fn default_public_runs_still_wait_for_focus_and_cancel_on_focus_loss() {
         let (mut app, window) = background(Vec::new());
         app.insert_resource(Script::new(vec![Step::Hold(
