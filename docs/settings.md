@@ -243,6 +243,7 @@ from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 | Free Camera | `free_camera` | On | Lets a user-assigned Toggle Free Camera key detach the camera and fly it; off, the key does nothing |
 | See the World Clearly | `clear_view` | Off | Lights outdoor night as noon, brightens supported Titanium interiors and hides distance fog, rain and snow |
 | Rich Lighting | `rich_lighting` | Off | Experimental: lights every zone per pixel, with flickering lamps and torches, shadows from your own light, highlights and a soft glow; outdoors the lamps show at night. Departs from the original look |
+| Better Water | `better_water` | Off | Draws water and lava with flowing motion, sky reflections, sun glints, depth tint, shoreline foam and an underwater haze; the original client's flat water when off |
 | Loot Corpses Automatically | `auto_loot` | Off | Opens newly slain NPC corpses naming the player as killer within 20 units, then uses reply-driven Loot All; leaves NO DROP items for manual looting |
 | Floating Combat Text | `floating_combat_text` | Off | Draws received positive damage above known targets, in addition to chat |
 | Read the Spellbook Standing | `read_while_standing` | Off | Reads the spellbook without automatic sitting |

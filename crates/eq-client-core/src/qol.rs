@@ -100,6 +100,12 @@ pub enum Fix {
     /// night. Experimental (Adam's request of 11-24); off, every zone draws
     /// as before.
     RichLighting,
+    /// Draws water and lava surfaces with a richer look than the official
+    /// client's flat flipbook: smooth flowing motion, see-through surfaces
+    /// that reflect the sky at a glance and glint in the sun, depth tint,
+    /// shoreline foam, and a haze when the camera is under the surface.
+    /// Only the drawn scene changes. Adam's experiment (11-24).
+    BetterWater,
     /// Allows horizontal movement while stunned; other stun restrictions remain.
     WalkWhileWinded,
     /// The Feign Death press sends the feign request alone, without the
@@ -204,7 +210,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 39] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -216,6 +222,7 @@ impl Fix {
         Self::FreeCamera,
         Self::ClearView,
         Self::RichLighting,
+        Self::BetterWater,
         Self::WalkWhileWinded,
         Self::MoveWhileFeigned,
         Self::StandWhenHit,
@@ -265,6 +272,7 @@ impl Fix {
             Self::FreeCamera => "free_camera",
             Self::ClearView => "clear_view",
             Self::RichLighting => "rich_lighting",
+            Self::BetterWater => "better_water",
             Self::WalkWhileWinded => "walk_while_winded",
             Self::MoveWhileFeigned => "move_while_feigned",
             Self::StandWhenHit => "stand_when_hit",
@@ -316,6 +324,7 @@ impl Fix {
             Self::FreeCamera => "Free Camera",
             Self::ClearView => "See the World Clearly",
             Self::RichLighting => "Rich Lighting",
+            Self::BetterWater => "Better Water",
             Self::WalkWhileWinded => "Walk While Winded",
             Self::MoveWhileFeigned => "Move While Feigned",
             Self::StandWhenHit => "Stand When Hit",
@@ -392,6 +401,9 @@ impl Fix {
             }
             Self::RichLighting => {
                 "Light every zone with soft, flickering lamp and torch light, shadows from your own light and a gentle glow; outdoors the lamps show at night. Experimental: departs from the original client's look."
+            }
+            Self::BetterWater => {
+                "Draw water and lava with flowing motion, sky reflections, sun glints, depth tint and shoreline foam, and haze the view under the surface. Turn it off to keep the original client's flat water."
             }
             Self::WalkWhileWinded => {
                 "Allow horizontal movement while stunned. Attacks, spells, items and jumping still obey stun restrictions."
@@ -495,6 +507,7 @@ impl Fix {
             | Self::FreeCamera
             | Self::ClearView
             | Self::RichLighting
+            | Self::BetterWater
             | Self::ReadWhileStanding
             | Self::ShowInvisible
             | Self::FloatingCombatText
@@ -552,6 +565,7 @@ impl Fix {
             | Self::FreeCamera
             | Self::ClearView
             | Self::RichLighting
+            | Self::BetterWater
             | Self::ShowInvisible
             | Self::FloatingCombatText
             | Self::FrameCap
@@ -598,6 +612,7 @@ impl Fix {
             | Self::ShowTimesInChat
             | Self::ClearView
             | Self::RichLighting
+            | Self::BetterWater
             | Self::WalkWhileWinded
             | Self::MoveWhileFeigned
             | Self::AutoLoot
@@ -756,6 +771,7 @@ mod tests {
                 Fix::FreeCamera,
                 Fix::ClearView,
                 Fix::RichLighting,
+                Fix::BetterWater,
                 Fix::WalkWhileWinded,
                 Fix::MoveWhileFeigned,
                 Fix::StandWhenHit,
@@ -789,6 +805,7 @@ mod tests {
         for fix in [
             Fix::ClearView,
             Fix::RichLighting,
+            Fix::BetterWater,
             Fix::WalkWhileWinded,
             Fix::MoveWhileFeigned,
             Fix::AutoLoot,

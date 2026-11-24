@@ -612,6 +612,7 @@ pub(super) fn install_overlays(app: &mut App) {
     crate::creation_preview::register(app);
     entities::outline::register(app);
     crate::rich_light::register(app);
+    crate::water::register(app);
     app.add_systems(
         Update,
         (profile_files::follow, map::follow_landmarks)

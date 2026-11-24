@@ -353,7 +353,12 @@ pub(super) fn swap(
     mut commands: Commands,
     mut state: ResMut<RichState>,
     tuning: Res<Tuning>,
-    plain: Query<(Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>), Without<Parked>>,
+    // Water surfaces keep their own draw: Better Water dresses them, and
+    // the two swaps must not take the same surface.
+    plain: Query<
+        (Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
+        (Without<Parked>, Without<crate::water::WaterSurface>),
+    >,
     parked: Query<(Entity, &Parked)>,
     standard: Res<Assets<StandardMaterial>>,
     mut rich: ResMut<Assets<RichMaterial>>,
