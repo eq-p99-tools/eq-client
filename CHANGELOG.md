@@ -12,6 +12,93 @@
   longer refused. The `gm("depop")` helper for a selected NPC stays a local
   Titanium test convenience; elsewhere `#depop` goes as typed. Breaking for
   scripts that relied on the old refusals: those lines now send.
+- **An interruption the server names prints as the Titanium program prints it** (reads R49-51 and R49-51b, checklist 6.645 S1). On P99 and Titanium EQEmu, your own interruption line and another caster's take the program's colour 0x108. As a Bard, your own line is hidden where the song stop line is: only with the Bard songs filter at Hide (read R49-48 e: the program's filter 9 value 1 is that row's last option; that the options run in the Options window's order is inferred, as the read maps them by index with their labels unread). Another class's own line always shows, as before. Another caster's line follows the filter for who they are: a Bard's the Bard songs filter, another player's the other players' spells filter, an NPC's the NPC spells filter. A group member's shows at Show and Group only, anyone else's at Show only (options by index, inferred as above). A caster this client doesn't know shows (inferred). The Mac and RoF2 programs are unread and keep this client's colour and show every line.
+- **Fix: the Bard songs filter hides the song stop line at Hide, not Mine only** (read R49-48 e). The earlier entry below took the program's filter 9 value 1 for Mine only; it is the row's last option, Hide.
+- **Chat server channel commands follow the Titanium program** (read R49-12, checklist 6.616).
+  - `/join`, `/leave`, `/leaveall` and `/list` go to the chat server as typed, slash and all, and `/leave` alone goes as it is. `/1` to `/10` go as `;N text`.
+  - **`/autojoin channel, ...`** keeps the channels to join at each login in your character's options and sends nothing now. Each time the chat server takes the login, the client says so and sends `/join` with the list. The list is yours, else the official client's `[ChatManager]` `ChannelAutoJoin` for the character, else `eqclient.ini`'s `[Defaults]` one; `NONE` joins nothing. The official client's files are only read.
+  - The confirmation and the autojoining line are this client's words: the program prints plain lines there whose text isn't read. They show each channel's name but never a password after a colon, which still goes to the chat server with the `/join`.
+  - Usage lines for `/join` and `/N` with nothing after them are this client's words, in the program's colour for its own lines.
+  - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure. It is said, and nothing is sent, whenever no link is up: before the chat server takes the login, and after a link ends.
+  - The autojoin waits for the character to be in the world: the chat server can take the login while the character is still entering, and the list is that character's. `/autojoin NONE` says you will join no channels.
+  - `/announce` and `/chat words` go after a `/` too (`/announce on`, `/kick general Someone`). Inferred: `/announce`'s handler is unread and `/chat`'s sent form only partly read; the chat server skips a command's first byte, so this is the form it takes.
+  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422), and works against a stock chat server: one-byte opcodes, its keep-alive read past, commands as typed, and a log line saying why a link ended (eq-network #438, pinned at bb4c8d7). The repin also takes #443's bug-report fields, which this client leaves unticked.
+- A swimmer climbs out of a pool onto a rim up to about 3.3 above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483b, 6.483c):
+  - Stroking forward with the view pitched up toward dry ground just ahead hops, at most once in 1500 ms: three times the jump strength added to the rise and a push along the heading (0x48a793, 0x48a026, read R33b).
+  - The wet step ends on the frame that takes the origin out of the water, so the fall that follows keeps the velocity it left with instead of losing it to the water's damping for the rest of the sample.
+  - The walk loses its edge climb only with the origin in water or lava, the program's deep liquid (+0xad of 5 or more, R40), not whenever the feet are wet. Wading with the origin dry climbs edges.
+  - A fall whose origin has just left the water, the soles still in it, passes over what the walk would climb (origin + 1.25) and lands on it, inside the announced climb reach.
+  - A body falling back into water keeps the fall's velocity, so a wall that stopped the move no longer stops the next stroke's forward speed.
+  - A swimmer that surfaces under a ramp or deck over the water, its head inside it, drops back into the water instead of freezing in place (Temple of Life's north deck). The fall's downward sweep is led by the lower body when the whole body's is refused where it starts. Ours: the program's sphere differs (R40).
+- **A walker passes through trees, plants and grass, trunks included, as the engine's walking sweep does** (reads R49-49c, R49-49d, R49-49e). The sweep (EQGraphicsDX9.dll 0x10192400) returns no hit at once for an object mesh whose 0x36 flags lack 0x10000 and whose +0x14 reference is empty (read F4g), and every WLD placement reaches it on the player's walk. In the installed files that is every tree, plant and grass mesh (both pines' trunks among them) and about 280 meshes in all, among them some signs, lamps and jars and the generic Luclin and PoP shapes. Every building, rock, statue, ladder and the Neriak bars are referenced and stay solid.
+  - Before, this client stood a walker on a tree's trunk faces, which let a walker climb a Firiona swamp tree.
+  - Doors are unchanged: how the engine sets a door's collision mode (eqgame.exe 0x1006c2b0) is unread, so a door keeps every face it had.
+  - One step is inferred: a placement with an LOD list is taken to reach the sweep as one without does.
+  - Labelled departure: the engine's ray tests still see those meshes, but this client's camera shares the walking world, so it passes through them too (follow-up row).
+- **The Neriak bars stop a walker while shut** (eq-client #629, with eq-network #406's wall for open types 60-77). The engine makes five model names solid throughout, passable faces and all (EQGraphicsDX9.dll 0x10193510, read F4b): `LADDER*` and `IT66*` in any case, `SBDOOR103_*` as written, and exactly `HHCELL_DMSPRITEDEF` and `PORT1414_DMSPRITEDEF`. Before, every HHCELL face was flagged passable, so the bars stopped nothing. A click raises the linked pieces together, a walker passes under them, and a body a closing door overlaps is let out.
+- A knight's Lay on Hands or Harm Touch waits as the Titanium program's does
+  (read R49-29 b, checklist 6.626, slice B), with eq-network #433 in main's
+  pin. The session now waits the program's own gem-9 timer: 10 s from a
+  press, then the spell's recast
+  after the server refreshes the gem, saying the program's 0x2efd while it
+  runs. This client hands it the recast from the installed spell file
+  (field 15, the replayed table on P99 once ready). The server's long reuse
+  no longer holds the press: the button's hover shows it as "Server reuse
+  N s" (this client's label, "(estimated)" where the session estimated it)
+  and the button still dims while it runs, but the press goes after the
+  local wait and the server decides.
+- On Titanium, a right-click on a player inspects them, as the program's use
+  routine ends (reads R49-16 and R49-16e, checklist 6.644).
+  - The player is first considered, as before. Then, with Inspect Others
+    on and nothing on the cursor, a player under 20 away (3D) is inspected
+    through eq-network's new `InspectSpawn`. A player 20 or more away gets
+    the program's line 0x305a naming them, in this client's words where the
+    installation lacks the line.
+  - Right-clicking yourself inspects you with no consider. Nothing is
+    targeted.
+  - The Mac-era and RoF2 programs are unread, so they only consider, as
+    before.
+  - Not modelled yet: the program's busy gate before any right-click use
+    (mounted, dead, camping, a pending trade or merchant, certain windows
+    open; read R49-16e), the trader branches, and the body types the
+    consider skips.
+- The Player window's mana and endurance percents read as the Titanium program's label provider makes them (read R49-37b, gap 3.9, checklist 6.529): current x 100 / maximum in whole numbers, cut toward zero, at most 100, shown as a bare number, and "0" while the maximum is 0. Before our estimate has a maximum they show "0" too (inferred: the program always knows it). The "%" after each is the skin's own text, which the program never hides, so this client no longer hides the Player window's signs; that rule, from the earlier 6.529 entry, was inferred and is withdrawn. Hit points keep their current text, as R49-37 didn't read them.
+- A spawn whose model the installation lacks is drawn as the program draws it (read R49-37a, 0x43c84b): a Human of its gender, sized and footed as race 1 unless its race is 216 or 472. Before, it drew a marker. A carrier keeps its marker, and so does a race this client has no model name for yet, since that gap is ours.
+
+- Languages train on TAKP and Quarm as the `EQMac` program does (checklist 6.597; eq-network #427, already in the pin). The program keeps its language minimum levels inside itself, so the client reads them from the installed program at its addresses, checks their shape, and hands them to the session. Without a table that passes, Mac language training stays shut. No table values are kept in this repository.
+  - The training window lists only the languages the player already speaks. The program's gate runs before anything is sent, and each refusal says the program's line: too young for the language, no practice points, already mastered (naming the language), or at the guildmaster's limit. A purse short of the program's figure gets its coin line, in its colour.
+  - A practice resolves at once, as the program does, since neither server answers it. The program's line for a first point or a further one names the guildmaster and the language, in its colour. The next profile replaces the prediction either way.
+  - Scripts use the same practice command and meet the same gate.
+  - Source-derived, not live. The first public use is attended.
+
+- A Bard's own gem refresh starts no wait before the next spell, as the Titanium program's (0x458ed8 kind 3, read R49-21 c; checklist 6.642): it sets that wait to the refresh's time, where anyone else's adds the spell's recovery. It applies where the session offers eq-network's new `Capability::BardRefreshTimers`, with the Titanium song rules (P99 and stock `EQEmu`); the Mac-era servers keep the recovery. The spell's own recast still runs.
+- Repinned eq-network from 231d67d to 4f35c9a, picking up #432 (Pick Pockets on a player follows the world's ruleset), #434 (tracking ends silently, 6.636), #433 (a knight's special waits as the program's, 6.626), #435 (the Mac-era arrival aboard a boat, not offered, 6.641), #439 (`Capability::BardRefreshTimers`, 6.642) and #442 (`ClientCommand::InspectSpawn`, inspecting a player by spawn ID for the Titanium right-click, 6.644; not used here yet).
+- On TAKP and Quarm, a Tracking press now fills the track window itself, as the Mac-era program does (TAKP read 10c, checklist 6.619 client half): group members in the zone first, at any range, then every other player or NPC within the program's range. The range is skill × 10 + 500 in zone types 1, 2 and 5, and skill / 2 + 500 elsewhere, from the zone header's time type, with the read's above-100 term; before a header has given the type, the smaller range. Corpses, races 0x8f, 0x8d, 0x48, 0x49, 0x72 and 0x8e, invisible spawns and the player are left out, up to 1000 entries. No Mac server sends a list. The distance (a straight line), the visibility test (the invisible flag) and the list order (by spawn ID) are inferred; the actor +0x198 skip is unread. Titanium's press still waits for the server's list.
+- On TAKP and Quarm, `/decline` refuses a waiting duel challenge, as the Mac-era program does (TAKP read 11h, checklist 6.622 client half). The session says the program's line for each state: dueling (0x33bd), declined (0x33be) or nothing to decline (0x33bf). A plain `/duel` there now sends the target as it stands, as the program does (read 11g), and the session gives the program's refusals for no target, the player or a corpse. Words after `/duel` are still refused on the Mac era, since the program's handling of them is unread. Titanium is unchanged, and RoF2 keeps this client's checks.
+- `/toggleinspect` and the Inspect Others option as the Titanium program
+  keeps them (read R49-16, checklist 6.574). `/toggleinspect on` and `off`
+  set it; any other word or none says the usage lines 0x339a and 0x339b;
+  each ends with 0x339c or 0x339d, in colour 0x111. Nothing is sent. The
+  option is on by default and seeded from `InspectOthers` in `eqclient.ini`
+  (first letter t, T or 1; missing is on), then kept per character, which
+  is this client's choice (the original keeps one per installation).
+  - **Inspections are always answered now.** The option gates only the
+    player's own right-click inspects (6.644, next), not answering others,
+    so the earlier session-only switch that stopped answering is gone.
+  - Scripts can run it with `slash()`, and their reports list
+    `inspect_others` with the other options.
+- `/ttell` and `/whotarget` as the Titanium program takes them (read R49-18,
+  checklist 6.528). `/ttell` says nothing with no words or no target; a
+  target is taken by the name the server sent, refused (line 0x3322) when
+  it has a `#` or `_` unless it is a creature's corpse, and cut at its
+  apostrophe, so a player's corpse's tell goes to its owner; a tell to
+  yourself or your own corpse gets line 0x3023 and is not sent.
+  `/whotarget` lists any target as a typed `/who` of its name, ignoring any
+  words, and says nothing with no target. Labelled: the program counts a
+  creature that dies in view as a player's corpse and refuses it, where
+  this client sends the tell. Mac-era and RoF2 keep this client's own
+  rules. The code moves to `targeted.rs`.
+- `/shield` follows the Titanium program's handler (checklist 6.517, read R49-22d). A Warrior of level 30 or more can name the player to shield, as `/shield Name`: the name is matched as `/assist Name` matches it, the shortest name it begins winning, and the target is left as it is. A name that matches no one says nothing. With no name, the target is shielded. The lines for another class or a lower level, for no target, and for naming or targeting yourself are the installation's own (strings 0xfc1, 0xfbf and 0xfc2, 0xcce and 0xfbe), with this client's words where the installation lacks them. As in the program, the client checks no distance, kind or recast; the server answers those. The Mac-era client's handler is unread there, so it keeps the earlier checks and words. The program's general "can act" test and its silence while a trade or certain windows are open are not modelled yet (row 6.517a), as for `/assist`.
 - **The Use key now uses what is at the centre of the view, not the nearest door** (read R49-19, checklist 6.609). On Titanium (and RoF2, inferred) it casts the program's ray from the camera through the centre of the 3D view, the same pick a mouse click makes:
   - The first character the ray hits becomes the target. An NPC, or one the target setter refuses while no target stands, also gets what a right click on it does (a merchant, banker or guildmaster opens, a boat asks to pilot, else it is considered; no hail). A player or corpse that becomes the target is only targeted, as the program's key handler reads (0x462519).
   - With no character, a door on the same ray gets one click at the point the ray met it, and the session judges its reach from there, as for a mouse click. Nothing else is reached: an item on the ground or a world container opens only by its own click (read).
@@ -53,7 +140,7 @@
     drops the program's. Project 1999 offers none of the three.
   - No repin of its own: it uses main's eq-network pin (614d1c0, #635),
     which carries `reports::petition_form` and the feedback's place.
-- A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when the Bard songs filter is "mine only" (filter 9 holding 1), and so does this client, through the local filter gate (`chat_filters::hidden_locally`). Read R49-48 e asks to confirm that compare. On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
+- A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when filter 9 holds 1, and so does this client, through the local filter gate (`chat_filters::hidden_locally`). That value is the Bard songs row's Hide option (read R49-48 e; see the fix above). On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
 - A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
   - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.
   - **Each refresh of the player's own gem** sends the song stop, then presses the next gem, cycling. Nothing else moves the melody (no timer, no retry), so with no refresh after a refused press it stalls ([I]; read R49-48 f is filed for the program's index on a refusal).
@@ -134,12 +221,13 @@
   spells, the bad-word mask): each is a named TODO at
   `chat_filters::hidden_locally`. Mac-era and RoF2 programs are unread and
   hide nothing locally.
-- Show the session's chat pace (checklist 6.523, eq-network c951420). Its
+- Show the session's chat pace (checklist 6.523, eq-network #354). Its
   refusal, "You are sending chat too fast. Wait N seconds.", is printed as
-  the player's own line, and a script whose chat or social step the pace
-  holds fails at that step's line with those words. The repin's other news
-  (titles, the bind zone, the chat server's channels) is passed over until
-  each one's own client work lands.
+  the player's own line. A script fails at a step's line with those words
+  when the pace holds chat that step sent: a `chat`, `social` or `gm` step,
+  or a `slash` step whose typed line sent chat (`say`, `ooc` and the rest).
+  The pace is this client's own: the Titanium program paces no chat (read
+  R49-17), so it is a departure, not parity.
 - Follow program read R49-6 on Titanium (checklist 6.492). Each duel outcome the session tells is the program's line in its colour, and `/duel` sends the target as it stands, with the session wording the result. The **Duel Answer Card** is a quality-of-life setting, on by default: Yes accepts as `/duel` does, No sends nothing, and off there is no card, as in the program. Scripts can answer it. A quest's coins are said one line per coin with the giver's name, then the reward sound plays (also for EQEmu's fixed sound record). A yell for help names where the yeller stands from your heading. A level lost is said, and a level gained plays its sound. Another spawn's stat increase has the program's line. `/lfg on` and `off` say the program's lines, and any other form is its usage line. `/motd` says the kept message in the program's line, and `/charinfo` names the bind zone in it. The Mac-era and RoF2 programs are unread and keep this client's words. Repins eq-network to bf7a4db.
 - The Interface scale slider on the QoL page no longer swings between its ends while dragged.
   - **Cause:** each frame of a drag set the scale, which moved the Options window and the slider under a pointer that held still. The pointer then read near one end and then the other, so the scale flipped back and forth and could not be set back to 100%.
@@ -262,7 +350,8 @@
     - the speaker's stage: this client's own short-word list, then the program's per-letter rule;
     - the listener's stage, only where the world's log-server switch is on.
   - **Not garbled:** channels 6 and 14, and any line when a game master is on either side. A game master sender is found by name in the zone (inferred).
-  - **The away reply.** While AFK, a tell that got through the ignore list gets 0x58b back.
+  - **The away reply.** While AFK, a tell that got through the ignore list gets 0x58b back. The test for an away reply (0x589 or 0x58a at the start) reads the tell as it arrived, before any garble, so two away players never answer each other.
+  - **Letters.** A random letter is a backtick or 'a' to 'y' in Titanium's speaker stage (R49-4b's `0x60 + 0x40cbb2(0, 0x19)`, whose draw includes both ends, as the random-bounds read confirms) and in both Mac stages, and 'a' to 'y' in Titanium's listener stage. A roll of 99 or 100 makes a space of any letter but a word's first with no space beside it, its last letter included.
   - **Inferred or left out:**
     - on the Mac client, `/language`, the send and the speaker stage follow the Titanium read;
     - an unlabelled program flag at the gate is taken as 0;

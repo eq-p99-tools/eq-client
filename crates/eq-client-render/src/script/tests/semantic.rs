@@ -1152,10 +1152,12 @@ fn a_burst_of_gm_lines_off_a_local_session_goes_as_typed_under_the_chat_pace() {
 }
 
 #[test]
-fn a_chat_pace_refusal_after_a_gm_step_fails_it_but_not_after_an_emote() {
+fn a_chat_pace_refusal_after_a_gm_or_typed_say_fails_it_but_not_after_an_emote() {
     let reason = "You are sending chat too fast. Wait 2 seconds.";
     for (source, chats) in [
         ("gm(\"stun 8000\")\nwait(5000)", true),
+        // A slash step runs a typed line, so a typed chat word meets the pace.
+        ("slash(\"say hello\")\nwait(5000)", true),
         ("slash(\"emote waves\")\nwait(5000)", false),
     ] {
         let (mut app, rx) = app();

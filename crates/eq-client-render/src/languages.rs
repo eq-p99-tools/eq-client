@@ -178,9 +178,10 @@ impl ChatState {
         world: &ClientWorld,
         sender: &str,
     ) {
-        if let Some(hearing) = hearing(world, sender) {
-            tongues::hear(line, &hearing);
-        }
+        // The away test reads the tell as it arrived, before any garble: a
+        // garbled away reply that no longer starts with its line would
+        // otherwise be answered, and two away players could answer each
+        // other for ever.
         if line.channel == eq_client_core::chat::ChannelName::Tell
             && world.player().is_some_and(|player| player.listing.away)
             && !sender.eq_ignore_ascii_case(world.player().map_or("", |player| &player.name))
@@ -189,6 +190,9 @@ impl ChatState {
                 sender: sender.to_owned(),
                 text: line.message.text.clone(),
             });
+        }
+        if let Some(hearing) = hearing(world, sender) {
+            tongues::hear(line, &hearing);
         }
     }
 }

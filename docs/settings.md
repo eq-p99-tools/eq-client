@@ -193,6 +193,23 @@ own, nearest first, so they never take a voice from a spell, combat or
 interface sound. A zone change, a camp, a logout or a lost connection stops
 all of them.
 
+## Inspect Others
+
+**Inspect Others** (`inspect_others`, on) is the original client's
+`InspectOthers` in `eqclient.ini` `[Defaults]` (read R49-16): on when its
+value starts with t, T or 1, and on when the key is missing. A character
+with no choice of their own starts from it; this client then keeps the
+choice per character, where the original keeps one per installation.
+
+`/toggleinspect on` and `/toggleinspect off` set it, and any other word or
+none gives the original's two usage lines. Each ends with the original's
+line saying where it stands. Nothing is sent, on any server.
+
+It decides only whether your own right-click on a player inspects them
+(checklist 6.644, on Titanium; see [Controls](controls.md)). It does not
+stop others inspecting you: the original answers their inspections
+whatever it says, and so does this client.
+
 ## Attack On Assist
 
 Titanium installations keep `attack_on_assist` in the character's options file.

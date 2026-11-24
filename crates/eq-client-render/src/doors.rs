@@ -17,6 +17,20 @@ pub(super) struct Model {
     pub pick: Vec<PickMesh>,
 }
 
+/// A door's solid triangles from its model's: the faces a placement of
+/// the model is met by, and those of its meshes in the engine's no-hit case
+/// (read R49-49c) too. The engine builds a door by name and takes its
+/// collision mode from eqgame.exe 0x1006c2b0, which is unread (read
+/// R49-49d), so a door keeps the faces it had before that rule.
+pub(super) fn collision(
+    placed: Vec<[[f32; 3]; 3]>,
+    no_hit: Vec<[[f32; 3]; 3]>,
+) -> Vec<[[f32; 3]; 3]> {
+    let mut triangles = placed;
+    triangles.extend(no_hit);
+    triangles
+}
+
 /// Keeps just the drawn positions and indices available after GPU extraction.
 pub(super) struct PickMesh {
     positions: Vec<[f32; 3]>,
@@ -644,6 +658,7 @@ mod tests {
             }],
             materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
             collision: Vec::new(),
+            no_hit_collision: Vec::new(),
             vertex_count: None,
         };
         let mut models = Models::default();

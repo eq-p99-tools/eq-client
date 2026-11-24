@@ -1739,6 +1739,7 @@ mod tests {
             }],
             materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
             collision: Vec::new(),
+            no_hit_collision: Vec::new(),
             vertex_count: None,
         };
         let mut models = super::super::doors::Models::default();

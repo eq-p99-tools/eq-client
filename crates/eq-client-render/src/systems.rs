@@ -216,9 +216,13 @@ pub(super) fn schedule(app: &mut App) {
                 crate::fastdrop::answers,
                 crate::slash::answers,
                 crate::slash::assist_named,
+                crate::shield::answer,
                 crate::corpses::run,
                 inventory::auto::run,
-                crate::chat_channels::answers,
+                (
+                    crate::chat_channels::answers,
+                    crate::chat_channels::autojoin,
+                ),
                 (
                     crate::languages::command,
                     crate::languages::speak,
@@ -373,6 +377,7 @@ pub(super) fn schedule(app: &mut App) {
                         tracking::window,
                         tracking::say_rangers_only,
                         pet::say_pet_target,
+                        crate::targeted::say,
                     ),
                     (translocate::decline_unasked, confirm::window).chain(),
                     reading::window,
