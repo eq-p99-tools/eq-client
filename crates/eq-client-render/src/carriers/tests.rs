@@ -8,7 +8,7 @@ use eq_client_core::{
 use std::{path::PathBuf, sync::mpsc, time::Duration};
 
 fn asset() -> ActorAsset {
-    let points = vec![[-4.0, 0.0, -3.0], [4.0, 0.0, -3.0], [0.0, 0.0, 3.0]];
+    let points = vec![[-4.0, 0.0, -3.0], [0.0, 0.0, 3.0], [4.0, 0.0, -3.0]];
     ActorAsset {
         model: ZoneModel {
             name: "BOAT_ACTORDEF".into(),
@@ -64,8 +64,8 @@ fn fixture(gender: u32, invisible: bool) -> (App, Model) {
     time.advance_by(Duration::from_millis(200));
     let collision = CollisionWorld::new([[
         [-1000.0, -100.0, -1000.0],
-        [1000.0, -100.0, -1000.0],
         [0.0, -100.0, 1000.0],
+        [1000.0, -100.0, -1000.0],
     ]])
     .unwrap();
     let mut app = App::new();

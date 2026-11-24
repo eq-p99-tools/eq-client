@@ -119,8 +119,8 @@ fn lava_heat_still_burns_while_the_player_swims_it() {
     app.world_mut().resource_mut::<OnlineState>().regions = lava();
     let pool = CollisionWorld::new([[
         [-40.0, -40.0, -40.0],
-        [40.0, -40.0, -40.0],
         [0.0, -40.0, 40.0],
+        [40.0, -40.0, -40.0],
     ]])
     .unwrap()
     .with_liquids(crate::scene_collision::ZoneLiquids(
@@ -581,8 +581,8 @@ fn prepare_p99_surface(app: &mut App) -> (eq_client_core::WorldPosition, u64) {
     let regions = ZoneRegions::test_liquid_surface(0.0, Liquid::Water);
     let pool = CollisionWorld::new([[
         [-20.0, -20.0, -20.0],
-        [20.0, -20.0, -20.0],
         [0.0, -20.0, 20.0],
+        [20.0, -20.0, -20.0],
     ]])
     .unwrap()
     .with_liquids(crate::scene_collision::ZoneLiquids(

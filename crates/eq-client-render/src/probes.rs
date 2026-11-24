@@ -1467,42 +1467,42 @@ fn made_up_zone() -> (eq_client_core::movement::CollisionWorld, Boxes) {
     // from x 30, under water up to y -1.
     triangles.extend(quad(
         [-40.0, 0.0, -100.0],
-        [10.0, 0.0, -100.0],
-        [10.0, 0.0, -60.0],
         [-40.0, 0.0, -60.0],
+        [10.0, 0.0, -60.0],
+        [10.0, 0.0, -100.0],
     ));
     triangles.extend(quad(
         [10.0, 0.0, -100.0],
-        [30.0, -10.0, -100.0],
-        [30.0, -10.0, -60.0],
         [10.0, 0.0, -60.0],
+        [30.0, -10.0, -60.0],
+        [30.0, -10.0, -100.0],
     ));
     triangles.extend(quad(
         [30.0, -10.0, -100.0],
-        [60.0, -10.0, -100.0],
-        [60.0, -10.0, -60.0],
         [30.0, -10.0, -60.0],
+        [60.0, -10.0, -60.0],
+        [60.0, -10.0, -100.0],
     ));
     // Between z -40 and 0, flat ground with lava from x 30.
     triangles.extend(quad(
         [-40.0, 0.0, -40.0],
-        [60.0, 0.0, -40.0],
-        [60.0, 0.0, 0.0],
         [-40.0, 0.0, 0.0],
+        [60.0, 0.0, 0.0],
+        [60.0, 0.0, -40.0],
     ));
     // North of z 20, a ledge at y 10 to x 0 over ground at y 0 under water
     // up to y 8.
     triangles.extend(quad(
         [-40.0, 10.0, 20.0],
-        [0.0, 10.0, 20.0],
-        [0.0, 10.0, 60.0],
         [-40.0, 10.0, 60.0],
+        [0.0, 10.0, 60.0],
+        [0.0, 10.0, 20.0],
     ));
     triangles.extend(quad(
         [0.0, 0.0, 20.0],
-        [60.0, 0.0, 20.0],
-        [60.0, 0.0, 60.0],
         [0.0, 0.0, 60.0],
+        [60.0, 0.0, 60.0],
+        [60.0, 0.0, 20.0],
     ));
     // Over it all, a ceiling at y 20, as some zones have over them: as far
     // over the ledge as the water's floor is under it.

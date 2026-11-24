@@ -3756,8 +3756,8 @@ pub(super) mod tests {
         doors.apply(&DoorUpdate::Spawn(vec![lift]), start);
         doors.apply(&DoorUpdate::Move { id: 4, action: 2 }, start);
         let world = CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
         ])
         .unwrap();
         let mut reach = crate::doors::LiftReach::default();
@@ -3824,15 +3824,15 @@ pub(super) mod tests {
         let deck = |y: f32| {
             Arc::new(
                 CollisionMesh::new([
-                    [[-5.0, y, -5.0], [5.0, y, -5.0], [5.0, y, 5.0]],
-                    [[-5.0, y, -5.0], [5.0, y, 5.0], [-5.0, y, 5.0]],
+                    [[-5.0, y, -5.0], [5.0, y, 5.0], [5.0, y, -5.0]],
+                    [[-5.0, y, -5.0], [-5.0, y, 5.0], [5.0, y, 5.0]],
                 ])
                 .unwrap(),
             )
         };
         let mut world = CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
         ])
         .unwrap();
         let solid = eq_client_core::doors::Solidity::BOTH;
@@ -3858,10 +3858,10 @@ pub(super) mod tests {
         // floor: the program tests nothing above the rider (read R1d).
         lifts.0.insert(4, (Vec3::ZERO, 310.0));
         let mut capped = CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
-            [[-5.0, 4.0, -5.0], [5.0, 4.0, -5.0], [5.0, 4.0, 5.0]],
-            [[-5.0, 4.0, -5.0], [5.0, 4.0, 5.0], [-5.0, 4.0, 5.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
+            [[-5.0, 4.0, -5.0], [5.0, 4.0, 5.0], [5.0, 4.0, -5.0]],
+            [[-5.0, 4.0, -5.0], [-5.0, 4.0, 5.0], [5.0, 4.0, 5.0]],
         ])
         .unwrap();
         capped.set_door_obstacles_with(vec![(4, deck(0.5), solid)]);
@@ -3886,8 +3886,8 @@ pub(super) mod tests {
         let deck = |y: f32| {
             Arc::new(
                 CollisionMesh::new([
-                    [[-5.0, y, -5.0], [5.0, y, -5.0], [5.0, y, 5.0]],
-                    [[-5.0, y, -5.0], [5.0, y, 5.0], [-5.0, y, 5.0]],
+                    [[-5.0, y, -5.0], [5.0, y, 5.0], [5.0, y, -5.0]],
+                    [[-5.0, y, -5.0], [-5.0, y, 5.0], [5.0, y, 5.0]],
                 ])
                 .unwrap(),
             )
@@ -3915,8 +3915,8 @@ pub(super) mod tests {
         // The zone has a surface over the shaft that the risen lift's floor
         // ends 2.5 below, inside a standing body, as at the Kelethin lift.
         let mut world = CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
             [[-5.0, 92.5, -5.0], [5.0, 92.5, -5.0], [5.0, 92.5, 5.0]],
             [[-5.0, 92.5, -5.0], [5.0, 92.5, 5.0], [-5.0, 92.5, 5.0]],
         ])
@@ -3953,8 +3953,8 @@ pub(super) mod tests {
         // rerun, 6.648) is past that and falls; 0.3 over stays. A client
         // with no read physics keeps the grounded step's 2.
         let world = eq_client_core::movement::CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
         ])
         .unwrap();
         let titanium = physics(InstalledClient::Titanium, None).ground_tolerance;
@@ -3999,8 +3999,8 @@ pub(super) mod tests {
         );
         let quad = |x0: f32, x1: f32, y0: f32, y1: f32| {
             [
-                [[x0, y0, -10.0], [x1, y1, -10.0], [x1, y1, 10.0]],
-                [[x0, y0, -10.0], [x1, y1, 10.0], [x0, y0, 10.0]],
+                [[x0, y0, -10.0], [x1, y1, 10.0], [x1, y1, -10.0]],
+                [[x0, y0, -10.0], [x0, y0, 10.0], [x1, y1, 10.0]],
             ]
         };
         // Ten treads 1 deep and 0.75 high, up to a landing, with risers.
@@ -4771,15 +4771,15 @@ pub(super) mod tests {
         use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
         // Steep stairs: each slice of a fast sample can climb a whole step.
         let mut triangles = vec![
-            [[-20.0, 0.0, -10.0], [0.0, 0.0, -10.0], [0.0, 0.0, 10.0]],
-            [[-20.0, 0.0, -10.0], [0.0, 0.0, 10.0], [-20.0, 0.0, 10.0]],
+            [[-20.0, 0.0, -10.0], [0.0, 0.0, 10.0], [0.0, 0.0, -10.0]],
+            [[-20.0, 0.0, -10.0], [-20.0, 0.0, 10.0], [0.0, 0.0, 10.0]],
         ];
         for step in 0..10_u8 {
             let (x0, x1) = (f32::from(step) * 0.6, f32::from(step + 1) * 0.6);
             let (low, top) = (f32::from(step) * 1.5, f32::from(step + 1) * 1.5);
             triangles.extend([
-                [[x0, top, -10.0], [x1, top, -10.0], [x1, top, 10.0]],
-                [[x0, top, -10.0], [x1, top, 10.0], [x0, top, 10.0]],
+                [[x0, top, -10.0], [x1, top, 10.0], [x1, top, -10.0]],
+                [[x0, top, -10.0], [x0, top, 10.0], [x1, top, 10.0]],
                 [[x0, low, -10.0], [x0, top, -10.0], [x0, top, 10.0]],
                 [[x0, low, -10.0], [x0, top, 10.0], [x0, low, 10.0]],
             ]);
@@ -4821,8 +4821,8 @@ pub(super) mod tests {
     fn a_jump_starts_in_the_first_slice_and_keeps_its_arc_across_samples() {
         use eq_client_core::movement::{AirborneController, CollisionWorld};
         let world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let mut airborne = AirborneController::default();
@@ -4879,8 +4879,8 @@ pub(super) mod tests {
         // rises, then falls, then lands; a walk off a ledge falls.
         use eq_client_core::movement::{AirborneController, CollisionWorld};
         let world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let titanium = physics(InstalledClient::Titanium, None);
@@ -5649,8 +5649,8 @@ pub(super) mod tests {
     fn a_titanium_jump_rises_at_its_own_speed_within_the_guards_allowance() {
         use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
         let world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let titanium = climbing(
@@ -6408,8 +6408,8 @@ pub(super) mod tests {
         for (height, _, _) in expected {
             let ledge = |x0: f32, x1: f32, y: f32| {
                 [
-                    [[x0, y, -20.0], [x1, y, -20.0], [x1, y, 20.0]],
-                    [[x0, y, -20.0], [x1, y, 20.0], [x0, y, 20.0]],
+                    [[x0, y, -20.0], [x1, y, 20.0], [x1, y, -20.0]],
+                    [[x0, y, -20.0], [x0, y, 20.0], [x1, y, 20.0]],
                 ]
             };
             let [a, b] = ledge(-40.0, 0.0, height);
@@ -6465,8 +6465,8 @@ pub(super) mod tests {
     #[test]
     fn a_landing_costs_what_the_installed_clients_rule_says() {
         let floor = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let world = ClientWorld::default();
@@ -6668,8 +6668,8 @@ pub(super) mod tests {
 
     fn flat_surface(y: f32) -> [[[f32; 3]; 3]; 2] {
         [
-            [[-20.0, y, -20.0], [20.0, y, -20.0], [20.0, y, 20.0]],
-            [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
+            [[-20.0, y, -20.0], [20.0, y, 20.0], [20.0, y, -20.0]],
+            [[-20.0, y, -20.0], [-20.0, y, 20.0], [20.0, y, 20.0]],
         ]
     }
 
@@ -7285,15 +7285,15 @@ pub(super) mod tests {
         let quad = |a, b, c, d| [[a, b, c], [a, c, d]];
         let mut triangles = Vec::from(quad(
             [-20.0, -8.0, -10.0],
-            [0.0, -8.0, -10.0],
-            [0.0, -8.0, 10.0],
             [-20.0, -8.0, 10.0],
+            [0.0, -8.0, 10.0],
+            [0.0, -8.0, -10.0],
         ));
         triangles.extend(quad(
             [0.0, rim, -10.0],
-            [200.0, rim, -10.0],
-            [200.0, rim, 10.0],
             [0.0, rim, 10.0],
+            [200.0, rim, 10.0],
+            [200.0, rim, -10.0],
         ));
         triangles.extend(quad(
             [0.0, -8.0, -10.0],
@@ -7597,8 +7597,8 @@ pub(super) mod tests {
     /// with a floor at -40: the follow fixture's shore.
     fn kind_shore(kind: eq_client_assets::regions::RegionKind) -> CollisionWorld {
         let shelf = [
-            [[-20.0, 0.0, -20.0], [2.0, 0.0, -20.0], [2.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [2.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [2.0, 0.0, 20.0]],
         ];
         kind_world(shelf.into_iter().chain(flat_surface(-40.0)), kind)
     }
@@ -7836,16 +7836,16 @@ pub(super) mod tests {
     fn pool_ramp() -> CollisionWorld {
         let (lip, crease, far) = (-6.0, -3.0, 22.0);
         let mut triangles = vec![
-            [[0.0, 1.0, 0.0], [14.0, 8.0, far], [0.0, 8.0, far]],
-            [[14.0, 8.0, far], [0.0, 1.0, 0.0], [0.0, 0.0, crease]],
-            [[14.0, 1.0, 0.0], [0.0, 0.0, crease], [14.0, 0.0, crease]],
-            [[0.0, 0.0, crease], [14.0, 1.0, 0.0], [14.0, 8.0, far]],
+            [[0.0, 1.0, 0.0], [0.0, 8.0, far], [14.0, 8.0, far]],
+            [[14.0, 8.0, far], [0.0, 0.0, crease], [0.0, 1.0, 0.0]],
+            [[14.0, 1.0, 0.0], [14.0, 0.0, crease], [0.0, 0.0, crease]],
+            [[0.0, 0.0, crease], [14.0, 8.0, far], [14.0, 1.0, 0.0]],
             [[0.0, 1.0, 0.0], [0.0, 10.0, far], [0.0, 1.0, lip]],
             [[0.0, 10.0, far], [0.0, 1.0, 0.0], [0.0, 8.0, far]],
             [[0.0, 1.0, 0.0], [0.0, 0.0, lip], [0.0, 0.0, crease]],
             [[0.0, 0.0, lip], [0.0, 1.0, 0.0], [0.0, 1.0, lip]],
-            [[14.0, -1.0, lip], [0.0, 0.0, crease], [0.0, -1.0, lip]],
-            [[0.0, 0.0, crease], [14.0, -1.0, lip], [14.0, 0.0, crease]],
+            [[14.0, -1.0, lip], [0.0, -1.0, lip], [0.0, 0.0, crease]],
+            [[0.0, 0.0, crease], [14.0, 0.0, crease], [14.0, -1.0, lip]],
             [[0.0, 0.0, crease], [0.0, 0.0, lip], [0.0, -1.0, lip]],
         ];
         triangles.extend(flat_surface(-16.0));
@@ -8086,8 +8086,8 @@ pub(super) mod tests {
         // A short dry shelf ends above a deep pool. Follow must walk off,
         // fall into the mapped water, and retain its horizontal input.
         let shelf = [
-            [[-20.0, 0.0, -20.0], [2.0, 0.0, -20.0], [2.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [2.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [2.0, 0.0, 20.0]],
         ];
         app.insert_resource(Collision(Some(
             CollisionWorld::new(shelf.into_iter().chain(flat_surface(-12.0)))
@@ -8916,8 +8916,8 @@ pub(super) mod tests {
         // The new zone has a floor but no mapped water at the old surface.
         let dry = CollisionWorld::new([[
             [-20.0, -12.0, -20.0],
-            [20.0, -12.0, -20.0],
             [0.0, -12.0, 20.0],
+            [20.0, -12.0, -20.0],
         ]])
         .unwrap();
         app.insert_resource(Collision(Some(dry)));
@@ -10227,8 +10227,8 @@ pub(super) mod tests {
     fn a_diagonal_trial_that_leaves_support_uses_the_ordinary_ledge_path() {
         let (mut app, receiver) = app();
         let edge = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [0.0, 0.0, -20.0], [0.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [0.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [0.0, 0.0, 20.0]],
         ])
         .unwrap();
         app.insert_resource(Collision(Some(edge)))
@@ -10787,13 +10787,13 @@ pub(super) mod tests {
             CollisionWorld::new([
                 [
                     [-1000.0, 0.0, -1000.0],
-                    [1000.0, 0.0, -1000.0],
                     [1000.0, 0.0, 1000.0],
+                    [1000.0, 0.0, -1000.0],
                 ],
                 [
                     [-1000.0, 0.0, -1000.0],
-                    [1000.0, 0.0, 1000.0],
                     [-1000.0, 0.0, 1000.0],
+                    [1000.0, 0.0, 1000.0],
                 ],
             ])
             .unwrap(),
@@ -10915,13 +10915,13 @@ pub(super) mod tests {
             CollisionMesh::new([
                 [
                     [-200.0, 0.0, -200.0],
-                    [200.0, 0.0, -200.0],
                     [200.0, 0.0, 200.0],
+                    [200.0, 0.0, -200.0],
                 ],
                 [
                     [-200.0, 0.0, -200.0],
-                    [200.0, 0.0, 200.0],
                     [-200.0, 0.0, 200.0],
+                    [200.0, 0.0, 200.0],
                 ],
             ])
             .unwrap(),
@@ -10929,13 +10929,13 @@ pub(super) mod tests {
         let water_floor = [
             [
                 [-2000.0, -30.0, -2000.0],
-                [2000.0, -30.0, -2000.0],
                 [2000.0, -30.0, 2000.0],
+                [2000.0, -30.0, -2000.0],
             ],
             [
                 [-2000.0, -30.0, -2000.0],
-                [2000.0, -30.0, 2000.0],
                 [-2000.0, -30.0, 2000.0],
+                [2000.0, -30.0, 2000.0],
             ],
         ];
         // The boat reaches `pose`, and its collision is placed there.
@@ -12153,13 +12153,16 @@ pub(super) mod tests {
     ) -> (App, mpsc::Receiver<ClientCommand>) {
         use eq_client_core::movement::{CollisionWorld, MotionStep};
         let floor = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let mut airborne = AirborneController::default();
         let mut feet = Vec3::Y * 100.0;
+        let mut steps = 0;
         loop {
+            steps += 1;
+            assert!(steps <= 200, "the fixture's fall never landed: {feet}");
             let mut next = airborne.clone();
             let below = next.step(
                 &floor,
@@ -12777,8 +12780,8 @@ mod liquid_tests {
     fn a_press_in_water_finds_the_water_without_a_movement_pass() {
         let pool = CollisionWorld::new([[
             [-20.0, -20.0, -20.0],
-            [20.0, -20.0, -20.0],
             [0.0, -20.0, 20.0],
+            [20.0, -20.0, -20.0],
         ]])
         .unwrap()
         .with_liquids(crate::scene_collision::ZoneLiquids(

@@ -2147,8 +2147,8 @@ mod tests {
     fn offline_falling_pauses_for_character_selection_and_online_players() {
         use super::*;
         let geometry = [
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ];
         let mut app = App::new();
         crate::keys::testing::install(&mut app);
