@@ -8,6 +8,59 @@
   - **Jumps and falls of other spawns.** A spawn moving only up or down plays its jump (L04, L03 for race 49) or, faster than 45 a second down, its fall (L05), as the program's picker does, where it used to stand. Moving is now a speed of 2 a second in any direction.
   - **A rider on a deck stands on it at each report.** A still rider whose report came a little above the deck rose toward it and fell back, a bob at every report. The sweep that links it now stands it on the deck at once, as the program's does (0x48c285, read R49-27 (d)). A report with its own vertical speed, or more than the model's reach above the deck, still falls (inferred).
   - Our own sender still reports no vertical speed on a jump or fall; that is a separate row.
+- **An interruption the server names prints as the Titanium program prints it** (reads R49-51 and R49-51b, checklist 6.645 S1). On P99 and Titanium EQEmu, your own interruption line and another caster's take the program's colour 0x108. As a Bard, your own line is hidden where the song stop line is: only with the Bard songs filter at Hide (read R49-48 e: the program's filter 9 value 1 is that row's last option; that the options run in the Options window's order is inferred, as the read maps them by index with their labels unread). Another class's own line always shows, as before. Another caster's line follows the filter for who they are: a Bard's the Bard songs filter, another player's the other players' spells filter, an NPC's the NPC spells filter. A group member's shows at Show and Group only, anyone else's at Show only (options by index, inferred as above). A caster this client doesn't know shows (inferred). The Mac and RoF2 programs are unread and keep this client's colour and show every line.
+- **Fix: the Bard songs filter hides the song stop line at Hide, not Mine only** (read R49-48 e). The earlier entry below took the program's filter 9 value 1 for Mine only; it is the row's last option, Hide.
+- **Chat server channel commands follow the Titanium program** (read R49-12, checklist 6.616).
+  - `/join`, `/leave`, `/leaveall` and `/list` go to the chat server as typed, slash and all, and `/leave` alone goes as it is. `/1` to `/10` go as `;N text`.
+  - **`/autojoin channel, ...`** keeps the channels to join at each login in your character's options and sends nothing now. Each time the chat server takes the login, the client says so and sends `/join` with the list. The list is yours, else the official client's `[ChatManager]` `ChannelAutoJoin` for the character, else `eqclient.ini`'s `[Defaults]` one; `NONE` joins nothing. The official client's files are only read.
+  - The confirmation and the autojoining line are this client's words: the program prints plain lines there whose text isn't read. They show each channel's name but never a password after a colon, which still goes to the chat server with the `/join`.
+  - Usage lines for `/join` and `/N` with nothing after them are this client's words, in the program's colour for its own lines.
+  - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure. It is said, and nothing is sent, whenever no link is up: before the chat server takes the login, and after a link ends.
+  - The autojoin waits for the character to be in the world: the chat server can take the login while the character is still entering, and the list is that character's. `/autojoin NONE` says you will join no channels.
+  - `/announce` and `/chat words` go after a `/` too (`/announce on`, `/kick general Someone`). Inferred: `/announce`'s handler is unread and `/chat`'s sent form only partly read; the chat server skips a command's first byte, so this is the form it takes.
+  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422), and works against a stock chat server: one-byte opcodes, its keep-alive read past, commands as typed, and a log line saying why a link ended (eq-network #438, pinned at bb4c8d7). The repin also takes #443's bug-report fields, which this client leaves unticked.
+- A swimmer climbs out of a pool onto a rim up to about 3.3 above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483b, 6.483c):
+  - Stroking forward with the view pitched up toward dry ground just ahead hops, at most once in 1500 ms: three times the jump strength added to the rise and a push along the heading (0x48a793, 0x48a026, read R33b).
+  - The wet step ends on the frame that takes the origin out of the water, so the fall that follows keeps the velocity it left with instead of losing it to the water's damping for the rest of the sample.
+  - The walk loses its edge climb only with the origin in water or lava, the program's deep liquid (+0xad of 5 or more, R40), not whenever the feet are wet. Wading with the origin dry climbs edges.
+  - A fall whose origin has just left the water, the soles still in it, passes over what the walk would climb (origin + 1.25) and lands on it, inside the announced climb reach.
+  - A body falling back into water keeps the fall's velocity, so a wall that stopped the move no longer stops the next stroke's forward speed.
+  - A swimmer that surfaces under a ramp or deck over the water, its head inside it, drops back into the water instead of freezing in place (Temple of Life's north deck). The fall's downward sweep is led by the lower body when the whole body's is refused where it starts. Ours: the program's sphere differs (R40).
+- **A walker passes through trees, plants and grass, trunks included, as the engine's walking sweep does** (reads R49-49c, R49-49d, R49-49e). The sweep (EQGraphicsDX9.dll 0x10192400) returns no hit at once for an object mesh whose 0x36 flags lack 0x10000 and whose +0x14 reference is empty (read F4g), and every WLD placement reaches it on the player's walk. In the installed files that is every tree, plant and grass mesh (both pines' trunks among them) and about 280 meshes in all, among them some signs, lamps and jars and the generic Luclin and PoP shapes. Every building, rock, statue, ladder and the Neriak bars are referenced and stay solid.
+  - Before, this client stood a walker on a tree's trunk faces, which let a walker climb a Firiona swamp tree.
+  - Doors are unchanged: how the engine sets a door's collision mode (eqgame.exe 0x1006c2b0) is unread, so a door keeps every face it had.
+  - One step is inferred: a placement with an LOD list is taken to reach the sweep as one without does.
+  - Labelled departure: the engine's ray tests still see those meshes, but this client's camera shares the walking world, so it passes through them too (follow-up row).
+- **The Neriak bars stop a walker while shut** (eq-client #629, with eq-network #406's wall for open types 60-77). The engine makes five model names solid throughout, passable faces and all (EQGraphicsDX9.dll 0x10193510, read F4b): `LADDER*` and `IT66*` in any case, `SBDOOR103_*` as written, and exactly `HHCELL_DMSPRITEDEF` and `PORT1414_DMSPRITEDEF`. Before, every HHCELL face was flagged passable, so the bars stopped nothing. A click raises the linked pieces together, a walker passes under them, and a body a closing door overlaps is let out.
+- A knight's Lay on Hands or Harm Touch waits as the Titanium program's does
+  (read R49-29 b, checklist 6.626, slice B), with eq-network #433 in main's
+  pin. The session now waits the program's own gem-9 timer: 10 s from a
+  press, then the spell's recast
+  after the server refreshes the gem, saying the program's 0x2efd while it
+  runs. This client hands it the recast from the installed spell file
+  (field 15, the replayed table on P99 once ready). The server's long reuse
+  no longer holds the press: the button's hover shows it as "Server reuse
+  N s" (this client's label, "(estimated)" where the session estimated it)
+  and the button still dims while it runs, but the press goes after the
+  local wait and the server decides.
+- On Titanium, a right-click on a player inspects them, as the program's use
+  routine ends (reads R49-16 and R49-16e, checklist 6.644).
+  - The player is first considered, as before. Then, with Inspect Others
+    on and nothing on the cursor, a player under 20 away (3D) is inspected
+    through eq-network's new `InspectSpawn`. A player 20 or more away gets
+    the program's line 0x305a naming them, in this client's words where the
+    installation lacks the line.
+  - Right-clicking yourself inspects you with no consider. Nothing is
+    targeted.
+  - The Mac-era and RoF2 programs are unread, so they only consider, as
+    before.
+  - Not modelled yet: the program's busy gate before any right-click use
+    (mounted, dead, camping, a pending trade or merchant, certain windows
+    open; read R49-16e), the trader branches, and the body types the
+    consider skips.
+- The Player window's mana and endurance percents read as the Titanium program's label provider makes them (read R49-37b, gap 3.9, checklist 6.529): current x 100 / maximum in whole numbers, cut toward zero, at most 100, shown as a bare number, and "0" while the maximum is 0. Before our estimate has a maximum they show "0" too (inferred: the program always knows it). The "%" after each is the skin's own text, which the program never hides, so this client no longer hides the Player window's signs; that rule, from the earlier 6.529 entry, was inferred and is withdrawn. Hit points keep their current text, as R49-37 didn't read them.
+- A spawn whose model the installation lacks is drawn as the program draws it (read R49-37a, 0x43c84b): a Human of its gender, sized and footed as race 1 unless its race is 216 or 472. Before, it drew a marker. A carrier keeps its marker, and so does a race this client has no model name for yet, since that gap is ours.
+
 - Languages train on TAKP and Quarm as the `EQMac` program does (checklist 6.597; eq-network #427, already in the pin). The program keeps its language minimum levels inside itself, so the client reads them from the installed program at its addresses, checks their shape, and hands them to the session. Without a table that passes, Mac language training stays shut. No table values are kept in this repository.
   - The training window lists only the languages the player already speaks. The program's gate runs before anything is sent, and each refusal says the program's line: too young for the language, no practice points, already mastered (naming the language), or at the guildmaster's limit. A purse short of the program's figure gets its coin line, in its colour.
   - A practice resolves at once, as the program does, since neither server answers it. The program's line for a first point or a further one names the guildmaster and the language, in its colour. The next profile replaces the prediction either way.
@@ -83,7 +136,7 @@
     drops the program's. Project 1999 offers none of the three.
   - No repin of its own: it uses main's eq-network pin (614d1c0, #635),
     which carries `reports::petition_form` and the feedback's place.
-- A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when the Bard songs filter is "mine only" (filter 9 holding 1), and so does this client, through the local filter gate (`chat_filters::hidden_locally`). Read R49-48 e asks to confirm that compare. On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
+- A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when filter 9 holds 1, and so does this client, through the local filter gate (`chat_filters::hidden_locally`). That value is the Bard songs row's Hide option (read R49-48 e; see the fix above). On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
 - A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
   - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.
   - **Each refresh of the player's own gem** sends the song stop, then presses the next gem, cycling. Nothing else moves the melody (no timer, no retry), so with no refresh after a refused press it stalls ([I]; read R49-48 f is filed for the program's index on a refusal).

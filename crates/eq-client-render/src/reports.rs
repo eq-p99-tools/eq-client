@@ -320,6 +320,11 @@ fn command(asked: &Asked, world: &ClientWorld, stamp: crate::outbox::Stamp) -> C
                             name: spawn.state.name.clone(),
                         })
                     }),
+                    // The program's report window's choices, which this
+                    // client does not draw yet: none is ticked.
+                    repeatable: false,
+                    crash: false,
+                    character_flags: false,
                 },
                 created: stamp.created,
             }

@@ -127,6 +127,7 @@ fn read(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
                         .collect(),
                     primitives: staged.primitives,
                     collision: staged.collision,
+                    no_hit_collision: Vec::new(),
                     vertex_count: None,
                 });
             }

@@ -640,15 +640,15 @@ fn hovered_detail(
         Some(Action::Disband) => "Disband\nLeaves your group, or declines an invitation".into(),
         Some(Action::KnightAbility(ability)) => match world.casting().knight_wait(now) {
             Some(wait) if !wait.is_zero() => {
-                let source = match world.casting().knight_reuse_source() {
-                    Some(eq_client_core::knights::ReuseSource::LocalEstimate) => {
-                        "Estimated recovery"
-                    }
-                    Some(eq_client_core::knights::ReuseSource::Profile) => "Profile recovery",
-                    None => "Recovery",
+                // The server's own long reuse, for display only: the press
+                // still goes once the program's local wait is over, and the
+                // server decides (R49-29 b). This label is this client's.
+                let estimated = match world.casting().knight_reuse_source() {
+                    Some(eq_client_core::knights::ReuseSource::LocalEstimate) => " (estimated)",
+                    Some(eq_client_core::knights::ReuseSource::Profile) | None => "",
                 };
                 format!(
-                    "{}\n{source} {:.0}s",
+                    "{}\nServer reuse {:.0}s{estimated}",
                     ability.name(),
                     wait.as_secs_f32().ceil()
                 )
@@ -990,6 +990,43 @@ mod tests {
             app.update();
         }
         assert_eq!(shown(&app), (Size::Heading, false));
+    }
+
+    #[test]
+    fn a_knights_hover_shows_the_servers_reuse_as_this_clients_label() {
+        use eq_client_core::knights::{KnightAbility, ReuseSource};
+        use std::time::Duration;
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut bindings = Bindings::default();
+        bindings.0[0] = Some(Action::KnightAbility(KnightAbility::LayOnHands));
+        let qol = eq_client_core::qol::Settings::default();
+        let names = crate::spellbook::SpellNames::default();
+        let map = crate::keys::KeyMap::default();
+        let hover = |online: &crate::online::OnlineState| {
+            hovered_detail(
+                &bindings,
+                Some(0),
+                (online.world(), &qol),
+                (&names, &map),
+                std::time::Instant::now(),
+            )
+        };
+        assert_eq!(hover(&online), "Lay on Hands\nRecovery unknown");
+        for (source, words) in [
+            (ReuseSource::LocalEstimate, "Server reuse 4320s (estimated)"),
+            (ReuseSource::Profile, "Server reuse 4320s"),
+        ] {
+            crate::online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::KnightReuse {
+                    session_id: 1,
+                    remaining: Duration::from_mins(72),
+                    source,
+                }],
+            );
+            assert_eq!(hover(&online), format!("Lay on Hands\n{words}"));
+        }
     }
 
     #[test]
