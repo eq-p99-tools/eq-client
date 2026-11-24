@@ -281,7 +281,7 @@ pub(crate) struct ReportWindows {
     /// The session the question was asked in.
     pub(crate) asked_in: Option<u64>,
     /// Whether the installation sends system information without asking
-    /// (`[Defaults] SendSystemInfo=1`), as last read.
+    /// (`[Defaults] SendSystemInfo=1`), as read at the last Send.
     pub(crate) sends_system_info: bool,
 }
 
@@ -451,6 +451,12 @@ impl ReportWindows {
         Pressed::Done
     }
 
+    /// Whether a press needs the installation's `SendSystemInfo`: only the
+    /// bug report's Send, when no question is up.
+    fn reads_system_info(&self, button: ReportButton) -> bool {
+        button == ReportButton::Send(Report::Bug) && self.asking.is_none()
+    }
+
     /// The bug report's question, answered: the program's send, the same
     /// for every answer. True with it where Yes sent a report, which the
     /// program would have sent with the machine's details.
@@ -587,8 +593,11 @@ pub(crate) fn buttons(
     mut windows: ResMut<ReportWindows>,
 ) {
     let world = online.world();
-    windows.sends_system_info = sends_system_info(&settings.0);
     for button in clicks.iter() {
+        // The setting is read from disk only for a Send that would ask.
+        if windows.reads_system_info(*button) {
+            windows.sends_system_info = sends_system_info(&settings.0);
+        }
         let stamp = outbox.stamp(world).ok();
         let pressed = windows.press(*button, world, stamp, &mut shown);
         if pressed == Pressed::Ask {

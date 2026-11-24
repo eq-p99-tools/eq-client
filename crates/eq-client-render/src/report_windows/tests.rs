@@ -507,3 +507,45 @@ fn nothing_goes_once_the_session_it_was_asked_in_is_gone() {
     assert!(receiver.try_recv().is_err());
     assert_eq!(app.world().resource::<ReportWindows>().asking, None);
 }
+
+#[test]
+fn only_a_send_that_would_ask_reads_send_system_info() {
+    let mut windows = ReportWindows::default();
+    assert!(windows.reads_system_info(ReportButton::Send(Report::Bug)));
+    for button in [
+        ReportButton::Send(Report::Feedback),
+        ReportButton::Cancel(Report::Bug),
+        ReportButton::Location,
+        ReportButton::Target,
+    ] {
+        assert!(!windows.reads_system_info(button), "{button:?}");
+    }
+    windows.asking = Some(std::time::Duration::ZERO);
+    assert!(!windows.reads_system_info(ReportButton::Send(Report::Bug)));
+}
+
+#[test]
+fn a_frame_with_no_click_leaves_send_system_info_unread() {
+    let install = std::env::temp_dir().join(format!("eq-bug-sysinfo-{}", std::process::id()));
+    std::fs::create_dir_all(&install).unwrap();
+    std::fs::write(
+        install.join("eqclient.ini"),
+        "[Defaults]\nSendSystemInfo=1\n",
+    )
+    .unwrap();
+    let mut app = crate::testing::app();
+    app.init_resource::<ChatState>()
+        .add_systems(Update, buttons);
+    app.world_mut()
+        .resource_mut::<crate::ViewerSettings>()
+        .0
+        .eq_directory = Some(install.clone());
+    app.update();
+    app.update();
+    assert!(!app.world().resource::<ReportWindows>().sends_system_info);
+    // The same installation, read as a Send would read it.
+    assert!(sends_system_info(
+        &app.world().resource::<crate::ViewerSettings>().0
+    ));
+    let _ = std::fs::remove_dir_all(&install);
+}
