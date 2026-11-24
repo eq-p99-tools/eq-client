@@ -12,6 +12,49 @@ pub(super) struct Request {
     /// Unmodified installation mana cost; None leaves the decision to the server.
     pub mana_cost: Option<u32>,
     pub linked_timer: Option<u32>,
+    /// What the program's cast start tests of the spell and the options.
+    pub checks: CastChecks,
+}
+
+/// What the Titanium program's cast start (0x411f3d, read R49-34 e) tests
+/// beyond the gem, from the installed spell data and the options.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub(super) struct CastChecks {
+    /// The level the player's class casts the spell at, from the installed
+    /// spell data (255 for a class that can't); None where it isn't known,
+    /// which leaves the test to the server.
+    pub spell_level: Option<u8>,
+    /// Whether the spell is a song: one a Bard has a level for ([I]: the
+    /// program's own song test reads the spell's skill, not mapped here).
+    pub song: bool,
+    /// Allow Auto Stand: a sitting player stands to cast.
+    pub auto_stand: bool,
+}
+
+/// The gem click's line while a cast is under way or the gem's refresh
+/// runs (0x4ecb56, read R49-34 h), in colour 0x108. The cast start's own
+/// "already casting" line (0x309a) is never reached from a gem, as the
+/// click tests first.
+const GEM_WAIT: u32 = 0x2efd;
+const GEM_WAIT_COLOUR: u32 = 0x108;
+/// The cast start's line when the player's level is below the spell's
+/// (R49-34 e 10).
+const LEVEL_TOO_LOW: u32 = 0x309b;
+/// Its line when the player is stunned (R49-34 e 5).
+const STUNNED: u32 = 0xae;
+/// Its line for a non-song cast while not standing (R49-34 e 16, j): the
+/// program tests for posture 'd' (100, standing), so the crouch ('o', 110
+/// [I]) meets it, where sitting and lying meet the earlier stand test.
+const DUCKING: u32 = 0xd5;
+/// The colour of those lines.
+const CAST_COLOUR: u32 = 0x121;
+
+/// What a gem press that passes does: cast this spell, standing first where
+/// the player sits and Allow Auto Stand is on.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Checked {
+    pub spell_id: u32,
+    pub stand_first: bool,
 }
 
 /// Why a cast can't start now because one is under way: casting, or a
@@ -37,52 +80,113 @@ pub(crate) fn busy(
         .then(|| "Waiting for the server to acknowledge the cast".into())
 }
 
-/// The gem's spell, if the request can go now; otherwise why not, in the
-/// player's words. Like the official client, a cast refuses locally when the
-/// server-reported mana is short (P99 otherwise answers with a generic
-/// interruption); forgetting never needs mana.
+/// The gem's spell, if the request can go now; otherwise the line that says
+/// why not, or None where the program says nothing. A cast also refuses
+/// locally when the server-reported mana is short (P99 otherwise answers
+/// with a generic interruption); the program has no such test (read R49-34
+/// g), which is with the reviewer. Forgetting never needs mana.
 pub(super) fn check(
     world: &eq_client_core::world::ClientWorld,
     player: &PlayerState,
     request: &Request,
     (messages, map): (&super::messages::Messages, &crate::keys::KeyMap),
     now: Instant,
-) -> Result<u32, crate::chat::Said> {
+) -> Result<Checked, Option<crate::chat::Said>> {
+    use eq_client_core::PostureState;
     let Request {
         gem,
         forgetting,
         mana_cost,
         linked_timer,
+        checks,
         ..
     } = *request;
+    let line = |id, ours: &str| messages.said_text(id, ours).typed(CAST_COLOUR);
+    let pass = |spell_id| Checked {
+        spell_id,
+        stand_first: false,
+    };
     let spell_id = player
         .memorized_spells
         .get(usize::from(gem))
         .copied()
         .flatten()
         .ok_or_else(|| crate::chat::Said::own(super::empty_gem(gem, map)))?;
-    // While a Bard sings and no other cast is under way, a gem press stops
-    // the song whatever its timers or the mana, and casts nothing
-    // (0x4ecb56, read R49-21c); a forget goes too ([I], R49-48 a). The
-    // session decides both.
-    let singing = world.casting().singing.is_some() && !world.casting().holds_actions();
-    if !singing && let Some(refusal) = busy(world, map) {
-        return Err(refusal);
+    // A right click forgets a filled gem at once, with no confirm, while no
+    // request is pending, even mid-cast; while one is, it does nothing and
+    // says nothing (0x4eccc6, read R49-34 d).
+    if forgetting {
+        if world.casting().pending.is_some() {
+            return Err(None);
+        }
+        return Ok(pass(spell_id));
     }
-    if forgetting || singing {
-        return Ok(spell_id);
+    // While a Bard sings and no other cast is under way, a gem press stops
+    // the song whatever its timers, and casts nothing (0x4ecb56, read
+    // R49-21c). The session decides it.
+    let singing = world.casting().singing.is_some() && !world.casting().holds_actions();
+    if singing {
+        return Ok(pass(spell_id));
+    }
+    // The gem click (0x4ecb56, read R49-34 h): while a cast is under way or
+    // the gem's refresh runs, its line and nothing sent; the global recast
+    // it also tests (actor +0x110) isn't kept here. Ours words, where the
+    // installation lacks the line, say which wait it is.
+    let remaining = world.casting().spell_wait(spell_id, linked_timer, now);
+    if world.casting().cast.is_some() || !remaining.is_zero() {
+        let ours = if world.casting().cast.is_some() {
+            format!(
+                "Already casting: {} to interrupt",
+                map.named(crate::keys::Act::Duck, "duck")
+            )
+        } else {
+            format!("Spell available in {:.1}s", remaining.as_secs_f32())
+        };
+        return Err(Some(
+            messages.said_text(GEM_WAIT, &ours).typed(GEM_WAIT_COLOUR),
+        ));
+    }
+    // A request the server hasn't answered: the click does nothing and
+    // says nothing.
+    if world.casting().pending.is_some() {
+        return Err(None);
+    }
+    // The program's cast start, in its order (0x411f3d, read R49-34 e).
+    // 4: a sitting player stands first with Allow Auto Stand; lying is the
+    // session's (0x3099), and sitting without it is left to the server.
+    let posture = world.posture(player.spawn_id);
+    let stand_first = checks.auto_stand && posture == Some(PostureState::Sitting);
+    // 5: stunned.
+    if world.is_stunned() {
+        return Err(Some(line(STUNNED, "You are stunned.")));
+    }
+    // 9 (already casting) is the click's above.
+    // 10: the player's level below the spell's for their class.
+    if checks.spell_level.is_some_and(|level| player.level < level) {
+        return Err(Some(line(
+            LEVEL_TOO_LOW,
+            "Your level is too low for that spell.",
+        )));
+    }
+    // 16: a non-song cast while crouched. [I] Every non-song: the spell's
+    // own "may cast unstanding" field (+0x1fc) isn't mapped here, so a spell
+    // that has it is refused where the program would cast, never the other
+    // way. A song while lying (0xd4) waits on that field too.
+    if !checks.song && posture == Some(PostureState::Ducking) {
+        return Err(Some(line(DUCKING, "You must be standing to cast that.")));
     }
     if mana_cost
         .zip(world.vitals().mana)
         .is_some_and(|(cost, mana)| cost > mana)
     {
-        return Err(messages.said_text(199, "Not enough mana for that spell"));
+        return Err(Some(
+            messages.said_text(199, "Not enough mana for that spell"),
+        ));
     }
-    let remaining = world.casting().spell_wait(spell_id, linked_timer, now);
-    if !remaining.is_zero() {
-        return Err(format!("Spell available in {:.1}s", remaining.as_secs_f32()).into());
-    }
-    Ok(spell_id)
+    Ok(Checked {
+        spell_id,
+        stand_first,
+    })
 }
 
 /// Checks the request and sends it without predicting its result. A refusal
@@ -120,8 +224,20 @@ pub(super) fn spell(
         }
     }
     match check(world, player, request, wording, now) {
-        Err(refusal) => chat.refuse(refusal),
-        Ok(spell_id) => {
+        Err(Some(refusal)) => chat.refuse(refusal),
+        Err(None) => {}
+        Ok(Checked {
+            spell_id,
+            stand_first,
+        }) => {
+            if stand_first {
+                let _ = outbox.post(world, |stamp| ClientCommand::SetPosture {
+                    session_id: stamp.session_id,
+                    spawn_id: player.spawn_id,
+                    posture: eq_client_core::Posture::Standing,
+                    created: stamp.created,
+                });
+            }
             let _ = outbox.post(world, |stamp| {
                 if forgetting {
                     ClientCommand::ForgetSpell {
