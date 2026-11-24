@@ -444,14 +444,29 @@ fn draw(
 ) -> bool {
     let spawn = &state.world().spawns()[&id].state;
     let carrier = state.world().carriers().latest(id).is_some();
-    let model = if carrier {
+    let own = if carrier {
         None
     } else {
         races::model(spawn.race, spawn.gender)
     };
     // The look changes only which model is drawn: the size, feet and name
     // height below come from the race and size as for a classic model.
-    let generation = player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen);
+    let own_generation = player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen);
+    // A spawn whose own model the installation lacks is drawn as the
+    // program draws it (0x43c84b, read R49-37a): a Human of its gender,
+    // taken as race 1 for its size and feet unless its race is 216 or 472.
+    // A carrier keeps its marker, and a race that draws nothing still draws
+    // nothing. A race this client has no model name for yet keeps the
+    // marker: that gap is ours, not the installation's.
+    let unavailable = own
+        .is_some_and(|code| matches!(nearby_state.models.get(&(code, own_generation)), Some(None)));
+    let (model, race, generation) = if unavailable && !carrier && races::drawn(spawn.race) {
+        let (code, race) = races::stand_in(spawn.race, spawn.gender);
+        let generation = player_models::generation((race, spawn.gender, spawn.kind), chosen);
+        (Some(code), race, generation)
+    } else {
+        (own, spawn.race, own_generation)
+    };
     if let Some(code) = model
         && !nearby_state.models.contains_key(&(code, generation))
     {
@@ -459,7 +474,7 @@ fn draw(
             let directory = directory.to_path_buf();
             let zone = state.world().zone().to_owned();
             let donors = nearby_state.donors.clone();
-            let (race, gender) = (spawn.race, spawn.gender);
+            let gender = spawn.gender;
             let mut job = super::background::Background::default();
             job.start(state.world().session_id().unwrap_or_default(), move || {
                 load_model(
@@ -467,7 +482,8 @@ fn draw(
                     || load_luclin_character(&directory, code, (race, gender), &donors),
                     || {
                         // Read once per model and zone: a failure draws the
-                        // marker for the rest of the zone, so it is said once.
+                        // Human stand-in for the rest of the zone, so it is
+                        // said once.
                         load_installed_character(&directory, &zone, code, &donors).inspect_err(
                             |error| warn!("Model {code} unavailable in {zone}: {error}"),
                         )
@@ -506,11 +522,7 @@ fn draw(
         // position its feet hang under; the model hangs by it in model
         // units, as it is scaled below its root, and `interpolate` stands its
         // root on the floor by it in world units.
-        let drawn = Drawn::of(
-            client,
-            state.world(),
-            (spawn.race, spawn.gender, spawn.size),
-        );
+        let drawn = Drawn::of(client, state.world(), (race, spawn.gender, spawn.size));
         let scale = drawn.scale.max(0.01);
         let feet = drawn.feet();
         character::spawn_prepared(commands, entity, &asset, feet / scale);
@@ -534,7 +546,9 @@ fn draw(
             ));
         }
     } else {
-        // An explicit marker keeps unknown model races visible without inventing an appearance.
+        // A carrier, a race this client has no model name for, or a spawn
+        // whose Human stand-in can't be had either keeps an explicit marker
+        // (ours: the program has no such case).
         let height = if corpse {
             0.5
         } else {
