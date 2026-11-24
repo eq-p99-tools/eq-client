@@ -2,7 +2,7 @@
 
 ## Unreleased
 
-- Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). This repins eq-network to main 010536e, which carries #418's cold report and #424's event saves.
+- Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). It needs eq-network's #418 cold report and #424's event saves, which main's pin (ae61866) already carries, so it has no repin of its own.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.
   - The cold total follows the program's: the profile base (byte 12872; a Barbarian's 35, an Iksar's 10 lower), effects 47 and 111, the Ranger and Beastlord term, and worn items' cold (field 16). The resist cap of 500 can't change a cold amount and isn't applied.
