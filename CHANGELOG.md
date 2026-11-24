@@ -13,6 +13,30 @@
   N s" (this client's label, "(estimated)" where the session estimated it)
   and the button still dims while it runs, but the press goes after the
   local wait and the server decides.
+- On Titanium, a right-click on a player inspects them, as the program's use
+  routine ends (reads R49-16 and R49-16e, checklist 6.644).
+  - The player is first considered, as before. Then, with Inspect Others
+    on and nothing on the cursor, a player under 20 away (3D) is inspected
+    through eq-network's new `InspectSpawn`. A player 20 or more away gets
+    the program's line 0x305a naming them, in this client's words where the
+    installation lacks the line.
+  - Right-clicking yourself inspects you with no consider. Nothing is
+    targeted.
+  - The Mac-era and RoF2 programs are unread, so they only consider, as
+    before.
+  - Not modelled yet: the program's busy gate before any right-click use
+    (mounted, dead, camping, a pending trade or merchant, certain windows
+    open; read R49-16e), the trader branches, and the body types the
+    consider skips.
+- The Player window's mana and endurance percents read as the Titanium program's label provider makes them (read R49-37b, gap 3.9, checklist 6.529): current x 100 / maximum in whole numbers, cut toward zero, at most 100, shown as a bare number, and "0" while the maximum is 0. Before our estimate has a maximum they show "0" too (inferred: the program always knows it). The "%" after each is the skin's own text, which the program never hides, so this client no longer hides the Player window's signs; that rule, from the earlier 6.529 entry, was inferred and is withdrawn. Hit points keep their current text, as R49-37 didn't read them.
+- A spawn whose model the installation lacks is drawn as the program draws it (read R49-37a, 0x43c84b): a Human of its gender, sized and footed as race 1 unless its race is 216 or 472. Before, it drew a marker. A carrier keeps its marker, and so does a race this client has no model name for yet, since that gap is ours.
+
+- Languages train on TAKP and Quarm as the `EQMac` program does (checklist 6.597; eq-network #427, already in the pin). The program keeps its language minimum levels inside itself, so the client reads them from the installed program at its addresses, checks their shape, and hands them to the session. Without a table that passes, Mac language training stays shut. No table values are kept in this repository.
+  - The training window lists only the languages the player already speaks. The program's gate runs before anything is sent, and each refusal says the program's line: too young for the language, no practice points, already mastered (naming the language), or at the guildmaster's limit. A purse short of the program's figure gets its coin line, in its colour.
+  - A practice resolves at once, as the program does, since neither server answers it. The program's line for a first point or a further one names the guildmaster and the language, in its colour. The next profile replaces the prediction either way.
+  - Scripts use the same practice command and meet the same gate.
+  - Source-derived, not live. The first public use is attended.
+
 - A Bard's own gem refresh starts no wait before the next spell, as the Titanium program's (0x458ed8 kind 3, read R49-21 c; checklist 6.642): it sets that wait to the refresh's time, where anyone else's adds the spell's recovery. It applies where the session offers eq-network's new `Capability::BardRefreshTimers`, with the Titanium song rules (P99 and stock `EQEmu`); the Mac-era servers keep the recovery. The spell's own recast still runs.
 - Repinned eq-network from 231d67d to 4f35c9a, picking up #432 (Pick Pockets on a player follows the world's ruleset), #434 (tracking ends silently, 6.636), #433 (a knight's special waits as the program's, 6.626), #435 (the Mac-era arrival aboard a boat, not offered, 6.641), #439 (`Capability::BardRefreshTimers`, 6.642) and #442 (`ClientCommand::InspectSpawn`, inspecting a player by spawn ID for the Titanium right-click, 6.644; not used here yet).
 - On TAKP and Quarm, a Tracking press now fills the track window itself, as the Mac-era program does (TAKP read 10c, checklist 6.619 client half): group members in the zone first, at any range, then every other player or NPC within the program's range. The range is skill × 10 + 500 in zone types 1, 2 and 5, and skill / 2 + 500 elsewhere, from the zone header's time type, with the read's above-100 term; before a header has given the type, the smaller range. Corpses, races 0x8f, 0x8d, 0x48, 0x49, 0x72 and 0x8e, invisible spawns and the player are left out, up to 1000 entries. No Mac server sends a list. The distance (a straight line), the visibility test (the invisible flag) and the list order (by spawn ID) are inferred; the actor +0x198 skip is unread. Titanium's press still waits for the server's list.

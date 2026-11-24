@@ -133,7 +133,28 @@ pub(crate) fn skinned_triangle(
     grouped_faces: u16,
     skin: &[(u16, u16)],
 ) -> Vec<u8> {
-    triangle_of(name, palette, coordinates, grouped_faces, skin, &[])
+    triangle_of(
+        name,
+        palette,
+        coordinates,
+        grouped_faces,
+        skin,
+        &[],
+        (0x0001_8003, 0),
+    )
+}
+
+/// [`skinned_triangle`] with the mesh's own 0x36 flags and its one face's
+/// flags, such as 0x10 for a face the player passes through.
+pub(crate) fn flagged_triangle(
+    name: i32,
+    palette: i32,
+    coordinates: &Coordinates,
+    grouped_faces: u16,
+    skin: &[(u16, u16)],
+    flags: (u32, u16),
+) -> Vec<u8> {
+    triangle_of(name, palette, coordinates, grouped_faces, skin, &[], flags)
 }
 
 /// A one-triangle 0x36 mesh whose vertices carry these colours (none, or
@@ -144,7 +165,15 @@ pub(crate) fn coloured_triangle(
     coordinates: &Coordinates,
     colours: &[u32],
 ) -> Vec<u8> {
-    triangle_of(name, palette, coordinates, 1, &[], colours)
+    triangle_of(
+        name,
+        palette,
+        coordinates,
+        1,
+        &[],
+        colours,
+        (0x0001_8003, 0),
+    )
 }
 
 fn triangle_of(
@@ -154,8 +183,9 @@ fn triangle_of(
     grouped_faces: u16,
     skin: &[(u16, u16)],
     colours: &[u32],
+    (mesh_flags, face_flags): (u32, u16),
 ) -> Vec<u8> {
-    let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
+    let mut body = words(&[name.cast_unsigned(), mesh_flags, palette.cast_unsigned()]);
     // Animation, two unknown references, center, three unknowns, radius,
     // minimum and maximum.
     body.extend([0_u8; 12 + 12 + 12 + 4 + 24]);
@@ -187,7 +217,7 @@ fn triangle_of(
     body.extend(words(colours));
     // The face (flags, then its vertices), the skin runs, its face group
     // and vertex group.
-    for word in [0_u16, 0, 1, 2] {
+    for word in [face_flags, 0, 1, 2] {
         body.extend(word.to_le_bytes());
     }
     for (count, bone) in skin {

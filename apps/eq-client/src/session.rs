@@ -419,6 +419,18 @@ fn client(login: Login, options: &SessionOptions) -> Result<Client> {
     // Which servers resolve same-zone pads from installed boundaries is the
     // networking layer's decision; the client only offers the installed data.
     config.installed_zone_boundaries = Some(Arc::new(InstalledRegions(options.install.clone())));
+    // The `EQMac` program keeps its language minimum levels in itself; the
+    // session trains languages on the Mac-era servers only with them
+    // (6.597), so they are read from the installed program, shape-checked.
+    let mac = match eq_client_core::GameDialect::from(login.protocol) {
+        eq_client_core::GameDialect::EqMac => true,
+        eq_client_core::GameDialect::Titanium | eq_client_core::GameDialect::Rof2 => false,
+    };
+    if mac {
+        config.installed_language_levels =
+            eq_client_assets::program::installed_language_levels(&options.install)
+                .and_then(eq_client_core::training::LanguageLevels::checked);
+    }
     // A Titanium client entering a watched world tells it what machine the
     // player entered it on, once a week: this machine's own account, made
     // when it is due and dated by the last one this client or the installed
