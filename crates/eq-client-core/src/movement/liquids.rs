@@ -36,6 +36,12 @@ pub trait Liquids: Send + Sync {
     /// What fills the zone at a point, if anything.
     fn liquid_at(&self, point: Vec3) -> Option<Liquid>;
 
+    /// Which water set the liquid at a point takes: the program damps
+    /// slime, lava and Velious water with its slower set (R33, R49-26).
+    fn wet_kind_at(&self, _point: Vec3) -> super::water::WetKind {
+        super::water::WetKind::Normal
+    }
+
     /// Whether the provider resolved the region at this point.
     fn region_known(&self, point: Vec3) -> bool {
         point.is_finite()
@@ -111,6 +117,29 @@ impl CollisionWorld {
     pub fn with_liquids(mut self, liquids: impl Liquids + 'static) -> Self {
         self.liquids = Some(std::sync::Arc::new(liquids));
         self
+    }
+
+    /// Attaches the zone's liquids as the player's own moves meet them,
+    /// where they differ from [`Self::with_liquids`]'s: lava that swims as
+    /// water, as the Titanium program's does (R49-26).
+    #[must_use]
+    pub fn with_own_liquids(mut self, liquids: impl Liquids + 'static) -> Self {
+        self.own_liquids = Some(std::sync::Arc::new(liquids));
+        self
+    }
+
+    /// The same world as the player's own moves meet it: held keys, a
+    /// script's held keys and strokes, autorun, and the falls they make.
+    /// Following and a route this client chooses keep this world instead.
+    /// None where the two don't differ.
+    #[must_use]
+    pub fn own_moves(&self) -> Option<Self> {
+        let own = self.own_liquids.as_ref()?;
+        Some(Self {
+            liquids: Some(std::sync::Arc::clone(own)),
+            own_liquids: None,
+            ..self.clone()
+        })
     }
 
     /// What the guard sees for feet here, of a body this tall.

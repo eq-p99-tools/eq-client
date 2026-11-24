@@ -169,6 +169,10 @@ pub struct Contact {
     pub time_of_impact: f32,
 }
 
+/// A placed obstacle: the door it belongs to, if any, its mesh, and how
+/// solid it is.
+type Obstruction = (Option<u8>, Arc<CollisionMesh>, Solidity);
+
 /// Static zone geometry plus replaceable nearby obstacles, and the zone's
 /// water and lava where they are known. A clone shares all of it, so a
 /// snapshot for another thread costs a few reference counts.
@@ -177,10 +181,15 @@ pub struct CollisionWorld {
     terrain: Arc<CollisionMesh>,
     /// Each obstacle with the door it belongs to, if any, and whether it
     /// holds the player up and stops them walking.
-    obstacles: Vec<(Option<u8>, Arc<CollisionMesh>, Solidity)>,
+    obstacles: Arc<[Obstruction]>,
     /// Actual model geometry of nearby received carrier spawns.
-    spawn_obstacles: Vec<(u16, CollisionInstance)>,
+    spawn_obstacles: Arc<[(u16, CollisionInstance)]>,
     liquids: Option<Arc<dyn Liquids>>,
+    /// The zone's liquids as the player's own moves meet them, where they
+    /// differ: the Titanium program swims lava (R49-26), so its walks,
+    /// falls and strokes enter lava as water, while routes this client
+    /// chooses keep [`Self::liquids`] and refuse it.
+    own_liquids: Option<Arc<dyn Liquids>>,
     liquid_support: bool,
     swim_origin: Option<f32>,
 }
@@ -193,9 +202,10 @@ impl CollisionWorld {
     pub fn new(triangles: impl IntoIterator<Item = [[f32; 3]; 3]>) -> Result<Self, String> {
         Ok(Self {
             terrain: Arc::new(CollisionMesh::new(triangles)?),
-            obstacles: Vec::new(),
-            spawn_obstacles: Vec::new(),
+            obstacles: Arc::new([]),
+            spawn_obstacles: Arc::new([]),
             liquids: None,
+            own_liquids: None,
             liquid_support: false,
             swim_origin: None,
         })
@@ -250,7 +260,7 @@ impl CollisionWorld {
     /// Replaces carrier placements while sharing their authored geometry and
     /// acceleration structures. No triangles are rebuilt to move an instance.
     pub fn set_spawn_instances(&mut self, spawns: Vec<(u16, CollisionInstance)>) {
-        self.spawn_obstacles = spawns;
+        self.spawn_obstacles = spawns.into();
     }
 
     /// The same world with these doors' colliders left out, sharing its
@@ -267,6 +277,7 @@ impl CollisionWorld {
                 .collect(),
             spawn_obstacles: self.spawn_obstacles.clone(),
             liquids: self.liquids.clone(),
+            own_liquids: self.own_liquids.clone(),
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
         }
@@ -294,6 +305,7 @@ impl CollisionWorld {
                 .collect(),
             spawn_obstacles: self.spawn_obstacles.clone(),
             liquids: self.liquids.clone(),
+            own_liquids: self.own_liquids.clone(),
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
         }
@@ -516,7 +528,7 @@ impl CollisionWorld {
         for (x, z) in SUPPORT_OFFSETS {
             let sample = position + Vec3::new(x, step_up + EDGE, z);
             let ray = Ray::new(Vector::from_array(sample.to_array()), -Vector::Y);
-            for (id, instance) in &self.spawn_obstacles {
+            for (id, instance) in self.spawn_obstacles.iter() {
                 if let Some(time) =
                     instance
                         .surface()

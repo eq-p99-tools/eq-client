@@ -121,6 +121,17 @@ impl CollisionWorld {
             .is_some_and(|liquids| liquids.liquid_at(feet + self.swim_probe(height)).is_some())
     }
 
+    /// Which water set the liquid at the origin takes, where the program's
+    /// motion step reads it (+0xad, R33): Normal with no liquid there.
+    #[must_use]
+    pub fn wet_kind(&self, feet: Vec3, height: f32) -> super::water::WetKind {
+        self.liquids
+            .as_ref()
+            .map_or_else(super::water::WetKind::default, |liquids| {
+                liquids.wet_kind_at(feet + self.swim_probe(height))
+            })
+    }
+
     fn swim_probe(&self, height: f32) -> Vec3 {
         Vec3::Y * self.swim_origin.unwrap_or(height * 0.5)
     }
@@ -500,6 +511,67 @@ mod tests {
             deep.x > feet.x + 1.0,
             "surfacing should keep the horizontal stroke"
         );
+    }
+
+    #[test]
+    fn the_players_own_moves_fall_into_lava_and_swim_where_the_guarded_world_holds() {
+        // The same box is lava to the guarded world and swims as water to
+        // the player's own moves (R49-26).
+        let lava = (water().0, water().1, Liquid::Lava);
+        let world = CollisionWorld::new(flat(-12.0))
+            .unwrap()
+            .with_liquids(Boxes(vec![lava]))
+            .with_own_liquids(Boxes(vec![water()]));
+        let own = world.own_moves().unwrap();
+        assert!(own.own_moves().is_none());
+        // The view shares the world's geometry and obstacles (review L1).
+        assert!(std::sync::Arc::ptr_eq(&own.terrain, &world.terrain));
+        assert!(std::sync::Arc::ptr_eq(&own.obstacles, &world.obstacles));
+        assert!(std::sync::Arc::ptr_eq(
+            &own.spawn_obstacles,
+            &world.spawn_obstacles
+        ));
+        assert!(
+            CollisionWorld::new(flat(-12.0))
+                .unwrap()
+                .own_moves()
+                .is_none()
+        );
+        let fall = |world: &CollisionWorld| {
+            let mut airborne = AirborneController::default();
+            let mut feet = Vec3::new(5.0, 4.0, 0.0);
+            for _ in 0..40 {
+                feet = airborne.step_into_water(
+                    world,
+                    feet,
+                    PROVISIONAL_PHYSICS,
+                    MotionStep {
+                        horizontal: Vec3::ZERO,
+                        height: HEIGHT,
+                        jump: false,
+                        seconds: 0.05,
+                    },
+                );
+                if world.swim_depth(feet, HEIGHT).is_some() {
+                    break;
+                }
+            }
+            feet
+        };
+        let swum = fall(&own);
+        assert_eq!(own.swim_depth(swum, HEIGHT), Some(SwimDepth::Surface));
+        assert!((-3.01..=-3.0).contains(&swum.y), "{swum:?}");
+        let deeper = own.swim_step(swum, Vec3::new(1.0, -1.0, 0.0), HEIGHT);
+        assert!(
+            deeper.x > swum.x + 0.9 && deeper.y < swum.y - 0.9,
+            "{deeper:?}"
+        );
+        // The guarded world never swims it: a fall the server started over
+        // it goes through to the floor, as before.
+        let fallen = fall(&world);
+        assert!(fallen.y < -11.9, "{fallen:?}");
+        assert!(!world.in_swimmable_water(swum, HEIGHT));
+        assert_eq!(world.liquid_contact(swum, HEIGHT), LiquidContact::Lava);
     }
 
     #[test]
