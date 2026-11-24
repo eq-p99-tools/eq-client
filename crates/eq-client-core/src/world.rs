@@ -2038,8 +2038,28 @@ impl ClientWorld {
             WorldEvent::CastLateBegin { session_id, requested_spell } => {
                 self.cast_late_begin(*session_id, *requested_spell, news);
             }
-            WorldEvent::CastSuperseded { session_id, spell_id } => {
+            // A superseded cast, or one the Titanium program's own hit roll
+            // cleared locally (mode 1 of 0x40f8a0, read R49-50; 6.645 S2):
+            // the bar drops, with no line.
+            WorldEvent::CastSuperseded { session_id, spell_id }
+            | WorldEvent::CastCleared { session_id, spell_id } => {
                 news.ignored = !self.release_cast_hold(*session_id, *spell_id);
+            }
+            // The program's own stun roll was saved by a stun resist (read
+            // R49-50; 6.646): its line, in colour 10.
+            WorldEvent::StunSaved {
+                session_id,
+                string_id,
+            } => {
+                if self.accepts_reply(*session_id) && self.death.is_none() {
+                    news.notices.push(Notice::ServerString {
+                        id: *string_id,
+                        arguments: Vec::new(),
+                        message_type: Some(STUN_SAVED_COLOUR),
+                    });
+                } else {
+                    news.ignored = true;
+                }
             }
             WorldEvent::Singing { session_id, spell_id } => {
                 if self.accepts_reply(*session_id) {
@@ -2545,6 +2565,10 @@ mod tests;
 fn plain(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).collect()
 }
+
+/// The colour the Titanium program prints a stun save's line in (0x1679,
+/// 0x2375; read R49-50).
+const STUN_SAVED_COLOUR: u32 = 10;
 
 /// Whether a generation's program tells an incoming duel acceptance. The
 /// Titanium program has no case for 0x1b09 (read R49-6); the others are
