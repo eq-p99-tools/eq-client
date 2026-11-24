@@ -79,11 +79,15 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
                     .is_some_and(|name| name.eq_ignore_ascii_case(&actor_name))
             })
             .ok_or_else(|| LoadError::ParseWorld(format!("actor {tag} is unavailable")))?;
-        let posed = posed_hierarchy(&doc, &meshes, actor)
+        let mut posed = posed_hierarchy(&doc, &meshes, actor)
             .filter(|posed| posed.skins_skipped == 0)
             .ok_or_else(|| {
                 LoadError::ParseWorld(format!("actor {tag} has no complete readable pose"))
             })?;
+        // The no-hit test applies to zone placements. The spawned actor's
+        // collision mode is unread; retain its authored solid faces as before
+        // the placement split (inferred, checklist 6.650).
+        posed.collision.append(&mut posed.no_hit_collision);
         (posed.staged, posed.collision)
     };
     let mut textures = Vec::new();

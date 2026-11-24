@@ -1740,7 +1740,7 @@ mod tests {
     /// both), and a flame whose one bone carries no mesh; placements name
     /// each, and one names nothing.
     #[allow(clippy::too_many_lines)]
-    fn write_hierarchical_zone(install: &Path) {
+    fn write_hierarchical_zone(install: &Path, rigid_mesh_flags: u32, populated_flame: bool) {
         use crate::test_world::{
             Coordinates, OLD_FORMAT, WorldFile, flagged_triangle, material, material_with_flags,
             mesh, palette, palette_of, skinned_triangle, triangle, write_archive,
@@ -1781,7 +1781,14 @@ mod tests {
         let tri = objects.name("TRI_DMSPRITEDEF");
         // Its authored radius, 7.5, after the name, flags, palette, three
         // references, centre and three unknowns.
-        let mut tri_body = triangle(tri, object_palette, &coordinates, 1);
+        let mut tri_body = flagged_triangle(
+            tri,
+            object_palette,
+            &coordinates,
+            1,
+            &[],
+            (rigid_mesh_flags, 0),
+        );
         tri_body[48..52].copy_from_slice(&7.5_f32.to_le_bytes());
         let tri = objects.fragment(0x36, tri_body);
         // The skin's first two vertices are on the root, the third on the arm.
@@ -1889,14 +1896,16 @@ mod tests {
             words(&[tree_sprite.cast_unsigned(), tree.cast_unsigned(), 0]),
         );
         actor(&mut objects, "TREE_ACTORDEF", tree_sprite);
-        // A flame: one bone whose sprite is not a mesh (here a material).
+        // A flame: normally one bone with a material instead of a mesh.
+        // The carrier regression can give it the rigid mesh, making an
+        // actor whose only populated mesh is in the no-hit case.
         let flame = objects.name("FLAME_HS_DEF");
         let mut body = words(&[flame.cast_unsigned(), 0, 1, 0]);
         body.extend(words(&[
             bone.cast_unsigned(),
             0,
             tracks[0].cast_unsigned(),
-            solid.cast_unsigned(),
+            if populated_flame { tri_sprite } else { solid }.cast_unsigned(),
             0,
         ]));
         let flame = objects.fragment(0x10, body);
@@ -1994,10 +2003,50 @@ mod tests {
     fn load_hierarchical_zone(label: &str) -> ZoneAsset {
         let install = std::env::temp_dir().join(format!("eq-zone-{label}-{}", std::process::id()));
         std::fs::create_dir_all(&install).unwrap();
-        write_hierarchical_zone(&install);
+        write_hierarchical_zone(&install, 0x0001_4003, false);
         let result = load_zone(&install, "hzone");
         std::fs::remove_dir_all(&install).unwrap();
         result.unwrap()
+    }
+
+    #[test]
+    fn spawned_actor_retains_the_face_skipped_for_the_same_zone_placement() {
+        let install = std::env::temp_dir().join(format!("eq-spawned-deck-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        write_hierarchical_zone(&install, 0x4003, true);
+        std::fs::write(
+            install.join("hzone_chr.txt"),
+            "2\nTREE,hzone_obj\nFLAME,hzone_obj\n",
+        )
+        .unwrap();
+        let actors = ["FLAME", "TREE"]
+            .map(|tag| crate::actors::load_installed_actor(&install, "hzone", tag));
+        let zone = load_zone(&install, "hzone");
+        std::fs::remove_dir_all(&install).unwrap();
+
+        let zone = zone.unwrap();
+        for actor in actors {
+            let actor = actor.unwrap().model;
+            let placed = zone.models.iter().find(|m| m.name == actor.name).unwrap();
+            assert!(
+                zone.objects
+                    .iter()
+                    .any(|o| zone.models[o.model].name == placed.name)
+            );
+            assert_eq!(
+                placed.collision.len(),
+                usize::from(actor.name == "TREE_ACTORDEF")
+            );
+            assert_eq!(placed.no_hit_collision.len(), 1);
+            let deck = placed.no_hit_collision[0];
+            assert!(!placed.collision.contains(&deck));
+            assert_eq!(actor.collision.len(), placed.collision.len() + 1);
+            assert!(actor.collision.contains(&deck));
+            for face in &placed.collision {
+                assert!(actor.collision.contains(face));
+            }
+            assert_eq!(actor.no_hit_collision, Vec::<[[f32; 3]; 3]>::new());
+        }
     }
 
     /// The renderer's frame for libeq positions, wound as drawn.

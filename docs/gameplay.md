@@ -152,7 +152,14 @@ Swim speed is the land speed plus the Swimming skill: at a run speed of
 looking straight up also climbs at about twice that rate. Sneaking or
 ducked swimming keeps the land speed. The client steps water 60 times a
 second, where the original steps once a frame, so the sinking rate matches
-the original at 60 frames a second (recording checklist 6.483). A swimmer
+the original at 60 frames a second (recording checklist 6.483). On
+Titanium every liquid kind the original swims counts as water: plain
+water (`WT`), slime (`SL`), Velious water (`VW`) and the second and third
+waters (`W2`, `W3`), with their `A` forms (read R49-26). Slime and Velious
+water damp the stroke harder, as the original's slower set does, so a
+swimmer there goes about two thirds of water's speed; a swimmer crossing
+from one kind into another takes the new kind's set on the next frame. A
+swimmer
 entering water starts within the water's speeds. Rising out of the water
 carries the climb on as an ordinary fall back in. Unknown regions and dry
 gaps still hold the stroke. A supported bank returns the swimmer to

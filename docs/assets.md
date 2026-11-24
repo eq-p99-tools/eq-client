@@ -37,6 +37,19 @@ complete coverage for every race, armor set, animation or custom UI atlas.
 Terrain, collision and zone regions share coordinate conversions in
 `eq-client-axes`.
 
+Spawned carriers keep every authored solid face from their posed actor,
+including faces excluded for the same model as a zone placement. This restores
+the collision geometry from before the placed-object no-hit split (inferred,
+checklist 6.650). Zone vegetation and door collision keep their existing rules.
+Actor assets and their scaled collision meshes are held only for the current
+admission; the navigation disk cache excludes spawned obstacles. A failed mesh
+build is logged and counted in the gap file once per incarnation, model tag,
+and scale, rather than retried every frame.
+
+| Open parity row | What remains unknown |
+| --- | --- |
+| 6.650: spawned actor collision mode | Which engine collision mode a spawned actor's model takes is unread; the needed read is the spawn-actor counterpart of R49-49d. Keeping the pre-split faces is inferred. Loading a deck mesh does not establish boarding parity; a matched carrier, dock state, approach and input remain to be compared. |
+
 Item icons use the selected skin's `A_DragItem` grid: declared filenames,
 frame origins and sizes, cell dimensions, sheet order and numbering direction.
 The existing item-icon numbering starts at 500 for the first cell. Rectangles

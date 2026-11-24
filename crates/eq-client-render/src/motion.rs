@@ -2174,11 +2174,15 @@ pub(super) fn input(
         // water and the dry one from the next frame (read R33): the sample
         // ends at the frame whose travel takes the origin out, and the fall
         // that follows carries the velocity it left with.
+        // Each frame takes the set of the liquid at the origin, so a body
+        // crossing from one kind into another changes set on the next whole
+        // frame with its velocity kept (read R49-26).
         let mut travel = Vec3::ZERO;
         let mut left = span;
         while left > 0.0 {
             let piece = left.min(eq_client_core::movement::water::WET_FRAME_SECONDS);
-            let (across, up) = controls.wet.advance(swim.set, input, piece);
+            let set = swim.set_for(world.wet_kind(feet + travel, body.height));
+            let (across, up) = controls.wet.advance(set, input, piece);
             travel += Vec3::new(across[0], up, across[1]);
             left -= piece;
             if !world.origin_in_liquid(feet + travel, body.height) {
@@ -7273,6 +7277,116 @@ pub(super) mod tests {
             .fold(f32::MIN, f32::max);
         assert!(seen.iter().all(|(_, at, _)| at.x < 0.0), "{seen:?}");
         assert!(highest < 1.0, "origin rose to {highest}: {seen:?}");
+    }
+
+    /// A deep pool of one Titanium region kind, its surface at 0.
+    fn kind_pool(kind: eq_client_assets::regions::RegionKind) -> CollisionWorld {
+        CollisionWorld::new(flat_surface(-60.0))
+            .unwrap()
+            .with_liquids(crate::scene_collision::ZoneLiquids(
+                eq_client_assets::regions::ZoneRegions::test_kind_surface(0.0, kind)
+                    .with_titanium_liquids(),
+            ))
+            .with_swim_origin(3.75)
+    }
+
+    /// The level forward speed a swimmer settles at in a pool of `kind`,
+    /// in units a second, from the last half of 30 samples.
+    fn settled_swim_speed(kind: eq_client_assets::regions::RegionKind) -> f32 {
+        let seen = swim_from(
+            kind_pool(kind),
+            Vec3::new(0.0, -20.0, 0.0),
+            0.0,
+            (Some(WET_SWIMMER), 0.0),
+            30,
+        )
+        .unwrap();
+        assert!(
+            seen.iter().all(|(mode, _, _)| *mode == MovementMode::Swim),
+            "{kind:?}: {seen:?}"
+        );
+        let (_, from, start) = seen[15];
+        let (_, to, end) = seen[29];
+        Vec2::new(to.x - from.x, to.z - from.z).length() / end.saturating_sub(start).as_secs_f32()
+    }
+
+    #[test]
+    fn every_titanium_water_kind_swims_and_slime_lava_and_velious_water_are_slower() {
+        use eq_client_assets::regions::RegionKind;
+        // The program swims every kind of 5 or more, and damps 6 to 8 with
+        // its slower set (R33, R49-26): about two thirds of water's speed.
+        let water = settled_swim_speed(RegionKind::WATER);
+        for kind in [RegionKind::WATER_2, RegionKind::WATER_3] {
+            let speed = settled_swim_speed(kind);
+            assert!(
+                (speed - water).abs() < 0.05 * water,
+                "{kind:?}: {speed} vs {water}"
+            );
+        }
+        for kind in [RegionKind::SLIME, RegionKind::VELIOUS_WATER] {
+            let speed = settled_swim_speed(kind);
+            let share = speed / water;
+            assert!((0.6..0.73).contains(&share), "{kind:?}: {speed} vs {water}");
+        }
+    }
+
+    #[test]
+    fn every_titanium_water_kind_surfaces_into_ordinary_airborne_motion() {
+        use eq_client_assets::regions::RegionKind;
+        for kind in [
+            RegionKind::WATER,
+            RegionKind::SLIME,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::WATER_2,
+            RegionKind::WATER_3,
+        ] {
+            // Exercise ZoneLiquids, not a mock whose exit already accepts
+            // every wet kind. The ordinary session bounds every handoff.
+            let seen = swim_from(
+                kind_pool(kind),
+                Vec3::new(0.0, -3.76, 0.0),
+                0.0,
+                (Some(WET_SWIMMER), 0.4),
+                8,
+            )
+            .unwrap();
+            let exit = seen
+                .iter()
+                .position(|(mode, feet, _)| *mode == MovementMode::Swim && feet.y + 3.75 > 0.0)
+                .unwrap_or_else(|| panic!("{kind:?} never surfaced: {seen:?}"));
+            assert!(
+                seen[exit + 1..]
+                    .iter()
+                    .any(|(mode, _, _)| matches!(mode, MovementMode::Forward | MovementMode::Fall)),
+                "{kind:?} never handed off to ordinary motion: {seen:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn every_titanium_water_kind_keeps_a_bank_that_stops_plain_water_solid() {
+        use eq_client_assets::regions::RegionKind;
+        let wall = [
+            [[0.0, -60.0, -20.0], [0.0, 20.0, -20.0], [0.0, 20.0, 20.0]],
+            [[0.0, -60.0, -20.0], [0.0, 20.0, 20.0], [0.0, -60.0, 20.0]],
+        ];
+        let mut baseline = None;
+        for kind in [
+            RegionKind::WATER,
+            RegionKind::SLIME,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::WATER_2,
+            RegionKind::WATER_3,
+        ] {
+            let mut world = kind_pool(kind);
+            world.set_obstacles(vec![std::sync::Arc::new(
+                eq_client_core::movement::CollisionMesh::new(wall).unwrap(),
+            )]);
+            let held = world.wet_step(Vec3::new(-0.8, -3.76, 0.0), Vec3::new(1.6, 0.1, 0.0), 7.5);
+            assert!(held.x < -0.4, "{kind:?}: {held:?}");
+            let plain_water = *baseline.get_or_insert(held);
+            assert!(held.abs_diff_eq(plain_water, 1e-6), "{kind:?}: {held:?}");
+        }
     }
 
     /// A made-up ramp out of a pool whose surface is at -2: 14 wide,
