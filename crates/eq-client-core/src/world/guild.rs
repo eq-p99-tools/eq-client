@@ -84,6 +84,33 @@ fn member<'a>(
         .and_then(|members| members.iter_mut().find(|member| member.name == name))
 }
 
+fn membership_boundary(update: &GuildUpdate) -> bool {
+    matches!(
+        update,
+        GuildUpdate::Members(_)
+            | GuildUpdate::MemberAdded { .. }
+            | GuildUpdate::MemberRemoved { .. }
+            | GuildUpdate::MemberRank { .. }
+            | GuildUpdate::MemberRenamed { .. }
+            | GuildUpdate::Disbanded { .. }
+    )
+}
+
+fn received_guild(update: &GuildUpdate) -> Option<u32> {
+    match update {
+        GuildUpdate::MemberLocation { guild_id, .. }
+        | GuildUpdate::MemberAdded { guild_id, .. }
+        | GuildUpdate::MemberRemoved { guild_id, .. }
+        | GuildUpdate::MemberLevel { guild_id, .. }
+        | GuildUpdate::MemberNote { guild_id, .. }
+        | GuildUpdate::MemberRenamed { guild_id, .. }
+        | GuildUpdate::Renamed { guild_id, .. }
+        | GuildUpdate::Disbanded { guild_id } => Some(*guild_id),
+        GuildUpdate::MemberRank { guild_id, .. } => *guild_id,
+        GuildUpdate::Members(_) | GuildUpdate::Invite { .. } => None,
+    }
+}
+
 impl ClientWorld {
     /// Whether a positively identified character has a session-reported
     /// transfer. Link loss without such a destination clears the list.
@@ -193,18 +220,7 @@ impl ClientWorld {
 
     /// Keeps the guild's news.
     pub(super) fn guild_news(&mut self, update: &GuildUpdate) {
-        let guild_id = match update {
-            GuildUpdate::MemberLocation { guild_id, .. }
-            | GuildUpdate::MemberAdded { guild_id, .. }
-            | GuildUpdate::MemberRemoved { guild_id, .. }
-            | GuildUpdate::MemberLevel { guild_id, .. }
-            | GuildUpdate::MemberNote { guild_id, .. }
-            | GuildUpdate::MemberRenamed { guild_id, .. }
-            | GuildUpdate::Renamed { guild_id, .. }
-            | GuildUpdate::Disbanded { guild_id } => Some(*guild_id),
-            GuildUpdate::MemberRank { guild_id, .. } => *guild_id,
-            GuildUpdate::Members(_) | GuildUpdate::Invite { .. } => None,
-        };
+        let guild_id = received_guild(update);
         if let (Some(current), Some(received)) = (
             self.player().and_then(|player| player.listing.guild),
             guild_id,
@@ -212,15 +228,7 @@ impl ClientWorld {
         {
             return;
         }
-        if matches!(
-            update,
-            GuildUpdate::Members(_)
-                | GuildUpdate::MemberAdded { .. }
-                | GuildUpdate::MemberRemoved { .. }
-                | GuildUpdate::MemberRank { .. }
-                | GuildUpdate::MemberRenamed { .. }
-                | GuildUpdate::Disbanded { .. }
-        ) {
+        if membership_boundary(update) {
             self.guild_membership_revision = self.guild_membership_revision.wrapping_add(1);
         }
         match update {
