@@ -5,6 +5,7 @@
 - Every liquid kind the Titanium program swims swims here too (read R49-26; checklist 6.483d): slime (`SL`), Velious water (`VW`, `AVW`) and the second and third waters (`W2`, `W3`) now move as water, where they were walkable floors or breath-only. Breath and lava heat are unchanged.
   - Slime, lava and Velious water damp the stroke with the program's slower set (horizontal 0.02 and 0.94, vertical 0.8 and 0.15), so a swimmer there settles at about two thirds of water's speed. Each frame takes the set of the liquid at the body's origin, so crossing between kinds changes set on the next whole frame and keeps the velocity.
   - The session's water bound already covers both sets (eq-network #412).
+  - Surfacing uses the same liquid view as the stroke: slime, Velious water and the other waters can rise into known air and hand off to ordinary falling like plain water. Solid banks, guarded lava and unknown space keep the same checks.
 - Your own moves enter lava and swim it, as the Titanium program's do (read R49-26; checklist 6.483e). Walking or falling into lava by your keys, autorun or a script's held keys swims there with the slower set while the heat goes on as before.
   - `/follow` and a script's `walk` route keep this client's guard and stop at lava's edge: a labelled safety, not the program's rule (review K1).
   - A body already in lava keeps swimming it whatever moves it, so a follow or route started there carries it on rather than dropping it through to the lava's floor (review L2).

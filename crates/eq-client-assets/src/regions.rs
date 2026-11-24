@@ -452,20 +452,27 @@ impl ZoneRegions {
             .map(|(span, _)| span)
     }
 
-    /// A segment from water that ends in resolved air and crosses only
-    /// air or water. Other submerging media and unresolved spans are excluded.
+    /// A segment from this movement view's water into resolved dry air.
+    /// Only mapped movement water and known air may fill the segment;
+    /// unmapped submerging media, guarded lava and unknown spans stay excluded.
     #[must_use]
     pub fn water_surface_exit(&self, start: [f32; 3], end: [f32; 3]) -> bool {
-        self.medium_at(start) == Some(Medium::Water)
+        self.liquid_at(start) == Some(Liquid::Water)
             && self.medium_at(end) == Some(Medium::Air)
+            && self.liquid_at(end).is_none()
             && self
                 .first_matching_span_with(
                     start,
                     end,
-                    |region| match self.media.get(&region).copied().unwrap_or(Medium::Air) {
-                        Medium::Air => SpanKind::Dry,
-                        Medium::Water => SpanKind::Wet(Liquid::Water),
-                        Medium::Lava | Medium::OtherSubmerging => SpanKind::Unresolved,
+                    |region| match self.liquids.get(&region) {
+                        Some(Liquid::Water) => SpanKind::Wet(Liquid::Water),
+                        Some(Liquid::Lava) => SpanKind::Unresolved,
+                        None => match self.media.get(&region).copied().unwrap_or(Medium::Air) {
+                            Medium::Air => SpanKind::Dry,
+                            Medium::Water | Medium::Lava | Medium::OtherSubmerging => {
+                                SpanKind::Unresolved
+                            }
+                        },
                     },
                     |kind| !matches!(kind, SpanKind::Dry | SpanKind::Wet(Liquid::Water)),
                 )
@@ -1147,6 +1154,75 @@ mod tests {
                 regions.kind_at([0.0, -1.0, 0.0]),
                 "{tag}"
             );
+        }
+    }
+
+    #[cfg(feature = "testing")]
+    #[test]
+    fn every_titanium_water_kind_can_surface_through_its_movement_view() {
+        for kind in [
+            RegionKind::WATER,
+            RegionKind::SLIME,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::WATER_2,
+            RegionKind::WATER_3,
+        ] {
+            let regions = ZoneRegions::test_kind_surface(0.0, kind).with_titanium_liquids();
+            let (wet, air) = ([0.0, -0.01, 0.0], [0.0, 0.04, 0.0]);
+            assert_eq!(regions.medium_at(wet), Some(kind.medium()));
+            assert!(regions.water_surface_exit(wet, air), "{kind:?}");
+            assert!(!regions.water_surface_exit(air, wet), "{kind:?}");
+            assert!(!regions.water_surface_exit(wet, [0.0; 3]), "{kind:?}");
+        }
+        // The original view keeps its old classification. A native kind
+        // alone must not turn an unmapped medium into movement water.
+        for kind in [
+            RegionKind::SLIME,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::LAVA,
+        ] {
+            let regions = ZoneRegions::test_kind_surface(0.0, kind);
+            assert!(!regions.water_surface_exit([0.0, -0.01, 0.0], [0.0, 0.04, 0.0]));
+        }
+    }
+
+    #[test]
+    fn every_water_kind_keeps_forbidden_and_unknown_surface_exit_spans() {
+        let split = |distance, front, back| Node {
+            normal: [1.0, 0.0, 0.0],
+            distance,
+            region: None,
+            front: Some(front),
+            back: Some(back),
+        };
+        for kind in [
+            RegionKind::WATER,
+            RegionKind::SLIME,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::WATER_2,
+            RegionKind::WATER_3,
+        ] {
+            let mut regions = ZoneRegions {
+                nodes: vec![
+                    split(0.0, 2, 1),
+                    leaf(0),
+                    split(-0.0625, 4, 3),
+                    leaf(1),
+                    leaf(2),
+                ],
+                routes: BTreeMap::new(),
+                liquids: BTreeMap::new(),
+                media: BTreeMap::from([(0, kind.medium()), (1, Medium::Lava)]),
+                kinds: BTreeMap::from([(0, kind), (1, RegionKind::LAVA)]),
+            }
+            .with_titanium_liquids();
+            let (wet, air) = ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
+            assert!(!regions.water_surface_exit(wet, air), "lava: {kind:?}");
+            regions.liquids.remove(&1);
+            regions.media.insert(1, Medium::OtherSubmerging);
+            assert!(!regions.water_surface_exit(wet, air), "unmapped: {kind:?}");
+            regions.nodes[2].back = None;
+            assert!(!regions.water_surface_exit(wet, air), "unknown: {kind:?}");
         }
     }
 
