@@ -574,6 +574,7 @@ pub(super) fn liquid_and_movement()
         crate::breath::update,
         crate::arrival::place,
         crate::piloting::update,
+        motion::stop_autorun_after_failed_script,
         motion::input,
         motion::spend_endurance,
     )
