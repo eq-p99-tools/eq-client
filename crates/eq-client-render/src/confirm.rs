@@ -4,7 +4,8 @@
 //! challenge to a duel (`duel`), since the server waits for their answers,
 //! then a question of the client's own before something
 //! that cannot be undone, as Ask Before Deleting Spells asks before a spell
-//! leaves the book. Whoever asked acts on the answer.
+//! leaves the book, or before a bug report goes. Whoever asked acts on the
+//! answer.
 use crate::{
     online::OnlineState,
     outbox::Outbox,
@@ -66,6 +67,9 @@ pub(crate) enum Question {
         place: u16,
         item_id: u32,
     },
+    /// The bug report window's question before its report goes
+    /// ([`crate::report_windows`]): every answer sends.
+    BugReport,
 }
 
 impl Question {
@@ -118,6 +122,13 @@ impl Question {
             // The invitation's own words; see [`show`].
             Self::GuildInvite => String::new(),
             Self::LootNoDrop { .. } => crate::trade::no_drop::text(online.world(), self, messages),
+            Self::BugReport => {
+                // The program asks with its own string (read R49-52b).
+                let ours = "Send your system information with this bug report?";
+                messages.map_or_else(|| ours.to_owned(), |messages| {
+                    messages.official(crate::report_windows::SYSTEM_INFO_QUESTION, &[], ours)
+                })
+            }
         }
     }
 }

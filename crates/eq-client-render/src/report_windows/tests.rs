@@ -158,12 +158,21 @@ fn sending_the_bug_report_carries_its_boxes_and_clears_its_words() {
         .unwrap();
     windows.bug.text = "  the guard walks into the wall ".into();
     windows.editing = Some(Report::Bug);
-    let pressed = windows.press(
-        ReportButton::Send(Report::Bug),
-        world,
-        Some(stamp),
-        &mut shown,
+    // Send asks first; the window stays open with its words.
+    assert_eq!(
+        windows.press(
+            ReportButton::Send(Report::Bug),
+            world,
+            Some(stamp),
+            &mut shown,
+        ),
+        Pressed::Ask
     );
+    assert!(shown.displayed(WindowId::BugReport));
+    assert_eq!(windows.bug.text, "  the guard walks into the wall ");
+    // No sends the same report Yes does, and says nothing of the machine.
+    let (pressed, note) = windows.answered(false, world, Some(stamp), &mut shown);
+    assert!(!note);
     let Pressed::Send(command, echo) = pressed else {
         panic!("{pressed:?}");
     };
@@ -204,6 +213,7 @@ fn an_empty_bug_report_says_so_and_a_cancelled_one_keeps_its_words() {
     let mut windows = ReportWindows::default();
     windows.open(Report::Bug, world, &mut shown);
     windows.bug.text = "   ".into();
+    // The program asks before it looks at the words (0x4e9f7a).
     assert_eq!(
         windows.press(
             ReportButton::Send(Report::Bug),
@@ -211,10 +221,17 @@ fn an_empty_bug_report_says_so_and_a_cancelled_one_keeps_its_words() {
             Some(stamp),
             &mut shown
         ),
-        Pressed::Say(crate::reports::bug_empty())
+        Pressed::Ask
     );
-    // The window hides either way.
-    assert!(!shown.displayed(WindowId::BugReport));
+    for yes in [true, false] {
+        windows.open(Report::Bug, world, &mut shown);
+        assert_eq!(
+            windows.answered(yes, world, Some(stamp), &mut shown),
+            (Pressed::Say(crate::reports::bug_empty()), false)
+        );
+        // The window hides either way.
+        assert!(!shown.displayed(WindowId::BugReport));
+    }
 
     windows.open(Report::Bug, world, &mut shown);
     windows.bug.text = "half written".into();
@@ -343,6 +360,146 @@ fn a_scripts_report_reads_what_the_windows_show() {
             feedback_shown: false,
             feedback_text: "a note".into(),
             editing: Some(Report::Bug),
+            question_up: false,
         }
     );
+}
+
+#[test]
+fn the_question_answers_as_no_at_its_deadline() {
+    use std::time::Duration;
+    let deadline = Duration::from_secs(60);
+    let at = |seconds| Duration::from_secs(seconds);
+    assert_eq!(outcome(deadline, at(59), None, true, true), Outcome::Wait);
+    assert_eq!(
+        outcome(deadline, at(60), None, true, true),
+        Outcome::Answer(false)
+    );
+    assert_eq!(
+        outcome(deadline, at(1), Some(true), false, true),
+        Outcome::Answer(true)
+    );
+    // Lost by the dialog, or its session ended: nothing goes.
+    assert_eq!(outcome(deadline, at(1), None, false, true), Outcome::Drop);
+    assert_eq!(
+        outcome(deadline, at(1), Some(true), false, false),
+        Outcome::Drop
+    );
+    assert_eq!(outcome(deadline, at(60), None, true, false), Outcome::Drop);
+}
+
+#[test]
+fn with_send_system_info_set_the_report_goes_at_once_and_a_second_send_waits() {
+    let (online, stamp) = world(None);
+    let world = online.world();
+    let mut shown = Shown::default();
+    let mut windows = ReportWindows::default();
+    windows.open(Report::Bug, world, &mut shown);
+    windows.bug.text = "words".into();
+    windows.asking = Some(std::time::Duration::from_secs(60));
+    let send = ReportButton::Send(Report::Bug);
+    assert_eq!(
+        windows.press(send, world, Some(stamp), &mut shown),
+        Pressed::Done
+    );
+    assert!(shown.displayed(WindowId::BugReport));
+    windows.asking = None;
+    windows.sends_system_info = true;
+    assert!(matches!(
+        windows.press(send, world, Some(stamp), &mut shown),
+        Pressed::Send(..)
+    ));
+    assert!(!shown.displayed(WindowId::BugReport));
+}
+
+/// An app asking the bug report's question, with what it sends.
+fn asking() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
+    let (online, _) = world(None);
+    let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+    let mut app = crate::testing::app();
+    app.insert_resource(online)
+        .insert_resource(Outbox::new(Some(sender)))
+        .init_resource::<ChatState>()
+        .add_systems(Update, question);
+    let world = app.world_mut();
+    let mut windows = ReportWindows::default();
+    let online = world.resource::<OnlineState>();
+    let mut shown = Shown::default();
+    windows.open(Report::Bug, online.world(), &mut shown);
+    windows.bug.text = "the words".into();
+    windows.asking = Some(std::time::Duration::from_secs(60));
+    windows.asked_in = online.world().session_id();
+    world.insert_resource(windows);
+    world.insert_resource(shown);
+    assert!(world.resource_mut::<Asked>().ask(Question::BugReport));
+    (app, receiver)
+}
+
+#[test]
+fn after_cancel_the_question_stays_and_its_answer_sends_the_kept_words() {
+    let (mut app, receiver) = asking();
+    let world = app.world_mut();
+    let online = world.remove_resource::<OnlineState>().unwrap();
+    world.resource_scope(|world, mut windows: Mut<ReportWindows>| {
+        let mut shown = world.resource_mut::<Shown>();
+        windows.press(
+            ReportButton::Cancel(Report::Bug),
+            online.world(),
+            None,
+            &mut shown,
+        );
+    });
+    world.insert_resource(online);
+    app.update();
+    assert!(receiver.try_recv().is_err());
+    assert!(app.world().resource::<ReportWindows>().asking.is_some());
+    assert_eq!(
+        app.world().resource::<Asked>().question(),
+        Some(Question::BugReport)
+    );
+    app.world_mut().resource_mut::<Asked>().give(false);
+    app.update();
+    let Ok(ClientCommand::ReportBug { report, .. }) = receiver.try_recv() else {
+        panic!("nothing sent");
+    };
+    assert_eq!(report.text, "the words");
+    let windows = app.world().resource::<ReportWindows>();
+    assert_eq!(windows.asking, None);
+    assert_eq!(windows.bug.text, "");
+}
+
+#[test]
+fn yes_sends_the_report_with_this_clients_line_and_the_deadline_sends_it_quietly() {
+    let (mut app, receiver) = asking();
+    app.world_mut().resource_mut::<Asked>().give(true);
+    app.update();
+    assert!(receiver.try_recv().is_ok());
+    let history = |app: &App| {
+        format!(
+            "{:?}",
+            app.world()
+                .resource::<ChatState>()
+                .history
+                .lines(eq_client_core::chat::ChatTab::All)
+        )
+    };
+    assert!(history(&app).contains(NO_SYSTEM_INFO));
+    assert!(!app.world().resource::<Shown>().displayed(WindowId::BugReport));
+
+    let (mut app, receiver) = asking();
+    app.world_mut().resource_mut::<ReportWindows>().asking = Some(std::time::Duration::ZERO);
+    app.update();
+    assert!(receiver.try_recv().is_ok());
+    assert!(!history(&app).contains(NO_SYSTEM_INFO));
+    assert_eq!(app.world().resource::<Asked>().question(), None);
+}
+
+#[test]
+fn nothing_goes_once_the_session_it_was_asked_in_is_gone() {
+    let (mut app, receiver) = asking();
+    app.insert_resource(OnlineState::new(true));
+    app.world_mut().resource_mut::<Asked>().give(true);
+    app.update();
+    assert!(receiver.try_recv().is_err());
+    assert_eq!(app.world().resource::<ReportWindows>().asking, None);
 }

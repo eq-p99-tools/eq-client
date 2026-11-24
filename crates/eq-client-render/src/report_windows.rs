@@ -17,14 +17,33 @@
 //! - The drop-down picks the category. The program names its categories
 //!   from a table in itself (0x791158); this client uses the names the
 //!   servers know them by, its own words.
-//! - **Send** with an empty box says line 0x22b0 and sends nothing;
-//!   otherwise it sends the report, clears the box and says 0x22ae once the
-//!   session says it went. The window hides either way. The program first
-//!   asks to confirm (line 0x1aa3) unless one of its settings
-//!   ([0x9254ee]) is set; that setting is unread, so this client sends
-//!   at once (a departure, labelled).
+//! - **Send** first asks the skin's confirmation dialog line 0x1aa3, with
+//!   Yes and No, unless the installation's `eqclient.ini` has
+//!   `[Defaults] SendSystemInfo=1` (0x4ea552, read R49-52b; the program's
+//!   [0x9254ee], default 0; read here, never written). The window stays
+//!   open behind the question with its words. **Every answer sends**: Yes,
+//!   No, and the question's own close after 60 seconds, which answers as No
+//!   (0x4ea36d, 0x547f0a). Nothing keeps the answer, so the question comes
+//!   back on every Send.
+//! - Then, as the program's send 0x4e9f7a: an empty box says line 0x22b0
+//!   and sends nothing; otherwise it sends the report, clears the box and
+//!   says 0x22ae once the session says it went. The window hides either
+//!   way.
+//! - Yes, or SendSystemInfo=1, has the program add a line naming the
+//!   machine's processor, video card and driver to the report. This client
+//!   never sends anything about the machine (the network library's choice),
+//!   so the report is the same either way, and a line of its own says so (a
+//!   departure, labelled).
 //! - **Cancel** says line 0x22af and closes the window; the box keeps its
-//!   words.
+//!   words. A Cancel, or any close of the window, leaves the question up,
+//!   and its answer still sends what the window then holds (read R49-52c:
+//!   Cancel 0x4ea3f5 leaves the dialogs alone, and the answer 0x4ea36d
+//!   never asks whether the window shows; that the close box and Esc do
+//!   the same is inferred there). Opening the window again before the
+//!   answer refreshes the place and clears the boxes, not the words.
+//! - A second Send while the question is up does nothing: the program would
+//!   ask a second question (inferred, R49-52b), and this client has one
+//!   dialog (a departure, labelled).
 //!
 //! **The feedback window** (`FeedbackWindow`, class built by 0x5013c9):
 //! - **Send** with an empty box only closes the window; otherwise it sends
@@ -37,6 +56,7 @@
 //! types with `press(...)`.
 use crate::{
     chat::ChatState,
+    confirm::{Asked, Question},
     keys::{Typing, search},
     online::OnlineState,
     outbox::Outbox,
@@ -56,6 +76,14 @@ use eq_client_core::{
 
 /// The Titanium program's line when its bug report window is cancelled.
 const BUG_CANCELLED: u32 = 0x22af;
+/// The Titanium program's question before a bug report goes (0x4ea552).
+pub(crate) const SYSTEM_INFO_QUESTION: u32 = 0x1aa3;
+/// How long the question waits before it answers as No (0xea60 ms,
+/// 0x548460).
+const QUESTION_WAITS: std::time::Duration = std::time::Duration::from_secs(60);
+/// This client's line where the program would add the machine's details.
+pub(crate) const NO_SYSTEM_INFO: &str =
+    "This client sends no system information with a bug report; it went without it.";
 /// The longest bug report the program's window sends (read R49-23).
 const BUG_LONGEST: usize = 1024;
 /// The longest feedback this client sends ([`eq_client_core::reports`]).
@@ -248,6 +276,58 @@ pub(crate) struct ReportWindows {
     pub(crate) feedback: String,
     /// The box that has the keyboard.
     pub(crate) editing: Option<Report>,
+    /// When the bug report's question answers itself, while it is up.
+    pub(crate) asking: Option<std::time::Duration>,
+    /// The session the question was asked in.
+    pub(crate) asked_in: Option<u64>,
+    /// Whether the installation sends system information without asking
+    /// (`[Defaults] SendSystemInfo=1`), as last read.
+    pub(crate) sends_system_info: bool,
+}
+
+/// What becomes of the bug report's question this frame.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Outcome {
+    /// It waits.
+    Wait,
+    /// The dialog no longer holds it: nothing is sent.
+    Drop,
+    /// It is answered: Yes (true) or No.
+    Answer(bool),
+}
+
+/// What becomes of the bug report's question: answered when a button
+/// answers it, as No at its deadline, whether or not its window still
+/// shows (read R49-52c); dropped where the dialog lost it, or where the
+/// session it was asked in has ended.
+///
+/// The program closes every question at once in a sweep (0x548256, called
+/// from 0x437bcd, which hides many windows), answering as No, so the
+/// report still goes. What calls that sweep is unread; this client takes
+/// the question back unanswered when its session ends (camping, a
+/// disconnect, or any new admission), so nothing goes to a later session
+/// (a departure, labelled; where the program's sweep runs is inferred).
+fn outcome(
+    deadline: std::time::Duration,
+    now: std::time::Duration,
+    answer: Option<bool>,
+    waiting: bool,
+    same_session: bool,
+) -> Outcome {
+    if !same_session {
+        return Outcome::Drop;
+    }
+    if let Some(yes) = answer {
+        return Outcome::Answer(yes);
+    }
+    if !waiting {
+        return Outcome::Drop;
+    }
+    if now >= deadline {
+        Outcome::Answer(false)
+    } else {
+        Outcome::Wait
+    }
 }
 
 impl ReportWindows {
@@ -314,6 +394,8 @@ enum Pressed {
     Say(ReportLine),
     /// Send this, and say the line once the session says it went.
     Send(Box<ClientCommand>, Option<ReportLine>),
+    /// Ask the bug report's question.
+    Ask,
 }
 
 impl ReportWindows {
@@ -354,6 +436,8 @@ impl ReportWindows {
                     }
                 };
             }
+            ReportButton::Send(Report::Bug) if self.asking.is_some() => {}
+            ReportButton::Send(Report::Bug) if !self.sends_system_info => return Pressed::Ask,
             ReportButton::Send(report) => {
                 shown.close(report.window());
                 self.release(report);
@@ -361,6 +445,24 @@ impl ReportWindows {
             }
         }
         Pressed::Done
+    }
+
+    /// The bug report's question, answered: the program's send, the same
+    /// for every answer. True with it where Yes sent a report, which the
+    /// program would have sent with the machine's details.
+    fn answered(
+        &mut self,
+        yes: bool,
+        world: &ClientWorld,
+        stamp: Option<crate::outbox::Stamp>,
+        shown: &mut Shown,
+    ) -> (Pressed, bool) {
+        self.asking = None;
+        shown.close(WindowId::BugReport);
+        self.release(Report::Bug);
+        let pressed = self.send(Report::Bug, world, stamp);
+        let sent = matches!(pressed, Pressed::Send(..));
+        (pressed, yes && sent)
     }
 
     /// The Send of a window, which has closed.
@@ -469,22 +571,100 @@ pub(crate) fn open(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn buttons(
     clicks: crate::clicks::Clicks<ReportButton>,
-    online: Res<OnlineState>,
-    outbox: Res<Outbox>,
+    (time, online, outbox, settings): (
+        Res<Time>,
+        Res<OnlineState>,
+        Res<Outbox>,
+        Res<crate::ViewerSettings>,
+    ),
+    mut asked: ResMut<Asked>,
     mut shown: ResMut<Shown>,
     mut chat: ResMut<ChatState>,
     mut windows: ResMut<ReportWindows>,
 ) {
     let world = online.world();
+    windows.sends_system_info = sends_system_info(&settings.0);
     for button in clicks.iter() {
         let stamp = outbox.stamp(world).ok();
-        match windows.press(*button, world, stamp, &mut shown) {
-            Pressed::Done => {}
-            Pressed::Say(line) => chat.report_lines.push(line),
-            Pressed::Send(command, echo) => match outbox.send(world, *command) {
-                Ok(()) => chat.report_echo = echo,
-                Err(refusal) => chat.history.push(crate::chat::system_line(refusal.text())),
-            },
+        let pressed = windows.press(*button, world, stamp, &mut shown);
+        if pressed == Pressed::Ask {
+            if asked.ask(Question::BugReport) {
+                windows.asking = Some(time.elapsed() + QUESTION_WAITS);
+                windows.asked_in = world.session_id();
+            }
+            continue;
+        }
+        // Sent without asking: the program would add the machine's details.
+        let note = *button == ReportButton::Send(Report::Bug);
+        deliver(pressed, note, world, &outbox, &mut chat);
+    }
+}
+
+/// Whether the installation sends system information without asking.
+fn sends_system_info(settings: &crate::ViewerConfig) -> bool {
+    settings
+        .official_settings()
+        .is_some_and(|official| official.sends_system_info())
+}
+
+/// Says or sends what a press or an answer asks, with this client's line
+/// where a report went that the program would send with the machine's
+/// details.
+fn deliver(
+    pressed: Pressed,
+    note: bool,
+    world: &ClientWorld,
+    outbox: &Outbox,
+    chat: &mut ChatState,
+) {
+    match pressed {
+        Pressed::Done | Pressed::Ask => {}
+        Pressed::Say(line) => chat.report_lines.push(line),
+        Pressed::Send(command, echo) => match outbox.send(world, *command) {
+            Ok(()) => {
+                chat.report_echo = echo;
+                if note {
+                    // A departure: the program sends the machine's details.
+                    chat.history
+                        .push(crate::chat::system_line(NO_SYSTEM_INFO.to_owned()));
+                }
+            }
+            Err(refusal) => chat.history.push(crate::chat::system_line(refusal.text())),
+        },
+    }
+}
+
+/// Settles the bug report's question: an answer, or its deadline, runs the
+/// send, with the window open or not.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(crate) fn question(
+    (time, online, outbox): (Res<Time>, Res<OnlineState>, Res<Outbox>),
+    mut asked: ResMut<Asked>,
+    mut shown: ResMut<Shown>,
+    mut chat: ResMut<ChatState>,
+    mut windows: ResMut<ReportWindows>,
+) {
+    let Some(deadline) = windows.asking else {
+        return;
+    };
+    let answer = asked.answer(Question::BugReport);
+    let waiting = asked.question() == Some(Question::BugReport);
+    let same_session = online
+        .world()
+        .session_id()
+        .is_some_and(|session| windows.asked_in == Some(session));
+    let outcome = outcome(deadline, time.elapsed(), answer, waiting, same_session);
+    if outcome != Outcome::Wait && waiting {
+        asked.withdraw();
+    }
+    match outcome {
+        Outcome::Wait => {}
+        Outcome::Drop => windows.asking = None,
+        Outcome::Answer(yes) => {
+            let world = online.world();
+            let stamp = outbox.stamp(world).ok();
+            let (pressed, note) = windows.answered(yes, world, stamp, &mut shown);
+            deliver(pressed, note, world, &outbox, &mut chat);
         }
     }
 }
@@ -609,6 +789,8 @@ pub(crate) struct Observation {
     pub(crate) feedback_text: String,
     /// The box that has the keyboard.
     pub(crate) editing: Option<Report>,
+    /// Whether the bug report's question is up.
+    pub(crate) question_up: bool,
 }
 
 impl ReportWindows {
@@ -630,6 +812,7 @@ impl ReportWindows {
             feedback_shown: shown.displayed(WindowId::Feedback),
             feedback_text: self.feedback.clone(),
             editing: self.editing,
+            question_up: self.asking.is_some(),
         }
     }
 }
