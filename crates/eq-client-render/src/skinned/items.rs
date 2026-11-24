@@ -287,6 +287,8 @@ pub(crate) const fn framed_while_open(id: WindowId) -> bool {
             | WindowId::Confirmation
             | WindowId::Note
             | WindowId::Book
+            | WindowId::BugReport
+            | WindowId::Feedback
             | WindowId::WorldContainer
             | WindowId::Map
             | WindowId::CharacterSelect
@@ -305,7 +307,8 @@ pub(crate) const fn closes_here(id: WindowId) -> bool {
 /// a bag's, while it is open and still a bag, the bank's, while it is open
 /// and a banker is in reach, and the give, quantity, Actions, Pet Info,
 /// Group, Raid, short effects, casting, Options, Training, Skills,
-/// confirmation, note and book windows while they are open and not hidden.
+/// confirmation, note, book, bug report and feedback windows while they are
+/// open and not hidden.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn frames(
     mut commands: Commands,

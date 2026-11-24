@@ -335,7 +335,7 @@ fn a_titanium_duel_sends_the_target_as_it_stands_whatever_follows() {
 }
 
 #[test]
-fn a_duel_elsewhere_challenges_only_another_player_targeted_and_never_by_name() {
+fn a_mac_duel_sends_the_target_as_it_stands_and_refuses_a_name() {
     let duel = |online: &OnlineState, named| {
         answer(
             Asked::Duel { named },
@@ -349,8 +349,46 @@ fn a_duel_elsewhere_challenges_only_another_player_targeted_and_never_by_name() 
         testing::generation(&mut online, eq_client_core::GameDialect::EqMac);
         online
     };
+    // The program takes any target and tests none first itself (TAKP read
+    // 11g): the session refuses no target, the player and a corpse with
+    // the program's lines, and challenges an NPC.
+    for (target, sent) in [
+        (Some(12), 12),
+        (Some(7), 7),
+        (Some(20), 20),
+        (Some(21), 21),
+        (None, 0),
+    ] {
+        assert_eq!(
+            duel(&mac(target), false),
+            Ok((None, Some(Sent::Duel { target: sent }))),
+            "{target:?}"
+        );
+    }
+    // Its words after `/duel` are unread: they send nothing.
+    assert_eq!(
+        duel(&mac(Some(12)), true).unwrap_err().words.text,
+        "This client does not take a name after /duel yet; target the player and type /duel."
+    );
+}
+
+#[test]
+fn a_duel_elsewhere_challenges_only_another_player_targeted_and_never_by_name() {
+    let duel = |online: &OnlineState, named| {
+        answer(
+            Asked::Duel { named },
+            online.world(),
+            None,
+            &Messages::default(),
+        )
+    };
+    let rof2 = |target| {
+        let mut online = targeting(target);
+        testing::generation(&mut online, eq_client_core::GameDialect::Rof2);
+        online
+    };
     // Another player targeted: sent, with no line of ours.
-    let online = mac(Some(12));
+    let online = rof2(Some(12));
     assert_eq!(
         duel(&online, false),
         Ok((None, Some(Sent::Duel { target: 12 })))
@@ -362,13 +400,30 @@ fn a_duel_elsewhere_challenges_only_another_player_targeted_and_never_by_name() 
     );
     // No target, the player, an NPC, a corpse, or a spawn not in the zone.
     for target in [None, Some(7), Some(20), Some(21), Some(99)] {
-        let online = mac(target);
+        let online = rof2(target);
         assert_eq!(
             duel(&online, false).unwrap_err().words.text,
             "You must first target another player to challenge to a duel.",
             "{target:?}"
         );
     }
+}
+
+#[test]
+fn decline_goes_to_the_session_where_it_is_offered() {
+    assert_eq!(Asked::typed("/decline"), Some(Asked::Decline));
+    assert_eq!(Asked::typed("/DECLINE now"), Some(Asked::Decline));
+    let decline =
+        |online: &OnlineState| answer(Asked::Decline, online.world(), None, &Messages::default());
+    // The session says the program's line for each state.
+    let online = admitted(vec![Capability::DecliningDuels]);
+    assert_eq!(decline(&online), Ok((None, Some(Sent::Decline))));
+    // Titanium's session offers no `/decline`.
+    let online = admitted(vec![Capability::Dueling]);
+    assert_eq!(
+        decline(&online).unwrap_err().words.text,
+        "This client does not take /decline that way yet."
+    );
 }
 
 #[test]
