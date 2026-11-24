@@ -169,3 +169,79 @@ fn tilted_placement_extent_uses_real_vertices_instead_of_empty_aabb_corners() {
     .unwrap();
     assert!((placed.surface().minimum_y() - baked.mesh.local_aabb().mins.y).abs() < 0.001);
 }
+
+#[test]
+fn a_ship_passing_alongside_never_takes_the_link_off_the_deck_still_underfoot() {
+    // The #631 rerun (6.611): with two ships alongside, part of a rider's
+    // footprint met the passing ship's side, level with or a little above
+    // its own deck, and the link went to the passing ship. The deck it
+    // stands on keeps the link while any part of the footprint is over it.
+    let slab = |from: f32, to: f32, height: f32| {
+        Arc::new(
+            CollisionMesh::new([
+                [
+                    [from, height, -10.0],
+                    [to, height, -10.0],
+                    [to, height, 10.0],
+                ],
+                [
+                    [from, height, -10.0],
+                    [to, height, 10.0],
+                    [from, height, 10.0],
+                ],
+            ])
+            .unwrap(),
+        )
+    };
+    for passing in [5.0, 5.45] {
+        let mut world = world();
+        // The passing ship is listed first, so the plain sweep meets it first.
+        world.set_spawn_obstacles(vec![
+            (9, slab(-0.1, 20.0, passing)),
+            (8, slab(-20.0, 0.2, 5.0)),
+        ]);
+        // Feet on the higher of the two, where the walk stood them.
+        let feet = Vec3::new(0.0, passing, 0.0);
+        let depth = 200.0;
+        assert_eq!(
+            world.spawn_floor(feet, 0.01, depth).map(|(id, _)| id),
+            Some(9)
+        );
+        let kept = world.spawn_floor_keeping(feet, 0.01, depth, Some(8));
+        assert_eq!(kept.map(|(id, _)| id), Some(8), "{passing}");
+        close(kept.map(|(_, height)| height), Some(5.0));
+        // With no link, or a link to the other ship, the plain sweep's.
+        assert_eq!(
+            world.spawn_floor_keeping(feet, 0.01, depth, None),
+            world.spawn_floor(feet, 0.01, depth)
+        );
+        assert_eq!(
+            world
+                .spawn_floor_keeping(feet, 0.01, depth, Some(9))
+                .map(|(id, _)| id),
+            Some(9)
+        );
+        // Once no part of the footprint is over its deck, the link moves.
+        let across = Vec3::new(1.0, passing, 0.0);
+        assert_eq!(
+            world
+                .spawn_floor_keeping(across, 0.01, depth, Some(8))
+                .map(|(id, _)| id),
+            Some(9)
+        );
+    }
+    // A deck under another ship's floor is not the first floor there, so
+    // it keeps nothing.
+    let mut stacked = world();
+    stacked.set_spawn_obstacles(vec![
+        (9, slab(-20.0, 20.0, 6.0)),
+        (8, slab(-20.0, 20.0, 5.0)),
+    ]);
+    let above = Vec3::new(0.0, 6.0, 0.0);
+    assert_eq!(
+        stacked
+            .spawn_floor_keeping(above, 0.01, 200.0, Some(8))
+            .map(|(id, _)| id),
+        Some(9)
+    );
+}

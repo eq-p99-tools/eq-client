@@ -2,6 +2,12 @@
 
 ## Unreleased
 
+- Ride boats as the Titanium client does (read R49-27, checklist 6.611).
+  - **A jump on a moving boat comes down on its deck.** The link to the boat was the floor within 0.05 under the feet, so a jump on a moving ferry let go of it and the boat sailed out from under you. Now, as the program's floor sweep does, the first floor under the feet links you however far down it is: a body in the air over the deck stays with the boat, and one over the water or a dock doesn't. The link still ends 600 from the boat's origin, the session guard's bound (6.469), which is ours.
+  - **Other riders move with the boat between their reports.** Another player or NPC standing on a moving ferry was left standing in the water until its next report, then jumped on. Now a spawn whose report puts it over a boat's deck is carried with the boat, by its own motion across the deck. This is only in zones with a boat.
+  - **Jumps and falls of other spawns.** A spawn moving only up or down plays its jump (L04, L03 for race 49) or, faster than 45 a second down, its fall (L05), as the program's picker does, where it used to stand. Moving is now a speed of 2 a second in any direction.
+  - **A passing ship no longer takes a rider's link.** With two ships alongside, part of a rider's footprint could meet the other ship's side and the link went to that ship, which carried the rider along its own deck. The ship a rider is linked to now stays its link while any part of the footprint is over its deck, for your own character and for others drawn aboard. The program's choice between two ships is unread: this is inferred, the stricter side (6.611).
+  - Our own sender still reports no vertical speed on a jump or fall; that is a separate row.
 - **Luclin player models follow the viewer's eqclient.ini keys, a set key on every server** (read R49-44 a, checklist 6.554):
   - **The keys are read now, not recalled.** `[Defaults] UseLuclin<Race>Male` / `Female` counts as on when its value starts with T, t or 1, and off otherwise. The race words are the program's: Human, Barbarian, Erudite, WoodElf, HighElf, DarkElf, HalfElf, Dwarf, Troll, Ogre, Halfling, Gnome, Iksar and VahShir.
   - **A key that isn't set follows the server's expansion mask,** as the program's default does: on where it has Luclin or Planes of Power (bit 0x4 or 0x8), classic where it hasn't or no mask came. So on P99 (Kunark and Velious) a missing key is classic. The program also writes `TRUE` back to its ini where it counts a key on; this client never writes the official ini.
