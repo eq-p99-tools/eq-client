@@ -1,6 +1,6 @@
 # Guild roster
 
-Open **Guild** from the EQ menu. The read-only list shows received names,
+Open **Guild** from the EQ menu. The list shows received names,
 levels, classes, ranks, online status, zones and public notes. The installed
 `EQUI_GuildManagementWnd.xml` supplies its frame, list and scrollbar when
 available; otherwise the client supplies a fallback. Movement, minimization,
@@ -20,10 +20,34 @@ guild in the same known world. Location/status remain last-received values;
 the transfer does not refresh them. Membership changes, disband, removal of the
 player, world changes, character selection, terminal or unoffered connection
 loss, camping and other admissions discard roster evidence. Death retains it.
-There are no moderation controls, note edits, polling or refresh request.
+There are no note edits, polling or refresh request.
 The current network API has no established Titanium roster-refresh operation;
 opening the window sends nothing. A session without guild roster capability
 reports that availability separately from a guilded session awaiting its list.
+
+Select a named roster row to manage another member. Officers and the Guild
+Master can request removal of a Member or Officer. Only the Guild Master can
+offer a Member the Officer rank, or demote an Officer to Member. Promotion
+requires that member to be in the zone and accept the existing guild invitation.
+Unknown ranks remain readable but do not grant management authority. These
+controls do not remove oneself, remove a Guild Master or transfer leadership.
+The server remains responsible for its guild permission settings and acceptance.
+
+Every action asks Yes or No with the exact canonical member name and proposed
+change. No cancels without sending. The ticket binds the character, admission,
+guild, actor rank and received membership revision: replacement, removal/rejoin,
+rank changes, leaving the window or another admission withdraw stale intent.
+Sending queues one existing command and leaves the roster unchanged. A later
+received matching rank or removal establishes the displayed state; it is not a
+request acknowledgement. A guild refusal is shown without claiming which
+request it answered. After 30 seconds without a matching change the result is
+unconfirmed, with no automatic retry. Closing the window cancels an unanswered
+question but does not recall an already sent request.
+
+Scripts click the same controls with `click button guild Member_Name`, where
+`Name` is the roster's exact character name, then `click button guild Remove`,
+`Promote` or `Demote` and the ordinary confirmation dialog's Yes or No. No
+script path bypasses member identity, rank, capability or stale-ticket checks.
 
 EQEmu supplies the full list on an ordinary fresh character login and guild
 join. Its initial-login marker is server lifecycle state, separate from the

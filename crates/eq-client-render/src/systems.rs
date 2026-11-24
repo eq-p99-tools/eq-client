@@ -55,6 +55,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<abilities::choices::Files>()
         .init_resource::<abilities::picker::Picker>()
         .init_resource::<guild::Invitations>()
+        .init_resource::<guild::management::State>()
         .init_resource::<surname::Pending>()
         .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
@@ -256,6 +257,7 @@ pub(super) fn schedule(app: &mut App) {
                 (
                     guild::invitations,
                     guild::commands,
+                    guild::management::input,
                     sharing::commands,
                     surname::command,
                 ),
@@ -484,7 +486,11 @@ pub(super) fn schedule(app: &mut App) {
                         (training::fill, tracking::fill, abilities::picker::fill),
                         skills::fill,
                         raid::fill,
-                        (guild::roster::fill, crate::combat_abilities::fill),
+                        (
+                            guild::roster::fill,
+                            guild::management::present,
+                            crate::combat_abilities::fill,
+                        ),
                         confirm::show,
                         reading::show,
                         tradeskills::show,
