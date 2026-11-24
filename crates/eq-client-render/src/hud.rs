@@ -542,13 +542,25 @@ pub(super) fn press_gem(
         &messages::Messages,
         &crate::ViewerSettings,
     ),
-    map: &super::keys::KeyMap,
+    (map, options): (&super::keys::KeyMap, Option<&crate::options::OptionsState>),
 ) {
+    const BARD: u32 = 8;
     let world = online.world();
     let Some(player) = world.player() else {
         return;
     };
     let spell = world.gem(usize::from(gem));
+    let checks = requests::CastChecks {
+        spell_level: spell
+            .zip(player.class)
+            .and_then(|(spell, class)| names.class_level(spell, class)),
+        song: spell.is_some_and(|spell| {
+            names
+                .class_level(spell, BARD)
+                .is_some_and(|level| level != 0 && level != u8::MAX)
+        }),
+        auto_stand: options.is_none_or(|options| options.options.allow_auto_stand),
+    };
     requests::spell(
         chat,
         world,
@@ -560,6 +572,7 @@ pub(super) fn press_gem(
             forgetting,
             mana_cost: spell.and_then(|spell| names.mana(spell)),
             linked_timer: spell.and_then(|spell| names.linked_timer(spell)),
+            checks,
         },
         (messages, map),
         || super::invisibility::drop_before_cast(world, outbox, names, settings.0.installed_client),
@@ -639,7 +652,7 @@ pub(super) fn actions(
             (gem, forget.is_some()),
             (&mut chat, &online, &outbox),
             (&definitions.0, &definitions.1, &definitions.2),
-            &keys.map,
+            (&keys.map, options.as_deref()),
         );
     }
     if let Some(hotbar::Action::Ability(ability)) = bar_action {

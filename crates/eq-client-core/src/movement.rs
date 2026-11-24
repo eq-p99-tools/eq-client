@@ -70,7 +70,7 @@ pub use eq_network_game::movement::{
 use glam::Vec3;
 use parry3d::{
     math::{Pose, Vector},
-    query::{Ray, RayCast, ShapeCastOptions, cast_shapes, contact},
+    query::{Ray, RayCast, ShapeCastOptions, cast_shapes, contact, intersection_test},
     shape::{Capsule, TriMesh},
 };
 use std::sync::Arc;
@@ -406,11 +406,14 @@ impl CollisionWorld {
             return None;
         }
         let (pose, capsule) = body(feet, height);
+        // Inside a closed door, or crossing a thin one's faces (a
+        // portcullis's bars, one plane, come down through the body).
         let inside = |mesh: &CollisionMesh| {
             contact(&pose, &capsule, &Pose::IDENTITY, &mesh.mesh, 0.0)
                 .ok()
                 .flatten()
                 .is_some_and(|contact| contact.dist < 0.0)
+                || intersection_test(&pose, &capsule, &Pose::IDENTITY, &mesh.mesh).unwrap_or(false)
         };
         let mut released = false;
         let obstacles = self
@@ -973,6 +976,35 @@ impl CollisionWorld {
             )
     }
 
+    /// [`Self::sweep`] for a fall straight down, which a body whose upper
+    /// part starts inside something over it, such as a swimmer surfaced
+    /// under a ramp into the water, still makes: going down leaves what the
+    /// head overlaps, and only what the lower body meets can stop it. The
+    /// lower body leads, halved until its sweep isn't refused where it
+    /// starts. Ours: the program's sphere differs (R40) and this case is
+    /// unread.
+    fn fall_sweep(
+        &self,
+        feet: Vec3,
+        drop: f32,
+        height: f32,
+    ) -> Result<Option<parry3d::query::ShapeCastHit>, parry3d::query::Unsupported> {
+        let delta = Vec3::Y * drop;
+        let hit = self.sweep(feet, delta, height)?;
+        if drop >= 0.0 || hit.as_ref().is_none_or(|hit| hit.time_of_impact > 0.0) {
+            return Ok(hit);
+        }
+        let mut lower = height / 2.0;
+        while lower >= 2.5 * CAPSULE_RADIUS {
+            let below = self.sweep(feet, delta, lower)?;
+            if below.as_ref().is_none_or(|hit| hit.time_of_impact > 0.0) {
+                return Ok(below);
+            }
+            lower /= 2.0;
+        }
+        Ok(hit)
+    }
+
     /// Sweeps one segment with a skin gap, keeping the collision query separate from sliding.
     fn sweep(
         &self,
@@ -1229,6 +1261,40 @@ mod tests {
             Solidity::BOTH,
         )]);
         assert!(deck.releasing_overlapped_doors(Vec3::Y, 6.0).is_none());
+    }
+
+    #[test]
+    fn a_portcullis_coming_down_on_a_player_under_it_lets_them_walk_out_either_way() {
+        // Bars of one plane across x = 0, every face a wall (a door's
+        // passable faces too), come down around a player standing in the
+        // gateway: they may step out on either side, and once clear the bars
+        // stop them again (reviewer W2, recording checklist 6.439).
+        let bars = Arc::new(
+            CollisionMesh::new(vec![
+                [[0.0, 0.0, -5.0], [0.0, 0.0, 5.0], [0.0, 10.0, 5.0]],
+                [[0.0, 0.0, -5.0], [0.0, 10.0, 5.0], [0.0, 10.0, -5.0]],
+            ])
+            .unwrap(),
+        );
+        let mut world = CollisionWorld::new(floor(0.0)).unwrap();
+        world.set_door_obstacles_with(vec![(
+            1,
+            bars,
+            Solidity {
+                floor: false,
+                wall: true,
+            },
+        )]);
+        // Unreleased, the one-sided plane would hold them on its back side.
+        assert!(world.step(Vec3::ZERO, Vec3::X * 3.0, 6.0).x < 0.01);
+        let released = world.releasing_overlapped_doors(Vec3::ZERO, 6.0).unwrap();
+        for direction in [Vec3::X, -Vec3::X] {
+            let out = released.step(Vec3::ZERO, direction * 3.0, 6.0);
+            assert!(out.distance(direction * 3.0) < 0.01, "stepped out to {out}");
+        }
+        let clear = Vec3::new(3.0, 0.0, 0.0);
+        assert!(world.releasing_overlapped_doors(clear, 6.0).is_none());
+        assert!(world.step(clear, -Vec3::X * 6.0, 6.0).x > 0.0);
     }
 
     #[test]

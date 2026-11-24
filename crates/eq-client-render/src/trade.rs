@@ -463,12 +463,35 @@ pub(super) fn input(
     if trade.chosen().is_some() && trade.merchant_choice.is_none() {
         trade.merchant_choice = trade.quantity_selection(online.world());
     }
-    let right_clicked =
-        trade.take_right_click(online.world(), settings.0.installed_client, &outbox);
-    // A right-click on a boat goes to the piloting request, which sends
-    // nothing unless the player stands on it (read R35).
-    if let Some(spawn_use::Use::Boat(boat)) = right_clicked {
-        chat.interact_with_boat(boat, None);
+    let inspect_others = options.as_ref().is_none_or(|options| {
+        options
+            .options
+            .get(eq_client_core::options::Toggle::InspectOthers)
+    });
+    let right_clicked = trade.take_right_click(
+        online.world(),
+        settings.0.installed_client,
+        &outbox,
+        inspect_others,
+    );
+    match right_clicked {
+        // A right-click on a boat goes to the piloting request, which sends
+        // nothing unless the player stands on it (read R35).
+        Some(spawn_use::Use::Boat(boat)) => chat.interact_with_boat(boat, None),
+        // A player too far to inspect: the program names them by line
+        // 0x305a (read R49-16).
+        Some(spawn_use::Use::TooFarToInspect(id)) => {
+            if let Some(spawn) = online.world().spawn(id) {
+                let name = eq_client_core::entities::display_name(&spawn.state.name);
+                chat.history.push(super::chat::system_line(messages.said_or(
+                    spawn_use::TOO_FAR_TO_INSPECT,
+                    std::slice::from_ref(&name),
+                    &format!("{name} is too far away to inspect."),
+                )));
+            }
+            return;
+        }
+        _ => (),
     }
     // Only a player in the world trades; the outbox stamps what they ask.
     let (Some(stamp), Some(own_id)) = (
@@ -597,7 +620,7 @@ pub(super) fn input(
         && let Err(reason) =
             trade.submit_quantity(online.world(), &outbox, stamp, selection, quantity)
     {
-        chat.refuse(reason.to_owned());
+        say_refused(&mut chat, &messages, &trade, online.world(), reason);
     }
     for action in clicked {
         if match settings.0.installed_client {
@@ -649,7 +672,13 @@ pub(super) fn input(
                                     selection,
                                     1,
                                 ) {
-                                    chat.refuse(reason.to_owned());
+                                    say_refused(
+                                        &mut chat,
+                                        &messages,
+                                        &trade,
+                                        online.world(),
+                                        reason,
+                                    );
                                 }
                             } else {
                                 inventory.select_merchant(selection, limit);
@@ -663,7 +692,9 @@ pub(super) fn input(
                             }
                         }
                     }
-                    Err(reason) => chat.refuse(reason.to_owned()),
+                    Err(reason) => {
+                        say_refused(&mut chat, &messages, &trade, online.world(), reason);
+                    }
                 }
             }
             continue;
@@ -1063,6 +1094,40 @@ fn short_of(trade: &TradeState, world: &ClientWorld, slot: u32, quantity: u32) -
     let coins = world.coins()?.total_copper();
     (prices.buy_total(ware.price, merchant.rate, quantity) > coins)
         .then_some(prices.short[usize::from(quantity > 1)])
+}
+
+/// The Titanium program's buy lines (read R49-35 a): something on the
+/// cursor, and coins short of one of the ware.
+const CURSOR_ITEM_LINE: u32 = 0x2164;
+const CURSOR_ITEM_COLOUR: u32 = 0x114;
+const SHORT_LINE: u32 = 0x2f1c;
+const SHORT_COLOUR: u32 = 0x111;
+
+/// Says why a merchant trade didn't go: nothing where the program says
+/// nothing, its lines where it has them, and this client's words for its
+/// own guards.
+fn say_refused(
+    chat: &mut super::chat::ChatState,
+    messages: &super::hud::messages::Messages,
+    trade: &TradeState,
+    world: &ClientWorld,
+    refused: merchant_quantity::Refused,
+) {
+    use merchant_quantity::Refused;
+    match refused {
+        Refused::Silent => (),
+        Refused::CursorItem => chat.refuse(
+            messages
+                .said_text(CURSOR_ITEM_LINE, "Place the cursor item before trading")
+                .typed(CURSOR_ITEM_COLOUR),
+        ),
+        Refused::Short(slot) => chat.refuse(
+            messages
+                .said(SHORT_LINE, &short_names(trade, world, slot))
+                .typed(SHORT_COLOUR),
+        ),
+        Refused::Words(words) => chat.refuse(words.to_owned()),
+    }
 }
 
 /// What the refusal of a buy the coins don't cover names: the merchant
