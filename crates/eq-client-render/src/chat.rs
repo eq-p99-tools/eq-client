@@ -176,6 +176,9 @@ pub(super) struct ChatState {
     pub(crate) report_echo: Option<super::reports::ReportLine>,
     /// Lines a report command prints at once, for [`super::reports::say`].
     pub(crate) report_lines: Vec<super::reports::ReportLine>,
+    /// The report window a typed command asked to open, for
+    /// [`super::report_windows::open`].
+    pub(crate) report_window: Option<super::report_windows::Report>,
     /// A `/loc` or `/time`, waiting to be answered.
     pub asked: Option<super::whereabouts::Asked>,
     /// A `/yell` or `/stopcast` waiting for its line and send.
@@ -371,7 +374,7 @@ impl ChatState {
         serde_json::json!({
             "composing": typing.composing,
             "composition_window": composition_window,
-            "other_text_input_active": typing.counting || typing.logging_in || typing.map_search
+            "other_text_input_active": typing.counting || typing.logging_in || typing.map_search || typing.reporting
                 || typing.spell_search || typing.spell_search_claimed || typing.spell_set_name
                 || typing.rebinding || typing.editing_script || typing.creating_character,
         })
@@ -589,6 +592,7 @@ impl ChatState {
             paced,
             shield_words,
             report_echo,
+            report_window,
             // Cleared elsewhere: the link scope, the message of the day and
             // recall by `end_session`, the social inbox at every reset, and
             // the departure by `login::depart`.
@@ -655,6 +659,7 @@ impl ChatState {
         *shield_words = None;
         // An echo waits on the ended session's answer.
         *report_echo = None;
+        *report_window = None;
     }
 
     /// Links can follow a known profile through zoning on the same connection.
@@ -1344,7 +1349,7 @@ pub(super) fn input(
         .next()
         .is_some_and(|Send(id)| state.groups.focus(*id));
     // Local text fields keep their keys out of chat.
-    if typing.counting || typing.map_search || typing.spell_search_claimed {
+    if typing.counting || typing.map_search || typing.reporting || typing.spell_search_claimed {
         keyboard.clear();
         paste.clear();
     }
@@ -2061,6 +2066,7 @@ fn typed_report(
             state.report_echo = echo;
         }
         Answer::Say(line) => state.report_lines.push(line),
+        Answer::Open(report) => state.report_window = Some(report),
         Answer::Nothing => {}
     }
     Ok(())
@@ -4774,8 +4780,25 @@ mod tests {
 
     #[test]
     fn a_typed_line_sends_a_report_to_the_staff() {
+        use crate::report_windows::Report;
         use eq_client_core::reports::BugCategory;
         let (mut app, receiver) = slash_app(true);
+        // As the program does, a bug report or feedback opens its window
+        // and leaves the words aside, unless Typed Reports is on.
+        for (line, report) in [
+            ("/bug doors: it will not open", Report::Bug),
+            ("/feedback a note", Report::Feedback),
+        ] {
+            send_typed(&mut app, line);
+            assert!(receiver.try_recv().is_err(), "{line}");
+            let mut chat = app.world_mut().resource_mut::<ChatState>();
+            assert_eq!(chat.report_window.take(), Some(report), "{line}");
+        }
+        let mut typed = Settings::default();
+        typed.set(Fix::TypedReports, true);
+        let mut options = crate::options::OptionsState::default();
+        options.options.qol = typed;
+        app.insert_resource(options);
         send_typed(&mut app, "/petition  I am stuck in the wall. ");
         assert!(matches!(
             receiver.try_recv(),
@@ -4847,7 +4870,7 @@ mod tests {
             );
             assert!(receiver.try_recv().is_err(), "{line}");
             assert_eq!(
-                submit_typed_line(line, &mut chat, &mut online, &outbox, &Settings::default()),
+                submit_typed_line(line, &mut chat, &mut online, &outbox, &typed),
                 Ok(()),
                 "{line}"
             );

@@ -44,6 +44,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<weather::Field>()
         .init_resource::<crate::breath::State>()
         .init_resource::<trade::TradeState>()
+        .init_resource::<crate::report_windows::ReportWindows>()
         .init_resource::<escape::Escape>()
         .init_resource::<windows::pointer::Wheel>()
         .init_resource::<skin::UiSkin>()
@@ -182,7 +183,12 @@ pub(super) fn schedule(app: &mut App) {
                 navigation::update,
                 login::depart,
                 skinned::type_amount,
-                map::search_input,
+                (
+                    map::search_input,
+                    crate::report_windows::focus,
+                    crate::report_windows::input,
+                )
+                    .chain(),
             )
                 .chain()
                 .in_set(Stage::Typing),
@@ -213,6 +219,12 @@ pub(super) fn schedule(app: &mut App) {
                 whereabouts::answers,
                 crate::motd::answers,
                 crate::reports::say,
+                (
+                    crate::report_windows::open,
+                    crate::report_windows::buttons,
+                    crate::report_windows::show,
+                )
+                    .chain(),
                 crate::fastdrop::answers,
                 crate::slash::answers,
                 crate::slash::assist_named,

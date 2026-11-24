@@ -937,6 +937,7 @@ type Buttons<'w, 's> = Query<
                         Has<super::tracking::TrackButton>,
                         Option<&'static super::abilities::picker::PickRow>,
                     ),
+                    Option<&'static super::report_windows::ReportBox>,
                 ),
             ),
         ),
@@ -990,6 +991,7 @@ type Observed<'w> = (
         Option<Res<'w, crate::abilities::Choices>>,
         Option<Res<'w, crate::abilities::picker::Picker>>,
         Option<Res<'w, crate::keys::Typing>>,
+        Option<Res<'w, crate::report_windows::ReportWindows>>,
     ),
 );
 
@@ -2709,6 +2711,13 @@ pub(super) fn drive(
                 detached_camera.single().ok(),
             );
             report::surroundings(&online, &observed);
+            if let Some(windows) = observed.15.3.as_deref() {
+                info!(
+                    label,
+                    report_windows = ?windows.observe(&shown, online.world()),
+                    "Script report windows"
+                );
+            }
             report::game_messages(&mut script.chat_seen, &chat);
             report::item_links(label, &online, &chat, &item);
             report::dialogs(label, online.world());
@@ -3302,7 +3311,13 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             slider,
             drop_down,
             choice,
-            (dialog, page, combine, map, (raid_row, raid_action, shows, skin_id, tracking)),
+            (
+                dialog,
+                page,
+                combine,
+                map,
+                (raid_row, raid_action, shows, skin_id, tracking, report_box),
+            ),
         ),
     ) in buttons
     {
@@ -3330,6 +3345,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::KeyFilter => drop_down.is_some_and(|drop_down| {
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
+            ClickTarget::BugType => drop_down
+                .is_some_and(|drop_down| drop_down.choosing() == super::skinned::Choosing::BugType),
+            ClickTarget::ReportBox(report) => report_box.is_some_and(|boxed| boxed.0 == report),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
             ClickTarget::Answer(_)
             | ClickTarget::Training(_)

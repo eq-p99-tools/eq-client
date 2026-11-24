@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- **`/bugreport` and `/feedback` open their windows**, as the Titanium program does (read R49-23 and the bug report window's fill and send passes; checklist 6.511, C1b client half). The installed skin's `BugReportWindow` and `FeedbackWindow` are drawn and work:
+  - Opening the bug report fills its place labels with the player's place, each truncated to a whole number as the program's ftol does, keeps the heading the same way, and clears its four check boxes and the target's name. The report sends that place and heading. This client resets it on every open (inferred).
+  - **Location** fills the place again. **Target**, checked with a target, names it (the cleaned name) and carries it; checked with none it stays unchecked; unchecked it clears. **Dup**, **Crash**, **Flags** and **Target** send the report's bits 1, 2, 8 and 4, carried by eq-network #443.
+  - The category drop-down lists this client's own names for the categories (the program's come from a table in itself). Scripts reach it as `dropdown bug_type`, the text boxes as `report bug_text` and `report feedback_text`, and the buttons by ScreenID. A script's `report()` adds a `Script report windows` event with what both windows show.
+  - **Send** with an empty box says line 0x22b0 and sends nothing; otherwise it sends, clears the box and says 0x22ae once the session says it went. **Cancel** says 0x22af and keeps the words. The window hides either way. The program may ask to confirm first (line 0x1aa3) depending on a setting this client has not read; this client sends at once, a labelled departure.
+  - The feedback window's **Send** sends the words with the player's place and heading, clears and closes, with no line; empty, it only closes. **Cancel** clears and closes.
+  - **Typed Reports is now off by default**, so the commands behave as the program's. On, it sends the typed words as before. It changes nothing on EqMac and RoF2, which always send the typed words.
+  - If the installed skin lacks a window, a line says so and points to Typed Reports (a departure; the program always has them).
+  - Comboboxes now honour the skin's anchors (`AutoStretch`), as the bug report's drop-down needs.
 - **A bash or a kick can stun or interrupt you on your side, as the Titanium program rolls it** (eq-network #446 and #447, reads R49-50 and R49-50b, checklist 6.646 and 6.645 S2). On P99 and Titanium EQEmu alike, with no setting. Nothing is sent.
   - A saved stun prints the program's line by id (0x1679 or 0x2375) in its colour 10.
   - A cast cleared locally drops the cast bar with no line, and the next gem press casts. A song cleared locally ends with line 0x318e and resets the gems as any song stop does; `/melody` sees it as it sees the server's stop.
@@ -28,7 +37,7 @@
   - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure. It is said, and nothing is sent, whenever no link is up: before the chat server takes the login, and after a link ends.
   - The autojoin waits for the character to be in the world: the chat server can take the login while the character is still entering, and the list is that character's. `/autojoin NONE` says you will join no channels.
   - `/announce` and `/chat words` go after a `/` too (`/announce on`, `/kick general Someone`). Inferred: `/announce`'s handler is unread and `/chat`'s sent form only partly read; the chat server skips a command's first byte, so this is the form it takes.
-  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422), and works against a stock chat server: one-byte opcodes, its keep-alive read past, commands as typed, and a log line saying why a link ended (eq-network #438, pinned at bb4c8d7). The repin also takes #443's bug-report fields, which this client leaves unticked.
+  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422), and works against a stock chat server: one-byte opcodes, its keep-alive read past, commands as typed, and a log line saying why a link ended (eq-network #438, pinned at bb4c8d7). The repin also takes #443's bug-report fields, which the typed line leaves unticked and the bug report window (below) ticks.
 - A swimmer climbs out of a pool onto a rim up to about 3.3 above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483b, 6.483c):
   - Stroking forward with the view pitched up toward dry ground just ahead hops, at most once in 1500 ms: three times the jump strength added to the rise and a push along the heading (0x48a793, 0x48a026, read R33b).
   - The wet step ends on the frame that takes the origin out of the water, so the fall that follows keeps the velocity it left with instead of losing it to the water's damping for the rest of the sample.

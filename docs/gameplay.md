@@ -527,13 +527,36 @@ recording checklist 6.511), in the installation's own lines:
 - Where the world turns the petition window on, the official client shows
   its petition window instead and ignores the words. Which window that is
   is unread, so this client sends the words as above: a departure.
-- The official `/bugreport` and `/feedback` open a window and ignore the
-  words. This client has no such windows yet, so the **Typed Reports**
-  setting (on by default until the windows are built) sends the words
-  instead. A bug report then prints the official sent line, or its empty-box
-  line with no words; feedback prints nothing, as the official window does.
-  With the setting off, the words are ignored and a line says there is no
-  window yet.
+- `/bugreport` and `/feedback` open the installed skin's bug report and
+  feedback windows and ignore the words, as the official client does:
+  - Opening the bug report fills its three place labels with where you
+    stand, each cut to a whole number, and clears its four check boxes and
+    the target's name. The place and heading go with the report as shown.
+    This client clears it on every open (inferred).
+  - **Location** fills the place again. **Target**, checked with a target,
+    names it and sends it; with no target it stays unchecked. **Dup**,
+    **Crash** and **Flags** go with the report as the official bits.
+  - The drop-down picks the category. The official client names the
+    categories from its own table; this client lists them in its own
+    words, the names the servers use.
+  - Click the box to type in it; Enter or Escape gives the keyboard back.
+    The box takes up to 1024 bytes, as the official one.
+  - **Send** with an empty box prints the official empty-box line and sends
+    nothing. Otherwise it sends, clears the box and prints the official
+    sent line once the session says it went. The window closes either way.
+    The official client may first ask you to confirm, depending on a
+    setting this client has not read; this client sends at once (a
+    departure).
+  - **Cancel** prints the official cancelled line and closes the window;
+    the box keeps its words.
+  - The feedback window's **Send** sends the words with your place and
+    heading, clears the box and closes, with no line; empty, it only
+    closes. Its **Cancel** clears the box and closes.
+  - The **Typed Reports** setting (off by default) sends the typed words
+    instead, as earlier versions of this client did: a bug report then
+    prints the official sent line, or its empty-box line with no words.
+  - If the installed skin has no such window, a line says so and points to
+    Typed Reports (a departure: the official client always has them).
 
 Elsewhere, or on any server:
 - A bug report's first word may name its category with a colon, such as

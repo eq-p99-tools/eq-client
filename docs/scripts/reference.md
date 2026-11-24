@@ -172,7 +172,7 @@ latest completed projectile update, normally the preceding frame. Missing assets
 types can produce a receipt without a model. Scene instances may be off-camera
 or occluded. The counters are independent of damage and inventory.
 
-- `report([label])` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
+- `report([label])` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known. A `Script report windows` event follows with `report_windows`: whether the bug report and feedback windows are open, the bug report's category, its Dup, Crash, Flags and Target boxes (in that order), its place and target name as the labels show them, the words in each box, and which box has the keyboard.
   `guild_state` is a read-only JSON snapshot of the known guild ID/name/rank
   and last-received member fields. `members: null` means no retained list;
   `members: []` means a received empty list. A member's `note: null` remains
@@ -279,8 +279,10 @@ or occluded. The counters are independent of damage and inventory.
   `auction`), `reply`, `friend`, `ignore`, `quit` and `exit` work as typed. The line is at
   most 512 bytes counting the slash, as the chat line is, and takes no control characters.
   A social goes through the named `social` step instead. `petition`, `guidehelp`,
-  `bugreport` (`bug`) and `feedback` send their report as typed, with the same lines and
-  the Typed Reports setting: a person on the staff reads each one.
+  `bugreport` (`bug`) and `feedback` run as typed, with the same lines and the Typed
+  Reports setting: on Titanium they open their windows unless that setting is on (see
+  `report` and `button bug-report ...` in [targets](targets.md)). A person on the staff
+  reads each report.
   `slash("follow")` queues the ordinary local follow request for the targeted group
   member. Its deferred request keeps the script's expected admission and zone;
   a changed world withdraws it before movement handles it. Completion of the

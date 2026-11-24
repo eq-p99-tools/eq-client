@@ -12,8 +12,23 @@ pub(crate) enum Finish {
     Escape,
 }
 
+/// The longest search, in bytes.
+const SEARCH_LONGEST: usize = 128;
+
 pub(crate) fn edit(
     query: &mut String,
+    events: &[KeyboardInput],
+    keys: &ButtonInput<Key>,
+    clipboard: Option<&mut Clipboard>,
+    pending: &mut Option<ClipboardRead>,
+) -> Option<Finish> {
+    edit_up_to(query, SEARCH_LONGEST, events, keys, clipboard, pending)
+}
+
+/// Edits one line of at most `longest` bytes, as [`edit`] does a search.
+pub(crate) fn edit_up_to(
+    query: &mut String,
+    longest: usize,
     events: &[KeyboardInput],
     keys: &ButtonInput<Key>,
     mut clipboard: Option<&mut Clipboard>,
@@ -21,7 +36,7 @@ pub(crate) fn edit(
 ) -> Option<Finish> {
     if let Some(result) = pending.as_mut().and_then(ClipboardRead::poll_result) {
         if let Ok(text) = result {
-            append(query, &text);
+            append_up_to(query, &text, longest);
         }
         *pending = None;
     }
@@ -52,16 +67,22 @@ pub(crate) fn edit(
                 query.clear();
                 *pending = None;
             }
-            _ => append(query, event.text.as_deref().unwrap_or_default()),
+            _ => append_up_to(query, event.text.as_deref().unwrap_or_default(), longest),
         }
     }
     None
 }
 
 /// Bound input on UTF-8 boundaries and ignore multiline/control content.
+#[cfg(test)]
 pub(crate) fn append(query: &mut String, text: &str) {
+    append_up_to(query, text, SEARCH_LONGEST);
+}
+
+/// As [`append`], up to `longest` bytes.
+pub(crate) fn append_up_to(query: &mut String, text: &str, longest: usize) {
     for c in text.chars().filter(|c| !c.is_control()) {
-        if query.len() + c.len_utf8() > 128 {
+        if query.len() + c.len_utf8() > longest {
             break;
         }
         query.push(c);
