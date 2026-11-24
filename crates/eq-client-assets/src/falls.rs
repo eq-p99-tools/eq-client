@@ -8,15 +8,27 @@
 //! Titanium ones from its program (sittings 6, 8g, 8h and 8i), except where
 //! a rule says it is this client's reading or not yet known.
 //!
-//! The program slows a fall by the air's share once a rendered frame, so how
-//! fast its falls go depends on the frame rate. This client slows it once a
-//! 50 ms step, which lands faster and costs more than the program at any
-//! higher frame rate, the slower side for the player, until a recording at a
-//! known frame rate shows the rate to take (recording checklist 6.419).
+//! The program slows a body in the air by the air's share once a rendered
+//! frame, and adds gravity and moves it by the frame's share of a step, so
+//! how fast its falls go depends on the frame rate (read R49-24 b). It has
+//! no frame cap by default (R49-24 a), so that rate is the machine's. This
+//! client takes [`PROGRAM_FRAME_RATE`], 60 frames a second, whatever its own
+//! frame rate (inferred, recording checklist 6.419): the program's own fall
+//! at 60, the same for every player, and never gentler than the program
+//! running faster, as it does uncapped on a present-day PC.
 
 /// The length of the program's movement step, in seconds: it counts
 /// elapsed milliseconds × 0.02 steps (the clock's unit is unsure, 6.161).
 pub const STEP_SECONDS: f32 = 0.05;
+
+/// The frame rate this client takes for the programs' once-a-frame steps,
+/// the air's slowing and the turn keys' ramp: 60 frames a second, three a
+/// step (inferred, recording checklists 6.416 and 6.419).
+pub const PROGRAM_FRAME_RATE: f32 = 60.0;
+
+/// The program frames a 50 ms step stands for at [`PROGRAM_FRAME_RATE`].
+const FRAMES_PER_STEP: u32 = 3;
+const _: () = assert!((PROGRAM_FRAME_RATE * STEP_SECONDS - 3.0).abs() < 1e-4);
 
 /// How a client generation falls, and what its landings cost.
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -35,8 +47,12 @@ pub struct ClientFalls {
     pub jump_speed: f32,
     /// The share of the vertical speed the air leaves after each frame. The
     /// program applies it per rendered frame, so its effect depends on the
-    /// frame rate; this client applies it per 50 ms step (unsure, 6.161).
+    /// frame rate (R49-24 b); this client applies it
+    /// [`Self::frames_per_step`] times a 50 ms step.
     pub air_factor: f32,
+    /// How many program frames a 50 ms step stands for: the
+    /// [`PROGRAM_FRAME_RATE`]'s share of a step (inferred, 6.419).
+    pub frames_per_step: u32,
     /// The fall speed a landing must pass to count as a fall, in units a
     /// step.
     pub gate: f32,
@@ -141,12 +157,15 @@ impl ClientFalls {
     }
 
     /// The fastest fall under this gravity, in units a second, where the
-    /// air's slowing meets it at one frame a step, held to
+    /// air's slowing meets it, a frame at a time
+    /// ([`ClientFalls::frames_per_step`] a step), held to
     /// [`ClientFalls::terminal_speed`].
     #[must_use]
     pub fn terminal_under(&self, gravity: f32) -> f32 {
-        let per_step = gravity * STEP_SECONDS * STEP_SECONDS;
-        let terminal = per_step * self.air_factor / (1.0 - self.air_factor) / STEP_SECONDS;
+        #[allow(clippy::cast_precision_loss)] // A handful of frames.
+        let frames = self.frames_per_step.max(1) as f32;
+        let per_frame = gravity * STEP_SECONDS * STEP_SECONDS / frames;
+        let terminal = per_frame * self.air_factor / (1.0 - self.air_factor) / STEP_SECONDS;
         if terminal.is_finite() && terminal > 0.0 {
             terminal.min(self.terminal_speed)
         } else {
@@ -274,6 +293,9 @@ pub const EQMAC: ClientFalls = ClientFalls {
     terminal_speed: 39.6 / STEP_SECONDS,
     jump_speed: 1.65 * 1.35 / STEP_SECONDS,
     air_factor: 0.99,
+    // Titanium's frame (R49-24 b) at the frame rate taken; the Mac-era
+    // program's once-a-frame slowing is taken to match (inferred, 6.419).
+    frames_per_step: FRAMES_PER_STEP,
     gate: 2.5,
     harmless_zones: &[151],
     safe_fall_rank_share: 0.1,
@@ -619,9 +641,17 @@ mod tests {
 
     #[test]
     fn the_terminal_speed_is_where_the_air_meets_gravity() {
+        // The ceiling: where the air meets gravity at one frame a step.
         let step = EQMAC.terminal_speed * STEP_SECONDS;
         let next = (step + EQMAC.gravity * STEP_SECONDS * STEP_SECONDS) * EQMAC.air_factor;
         assert!((next - step).abs() < 0.001, "{next}");
+        // At three frames a step each frame adds a third of a step's gravity:
+        // 0.4 / 3 × 0.99 / 0.01 = 13.2 units a step.
+        assert_eq!(EQMAC.frames_per_step, 3);
+        let frame = EQMAC.terminal_under(EQMAC.gravity) * STEP_SECONDS;
+        assert!((frame - 13.2).abs() < 0.001, "{frame}");
+        let next = (frame + EQMAC.gravity * STEP_SECONDS * STEP_SECONDS / 3.0) * EQMAC.air_factor;
+        assert!((next - frame).abs() < 0.001, "{next}");
         // A jump starts at 44.55 units a second.
         assert!(
             (EQMAC.jump_speed - 44.55).abs() < 0.001,

@@ -206,8 +206,9 @@ pub enum Level {
     /// display (the Display page's Max. Frames Per Second).
     MaxFps,
     /// How fast the camera turns as the mouse drags it, from 0 to 100
-    /// across the program's sensitivity 1 to 8 (the Mouse page's Mouselook
-    /// Sensitivity; see [`Options::turn_per_pixel`]).
+    /// across the program's sensitivity 1 to 8, its eight steps (the Mouse
+    /// page's Mouselook Sensitivity; see [`mouse_step`] and
+    /// [`Options::turn_per_pixel`]).
     MouseSensitivity,
     /// How large this client's windows are drawn, as a percentage of the
     /// desktop's scaling (the Interface scale on the quality-of-life page); the installation's
@@ -352,11 +353,8 @@ impl Level {
     #[must_use]
     pub fn words(self, value: u16) -> String {
         match self {
-            Self::ClipPlane
-            | Self::MouseSensitivity
-            | Self::UiScale
-            | Self::SoundVolume
-            | Self::MusicVolume => {
+            Self::MouseSensitivity => mouse_step(value).to_string(),
+            Self::ClipPlane | Self::UiScale | Self::SoundVolume | Self::MusicVolume => {
                 format!("{value} %")
             }
             Self::MaxFps if value == 0 => "Display".to_owned(),
@@ -584,7 +582,8 @@ impl Default for Options {
             channel_autojoin: None,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
-            mouse_sensitivity: 50,
+            // The program's default sensitivity, 4 (R49-24 d).
+            mouse_sensitivity: 43,
             ui_scale: 100,
             sound_volume: 100,
             chat_font_size: None,
@@ -595,6 +594,18 @@ impl Default for Options {
             chat_filters: crate::chat_filters::ChatFilters::default(),
         }
     }
+}
+
+/// The program's mouse-look sensitivity, a whole step from 1 to 8, for the
+/// setting's `share` from 0 to 100: the nearest step, with 50, this client's
+/// default before the steps, kept at the program's default 4 (R49-24 d).
+#[must_use]
+pub const fn mouse_step(share: u16) -> u16 {
+    if share == 50 {
+        return 4;
+    }
+    let share = if share > 100 { 100 } else { share };
+    (share * 7 + 50) / 100 + 1
 }
 
 impl Options {
@@ -731,16 +742,16 @@ impl Options {
     /// How far the camera turns, in radians, for each pixel the mouse drags
     /// it on a screen `width` pixels wide. The program turns
     /// (0.5 + 1.5 × (s − 1) / 7) × dx / width × 512 heading units, a whole
-    /// turn being 512, for its sensitivity s from 1 to 8 (Titanium
-    /// 0x4929dd). The setting's 0 to 100 spans s from 1 to 8 (inferred,
-    /// recording checklist 6.418), so a drag across the whole screen turns
+    /// turn being 512, for its sensitivity s, a whole step from 1 to 8
+    /// (Titanium 0x4929dd, read R49-24 d). The setting's 0 to 100 spans
+    /// those steps ([`mouse_step`]), so a drag across the whole screen turns
     /// from half a turn to two. A width that is no width turns nothing.
     #[must_use]
     pub fn turn_per_pixel(&self, width: f32) -> f32 {
         if !(width.is_finite() && width >= 1.0) {
             return 0.0;
         }
-        let share = f32::from(self.mouse_sensitivity.min(100)) / 100.0;
+        let share = f32::from(mouse_step(self.mouse_sensitivity) - 1) / 7.0;
         (0.5 + 1.5 * share) * std::f32::consts::TAU / width
     }
 
@@ -1063,7 +1074,7 @@ mod tests {
             "clip_plane = 300\nmouse_sensitivity = x\n",
             Options::default(),
         );
-        assert_eq!((read.clip_plane, read.mouse_sensitivity), (100, 50));
+        assert_eq!((read.clip_plane, read.mouse_sensitivity), (100, 43));
         // The far right of Max FPS leaves the rate to the display.
         assert_eq!(Level::MaxFps.at(1.0), 0);
         assert_eq!(Level::MaxFps.at(0.0), 10);
@@ -1073,19 +1084,28 @@ mod tests {
         assert_eq!(Level::ClipPlane.words(40), "40 %");
         assert_eq!(Options::default().frame_cap(), Some(60));
         assert_eq!(options.frame_cap(), None);
-        // The program's curve: a drag across the whole screen turns half a
-        // turn at sensitivity 1 (0) and two at 8 (100); 50 is s = 4.5.
+        // The program's curve, in its eight steps: a drag across the whole
+        // screen turns half a turn at sensitivity 1 (0) and two at 8 (100),
+        // and the default is its 4, 0.5 + 1.5 × 3/7 (R49-24 d).
         let mut quick = Options::default();
         let across = |options: &Options| options.turn_per_pixel(1_000.0) * 1_000.0;
         let turn = std::f32::consts::TAU;
-        assert!((across(&quick) - 1.25 * turn).abs() < 1e-4);
+        let at = |step: f32| (0.5 + 1.5 * (step - 1.0) / 7.0) * turn;
+        assert!((across(&quick) - at(4.0)).abs() < 1e-4);
+        assert_eq!(Level::MouseSensitivity.words(quick.mouse_sensitivity), "4");
         quick.set_level(Level::MouseSensitivity, 0);
         assert!((across(&quick) - 0.5 * turn).abs() < 1e-4);
         quick.set_level(Level::MouseSensitivity, 100);
         assert!((across(&quick) - 2.0 * turn).abs() < 1e-4);
-        // Program sensitivity 4 is 3/7 of the way: 0.5 + 1.5 × 3/7.
-        quick.set_level(Level::MouseSensitivity, 43);
-        assert!((across(&quick) - (0.5 + 1.5 * 0.43) * turn).abs() < 1e-4);
+        // A saved 50, the old default, is the program's default 4; other
+        // shares take the nearest step, and the ini's sevenths their own.
+        quick.set_level(Level::MouseSensitivity, 50);
+        assert!((across(&quick) - at(4.0)).abs() < 1e-4);
+        quick.set_level(Level::MouseSensitivity, 51);
+        assert!((across(&quick) - at(5.0)).abs() < 1e-4);
+        for step in 1..=8_u16 {
+            assert_eq!(mouse_step((step - 1) * 100 / 7), step);
+        }
         // The same drag on a screen twice as wide turns half as far.
         assert!((quick.turn_per_pixel(2_000.0) * 2.0 - quick.turn_per_pixel(1_000.0)).abs() < 1e-7);
         assert!(quick.turn_per_pixel(0.0).abs() < f32::EPSILON);

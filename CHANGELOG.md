@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- Follow program reads R49-24 and R49-24b on Titanium for the per-frame steps (checklists 6.416, 6.418, 6.419).
+  - **Falls and jumps:** the air slows a body once a program frame, three frames each 50 ms step at the 60 frames a second taken (inferred), with gravity and the move in each frame's share. Falls now reach about a third of the old top speed, and a jump rises about 5.25 rather than 4.95, as the official client does at 60 frames a second. The program has no frame cap by default, so the official client on a present-day PC falls no faster than this. A fall's damage follows the slower landing. The first fall on P99 or Quarm with this build is attended.
+  - **Turn keys:** the ramp's cap is a race rule: 12 steps (240 heading units a second) for most races, 8 for races 216 and 472, and 3 for race 141. Walking no longer lowers it to 8.
+  - **Mouse look:** sensitivity takes the program's eight steps, shown 1 to 8 on the slider. The default is its 4 (s = 1.143), and a saved 50, the old default, reads as 4. Races 216 and 472 turn at most 8 heading units a step by mouse, and race 141 3. The program's dead zone waits on a read, so a straight up-and-down drag still looks fully up and down.
 - The track window's options, as the Titanium program keeps them (read
   R49-30 e, checklist 6.638):
   - **`/tracksort`** (Rangers): N, D, C, RD or RC by their first letters,
