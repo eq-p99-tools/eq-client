@@ -568,14 +568,31 @@ recording checklist 6.511), in the installation's own lines:
     words, the names the servers use.
   - Click the box to type in it; Enter or Escape gives the keyboard back.
     The box takes up to 1024 bytes, as the official one.
-  - **Send** with an empty box prints the official empty-box line and sends
-    nothing. Otherwise it sends, clears the box and prints the official
-    sent line once the session says it went. The window closes either way.
-    The official client may first ask you to confirm, depending on a
-    setting this client has not read; this client sends at once (a
+  - **Send** first asks the official question in the skin's confirmation
+    dialog, with Yes and No, and the window stays open behind it. Every
+    answer sends, and so does the question's own close after 60 seconds.
+    It is asked on every Send, unless the installation's `eqclient.ini`
+    has `SendSystemInfo=1` under `[Defaults]`; this client reads that
+    setting and never writes it.
+  - After the answer, an empty box prints the official empty-box line and
+    sends nothing. Otherwise it sends, clears the box and prints the
+    official sent line once the session says it went. The window closes
+    either way.
+  - Yes, or `SendSystemInfo=1`, has the official client add your
+    processor, video card and driver to the report. This client never
+    sends anything about your machine, so the report is the same for
+    either answer, and it prints a line of its own saying so (a
     departure).
   - **Cancel** prints the official cancelled line and closes the window;
-    the box keeps its words.
+    the box keeps its words. A question already up stays up, and its
+    answer still sends what the box holds, as the official client does.
+  - A second Send while the question is up does nothing (a departure: the
+    official client would ask again in a second dialog).
+  - If you leave the world while the question is up (zoning, camping, a
+    disconnect, `/quit`), the question goes away and nothing is sent, as
+    with the official client. The official client then still clears the
+    box and prints its sent line; this client keeps the words and prints
+    no sent line for a report that never went (a departure).
   - The feedback window's **Send** sends the words with your place and
     heading, clears the box and closes, with no line; empty, it only
     closes. Its **Cancel** clears the box and closes.
