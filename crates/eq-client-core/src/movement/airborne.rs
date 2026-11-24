@@ -430,7 +430,7 @@ impl AirborneController {
             }
             return position;
         }
-        match world.sweep(position, Vec3::Y * distance, input.height) {
+        match world.fall_sweep(position, distance, input.height) {
             Ok(None) if held.is_some() => {
                 self.hold();
                 target

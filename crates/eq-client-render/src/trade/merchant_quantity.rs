@@ -17,6 +17,27 @@ pub(crate) struct Selection {
 #[cfg(test)]
 mod tests;
 
+/// Why a merchant trade doesn't go. The Titanium program's buy (0x53826a,
+/// read R49-35 a) passes over some cases silently and says others in its
+/// own lines; the rest are this client's own guards, in its words.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refused {
+    /// The program says nothing: an action pending, no merchant, no ware.
+    Silent,
+    /// Something on the cursor: line 0x2164, colour 0x114.
+    CursorItem,
+    /// The coins don't cover one of the ware: line 0x2f1c, colour 0x111.
+    Short(u32),
+    /// This client's own words.
+    Words(&'static str),
+}
+
+impl From<&'static str> for Refused {
+    fn from(words: &'static str) -> Self {
+        Self::Words(words)
+    }
+}
+
 impl Selection {
     pub(super) fn same_shop(self, world: &ClientWorld) -> bool {
         world.session_id() == Some(self.session)
@@ -107,30 +128,50 @@ impl TradeState {
         &self,
         world: &ClientWorld,
         chosen: Chosen,
-    ) -> Result<u32, &'static str> {
+    ) -> Result<u32, Refused> {
+        // The program's buy, in its order (read R49-35 a): pending, no
+        // merchant or no ware, then the cursor, then the coins. It has no
+        // room check: the server says when the item doesn't fit.
+        let buying = matches!(chosen, Chosen::Ware(_));
         if self.merchant_pending.is_some() {
-            return Err("Wait for the pending merchant result");
+            return Err(if buying {
+                Refused::Silent
+            } else {
+                "Wait for the pending merchant result".into()
+            });
         }
         if !world.in_world() || world.merchant().is_none() || self.merchant.is_none() {
-            return Err("Open the merchant again");
+            return Err(if buying {
+                Refused::Silent
+            } else {
+                "Open the merchant again".into()
+            });
+        }
+        if let Chosen::Ware(slot) = chosen
+            && world
+                .merchant()
+                .is_none_or(|open| !open.stock.contains_key(&slot))
+        {
+            return Err(Refused::Silent);
         }
         let inventory = world.inventory();
         if !inventory.received() || inventory.stale() || world.inventory_moves_pending() {
-            return Err("Wait for current inventory before trading");
+            return Err("Wait for current inventory before trading".into());
         }
         if inventory
             .items()
             .contains_key(&eq_client_core::inventory::InventorySlot::CURSOR)
         {
-            return Err("Place the cursor item before trading");
+            return Err(if buying {
+                Refused::CursorItem
+            } else {
+                "Place the cursor item before trading".into()
+            });
         }
         let limit = match chosen {
             Chosen::Ware(slot) => {
-                let open = world.merchant().ok_or("Open the merchant again")?;
-                let ware = open
-                    .stock
-                    .get(&slot)
-                    .ok_or("Choose a current merchant item")?;
+                let open = world.merchant().ok_or(Refused::Silent)?;
+                let ware = open.stock.get(&slot).ok_or(Refused::Silent)?;
                 let mut limit = if ware.item.stack_count.is_some() {
                     ware.item.rules.stack_size.max(1)
                 } else {
@@ -150,27 +191,31 @@ impl TradeState {
                     limit = limit.min(u32::try_from(purse / u64::from(unit)).unwrap_or(u32::MAX));
                     limit = limit.min(u32::MAX / unit);
                 }
+                // Not even one: the program's line for a quantity of one.
+                if limit == 0 {
+                    return Err(Refused::Short(slot));
+                }
                 limit
             }
             Chosen::Carried(slot) => {
                 if !super::sellable_slot(slot) {
-                    return Err("Choose a carried item to sell");
+                    return Err("Choose a carried item to sell".into());
                 }
                 let item = inventory
                     .items()
                     .get(&eq_client_core::inventory::InventorySlot(slot))
                     .ok_or("Choose a current carried item")?;
                 if super::no_drop(item) {
-                    return Err("The merchant will not buy NO DROP items.");
+                    return Err("The merchant will not buy NO DROP items.".into());
                 }
                 if super::holds_items(item, inventory.items()) {
-                    return Err("Empty the bag before selling it.");
+                    return Err("Empty the bag before selling it.".into());
                 }
                 item.stack_count.unwrap_or(1)
             }
         };
         if limit == 0 {
-            Err("You do not have enough coins or items for that trade")
+            Err("You do not have enough coins or items for that trade".into())
         } else {
             Ok(limit)
         }
@@ -184,13 +229,17 @@ impl TradeState {
         stamp: Stamp,
         selection: Selection,
         quantity: u32,
-    ) -> Result<(), &'static str> {
+    ) -> Result<(), Refused> {
         if !selection.current(self, world) || selection.session != stamp.session_id {
-            return Err("Merchant or inventory changed; choose the item again");
+            return Err("Merchant or inventory changed; choose the item again".into());
         }
         let limit = self.quantity_limit(world, selection.chosen)?;
+        // The program's buy passes over a quantity below one silently.
+        if quantity == 0 && matches!(selection.chosen, Chosen::Ware(_)) {
+            return Err(Refused::Silent);
+        }
         if quantity == 0 || quantity > limit {
-            return Err("Choose a positive quantity within the current trade limit");
+            return Err("Choose a positive quantity within the current trade limit".into());
         }
         let own_id = world.player().ok_or("Enter the world first")?.spawn_id;
         let command = match selection.chosen {

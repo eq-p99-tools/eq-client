@@ -123,11 +123,13 @@ pub(super) fn input(
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<Outbox>,
-    (ui, escape, presses, mut trade): (
+    (ui, escape, presses, mut trade, messages, options): (
         super::windows::pointer::PointerUi,
         Res<super::escape::Escape>,
         Res<super::hud::hotbar::carry::Presses>,
         ResMut<super::trade::TradeState>,
+        Option<Res<super::hud::messages::Messages>>,
+        Option<Res<crate::options::OptionsState>>,
     ),
 ) {
     let requested = chat.requested_target.take();
@@ -202,9 +204,37 @@ pub(super) fn input(
         let rule = settings.as_ref().map_or(TargetByName::Nearest, |s| {
             s.0.installed_client.target_by_name()
         });
-        match named(rule, &ids, &online, &name) {
-            Some(id) => proposal = Some(Some(id)),
-            None => chat.refuse(format!("No nearby target named {name}")),
+        match rule {
+            // Titanium (read R49-33 b): an empty name says 0x33d3; any other
+            // looks over every known spawn, drawn or not, and a name that
+            // matches none sends the target naming no one, with no line.
+            // Spawns this client can't target are skipped, Adam's call, a
+            // labelled departure from the program's look over all of them.
+            TargetByName::Nearest if name.is_empty() => {
+                let said = messages.as_ref().map_or_else(
+                    || super::chat::Said::own(EMPTY_TARGET_NAME),
+                    |messages| messages.said_text(EMPTY_TARGET_LINE, EMPTY_TARGET_NAME),
+                );
+                chat.refuse(said.typed(EMPTY_TARGET_COLOUR));
+            }
+            TargetByName::Nearest => {
+                let known = targetable(
+                    online
+                        .world()
+                        .spawns()
+                        .keys()
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                    &online,
+                );
+                proposal = Some(named(rule, &known, &online, &name));
+            }
+            TargetByName::Shortest if name.is_empty() => chat.refuse(EMPTY_TARGET_NAME.to_owned()),
+            TargetByName::Shortest => match named(rule, &ids, &online, &name) {
+                Some(id) => proposal = Some(Some(id)),
+                None => chat.refuse(format!("No nearby target named {name}")),
+            },
         }
     } else if let Some(id) = assisted {
         proposal = Some(Some(id));
@@ -214,6 +244,12 @@ pub(super) fn input(
         proposal = own_id.map(Some);
     } else if let Some(act) = keys.first([Act::TargetNext, Act::TargetPrevious]) {
         proposal = Some(cycle(&ids, current, act == Act::TargetPrevious));
+    } else if keys.pressed(Act::Use)
+        && super::interact::by_ray(&online, &super::interact::qol(options.as_deref()))
+    {
+        if let Some(chosen) = use_key(&scene, &mut online, &outbox, &mut trade) {
+            proposal = Some(Some(chosen));
+        }
     } else if let Some(cursor) = cursor
         && (door_release || mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]))
         && let Some(Picked {
@@ -293,6 +329,62 @@ pub(super) fn input(
         return;
     };
     select(&mut online, &outbox, selected);
+}
+
+/// The Use key, as key command 0x10 casts it (read R49-19, checklist
+/// 6.609, and its follow-ups): the scene's own click pick through the
+/// centre of the 3D view (0x494ac5).
+/// - **A spawn** is targeted (0x4a6f0e). Then, if it is an NPC, or no
+///   target stands afterwards, it gets what a right click does (0x4a7356).
+///   A player or corpse that became the target is only targeted.
+/// - **No spawn:** a door on the same ray gets a click at the hit point,
+///   whose reach the session judges (0x49812e). Nothing else is reached:
+///   not an item on the ground nor a world container, which open by their
+///   own clicks.
+/// - **Neither:** nothing happens and nothing is said.
+///
+/// Gives the spawn to target, if any. The program's pick skips its own
+/// actor, its mount and "not pickable" actors ([I] the last two); this
+/// skips what a mouse click skips.
+fn use_key(
+    scene: &Scene,
+    online: &mut OnlineState,
+    outbox: &Outbox,
+    trade: &mut super::trade::TradeState,
+) -> Option<u16> {
+    let centre = scene.centre()?;
+    // 0x494ac5: the first actor on the ray, doors aside.
+    match scene.pick(online, centre, false)?.choice {
+        // A spawn the program will not interact with by its body type:
+        // nothing at all, as for a click (R44).
+        Choice::Spawn(id, _) if !interacts(online, id) => None,
+        Choice::Spawn(id, _) => {
+            // One the target setter refuses by body type keeps the current
+            // target (R44).
+            let refused = refused_by_body(online, id);
+            let npc = online
+                .world()
+                .spawn(id)
+                .is_some_and(|spawn| spawn.state.kind == SpawnKind::Npc);
+            // 0x4a7356 runs for an NPC, or where no target stands after
+            // the targeting.
+            if npc || (refused && online.world().target().selected.is_none()) {
+                trade.right_click(online.world(), id);
+            }
+            (!refused).then_some(id)
+        }
+        // 0x49812e: the same ray, mapped to a door only, with its hit
+        // point. An item on the ground is never reached by this key.
+        Choice::Door(_) | Choice::Item(_) | Choice::Nothing => {
+            let picked = scene.pick(online, centre, true)?;
+            if let (Choice::Door(door), Some((id, point))) = (picked.choice, picked.door_point)
+                && door.id == id
+            {
+                super::doors::click(id, point, online, outbox);
+            }
+            None
+        }
+    }
 }
 
 /// Shared submission for scene, keyboard and map choices. A failed send never
@@ -451,33 +543,115 @@ impl Scene<'_, '_> {
         })
     }
 
-    /// Where on the view a click would name this thing: the middle of what
-    /// the pick tests of it (a spawn's posed box, an object's pick box, a
-    /// door's pick mesh), projected. None when it isn't drawn or the point
-    /// is behind the camera.
-    fn aim(&self, thing: Thing) -> Option<Vec2> {
-        let (camera, camera_transform) = self.cameras.single().ok()?;
-        let middle = match thing {
-            Thing::Spawn(id) => {
-                let root = *self.nearby.rendered.get(&id)?;
-                let ray = Ray3d::new(Vec3::ZERO, Dir3::Y);
-                self.picker.pick(root, ray).posed?.middle()
-            }
-            Thing::Object(drop_id) => self.ground.iter().find_map(|(entity, transform)| {
-                super::ground::middle(entity, transform, drop_id)
-            })?,
-            Thing::Door(id) => {
-                let models = self.door_models.as_ref()?;
-                self.doors
-                    .iter()
-                    .find_map(|(_, door, transform, visibility)| {
-                        (door.id == id)
-                            .then(|| super::doors::middle(door, transform, *visibility, models))
-                            .flatten()
-                    })?
-            }
+    /// The centre of the world camera's 3D view rectangle, in the window's
+    /// logical pixels, where the Use key casts its ray (read R49-19: the
+    /// middle of the view's left, right, top and bottom).
+    fn centre(&self) -> Option<Vec2> {
+        let (camera, _) = self.cameras.single().ok()?;
+        Some(camera.logical_viewport_rect()?.center())
+    }
+
+    /// Where on the view a click may name this thing, best first: the
+    /// middle of what the pick tests of it (a spawn's posed box, an
+    /// object's pick box, a door's pick mesh), and for a door then points
+    /// on its drawn faces ([`super::doors::aim_points`]), projected. Empty
+    /// when it isn't drawn; a point behind the camera is left out.
+    fn aim(&self, thing: Thing) -> Vec<Vec2> {
+        let Ok((camera, camera_transform)) = self.cameras.single() else {
+            return Vec::new();
         };
-        camera.world_to_viewport(camera_transform, middle).ok()
+        let points = match thing {
+            Thing::Spawn(id) => self
+                .nearby
+                .rendered
+                .get(&id)
+                .and_then(|root| {
+                    let ray = Ray3d::new(Vec3::ZERO, Dir3::Y);
+                    self.picker.pick(*root, ray).posed
+                })
+                .map(|posed| posed.middle())
+                .into_iter()
+                .collect(),
+            Thing::Object(drop_id) => self
+                .ground
+                .iter()
+                .find_map(|(entity, transform)| super::ground::middle(entity, transform, drop_id))
+                .into_iter()
+                .collect(),
+            Thing::Door(id) => self
+                .door_models
+                .as_ref()
+                .and_then(|models| {
+                    self.doors
+                        .iter()
+                        .find_map(|(_, door, transform, visibility)| {
+                            (door.id == id).then(|| {
+                                super::doors::aim_points(door, transform, *visibility, models)
+                            })
+                        })
+                })
+                .unwrap_or_default(),
+        };
+        points
+            .into_iter()
+            .filter_map(|point| camera.world_to_viewport(camera_transform, point).ok())
+            .collect()
+    }
+}
+
+impl Scene<'_, '_> {
+    /// Why a click at `at`, a thing's middle on the view, picks something
+    /// else: what it picks, and for a door what its ray met of the door and
+    /// what solid stands nearer. For a script's report only.
+    fn missed(&self, thing: Thing, at: Vec2, choice: Choice) -> String {
+        let picks = match choice {
+            Choice::Spawn(id, _) => format!("spawn {id}"),
+            Choice::Item(id) => format!("object {id}"),
+            Choice::Door(door) => format!("door {}", door.id),
+            Choice::Nothing => "nothing".to_owned(),
+        };
+        let Thing::Door(id) = thing else {
+            return format!("a click at its middle picks {picks}");
+        };
+        let ray = self
+            .cameras
+            .single()
+            .ok()
+            .and_then(|(camera, transform)| camera.viewport_to_world(transform, at).ok());
+        let models = self.door_models.as_ref();
+        let met = ray.zip(models).and_then(|(ray, models)| {
+            self.doors
+                .iter()
+                .find_map(|(_, door, transform, visibility)| {
+                    (door.id == id)
+                        .then(|| super::doors::hit_point(ray, door, transform, *visibility, models))
+                        .flatten()
+                })
+        });
+        let Some((distance, _)) = met else {
+            return format!(
+                "a click at its middle picks {picks}; the ray there misses the door's drawn faces"
+            );
+        };
+        let solid = ray.and_then(|ray| {
+            self.collision
+                .as_ref()
+                .and_then(|collision| collision.0.as_ref())
+                .and_then(|world| {
+                    world
+                        .without_doors(&[id])
+                        .ray_distance(ray.origin, *ray.direction, distance)
+                })
+        });
+        match solid {
+            Some(nearer) if nearer + 0.01 < distance => format!(
+                "a click at its middle picks {picks}; the ray meets the door at {distance:.1} \
+                 but something solid at {nearer:.1}"
+            ),
+            _ => format!(
+                "a click at its middle picks {picks}; the ray meets the door at {distance:.1}"
+            ),
+        }
     }
 }
 
@@ -549,25 +723,56 @@ pub(super) fn aim(
     let Some(thing) = scripted.request.take().map(|request| request.thing) else {
         return;
     };
-    let verdict = scene
-        .aim(thing)
-        .filter(|at| {
-            windows.single().is_ok_and(|window| {
-                let size = window.size();
-                at.x >= 0.0
-                    && at.y >= 0.0
-                    && at.x < size.x
-                    && at.y < size.y
-                    && !ui.covers(*at * window.scale_factor())
-            })
-        })
-        .filter(|at| {
-            let doors = matches!(thing, Thing::Door(_));
-            scene
-                .pick(&online, *at, doors)
-                .is_some_and(|picked| thing.is(picked.choice))
-        })
-        .ok_or_else(|| thing.covered().to_owned());
+    let refuse = |why: String| format!("{}: {why}", thing.covered());
+    let points = scene.aim(thing);
+    let doors = matches!(thing, Thing::Door(_));
+    // Why a click at one point can't name it, or None where it can.
+    let check = |at: Vec2| -> Option<String> {
+        let Ok(window) = windows.single() else {
+            return Some("there is no window".to_owned());
+        };
+        let size = window.size();
+        if at.x < 0.0 || at.y < 0.0 || at.x >= size.x || at.y >= size.y {
+            return Some(format!(
+                "its middle shows at ({:.0}, {:.0}), off the window",
+                at.x, at.y
+            ));
+        }
+        if ui.covers(at * window.scale_factor()) {
+            return Some(format!(
+                "a window covers its middle at ({:.0}, {:.0})",
+                at.x, at.y
+            ));
+        }
+        match scene.pick(&online, at, doors) {
+            None => Some("the view casts no ray there".to_owned()),
+            Some(picked) if thing.is(picked.choice) => None,
+            Some(picked) => Some(scene.missed(thing, at, picked.choice)),
+        }
+    };
+    let mut first = None;
+    let mut verdict = None;
+    for at in &points {
+        match check(*at) {
+            None => {
+                verdict = Some(Ok(*at));
+                break;
+            }
+            Some(why) => {
+                first.get_or_insert(why);
+            }
+        }
+    }
+    let verdict = verdict.unwrap_or_else(|| {
+        Err(refuse(match first {
+            None => "it isn't drawn, or is behind the camera".to_owned(),
+            Some(why) if points.len() > 1 => format!(
+                "{why}; nor does a click at any of {} points on its drawn faces",
+                points.len() - 1
+            ),
+            Some(why) => why,
+        }))
+    });
     scripted.aim = Some(verdict);
 }
 
@@ -803,10 +1008,25 @@ fn named(rule: TargetByName, ids: &[u16], online: &OnlineState, query: &str) -> 
     }
 }
 
-/// Titanium: the nearest drawn visible spawn whose shown name, or full
-/// server name such as `a_whiskered_bat002` (as `/target` also accepts),
-/// starts with `query`, ignoring case.
+/// Titanium's `/target` with no name: line 0x33d3, colour 0x111 (read
+/// R49-33 b), in these words where the installation lacks it.
+const EMPTY_TARGET_LINE: u32 = 0x33d3;
+const EMPTY_TARGET_COLOUR: u32 = 0x111;
+const EMPTY_TARGET_NAME: &str = "Use /target Name";
+
+/// Titanium (read R49-33 b): a spawn whose full server name is exactly
+/// `query` (underscores read as spaces) first; otherwise the nearest whose
+/// shown name, or full server name such as `a_whiskered_bat002`, starts
+/// with `query`, ignoring case. `ids` are the spawns it may pick.
 fn nearest_named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
+    if let Some(exact) = ids.iter().copied().find(|id| {
+        online
+            .world()
+            .spawn(*id)
+            .is_some_and(|spawn| spawn.state.name.replace('_', " ") == query)
+    }) {
+        return Some(exact);
+    }
     let query = query.to_lowercase();
     let origin = online
         .world()
@@ -1073,8 +1293,27 @@ mod tests {
         // Digits in the text are dropped as they are from the names.
         assert_eq!(pick("a bat003"), Some(3));
         assert_eq!(pick("a cat"), None);
-        // Titanium's rule only looks at drawn spawns.
+        // Titanium's rule picks only among the spawns it is given.
         assert_eq!(named(TargetByName::Nearest, &[], &online, "a bat"), None);
+        // An exact full name is picked first; otherwise the nearest of the
+        // prefix matches, the first of equals (read R49-33 b).
+        assert_eq!(
+            named(TargetByName::Nearest, &[2, 3, 4], &online, "a bat003"),
+            Some(4)
+        );
+        assert_eq!(
+            named(TargetByName::Nearest, &[2, 3, 4], &online, "a bat"),
+            Some(2)
+        );
+        assert_eq!(
+            named(TargetByName::Nearest, &[3, 4], &online, "A BAT"),
+            Some(3)
+        );
+        // Exact is exact: another case falls back to the nearest prefix.
+        assert_eq!(
+            named(TargetByName::Nearest, &[3, 4], &online, "A BAT003"),
+            Some(4)
+        );
     }
 
     #[test]
@@ -1178,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_spawn_keeps_the_target_by_click_cycle_or_name_with_nothing_sent_or_said() {
+    fn a_refused_spawn_keeps_the_target_by_click_or_cycle_and_a_name_matching_none_clears_it() {
         use crate::online::testing as session;
         const GUARD: u16 = 41;
         const CONTROLLER: u16 = 42;
@@ -1253,7 +1492,10 @@ mod tests {
             .resource_mut::<ButtonInput<MouseButton>>()
             .reset_all();
         assert!(commands.try_recv().is_err());
-        assert_eq!(app.world().resource::<Outbox>().take_refused(), []);
+        assert_eq!(
+            app.world().resource::<Outbox>().take_refused(),
+            Vec::<crate::outbox::Refusal>::new()
+        );
         assert_eq!(said(&app), lines);
 
         // Target Next passes over it: from the guard it stays on the guard,
@@ -1270,13 +1512,20 @@ mod tests {
         assert_eq!(selected(&app), Some(GUARD));
         assert!(commands.try_recv().is_err());
 
-        // `/target` by its name finds no target, as for a spawn not there.
+        // `/target` by its name finds no target, as for a spawn not there:
+        // Titanium then sends the target naming no one, with no line (read
+        // R49-33 b).
         app.world_mut()
             .resource_mut::<super::super::chat::ChatState>()
             .requested_target = Some("zone controller".into());
         app.update();
-        assert_eq!(selected(&app), Some(GUARD));
+        assert_eq!(selected(&app), None);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ClientCommand::SelectTarget { spawn_id: None, .. })
+        ));
         assert!(commands.try_recv().is_err());
+        assert_eq!(said(&app), lines);
     }
 
     #[test]
@@ -1649,14 +1898,23 @@ mod tests {
 
     /// A door with id 0 in the middle of the view, drawn with its pick mesh.
     fn door_scene(app: &mut App) {
+        door_scene_of(
+            app,
+            vec![[-2.0, -2.0, 0.0], [2.0, -2.0, 0.0], [0.0, 2.0, 0.0]],
+            vec![0, 1, 2],
+        );
+    }
+
+    /// Door 0 of model TEST, these faces, before the test camera.
+    fn door_scene_of(app: &mut App, positions: Vec<[f32; 3]>, indices: Vec<u32>) {
         app.init_resource::<Time>()
             .init_resource::<super::super::doors::Hinges>()
             .init_resource::<super::super::doors::LiftReach>();
         let source = eq_client_assets::ZoneModel {
             name: "TEST".into(),
             primitives: vec![eq_client_assets::ZonePrimitive {
-                positions: vec![[-2.0, -2.0, 0.0], [2.0, -2.0, 0.0], [0.0, 2.0, 0.0]],
-                indices: vec![0, 1, 2],
+                positions,
+                indices,
                 normals: Vec::new(),
                 texture_coordinates: Vec::new(),
                 texture: None,
@@ -1665,7 +1923,9 @@ mod tests {
             }],
             materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
             collision: Vec::new(),
+            no_hit_collision: Vec::new(),
             vertex_count: None,
+            radius: None,
         };
         let mut models = super::super::doors::Models::default();
         models.0.insert(
@@ -1675,6 +1935,7 @@ mod tests {
                 primitives: vec![(Handle::default(), Handle::default())],
                 collision: Vec::new(),
                 pick: super::super::doors::PickMesh::from_model(&source),
+                radius: None,
             },
         );
         app.insert_resource(models)
@@ -1844,7 +2105,9 @@ mod tests {
         assert_eq!(
             app.world_mut().resource_mut::<ScenePointer>().aim.take(),
             Some(Err(
-                "that spawn is covered or off screen from here".to_owned()
+                "that spawn is covered or off screen from here: it isn't drawn, or is behind \
+                 the camera"
+                    .to_owned()
             ))
         );
         scripted_frame(&mut app, Thing::Spawn(NPC + 1), Some(center), true);
@@ -1924,6 +2187,243 @@ mod tests {
         // A door the pick doesn't name there is refused on the press.
         scripted_frame(&mut app, Thing::Door(1), Some(center), true);
         assert!(app.world().resource::<ScenePointer>().refused.is_some());
+    }
+
+    #[test]
+    fn a_script_clicks_a_door_drawn_as_bars_on_a_bar() {
+        // Two bars with a gap between, as the Neriak cells' doors are
+        // drawn: the middle of the door's mesh is in the gap, where a click
+        // meets nothing of it.
+        let bar = |left: f32| {
+            [
+                [left, -2.0, 0.0],
+                [left + 0.5, -2.0, 0.0],
+                [left + 0.5, 2.0, 0.0],
+                [left, 2.0, 0.0],
+            ]
+        };
+        let positions = [bar(-3.0), bar(2.5)].concat();
+        let indices = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+        let center = Vec2::new(400.0, 300.0);
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        door_scene_of(&mut app, positions, indices);
+        app.add_systems(Update, aim.after(input));
+        app.update();
+        scripted_frame(&mut app, Thing::Door(0), None, false);
+        let aimed = app.world_mut().resource_mut::<ScenePointer>().aim.take();
+        let Some(Ok(at)) = aimed else {
+            panic!("a bar's point is clickable: {aimed:?}");
+        };
+        assert!(at.distance(center) > 10.0, "aimed at the gap: {at:?}");
+        for pressed in [true, false, true, false] {
+            scripted_frame(&mut app, Thing::Door(0), Some(at), pressed);
+        }
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::ClickDoor { door_id: 0, .. }
+        ));
+        assert!(app.world().resource::<ScenePointer>().refused.is_none());
+    }
+
+    /// A spawn's body at the scene's origin, which the test camera sees at
+    /// the middle of its view.
+    fn body_at_origin(app: &mut App, id: u16, kind: SpawnKind) {
+        use crate::online::testing as session;
+        let mut meshes = Assets::<Mesh>::default();
+        let body = app
+            .world_mut()
+            .spawn((
+                Transform::default(),
+                Mesh3d(meshes.add(Cuboid::new(2.0, 2.0, 2.0))),
+            ))
+            .id();
+        app.insert_resource(meshes);
+        app.world_mut()
+            .resource_mut::<NearbyEntities>()
+            .rendered
+            .insert(id, body);
+        let mut spawn = session::pet(id, 99);
+        spawn.kind = kind;
+        spawn.pet_owner = None;
+        session::spawns(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            vec![spawn],
+        );
+    }
+
+    /// One frame with the Use key freshly pressed and the real pointer off
+    /// in a corner, so only the view's centre can name anything.
+    fn press_use(app: &mut App) {
+        let mut windows = app
+            .world_mut()
+            .query_filtered::<&mut Window, With<PrimaryWindow>>();
+        windows
+            .single_mut(app.world_mut())
+            .unwrap()
+            .set_cursor_position(Some(Vec2::new(5.0, 5.0)));
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset(KeyCode::KeyU);
+        keys.press(KeyCode::KeyU);
+        app.update();
+    }
+
+    fn right_clicked(app: &App) -> Option<u16> {
+        app.world()
+            .resource::<super::super::trade::TradeState>()
+            .right_clicked()
+    }
+
+    #[test]
+    fn the_use_key_targets_the_npc_at_the_views_centre_and_uses_it_as_a_right_click() {
+        const NPC: u16 = 42;
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        body_at_origin(&mut app, NPC, SpawnKind::Npc);
+        press_use(&mut app);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::SelectTarget {
+                spawn_id: Some(NPC),
+                ..
+            }
+        ));
+        assert!(commands.try_recv().is_err());
+        assert_eq!(right_clicked(&app), Some(NPC));
+    }
+
+    #[test]
+    fn the_use_key_only_targets_a_player_or_corpse_at_the_views_centre() {
+        // 0x462519 uses the spawn only when it is an NPC or no target
+        // stands afterwards; these become the target.
+        for (id, kind) in [
+            (43, SpawnKind::Player),
+            (44, SpawnKind::NpcCorpse),
+            (45, SpawnKind::PlayerCorpse),
+        ] {
+            let (mut app, commands, ..) = target_app();
+            scene_camera(&mut app);
+            body_at_origin(&mut app, id, kind);
+            press_use(&mut app);
+            assert!(matches!(
+                commands.try_recv().unwrap(),
+                ClientCommand::SelectTarget {
+                    spawn_id: Some(target),
+                    ..
+                } if target == id
+            ));
+            assert_eq!(right_clicked(&app), None, "{kind:?}");
+        }
+    }
+
+    #[test]
+    fn the_use_key_never_reaches_an_item_on_the_ground_at_the_views_centre() {
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        app.world_mut()
+            .spawn((super::super::ground::testing_item(7), Transform::default()));
+        press_use(&mut app);
+        // No pickup, and nothing else: only a door is reached (0x49812e).
+        assert!(commands.try_recv().is_err());
+        assert_eq!(right_clicked(&app), None);
+    }
+
+    #[test]
+    fn the_use_key_clicks_the_door_at_the_views_centre_at_its_hit_point() {
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        door_scene(&mut app);
+        app.update();
+        press_use(&mut app);
+        // One press is one click, at the point the ray met the door, in the
+        // server's frame: the middle of the view falls on its origin.
+        let ClientCommand::ClickDoor {
+            session_id: 1,
+            door_id: 0,
+            point: Some(point),
+            ..
+        } = commands.try_recv().unwrap()
+        else {
+            panic!("a door click with its point");
+        };
+        assert!(point.x.hypot(point.y).hypot(point.z) < 1e-3, "{point:?}");
+        assert!(commands.try_recv().is_err());
+    }
+
+    #[test]
+    fn the_use_key_with_nothing_at_the_views_centre_sends_and_says_nothing() {
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        let lines = app
+            .world()
+            .resource::<super::super::chat::ChatState>()
+            .history
+            .lines(eq_client_core::chat::ChatTab::All)
+            .len();
+        press_use(&mut app);
+        assert!(commands.try_recv().is_err());
+        assert_eq!(
+            app.world()
+                .resource::<super::super::chat::ChatState>()
+                .history
+                .lines(eq_client_core::chat::ChatTab::All)
+                .len(),
+            lines
+        );
+        assert_eq!(
+            app.world().resource::<Outbox>().take_refused(),
+            Vec::<crate::outbox::Refusal>::new()
+        );
+    }
+
+    #[test]
+    fn the_use_key_casts_through_the_3d_views_centre_not_the_windows() {
+        const NPC: u16 = 42;
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        body_at_origin(&mut app, NPC, SpawnKind::Npc);
+        // The view takes only the window's top left quarter, so the window's
+        // middle is the view's bottom right corner, well off the body.
+        let mut cameras = app.world_mut().query::<&mut Camera>();
+        let mut camera = cameras.single_mut(app.world_mut()).unwrap();
+        camera.viewport = Some(bevy::camera::Viewport {
+            physical_position: UVec2::ZERO,
+            physical_size: UVec2::new(400, 300),
+            ..default()
+        });
+        press_use(&mut app);
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::SelectTarget {
+                spawn_id: Some(NPC),
+                ..
+            }
+        ));
+        // A pick at the window's middle would have found nothing there.
+        let mut state =
+            bevy::ecs::system::SystemState::<(Scene, Res<OnlineState>)>::new(app.world_mut());
+        let (scene, online) = state.get(app.world()).unwrap();
+        assert_eq!(scene.centre(), Some(Vec2::new(200.0, 150.0)));
+        let missed = scene.pick(&online, Vec2::new(400.0, 300.0), false).unwrap();
+        assert_eq!(missed.choice, Choice::Nothing);
+    }
+
+    #[test]
+    fn use_picks_nearest_leaves_the_use_key_to_the_nearest_rule() {
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        door_scene(&mut app);
+        let mut options = crate::options::OptionsState::default();
+        options
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::UsePicksNearest, true);
+        app.insert_resource(options);
+        app.update();
+        press_use(&mut app);
+        // The scene's pick sends nothing; the nearest rule's own system,
+        // not in this app, answers the key.
+        assert!(commands.try_recv().is_err());
     }
 
     #[test]

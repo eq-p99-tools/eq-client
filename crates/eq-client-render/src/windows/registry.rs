@@ -98,6 +98,10 @@ pub(crate) enum WindowId {
     PlayerInspection,
     /// The skin's note window: a note or scroll being read.
     Note,
+    /// The skin's bug report window, which `/bugreport` opens (read R49-23).
+    BugReport,
+    /// The skin's feedback window, which `/feedback` opens (read R49-23).
+    Feedback,
     /// The skin's book window: a book being read, two pages at a time.
     Book,
     /// The skin's container window for the world container open for the
@@ -375,7 +379,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 41] = [
+    pub(crate) const ALL: [Self; 43] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -410,6 +414,8 @@ impl WindowId {
         Self::ServerDialog,
         Self::PlayerInspection,
         Self::Note,
+        Self::BugReport,
+        Self::Feedback,
         Self::Book,
         Self::WorldContainer,
         Self::Map,
@@ -461,6 +467,8 @@ impl WindowId {
             Self::Skills => Some("SkillsWindow"),
             Self::Confirmation => Some("ConfirmationDialogBox"),
             Self::Note => Some("NoteWindow"),
+            Self::BugReport => Some("BugReportWindow"),
+            Self::Feedback => Some("FeedbackWindow"),
             Self::Book => Some("BookWindow"),
             Self::Map => Some("MapViewWnd"),
             Self::Selector => Some("SelectorWindow"),
@@ -538,6 +546,8 @@ impl WindowId {
             Self::ServerDialog => "server-dialog",
             Self::PlayerInspection => "player-inspection",
             Self::Note => "note",
+            Self::BugReport => "bug-report",
+            Self::Feedback => "feedback",
             Self::Book => "book",
             Self::WorldContainer => "world-container",
             Self::Map => "map",
@@ -784,6 +794,10 @@ impl WindowId {
             },
             // Where the skin places them; they open with a text to read.
             Self::Note => floating("", Placement::TopLeft(100.0, 80.0), false, &[]),
+            // Where the skin places them (EQUI_BugReportWnd.xml,
+            // EQUI_FeedbackWnd.xml); they open by their commands.
+            Self::BugReport => floating("", Placement::TopLeft(70.0, 70.0), false, &[]),
+            Self::Feedback => floating("", Placement::TopLeft(50.0, 50.0), false, &[]),
             Self::Book => floating("", Placement::TopLeft(120.0, 20.0), false, &[]),
             // Where the skin places it (EQUI_MapViewWnd.xml).
             Self::Map => floating("MAP", Placement::TopLeft(100.0, 80.0), true, &["MAP"]),
