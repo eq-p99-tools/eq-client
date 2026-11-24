@@ -1,5 +1,8 @@
 # Changelog
 
+Pull requests add their entry as a file in [`changelog.d/`](changelog.d/README.md)
+instead of editing this file; merged entries not yet folded in are listed there.
+
 ## Unreleased
 
 - eq-network is repinned to bd80661, which carries #441 (the program's line for a refused item use, and refusal before an item's recast), #440 (the Titanium scribe waits out the program's gauge) and #436 (the bind landing decision, off here until the client sets `bind_slot`). A refused bind landing (`WorldEvent::BindRefused`) counts in the gap file with the other news this client doesn't show yet.
