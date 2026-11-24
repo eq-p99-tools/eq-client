@@ -892,9 +892,13 @@ impl Options {
         if !classic.is_empty() {
             let _ = writeln!(text, "{CLASSIC_MODELS} = {classic}");
         }
-        if self.luclin_models.all_off {
-            let _ = writeln!(text, "{ALL_LUCLIN_MODELS_OFF} = true");
-        }
+        // Written either way, so a file's false keeps over an ini seed's
+        // true, as the per-key lines do.
+        let _ = writeln!(
+            text,
+            "{ALL_LUCLIN_MODELS_OFF} = {}",
+            self.luclin_models.all_off
+        );
         text.push_str(&self.chat_filters.text());
         text
     }
@@ -925,6 +929,14 @@ mod tests {
         assert!(text.contains("luclin_models = DAF\n"));
         assert!(text.contains("classic_models = HUM\n"));
         assert!(text.contains("all_luclin_models_off = true\n"));
+        // A file's false keeps over an ini seed's true, through a save.
+        let mut seed = Options::default();
+        seed.luclin_models.all_off = true;
+        let mut kept = Options::read("all_luclin_models_off = false\n", seed);
+        assert!(!kept.luclin_models.all_off);
+        kept = Options::read(&kept.text(), seed);
+        assert!(!kept.luclin_models.all_off);
+        assert!(kept.text().contains("all_luclin_models_off = false\n"));
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
         assert!(text.contains("skip_modified_food = false\n"));
