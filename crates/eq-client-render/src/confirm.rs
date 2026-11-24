@@ -59,6 +59,8 @@ pub(crate) enum Question {
     /// Whether to join a guild, or take a higher rank in it, as the player
     /// was invited ([`crate::guild::Invitations`] holds the words).
     GuildInvite,
+    /// Frozen guild-window target/action owned by its management controller.
+    GuildManagement { request_id: u64 },
     /// Whether to send the surname named ([`crate::surname::Pending`] holds
     /// the word).
     Surname,
@@ -123,7 +125,7 @@ impl Question {
                 )
             }
             // The invitation's and the surname's own words; see [`show`].
-            Self::GuildInvite | Self::Surname => String::new(),
+            Self::GuildInvite | Self::GuildManagement { .. } | Self::Surname => String::new(),
             Self::LootNoDrop { .. } => crate::trade::no_drop::text(online.world(), self, messages),
             Self::BugReport => {
                 // The program asks with its own string (read R49-52b).
@@ -160,6 +162,11 @@ impl Asked {
     /// The question waiting for an answer, if any.
     pub(crate) const fn question(&self) -> Option<Question> {
         self.question
+    }
+
+    /// An answered question still belongs to its owner until taken.
+    pub(crate) const fn has_pending_answer(&self) -> bool {
+        self.answer.is_some()
     }
 
     /// The server offer whose question the confirmation window last drew.
@@ -291,6 +298,7 @@ pub(crate) fn buttons(
 type Holders<'w> = (
     Option<Res<'w, crate::guild::Invitations>>,
     Option<Res<'w, crate::surname::Pending>>,
+    Option<Res<'w, crate::guild::management::State>>,
 );
 
 /// Shows the dialog's question.
@@ -302,7 +310,7 @@ pub(crate) fn show(
         Res<crate::ViewerSettings>,
         Option<Res<crate::options::OptionsState>>,
     ),
-    (messages, names, (invitations, surname)): (
+    (messages, names, (invitations, surname, guild_management)): (
         Option<Res<crate::hud::messages::Messages>>,
         Res<crate::spellbook::SpellNames>,
         Holders,
@@ -348,6 +356,9 @@ pub(crate) fn show(
                 .unwrap_or_default(),
             Some(Question::Surname) => surname
                 .map(|surname| surname.question(messages.as_deref()))
+                .unwrap_or_default(),
+            Some(Question::GuildManagement { request_id }) => guild_management
+                .map(|state| state.question(request_id))
                 .unwrap_or_default(),
             question => question
                 .map(|question| question.text(&names, &online, messages.as_deref()))

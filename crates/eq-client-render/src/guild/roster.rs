@@ -1,4 +1,4 @@
-//! Read-only guild roster. A full received list establishes membership;
+//! Guild roster. A full received list establishes membership;
 //! deltas update it in core. Opening this window sends no request: the mapped
 //! protocol has no roster-refresh command, and an absent list stays unknown.
 use crate::{
@@ -39,6 +39,7 @@ pub(crate) struct RosterFrame;
 pub(crate) struct GuildRows {
     columns: Vec<f32>,
     drawn: Option<Vec<Row>>,
+    drawn_scope: Option<(Option<u64>, u64)>,
 }
 
 impl GuildRows {
@@ -46,6 +47,7 @@ impl GuildRows {
         Self {
             columns,
             drawn: None,
+            drawn_scope: None,
         }
     }
 }
@@ -157,7 +159,7 @@ fn member_list(pieces: &[(String, Element)]) -> Option<&Listbox> {
     })
 }
 
-/// Adapts the native guild frame and list to this read-only slice. A skin
+/// Adapts the native guild frame and list to the shared roster/management UI. A skin
 /// without the member list keeps the usable fallback window.
 pub(crate) fn adapt(screen: &mut Screen) -> bool {
     let Some(mut list) = member_list(&screen.pieces).cloned() else {
@@ -169,7 +171,7 @@ pub(crate) fn adapt(screen: &mut Screen) -> bool {
         x: 0.0,
         y: 24.0,
         width: (screen.area.width - 16.0).max(1.0),
-        height: (screen.area.height - 82.0).max(1.0),
+        height: (screen.area.height - 154.0).max(1.0),
     });
     let scale = ((screen.area.width - 48.0).max(1.0) / WIDTHS.iter().sum::<f32>()).min(1.0);
     list.columns = HEADINGS
@@ -188,6 +190,7 @@ pub(crate) fn adapt(screen: &mut Screen) -> bool {
 
 /// Dynamic labels shared by the authored and fallback frame.
 pub(crate) fn labels(parent: &mut ChildSpawnerCommands, width: f32, height: f32) {
+    super::management::controls(parent, width, height);
     for (summary, y) in [(false, 24.0), (true, height - 24.0)] {
         let mut label = parent.spawn((
             theme::text("", Size::Small, theme::INK_BRIGHT),
@@ -258,7 +261,7 @@ pub(crate) fn window(
                 Node {
                     overflow: Overflow::scroll_y(),
                     flex_direction: FlexDirection::Column,
-                    ..crate::skinned::at(8.0, 68.0, width - 16.0, height - 98.0)
+                    ..crate::skinned::at(8.0, 68.0, width - 16.0, height - 170.0)
                 },
                 BackgroundColor(theme::INSET),
             ));
@@ -297,7 +300,8 @@ pub(crate) fn fill(
         }
     }
     for (entity, mut list, children) in &mut lists {
-        if list.drawn.as_ref() == Some(&wanted) {
+        let scope = (world.session_id(), world.guild_membership_revision());
+        if list.drawn.as_ref() == Some(&wanted) && list.drawn_scope == Some(scope) {
             continue;
         }
         for child in children.into_iter().flatten() {
@@ -306,6 +310,17 @@ pub(crate) fn fill(
         for row in &wanted {
             commands
                 .spawn((
+                    Button,
+                    super::management::Member {
+                        name: row[0].clone(),
+                        session: world.session_id(),
+                        revision: world.guild_membership_revision(),
+                    },
+                    crate::skinned::SkinId {
+                        window: WindowId::Guild,
+                        id: format!("Member_{}", row[0]),
+                    },
+                    BackgroundColor(Color::NONE),
                     Node {
                         height: px(ROW_HEIGHT),
                         flex_shrink: 0.0,
@@ -320,5 +335,6 @@ pub(crate) fn fill(
                 });
         }
         list.drawn = Some(wanted.clone());
+        list.drawn_scope = Some(scope);
     }
 }

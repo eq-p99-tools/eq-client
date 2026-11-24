@@ -26,6 +26,20 @@ impl ClientWorld {
         self.guild_members.as_deref()
     }
 
+    /// A received membership/rank boundary. Confirmation tickets bind to this
+    /// revision, so removing and readding the same name invalidates old intent.
+    #[must_use]
+    pub const fn guild_membership_revision(&self) -> u64 {
+        self.guild_membership_revision
+    }
+
+    /// The latest admission-checked guild refusal and its observation counter.
+    /// A queued request is never evidence that the server accepted it.
+    #[must_use]
+    pub fn guild_refusal(&self) -> (u64, &str) {
+        (self.guild_refusal.0, &self.guild_refusal.1)
+    }
+
     /// A listed member's public note, once a full list or note update supplied
     /// it. An add-member update has no note field; that note remains unknown.
     #[must_use]
@@ -106,6 +120,7 @@ impl ClientWorld {
 
     /// Discards roster and invitation evidence at a membership or admission boundary.
     pub(super) fn forget_guild(&mut self) {
+        self.guild_membership_revision = self.guild_membership_revision.wrapping_add(1);
         self.guild_members = None;
         self.guild_unknown_notes.clear();
         self.guild_invitations.clear();
@@ -196,6 +211,17 @@ impl ClientWorld {
         ) && current != received
         {
             return;
+        }
+        if matches!(
+            update,
+            GuildUpdate::Members(_)
+                | GuildUpdate::MemberAdded { .. }
+                | GuildUpdate::MemberRemoved { .. }
+                | GuildUpdate::MemberRank { .. }
+                | GuildUpdate::MemberRenamed { .. }
+                | GuildUpdate::Disbanded { .. }
+        ) {
+            self.guild_membership_revision = self.guild_membership_revision.wrapping_add(1);
         }
         match update {
             GuildUpdate::Members(members) => {
