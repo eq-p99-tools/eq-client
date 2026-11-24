@@ -66,7 +66,7 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
             return None;
         }
         let mesh = model.mesh()?;
-        Some((stage_mesh(&mesh), mesh_collision(&mesh)))
+        Some((stage_mesh(&mesh, &[]), mesh_collision(&mesh)))
     });
     let (staged, collision) = if let Some(geometry) = geometry {
         geometry
@@ -102,6 +102,10 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
             primitives: realized.primitives,
             materials: realized.materials,
             collision,
+            no_hit_collision: Vec::new(),
+            vertex_count: None,
+            // A carrier is never a door, whose riders the radius measures.
+            radius: None,
         },
         textures,
     })

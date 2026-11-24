@@ -160,6 +160,104 @@ impl ChatFilters {
     }
 }
 
+/// Whether the generation's program hides a notice's line itself, by the
+/// player's filters, beside asking the server not to send it.
+///
+/// Titanium's program tests the same 28 values before it prints some lines
+/// (read R49-2 d, through 0x60ca90). Of the lines this client prints, one
+/// kind meets such a test:
+/// - **Missed me** (`Channel09`, tested in the damage display at 0x4a6631):
+///   another's melee attack on the player that does not land (a miss, a
+///   block, a parry, a riposte, a dodge, an invulnerable or a rune) is
+///   hidden while the row is Hide. Which of these outcomes the program's
+///   test covers is inferred.
+///
+/// The other tests the read found gate lines this client does not print
+/// yet. Each one belongs where that line is added:
+// TODO(6.494, C2): Stun (0x417911, 0x41796f, 0x4226ef): the stun lines
+// (R49-6 b), when this client prints them.
+// TODO(6.494, C2): HideDamageShield's index (0x11) in 0x4a56e3: other
+// players' environmental-damage lines, when this client prints them.
+// TODO(6.494, C2): Others' hits (Channel08, 0x4a67d2): the damage display's
+// lines for fights the player is not in, when this client prints them.
+// TODO(6.494, C2): PCSpells, NPCSpells and BardSongs (0x40f303, 0x45e257
+// and the rest): others' spell-effect and casting lines, when this client
+// prints them; which lines each site tests is unread. BardSongs' test in the
+// song stop (0x40f06d) and the interruption lines' tests (0x45e233) are
+// wired below.
+// TODO(6.494, C2): BadWord's chat-text sites (0x454c12 and the rest): the
+// bad-word mask, once the list's source is read.
+// TODO(6.494, C2): the group index's site (0x4602a0), once its use is read.
+///
+/// `EQMac`'s and `RoF2`'s programs are unread, so they hide nothing here.
+#[must_use]
+pub fn hidden_locally(
+    filters: &ChatFilters,
+    dialect: GameDialect,
+    notice: &crate::world::Notice,
+) -> bool {
+    match dialect {
+        GameDialect::Titanium => titanium_hides(filters, notice),
+        GameDialect::EqMac | GameDialect::Rof2 => false,
+    }
+}
+
+/// Titanium's local tests, for the lines this client prints.
+fn titanium_hides(filters: &ChatFilters, notice: &crate::world::Notice) -> bool {
+    use crate::combat::{DamageOutcome, SPELL_DAMAGE_KIND};
+    use crate::world::{InterruptPrint, Notice, OtherCaster};
+    match notice {
+        Notice::Damage { damage, own_id, .. } => {
+            damage.target_id == *own_id
+                && damage.source_id != *own_id
+                && damage.kind != SPELL_DAMAGE_KIND
+                && matches!(
+                    damage.outcome,
+                    DamageOutcome::Miss
+                        | DamageOutcome::Block
+                        | DamageOutcome::Parry
+                        | DamageOutcome::Riposte
+                        | DamageOutcome::Dodge
+                        | DamageOutcome::Invulnerable
+                        | DamageOutcome::Rune
+                )
+                && filters.get(FilterCategory::MissedMe) == FilterMode::Hide
+        }
+        // The song stop's line (0x40f06d, read R49-21) and a Bard's own
+        // interruption (`OP_InterruptCast`'s print tail 0x45e233, read
+        // R49-51) hide only where filter 9's value is 1 (off), which read
+        // R49-48 e finds at the row's last option. That the options run in
+        // the Options window's order, so that it is Hide, is inferred: the
+        // labels' string ids are unread, and the read maps them by index.
+        Notice::SongStopped { .. }
+        | Notice::CastInterrupted {
+            print: InterruptPrint::TitaniumBard,
+            ..
+        } => filters.get(FilterCategory::BardSongs) == FilterMode::Hide,
+        // Another caster's interruption (0x45e233, read R49-51b, values
+        // R49-48 e): a group member's shows at show all and group only,
+        // anyone else's at show all only, by option index in the Options
+        // window's order (inferred, as above).
+        Notice::OtherCastInterrupted {
+            print: InterruptPrint::TitaniumOther(caster),
+            ..
+        } => {
+            let shows = |category, grouped| match filters.get(category) {
+                FilterMode::Show => true,
+                FilterMode::GroupOnly => grouped,
+                FilterMode::MineOnly | FilterMode::Hide => false,
+            };
+            match *caster {
+                OtherCaster::Bard { grouped } => !shows(FilterCategory::BardSongs, grouped),
+                OtherCaster::Player { grouped } => !shows(FilterCategory::PcSpells, grouped),
+                OtherCaster::Npc => !shows(FilterCategory::NpcSpells, false),
+                OtherCaster::Unknown => false,
+            }
+        }
+        _ => false,
+    }
+}
+
 /// The kinds the original's Options window has a row for, in its order.
 pub fn rows() -> impl Iterator<Item = FilterCategory> {
     FilterCategory::ALL
@@ -224,6 +322,203 @@ pub const fn kind_words(category: FilterCategory) -> &'static str {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titanium_hides_the_song_stop_line_only_while_bard_songs_is_hidden() {
+        // The program's test is filter 9's value 1 (read R49-21), its last
+        // option (read R49-48 e).
+        let stopped = crate::world::Notice::SongStopped {
+            spell_id: 42,
+            string_id: 0x318f,
+        };
+        let mut filters = ChatFilters::default();
+        for (mode, hidden) in [
+            (FilterMode::Show, false),
+            (FilterMode::MineOnly, false),
+            (FilterMode::GroupOnly, false),
+            (FilterMode::Hide, true),
+        ] {
+            filters.set(FilterCategory::BardSongs, mode);
+            assert_eq!(
+                hidden_locally(&filters, GameDialect::Titanium, &stopped),
+                hidden,
+                "{mode:?}"
+            );
+            // The unread programs hide nothing here.
+            assert!(!hidden_locally(&filters, GameDialect::EqMac, &stopped));
+        }
+    }
+
+    #[test]
+    fn titanium_hides_a_bards_own_interruption_as_the_song_stop_line() {
+        // OP_InterruptCast's print tail (0x45e233, read R49-51) tests filter
+        // 9 as the song stop does for the player a Bard (values R49-48 e).
+        use crate::world::InterruptPrint;
+        let line = |print| crate::world::Notice::CastInterrupted {
+            string_id: 0x318e,
+            print,
+        };
+        let mut filters = ChatFilters::default();
+        for (mode, hidden) in [
+            (FilterMode::Show, false),
+            (FilterMode::MineOnly, false),
+            (FilterMode::GroupOnly, false),
+            (FilterMode::Hide, true),
+        ] {
+            filters.set(FilterCategory::BardSongs, mode);
+            assert_eq!(
+                hidden_locally(
+                    &filters,
+                    GameDialect::Titanium,
+                    &line(InterruptPrint::TitaniumBard)
+                ),
+                hidden,
+                "{mode:?}"
+            );
+            // Another class's own line always shows (R49-51b).
+            assert!(!hidden_locally(
+                &filters,
+                GameDialect::Titanium,
+                &line(InterruptPrint::Titanium)
+            ));
+            assert!(!hidden_locally(
+                &filters,
+                GameDialect::EqMac,
+                &line(InterruptPrint::TitaniumBard)
+            ));
+        }
+    }
+
+    #[test]
+    fn titanium_filters_another_casters_interruption_by_who_they_are() {
+        // OP_InterruptCast's print tail (0x45e233, read R49-51b) by option,
+        // from read R49-48 e's values: a group member's shows at show all
+        // and group only, anyone else's at show all only.
+        use crate::world::{InterruptPrint, Notice, OtherCaster};
+        let line = |caster| Notice::OtherCastInterrupted {
+            string_id: 0x318e,
+            caster: "Examplar".into(),
+            print: InterruptPrint::TitaniumOther(caster),
+        };
+        let shown = |category: FilterCategory, caster| {
+            category
+                .modes(GameDialect::Titanium)
+                .into_iter()
+                .filter(|mode| {
+                    let mut filters = ChatFilters::default();
+                    filters.set(category, *mode);
+                    !hidden_locally(&filters, GameDialect::Titanium, &line(caster))
+                })
+                .collect::<Vec<_>>()
+        };
+        let (show, group) = (FilterMode::Show, FilterMode::GroupOnly);
+        let bards = FilterCategory::BardSongs;
+        let players = FilterCategory::PcSpells;
+        assert_eq!(
+            shown(bards, OtherCaster::Bard { grouped: true }),
+            [show, group]
+        );
+        assert_eq!(shown(bards, OtherCaster::Bard { grouped: false }), [show]);
+        assert_eq!(
+            shown(players, OtherCaster::Player { grouped: true }),
+            [show, group]
+        );
+        assert_eq!(
+            shown(players, OtherCaster::Player { grouped: false }),
+            [show]
+        );
+        assert_eq!(shown(FilterCategory::NpcSpells, OtherCaster::Npc), [show]);
+        // Each caster answers to their own row only.
+        assert_eq!(
+            shown(players, OtherCaster::Bard { grouped: false }).len(),
+            players.modes(GameDialect::Titanium).len()
+        );
+        assert_eq!(
+            shown(bards, OtherCaster::Npc).len(),
+            bards.modes(GameDialect::Titanium).len()
+        );
+        // A spawn this client doesn't know, and the unread programs, show.
+        let mut hidden = ChatFilters::default();
+        for category in [bards, players, FilterCategory::NpcSpells] {
+            hidden.set(category, FilterMode::Hide);
+        }
+        assert!(!hidden_locally(
+            &hidden,
+            GameDialect::Titanium,
+            &line(OtherCaster::Unknown)
+        ));
+        assert!(!hidden_locally(
+            &hidden,
+            GameDialect::EqMac,
+            &line(OtherCaster::Npc)
+        ));
+    }
+
+    #[test]
+    fn titanium_hides_attacks_that_miss_the_player_while_missed_me_is_hidden() {
+        use crate::combat::{Damage, DamageOutcome, SPELL_DAMAGE_KIND};
+        use crate::world::Notice;
+        let notice = |source_id, target_id, kind, outcome| Notice::Damage {
+            damage: Damage {
+                target_id,
+                source_id,
+                kind,
+                spell_id: None,
+                outcome,
+                push: None,
+            },
+            own_id: 5,
+            source: None,
+            target: None,
+        };
+        let mut hidden = ChatFilters::default();
+        hidden.set(FilterCategory::MissedMe, FilterMode::Hide);
+        let shown = ChatFilters::default();
+        for outcome in [
+            DamageOutcome::Miss,
+            DamageOutcome::Block,
+            DamageOutcome::Parry,
+            DamageOutcome::Riposte,
+            DamageOutcome::Dodge,
+            DamageOutcome::Invulnerable,
+            DamageOutcome::Rune,
+        ] {
+            let missed = notice(9, 5, 1, outcome);
+            assert!(
+                hidden_locally(&hidden, GameDialect::Titanium, &missed),
+                "{outcome:?}"
+            );
+            assert!(
+                !hidden_locally(&shown, GameDialect::Titanium, &missed),
+                "{outcome:?}"
+            );
+            // Unread programs hide nothing.
+            assert!(!hidden_locally(&hidden, GameDialect::EqMac, &missed));
+            assert!(!hidden_locally(&hidden, GameDialect::Rof2, &missed));
+            // The player's own misses, and spells, are another row's.
+            assert!(!hidden_locally(
+                &hidden,
+                GameDialect::Titanium,
+                &notice(5, 9, 1, outcome)
+            ));
+            assert!(!hidden_locally(
+                &hidden,
+                GameDialect::Titanium,
+                &notice(9, 5, SPELL_DAMAGE_KIND, outcome)
+            ));
+        }
+        // A hit on the player always shows.
+        assert!(!hidden_locally(
+            &hidden,
+            GameDialect::Titanium,
+            &notice(9, 5, 1, DamageOutcome::Hit(4))
+        ));
+        assert!(!hidden_locally(
+            &hidden,
+            GameDialect::Titanium,
+            &Notice::ItemRefused
+        ));
+    }
 
     #[test]
     fn the_default_is_the_tables() {

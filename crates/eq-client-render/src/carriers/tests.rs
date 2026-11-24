@@ -19,9 +19,13 @@ fn asset() -> ActorAsset {
                 indices: vec![0, 1, 2],
                 texture: None,
                 material_mode: MaterialMode::Opaque,
+                light: Vec::new(),
             }],
             materials: vec![ObjectMaterial { double_sided: true }],
             collision: vec![[points[0], points[1], points[2]]],
+            no_hit_collision: Vec::new(),
+            vertex_count: None,
+            radius: None,
         },
         textures: Vec::new(),
     }

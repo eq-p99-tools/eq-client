@@ -1,8 +1,20 @@
 //! News about the player's spells: gems and the book, casts, buffs and
 //! lasting effects, and spellbook changes.
-use super::{CastNews, Changes, ClientWorld, Notice, SpellCatalog};
+use super::{CastNews, Changes, ClientWorld, InterruptPrint, Notice, OtherCaster, SpellCatalog};
 use crate::{BookActionStatus, Buff, BuffUpdate, SpellEffect, SpellUpdate, buffs::Landing};
 use std::time::Instant;
+
+/// How a generation's program prints an interruption the server names,
+/// the player's own when `own_bard` says the player is a Bard: the Titanium
+/// program's `OP_InterruptCast` print tail (0x45e233, reads R49-51 and
+/// R49-51b). The others are unread and keep this client's line.
+const fn interrupt_print(dialect: crate::GameDialect, own_bard: bool) -> InterruptPrint {
+    match dialect {
+        crate::GameDialect::Titanium if own_bard => InterruptPrint::TitaniumBard,
+        crate::GameDialect::Titanium => InterruptPrint::Titanium,
+        crate::GameDialect::EqMac | crate::GameDialect::Rof2 => InterruptPrint::Unread,
+    }
+}
 
 impl ClientWorld {
     /// A spell notice: the book and gems change, and the player's own casts
@@ -16,6 +28,12 @@ impl ClientWorld {
             book.apply(update);
         }
         let active = self.connected && self.death.is_none();
+        let other = match (self.generation, update) {
+            (crate::GameDialect::Titanium, SpellUpdate::Interrupted { caster_id, .. }) => {
+                InterruptPrint::TitaniumOther(self.other_caster(*caster_id))
+            }
+            _ => InterruptPrint::Unread,
+        };
         let Some(player) = self.player.as_mut() else {
             return;
         };
@@ -34,17 +52,49 @@ impl ClientWorld {
             changes.notices.push(Notice::OtherCastInterrupted {
                 string_id: *message_id,
                 caster: caster.clone(),
+                print: other,
             });
         }
         changes.cast = self
             .casting
             .observe(player.spawn_id, &player.memorized_spells, update, now);
         let own_id = player.spawn_id;
+        let print = interrupt_print(self.generation, player.class == Some(super::casting::BARD));
         self.own_cast_news(own_id, changes.cast);
         if let (Some(CastNews::Interrupted), Some((_, string_id))) =
             (changes.cast, self.casting.interrupted)
         {
-            changes.notices.push(Notice::CastInterrupted { string_id });
+            changes
+                .notices
+                .push(Notice::CastInterrupted { string_id, print });
+        }
+    }
+
+    /// Who another caster is for the Titanium program's interruption
+    /// filters (0x45e233, read R49-51b): a Bard by class whatever their
+    /// kind, another player, or an NPC, and whether a player is in the
+    /// player's group, by name as the program's group list holds them.
+    fn other_caster(&self, caster_id: u32) -> OtherCaster {
+        let Some(spawn) = u16::try_from(caster_id)
+            .ok()
+            .and_then(|id| self.zone.spawns.get(&id))
+        else {
+            return OtherCaster::Unknown;
+        };
+        let player = spawn.state.kind == crate::SpawnKind::Player;
+        let grouped = player
+            && self.group.as_ref().is_some_and(|group| {
+                group
+                    .members
+                    .iter()
+                    .any(|member| member.eq_ignore_ascii_case(&spawn.state.name))
+            });
+        if spawn.state.class == Some(8) {
+            OtherCaster::Bard { grouped }
+        } else if player {
+            OtherCaster::Player { grouped }
+        } else {
+            OtherCaster::Npc
         }
     }
 

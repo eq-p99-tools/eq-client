@@ -621,6 +621,7 @@ impl CharacterAsset {
                 indices: vec![0, 1, 2],
                 texture: None,
                 material_mode: MaterialMode::Opaque,
+                light: Vec::new(),
             }],
             textures: Vec::new(),
             materials: vec![None],
@@ -833,7 +834,7 @@ pub(super) fn load_with_source(
             return Err(invalid("skin bone assignments"));
         }
         let piece = Piece::of(&name, mesh_name);
-        for staged in stage_mesh(&mesh) {
+        for staged in stage_mesh(&mesh, &[]) {
             let material = staged.material.clone();
             // Bone-local, in the renderer's frame, where the joints act.
             skins.push(Skin {
@@ -1399,6 +1400,7 @@ mod tests {
                     indices: Vec::new(),
                     texture: None,
                     material_mode: MaterialMode::Opaque,
+                    light: Vec::new(),
                 }],
                 textures: Vec::new(),
                 materials: vec![None],

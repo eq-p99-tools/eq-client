@@ -420,10 +420,6 @@ fn controls(
                     state.message = "Add a statement before running.".into();
                 }
                 Ok(program) => {
-                    if let Err(error) = program.check_local_commands(settings.0.local_session) {
-                        state.message = error.to_string();
-                        continue;
-                    }
                     // Dots on lines without a statement are kept but not used.
                     let statements = program.statement_lines();
                     let dots = state

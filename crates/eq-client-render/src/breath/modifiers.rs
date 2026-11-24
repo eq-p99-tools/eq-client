@@ -2,7 +2,14 @@
 //!
 //! Titanium `eqgame.exe` uses the profile and racial fire resistance at
 //! 0x418756, and adds the ordinary Ranger and Monk bonuses and effects 46
-//! and 111 at 0x4187e4. Effect 40 is checked at 0x41c905. Restrictions on
+//! and 111 at 0x4187e4. Effect 40 is checked at 0x41c905. Cold resist is
+//! char info +0x34, the total 0x41897d (read R49-3c): the profile base
+//! through 0x4188ef with its racial terms, effects 47 and 111, the Ranger
+//! and Beastlord term and the items' cold. The cap that follows,
+//! 0x4bb05d kind 8 (read R49-3d), is 500 plus effect 262's raise at these
+//! levels, and isn't applied: cold reaches its floor of 10 at 120, so a cap
+//! of 500 or more never changes the amount. Fire's cap matters only in the
+//! base-200 zones and isn't modelled yet (checklist 6.491d). Restrictions on
 //! instrument, level and formula inputs are conservative limits of this
 //! projection (recording checklist 6.393).
 use super::Unavailable;
@@ -20,6 +27,7 @@ struct Effects {
     stamina: i64,
     breath_level: i64,
     fire_resistance: i64,
+    cold_resistance: i64,
     water_breathing: i64,
     invulnerable: bool,
 }
@@ -29,6 +37,7 @@ impl Effects {
         self.stamina += other.stamina;
         self.breath_level += other.breath_level;
         self.fire_resistance += other.fire_resistance;
+        self.cold_resistance += other.cold_resistance;
         self.water_breathing += other.water_breathing;
         self.invulnerable |= other.invulnerable;
     }
@@ -40,6 +49,7 @@ pub(super) enum Need {
     Breathing,
     Air,
     Heat,
+    Cold,
 }
 
 fn project(effects: &[Effect], level: u16, instrument: u32, need: Need) -> Option<Effects> {
@@ -54,6 +64,7 @@ fn project(effects: &[Effect], level: u16, instrument: u32, need: Need) -> Optio
             Need::Breathing => effect.id == WATER_BREATHING,
             Need::Air => matches!(effect.id, 7 | 159 | WATER_BREATHING | SET_BREATH_LEVEL),
             Need::Heat => matches!(effect.id, 46 | 111),
+            Need::Cold => matches!(effect.id, 47 | 111),
         };
         if !affects {
             continue;
@@ -65,11 +76,12 @@ fn project(effects: &[Effect], level: u16, instrument: u32, need: Need) -> Optio
             return None;
         }
         let value = effect.base_magnitude(level)?;
-        match effect.id {
-            7 | 159 => result.stamina += value,
-            46 | 111 => result.fire_resistance += value,
-            WATER_BREATHING if value >= 0 => result.water_breathing += value,
-            SET_BREATH_LEVEL => result.breath_level += value,
+        match (need, effect.id) {
+            (_, 7 | 159) => result.stamina += value,
+            (Need::Cold, 47 | 111) => result.cold_resistance += value,
+            (_, 46 | 111) => result.fire_resistance += value,
+            (_, WATER_BREATHING) if value >= 0 => result.water_breathing += value,
+            (_, SET_BREATH_LEVEL) => result.breath_level += value,
             _ => return None,
         }
     }
@@ -82,6 +94,8 @@ pub(super) struct Inputs {
     pub(super) water_breathing: bool,
     pub(super) invulnerable: bool,
     pub(super) fire_resistance: Option<i64>,
+    /// The cold total the liquid routine reads (R49-3c).
+    pub(super) cold_resistance: Option<i64>,
     item_hp: i64,
 }
 
@@ -175,6 +189,29 @@ fn read_buff(
     Ok(effect)
 }
 
+/// The cold total's base and class terms (read R49-3c): the base getter
+/// 0x4188ef replaces a Barbarian's base with 35 and lowers an Iksar's by 10,
+/// and the total 0x41897d gives Rangers and Beastlords 4, plus a point a
+/// level past 49.
+fn cold_total(
+    player: &PlayerState,
+    race: u32,
+    profile: eq_client_core::hazards::TitaniumEnvironment,
+) -> i64 {
+    let base = match race {
+        2 => 35,
+        128 => i64::from(profile.base_cold_resistance) - 10,
+        _ => i64::from(profile.base_cold_resistance),
+    };
+    let class = match player.class {
+        Some(4 | 15) => 4 + i64::from(player.level.saturating_sub(49)),
+        _ => 0,
+    };
+    base + class
+}
+
+// One pass over the profile, equipment and effects feeds every need.
+#[allow(clippy::too_many_lines)]
 pub(super) fn read(
     world: &ClientWorld,
     spells: &SpellNames,
@@ -184,7 +221,8 @@ pub(super) fn read(
     let profile = player
         .titanium_environment
         .ok_or(Unavailable::MissingProfile)?;
-    let local_air = need != Need::Heat && world.can(eq_client_core::Capability::Drowning);
+    let local_air = matches!(need, Need::Breathing | Need::Air)
+        && world.can(eq_client_core::Capability::Drowning);
     if !local_air && profile.has_alternate_advancement {
         return Err(Unavailable::AlternateAdvancement);
     }
@@ -196,6 +234,7 @@ pub(super) fn read(
     let item_hp = eqemu_item_hit_points(&equipment);
     let (stamina, mut fire_resistance) =
         crate::speed::food_environment(inventory, level).ok_or(Unavailable::Food)?;
+    let mut cold_resistance = Some(0);
     let mut combined = Effects {
         stamina,
         ..Effects::default()
@@ -207,6 +246,9 @@ pub(super) fn read(
         combined.stamina += i64::from(item.bonuses.stamina);
         fire_resistance = fire_resistance
             .zip(item.bonuses.fire_resistance)
+            .map(|(total, item)| total + i64::from(item));
+        cold_resistance = cold_resistance
+            .zip(item.bonuses.cold_resistance)
             .map(|(total, item)| total + i64::from(item));
         if let Some(worn) = item.worn {
             if worn.effect_type != 2 {
@@ -259,6 +301,9 @@ pub(super) fn read(
         if effect.fire_resistance != 0 {
             fire_resistance = None;
         }
+        if effect.cold_resistance != 0 {
+            cold_resistance = None;
+        }
         combined.add(effect);
     }
     let race = world
@@ -286,6 +331,8 @@ pub(super) fn read(
         invulnerable: combined.invulnerable,
         fire_resistance: fire_resistance
             .map(|items| base + class_bonus + items + combined.fire_resistance),
+        cold_resistance: cold_resistance
+            .map(|items| cold_total(player, race, profile) + items + combined.cold_resistance),
         item_hp,
     })
 }
@@ -310,6 +357,7 @@ mod tests {
         player.titanium_environment = Some(TitaniumEnvironment {
             zone_id: 27,
             base_fire_resistance: 25,
+            base_cold_resistance: 25,
             has_alternate_advancement: false,
         });
         let mut online = OnlineState::new(true);
@@ -417,6 +465,7 @@ mod tests {
         player.titanium_environment = Some(TitaniumEnvironment {
             zone_id: 27,
             base_fire_resistance: 0,
+            base_cold_resistance: 25,
             has_alternate_advancement: false,
         });
         let mut online = OnlineState::new(true);
