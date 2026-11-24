@@ -264,6 +264,24 @@ pub(crate) fn look(
     }
 }
 
+/// `yaw`, in radians, as the program holds the mouse's heading rate for the
+/// controlled spawn's `race` over a frame of `seconds`: 8 heading units a
+/// step for races 216 and 472, 3 for race 141, and no hold for the rest
+/// (0x4929dd, read R49-24 d). A frame of no time holds nothing.
+fn mouse_turn_capped(yaw: f32, race: Option<u32>, seconds: f32) -> f32 {
+    let cap = match race {
+        Some(216 | 472) => 8.0,
+        Some(141) => 3.0,
+        _ => return yaw,
+    };
+    if !(seconds.is_finite() && seconds > 0.0) {
+        return yaw;
+    }
+    let most =
+        cap * seconds / eq_client_assets::falls::STEP_SECONDS * std::f32::consts::TAU / 512.0;
+    yaw.clamp(-most, most)
+}
+
 /// Samples horizontal look before locomotion. Online the attached view follows
 /// the actor's rotation, and offline the same input turns the orbit directly.
 #[allow(clippy::needless_pass_by_value)]
@@ -277,7 +295,7 @@ pub(super) fn turn(
         Option<Res<crate::script::WorldInput>>,
     ),
     mut cameras: Query<&mut OrbitCamera, Without<FreeCamera>>,
-    windows: Query<&Window, With<PrimaryWindow>>,
+    (windows, time): (Query<&Window, With<PrimaryWindow>>, Option<Res<Time>>),
 ) {
     aim.horizontal = None;
     if !look.held {
@@ -290,6 +308,11 @@ pub(super) fn turn(
             * options
                 .options
                 .turn_per_pixel(screen_width(windows.single().ok()));
+        let yaw = mouse_turn_capped(
+            yaw,
+            online.world().player().map(|player| player.race),
+            time.map_or(0.0, |time| time.delta_secs()),
+        );
         if online.enabled {
             aim.horizontal = Some(yaw);
         } else {
@@ -915,6 +938,23 @@ pub(super) mod testing {
 mod tests {
     use super::*;
     use crate::keys::Act;
+
+    #[test]
+    fn the_mouse_turns_races_216_472_and_141_no_faster_than_the_program() {
+        let unit = std::f32::consts::TAU / 512.0;
+        // A 50 ms frame: 8 heading units for a horse's races, 3 for 141.
+        for race in [216, 472] {
+            assert!((mouse_turn_capped(1.0, Some(race), 0.05) - 8.0 * unit).abs() < 1e-6);
+            assert!((mouse_turn_capped(-1.0, Some(race), 0.05) + 8.0 * unit).abs() < 1e-6);
+        }
+        assert!((mouse_turn_capped(1.0, Some(141), 0.05) - 3.0 * unit).abs() < 1e-6);
+        // Half the frame, half the turn; a small drag isn't held.
+        assert!((mouse_turn_capped(1.0, Some(141), 0.025) - 1.5 * unit).abs() < 1e-6);
+        assert!((mouse_turn_capped(unit, Some(141), 0.05) - unit).abs() < 1e-7);
+        // Every other race, or none yet, turns as dragged.
+        assert!((mouse_turn_capped(1.0, Some(1), 0.05) - 1.0).abs() < f32::EPSILON);
+        assert!((mouse_turn_capped(1.0, None, 0.05) - 1.0).abs() < f32::EPSILON);
+    }
 
     #[test]
     fn the_scene_camera_draws_colours_without_a_tone_curve() {

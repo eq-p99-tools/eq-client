@@ -541,6 +541,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         Notice::Camp(camp) => in_chat(camp_lines(camp, messages)),
         Notice::LootCoins(coins) => chat(loot_coins(*coins, messages)),
         Notice::LootRefused(response) => chat(loot_line(*response, messages)),
+        Notice::SurnameAnswer {
+            accepted,
+            name,
+            last_name,
+        } => chat(crate::surname::answer(*accepted, name, last_name, messages)),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
         Notice::ProgramLine {
@@ -793,11 +798,11 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         } => chat(format!("Cast rejected (spell {spell_id}): {reason}").into()),
         // The official client says why in the chat; the HUD keeps it on its
         // casting label as well.
-        Notice::CastInterrupted { string_id } => chat(own_interruption(*string_id, messages)),
+        Notice::CastInterrupted { string_id, .. } => chat(own_interruption(*string_id, messages)),
         Notice::Slain { victim, killer } => chat(slain(victim, killer, messages)),
-        Notice::OtherCastInterrupted { string_id, caster } => {
-            chat(other_interruption(*string_id, caster, messages))
-        }
+        Notice::OtherCastInterrupted {
+            string_id, caster, ..
+        } => chat(other_interruption(*string_id, caster, messages)),
         Notice::Group(notice) => in_chat(group_lines(notice, messages)),
         Notice::Listing(notice) => chat(listing_line(*notice, messages)),
         Notice::ListingRequested(change) => {
@@ -1780,7 +1785,10 @@ mod tests {
 
     #[test]
     fn an_interrupted_cast_says_why_in_the_chat() {
-        let notice = |string_id| Notice::CastInterrupted { string_id };
+        let notice = |string_id| Notice::CastInterrupted {
+            string_id,
+            print: eq_client_core::world::InterruptPrint::Unread,
+        };
         let messages = Messages::parse(
             "EQST0002
 0 2
@@ -2203,6 +2211,7 @@ mod tests {
         let notice = |string_id| Notice::OtherCastInterrupted {
             string_id,
             caster: "Examplar".into(),
+            print: eq_client_core::world::InterruptPrint::Unread,
         };
         let messages = Messages::parse(
             "EQST0002

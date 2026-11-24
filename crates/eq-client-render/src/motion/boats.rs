@@ -68,15 +68,36 @@ pub(super) fn to_world(pose: WorldPosition, transform: Transform) -> Transform {
     }
 }
 
-/// Refreshes the carrier link on each floor probe. A swept landing on its
-/// model links the rider; walking off, despawn or unavailable geometry unlinks.
+/// Where the program's floor sweep ends, its target z of -32767
+/// (0x48a0fc's 0xc6fffe00, read R49-27 (d)).
+const SWEEP_END: f32 = -32767.0;
+
+/// How far below `feet` the floor sweep looks for the first floor: down to
+/// [`SWEEP_END`].
+pub(crate) fn sweep_depth(feet: Vec3) -> f32 {
+    (feet.y - SWEEP_END).max(0.05)
+}
+
+/// Refreshes the carrier link on each floor probe, as the program's floor
+/// sweep does on every move step: the first floor under the feet, however
+/// far down, links the rider when it is a carrier's (0x48a0fc, 0x42cf54,
+/// read R49-27 (d)). So a body in the air over the deck stays linked, and
+/// one over the water or the dock is not; walking off, despawn or
+/// unavailable geometry unlinks. The read gives the sweep no reach; the
+/// link's bound of [`CARRIER_REACH`] from the boat's origin is ours, the
+/// stricter side, and the session's guard holds the same (6.469, 6.611).
+/// The read is Titanium's; the Mac-era client takes the same sweep,
+/// inferred until its twin is read (6.611). The carrier `current` links
+/// stays the link while any part of the footprint is over it
+/// ([`CollisionWorld::spawn_floor_keeping`]).
 pub(super) fn under(
     world: &CollisionWorld,
     carriers: &Carriers,
     feet: Vec3,
+    current: Option<u16>,
     now: Instant,
 ) -> Option<(CarrierSample, WorldPosition)> {
-    let id = world.ground_spawn(feet, 0.01, 0.05)?;
+    let (id, _) = world.spawn_floor_keeping(feet, 0.01, sweep_depth(feet), current)?;
     let report = carriers.latest(id)?;
     let pose = report.pose(now);
     let point = eq_client_core::world_position(feet.to_array(), pose.heading);
@@ -180,18 +201,115 @@ mod tests {
             std::sync::Arc::new(CollisionMesh::new(deck).unwrap()),
         )]);
         assert_eq!(
-            under(&collision, &carriers, Vec3::new(0.0, 5.0, 0.0), start)
+            under(&collision, &carriers, Vec3::new(0.0, 5.0, 0.0), None, start)
                 .unwrap()
                 .0
                 .spawn_id,
             8
         );
-        assert!(under(&collision, &carriers, Vec3::new(30.0, 5.0, 0.0), start).is_none());
+        assert!(
+            under(
+                &collision,
+                &carriers,
+                Vec3::new(30.0, 5.0, 0.0),
+                None,
+                start
+            )
+            .is_none()
+        );
         collision.set_spawn_obstacles(Vec::new());
-        assert!(under(&collision, &carriers, Vec3::new(0.0, 5.0, 0.0), start).is_none());
+        assert!(under(&collision, &carriers, Vec3::new(0.0, 5.0, 0.0), None, start).is_none());
         carriers.clear();
         assert!(carriers.latest(8).is_none());
     }
+    #[test]
+    fn a_ship_passing_alongside_keeps_the_rider_on_its_own_deck() {
+        use eq_client_core::movement::CollisionMesh;
+        // The #631 rerun (6.611): a ship coming alongside met part of the
+        // rider's footprint and took the link. The linked ship keeps it
+        // while any part of the footprint is over its deck.
+        let start = Instant::now();
+        let mut carriers = Carriers::default();
+        carriers.observe(
+            &WorldEvent::Spawns(vec![
+                carrier(8, WorldPosition::default()),
+                carrier(9, WorldPosition::default()),
+            ]),
+            GameDialect::Titanium,
+            start,
+        );
+        let slab = |from: f32, to: f32| {
+            std::sync::Arc::new(
+                CollisionMesh::new([
+                    [[from, 5.0, -10.0], [to, 5.0, -10.0], [to, 5.0, 10.0]],
+                    [[from, 5.0, -10.0], [to, 5.0, 10.0], [from, 5.0, 10.0]],
+                ])
+                .unwrap(),
+            )
+        };
+        let mut collision = CollisionWorld::new([[
+            [-500.0, -30.0, -500.0],
+            [500.0, -30.0, -500.0],
+            [0.0, -30.0, 500.0],
+        ]])
+        .unwrap();
+        collision.set_spawn_obstacles(vec![(9, slab(-0.1, 20.0)), (8, slab(-20.0, 0.2))]);
+        let linked = |feet: Vec3, current| {
+            under(&collision, &carriers, feet, current, start).map(|(sample, _)| sample.spawn_id)
+        };
+        let feet = Vec3::new(0.0, 5.0, 0.0);
+        assert_eq!(linked(feet, None), Some(9));
+        assert_eq!(linked(feet, Some(8)), Some(8));
+        assert_eq!(linked(Vec3::new(1.0, 5.0, 0.0), Some(8)), Some(9));
+    }
+    #[test]
+    fn the_first_floor_below_links_the_rider_however_far_down() {
+        use eq_client_core::movement::CollisionMesh;
+        // The program's floor sweep runs to z -32767 and links the first
+        // carrier it meets (read R49-27 (d), 6.611): a body high in the
+        // air over the deck is linked; over the water or the dock, or
+        // under the deck, it isn't.
+        let start = Instant::now();
+        let mut carriers = Carriers::default();
+        carriers.observe(
+            &WorldEvent::Spawns(vec![carrier(8, WorldPosition::default())]),
+            GameDialect::Titanium,
+            start,
+        );
+        let deck = [
+            [[-10.0, 5.0, -10.0], [10.0, 5.0, -10.0], [10.0, 5.0, 10.0]],
+            [[-10.0, 5.0, -10.0], [10.0, 5.0, 10.0], [-10.0, 5.0, 10.0]],
+        ];
+        let mut collision = CollisionWorld::new([
+            // The sea floor, then a dock beside the boat, 1 over its deck.
+            [
+                [-500.0, -30.0, -500.0],
+                [500.0, -30.0, -500.0],
+                [0.0, -30.0, 500.0],
+            ],
+            [[12.0, 6.0, -10.0], [30.0, 6.0, -10.0], [30.0, 6.0, 10.0]],
+            [[12.0, 6.0, -10.0], [30.0, 6.0, 10.0], [12.0, 6.0, 10.0]],
+        ])
+        .unwrap();
+        collision.set_spawn_obstacles(vec![(
+            8,
+            std::sync::Arc::new(CollisionMesh::new(deck).unwrap()),
+        )]);
+        let linked = |feet: Vec3| {
+            under(&collision, &carriers, feet, None, start).map(|(sample, _)| sample.spawn_id)
+        };
+        assert_eq!(linked(Vec3::new(0.0, 5.0, 0.0)), Some(8));
+        assert_eq!(linked(Vec3::new(0.0, 9.0, 0.0)), Some(8));
+        assert_eq!(linked(Vec3::new(0.0, 400.0, 0.0)), Some(8));
+        assert_eq!(linked(Vec3::new(-40.0, 9.0, 0.0)), None);
+        assert_eq!(linked(Vec3::new(20.0, 6.0, 0.0)), None);
+        assert_eq!(linked(Vec3::new(20.0, 9.0, 0.0)), None);
+        assert_eq!(linked(Vec3::new(0.0, 4.0, 0.0)), None);
+        // Past the guard's bound of 600 from the boat's origin, ours
+        // unlinks, the stricter side (6.469).
+        assert_eq!(linked(Vec3::new(0.0, 700.0, 0.0)), None);
+    }
+
     #[test]
     fn a_rejected_or_unconfirmed_endpoint_never_replaces_the_accepted_rider() {
         let now = Instant::now();
@@ -305,9 +423,12 @@ mod tests {
         let feet = Vec3::new(0.2, 5.0, 0.0);
         assert!((collision.support(feet).unwrap() - 5.0).abs() < 0.001);
         assert_eq!(
-            under(&collision, &carriers, feet, now).unwrap().0.spawn_id,
+            under(&collision, &carriers, feet, None, now)
+                .unwrap()
+                .0
+                .spawn_id,
             8
         );
-        assert!(under(&collision, &carriers, Vec3::new(0.5, 5.0, 0.0), now).is_none());
+        assert!(under(&collision, &carriers, Vec3::new(0.5, 5.0, 0.0), None, now).is_none());
     }
 }

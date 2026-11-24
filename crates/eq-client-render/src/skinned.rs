@@ -105,6 +105,8 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Skills => "EQUI_SkillsWindow.xml",
         WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
         WindowId::Note => "EQUI_NoteWindow.xml",
+        WindowId::BugReport => "EQUI_BugReportWnd.xml",
+        WindowId::Feedback => "EQUI_FeedbackWnd.xml",
         WindowId::Book => "EQUI_BookWindow.xml",
         WindowId::Map => "EQUI_MapViewWnd.xml",
         WindowId::Actions => "EQUI_HotButtonWnd.xml",
@@ -235,6 +237,16 @@ impl Screens {
     fn get(&mut self, directory: &std::path::Path, skin: &str, id: WindowId) -> Option<&Screen> {
         let (file, name) = source(id)?;
         self.screen(directory, skin, (file, name))
+    }
+
+    /// Whether this skin defines a window, before its frame is ever drawn.
+    pub(crate) fn defines(
+        &mut self,
+        directory: &std::path::Path,
+        skin: &str,
+        id: WindowId,
+    ) -> bool {
+        self.get(directory, skin, id).is_some()
     }
 
     /// A screen of this skin's file, if the file defines it: a window's, or
@@ -1234,6 +1246,14 @@ fn behave(
         Does::Answers(accept) => {
             drawn.insert((Button, super::confirm::AnswerButton(accept), skin()))
         }
+        // The skin lists the bug report's drop-down last, over the left of
+        // Location (x 130-196 of both installed skins, live look 11-24). The
+        // button stays on top so all of it takes a click; the program's own
+        // stacking there is unread, so this is inferred.
+        Does::Report(button @ crate::report_windows::ReportButton::Location) => {
+            drawn.insert((Button, button, skin(), ZIndex(1)))
+        }
+        Does::Report(button) => drawn.insert((Button, button, skin())),
         Does::TurnsPage(forward) => {
             drawn.insert((Button, super::reading::PageButton(forward), skin()))
         }
@@ -1489,6 +1509,7 @@ fn caption(
         | Does::Tracks
         | Does::StopsTracking
         | Does::Answers(_)
+        | Does::Report(_)
         | Does::TurnsPage(_)
         | Does::Combines(_)
         | Does::Maps(_)
@@ -1586,6 +1607,7 @@ type Stateful<'w, 's> = Query<
             Has<Greyed>,
             Has<scrollbar::ScrollArrow>,
             Option<&'static crate::character_select::Action>,
+            Option<&'static crate::report_windows::ReportButton>,
         ),
         &'static Interaction,
         &'static mut ImageNode,
@@ -1603,7 +1625,10 @@ pub(crate) fn buttons(
         Res<super::options::OptionsState>,
         Res<super::online::OnlineState>,
     ),
-    combat: Res<super::combat::CombatState>,
+    (combat, reports): (
+        Res<super::combat::CombatState>,
+        Res<crate::report_windows::ReportWindows>,
+    ),
     mut art: crate::sheets::Art,
     mut buttons: Stateful,
 ) {
@@ -1616,12 +1641,14 @@ pub(crate) fn buttons(
         selector,
         attack,
         checkbox,
-        (greyed, arrow, character),
+        (greyed, arrow, character, report),
         interaction,
         mut image,
     ) in &mut buttons
     {
         let on = match (selector, checkbox, character) {
+            // The bug report's check boxes show what they carry.
+            _ if let Some(report) = report => reports.checked(*report),
             (Some(selector), ..) => shown.displayed(selector.0),
             (None, Some(checkbox), _) => options.on(checkbox.0),
             (None, None, Some(crate::character_select::Action::Choose(slot))) => {
@@ -2264,7 +2291,10 @@ fn label(
         _ => None,
     };
     let hotbar_page = owner == WindowId::Actions && name == "HB_CurrentPageLabel";
+    // The bug report's place and target, and the feedback window's name.
+    let reported = crate::report_windows::ReportLabel::of(name, owner);
     let filled = label.eq_type.is_some()
+        || reported.is_some()
         || bag.is_some()
         || banker
         || partner
@@ -2334,6 +2364,9 @@ fn label(
         }
         (None, None) if let Some(shows) = named => {
             aligned_in(window, node, label.align, (text, shows), geometry);
+        }
+        (None, None) if let Some(reported) = reported => {
+            aligned_in(window, node, label.align, (text, reported), geometry);
         }
         (None, None) => plain_label(window, name, label, text, node, geometry, owner),
     }

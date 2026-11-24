@@ -123,11 +123,12 @@ pub(super) fn input(
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
     outbox: Res<Outbox>,
-    (ui, escape, presses, mut trade, options): (
+    (ui, escape, presses, mut trade, messages, options): (
         super::windows::pointer::PointerUi,
         Res<super::escape::Escape>,
         Res<super::hud::hotbar::carry::Presses>,
         ResMut<super::trade::TradeState>,
+        Option<Res<super::hud::messages::Messages>>,
         Option<Res<crate::options::OptionsState>>,
     ),
 ) {
@@ -203,9 +204,37 @@ pub(super) fn input(
         let rule = settings.as_ref().map_or(TargetByName::Nearest, |s| {
             s.0.installed_client.target_by_name()
         });
-        match named(rule, &ids, &online, &name) {
-            Some(id) => proposal = Some(Some(id)),
-            None => chat.refuse(format!("No nearby target named {name}")),
+        match rule {
+            // Titanium (read R49-33 b): an empty name says 0x33d3; any other
+            // looks over every known spawn, drawn or not, and a name that
+            // matches none sends the target naming no one, with no line.
+            // Spawns this client can't target are skipped, Adam's call, a
+            // labelled departure from the program's look over all of them.
+            TargetByName::Nearest if name.is_empty() => {
+                let said = messages.as_ref().map_or_else(
+                    || super::chat::Said::own(EMPTY_TARGET_NAME),
+                    |messages| messages.said_text(EMPTY_TARGET_LINE, EMPTY_TARGET_NAME),
+                );
+                chat.refuse(said.typed(EMPTY_TARGET_COLOUR));
+            }
+            TargetByName::Nearest => {
+                let known = targetable(
+                    online
+                        .world()
+                        .spawns()
+                        .keys()
+                        .copied()
+                        .collect::<Vec<_>>()
+                        .into_iter(),
+                    &online,
+                );
+                proposal = Some(named(rule, &known, &online, &name));
+            }
+            TargetByName::Shortest if name.is_empty() => chat.refuse(EMPTY_TARGET_NAME.to_owned()),
+            TargetByName::Shortest => match named(rule, &ids, &online, &name) {
+                Some(id) => proposal = Some(Some(id)),
+                None => chat.refuse(format!("No nearby target named {name}")),
+            },
         }
     } else if let Some(id) = assisted {
         proposal = Some(Some(id));
@@ -522,33 +551,107 @@ impl Scene<'_, '_> {
         Some(camera.logical_viewport_rect()?.center())
     }
 
-    /// Where on the view a click would name this thing: the middle of what
-    /// the pick tests of it (a spawn's posed box, an object's pick box, a
-    /// door's pick mesh), projected. None when it isn't drawn or the point
-    /// is behind the camera.
-    fn aim(&self, thing: Thing) -> Option<Vec2> {
-        let (camera, camera_transform) = self.cameras.single().ok()?;
-        let middle = match thing {
-            Thing::Spawn(id) => {
-                let root = *self.nearby.rendered.get(&id)?;
-                let ray = Ray3d::new(Vec3::ZERO, Dir3::Y);
-                self.picker.pick(root, ray).posed?.middle()
-            }
-            Thing::Object(drop_id) => self.ground.iter().find_map(|(entity, transform)| {
-                super::ground::middle(entity, transform, drop_id)
-            })?,
-            Thing::Door(id) => {
-                let models = self.door_models.as_ref()?;
-                self.doors
-                    .iter()
-                    .find_map(|(_, door, transform, visibility)| {
-                        (door.id == id)
-                            .then(|| super::doors::middle(door, transform, *visibility, models))
-                            .flatten()
-                    })?
-            }
+    /// Where on the view a click may name this thing, best first: the
+    /// middle of what the pick tests of it (a spawn's posed box, an
+    /// object's pick box, a door's pick mesh), and for a door then points
+    /// on its drawn faces ([`super::doors::aim_points`]), projected. Empty
+    /// when it isn't drawn; a point behind the camera is left out.
+    fn aim(&self, thing: Thing) -> Vec<Vec2> {
+        let Ok((camera, camera_transform)) = self.cameras.single() else {
+            return Vec::new();
         };
-        camera.world_to_viewport(camera_transform, middle).ok()
+        let points = match thing {
+            Thing::Spawn(id) => self
+                .nearby
+                .rendered
+                .get(&id)
+                .and_then(|root| {
+                    let ray = Ray3d::new(Vec3::ZERO, Dir3::Y);
+                    self.picker.pick(*root, ray).posed
+                })
+                .map(|posed| posed.middle())
+                .into_iter()
+                .collect(),
+            Thing::Object(drop_id) => self
+                .ground
+                .iter()
+                .find_map(|(entity, transform)| super::ground::middle(entity, transform, drop_id))
+                .into_iter()
+                .collect(),
+            Thing::Door(id) => self
+                .door_models
+                .as_ref()
+                .and_then(|models| {
+                    self.doors
+                        .iter()
+                        .find_map(|(_, door, transform, visibility)| {
+                            (door.id == id).then(|| {
+                                super::doors::aim_points(door, transform, *visibility, models)
+                            })
+                        })
+                })
+                .unwrap_or_default(),
+        };
+        points
+            .into_iter()
+            .filter_map(|point| camera.world_to_viewport(camera_transform, point).ok())
+            .collect()
+    }
+}
+
+impl Scene<'_, '_> {
+    /// Why a click at `at`, a thing's middle on the view, picks something
+    /// else: what it picks, and for a door what its ray met of the door and
+    /// what solid stands nearer. For a script's report only.
+    fn missed(&self, thing: Thing, at: Vec2, choice: Choice) -> String {
+        let picks = match choice {
+            Choice::Spawn(id, _) => format!("spawn {id}"),
+            Choice::Item(id) => format!("object {id}"),
+            Choice::Door(door) => format!("door {}", door.id),
+            Choice::Nothing => "nothing".to_owned(),
+        };
+        let Thing::Door(id) = thing else {
+            return format!("a click at its middle picks {picks}");
+        };
+        let ray = self
+            .cameras
+            .single()
+            .ok()
+            .and_then(|(camera, transform)| camera.viewport_to_world(transform, at).ok());
+        let models = self.door_models.as_ref();
+        let met = ray.zip(models).and_then(|(ray, models)| {
+            self.doors
+                .iter()
+                .find_map(|(_, door, transform, visibility)| {
+                    (door.id == id)
+                        .then(|| super::doors::hit_point(ray, door, transform, *visibility, models))
+                        .flatten()
+                })
+        });
+        let Some((distance, _)) = met else {
+            return format!(
+                "a click at its middle picks {picks}; the ray there misses the door's drawn faces"
+            );
+        };
+        let solid = ray.and_then(|ray| {
+            self.collision
+                .as_ref()
+                .and_then(|collision| collision.0.as_ref())
+                .and_then(|world| {
+                    world
+                        .without_doors(&[id])
+                        .ray_distance(ray.origin, *ray.direction, distance)
+                })
+        });
+        match solid {
+            Some(nearer) if nearer + 0.01 < distance => format!(
+                "a click at its middle picks {picks}; the ray meets the door at {distance:.1} \
+                 but something solid at {nearer:.1}"
+            ),
+            _ => format!(
+                "a click at its middle picks {picks}; the ray meets the door at {distance:.1}"
+            ),
+        }
     }
 }
 
@@ -620,25 +723,56 @@ pub(super) fn aim(
     let Some(thing) = scripted.request.take().map(|request| request.thing) else {
         return;
     };
-    let verdict = scene
-        .aim(thing)
-        .filter(|at| {
-            windows.single().is_ok_and(|window| {
-                let size = window.size();
-                at.x >= 0.0
-                    && at.y >= 0.0
-                    && at.x < size.x
-                    && at.y < size.y
-                    && !ui.covers(*at * window.scale_factor())
-            })
-        })
-        .filter(|at| {
-            let doors = matches!(thing, Thing::Door(_));
-            scene
-                .pick(&online, *at, doors)
-                .is_some_and(|picked| thing.is(picked.choice))
-        })
-        .ok_or_else(|| thing.covered().to_owned());
+    let refuse = |why: String| format!("{}: {why}", thing.covered());
+    let points = scene.aim(thing);
+    let doors = matches!(thing, Thing::Door(_));
+    // Why a click at one point can't name it, or None where it can.
+    let check = |at: Vec2| -> Option<String> {
+        let Ok(window) = windows.single() else {
+            return Some("there is no window".to_owned());
+        };
+        let size = window.size();
+        if at.x < 0.0 || at.y < 0.0 || at.x >= size.x || at.y >= size.y {
+            return Some(format!(
+                "its middle shows at ({:.0}, {:.0}), off the window",
+                at.x, at.y
+            ));
+        }
+        if ui.covers(at * window.scale_factor()) {
+            return Some(format!(
+                "a window covers its middle at ({:.0}, {:.0})",
+                at.x, at.y
+            ));
+        }
+        match scene.pick(&online, at, doors) {
+            None => Some("the view casts no ray there".to_owned()),
+            Some(picked) if thing.is(picked.choice) => None,
+            Some(picked) => Some(scene.missed(thing, at, picked.choice)),
+        }
+    };
+    let mut first = None;
+    let mut verdict = None;
+    for at in &points {
+        match check(*at) {
+            None => {
+                verdict = Some(Ok(*at));
+                break;
+            }
+            Some(why) => {
+                first.get_or_insert(why);
+            }
+        }
+    }
+    let verdict = verdict.unwrap_or_else(|| {
+        Err(refuse(match first {
+            None => "it isn't drawn, or is behind the camera".to_owned(),
+            Some(why) if points.len() > 1 => format!(
+                "{why}; nor does a click at any of {} points on its drawn faces",
+                points.len() - 1
+            ),
+            Some(why) => why,
+        }))
+    });
     scripted.aim = Some(verdict);
 }
 
@@ -874,10 +1008,25 @@ fn named(rule: TargetByName, ids: &[u16], online: &OnlineState, query: &str) -> 
     }
 }
 
-/// Titanium: the nearest drawn visible spawn whose shown name, or full
-/// server name such as `a_whiskered_bat002` (as `/target` also accepts),
-/// starts with `query`, ignoring case.
+/// Titanium's `/target` with no name: line 0x33d3, colour 0x111 (read
+/// R49-33 b), in these words where the installation lacks it.
+const EMPTY_TARGET_LINE: u32 = 0x33d3;
+const EMPTY_TARGET_COLOUR: u32 = 0x111;
+const EMPTY_TARGET_NAME: &str = "Use /target Name";
+
+/// Titanium (read R49-33 b): a spawn whose full server name is exactly
+/// `query` (underscores read as spaces) first; otherwise the nearest whose
+/// shown name, or full server name such as `a_whiskered_bat002`, starts
+/// with `query`, ignoring case. `ids` are the spawns it may pick.
 fn nearest_named(ids: &[u16], online: &OnlineState, query: &str) -> Option<u16> {
+    if let Some(exact) = ids.iter().copied().find(|id| {
+        online
+            .world()
+            .spawn(*id)
+            .is_some_and(|spawn| spawn.state.name.replace('_', " ") == query)
+    }) {
+        return Some(exact);
+    }
     let query = query.to_lowercase();
     let origin = online
         .world()
@@ -1144,8 +1293,27 @@ mod tests {
         // Digits in the text are dropped as they are from the names.
         assert_eq!(pick("a bat003"), Some(3));
         assert_eq!(pick("a cat"), None);
-        // Titanium's rule only looks at drawn spawns.
+        // Titanium's rule picks only among the spawns it is given.
         assert_eq!(named(TargetByName::Nearest, &[], &online, "a bat"), None);
+        // An exact full name is picked first; otherwise the nearest of the
+        // prefix matches, the first of equals (read R49-33 b).
+        assert_eq!(
+            named(TargetByName::Nearest, &[2, 3, 4], &online, "a bat003"),
+            Some(4)
+        );
+        assert_eq!(
+            named(TargetByName::Nearest, &[2, 3, 4], &online, "a bat"),
+            Some(2)
+        );
+        assert_eq!(
+            named(TargetByName::Nearest, &[3, 4], &online, "A BAT"),
+            Some(3)
+        );
+        // Exact is exact: another case falls back to the nearest prefix.
+        assert_eq!(
+            named(TargetByName::Nearest, &[3, 4], &online, "A BAT003"),
+            Some(4)
+        );
     }
 
     #[test]
@@ -1249,7 +1417,7 @@ mod tests {
     }
 
     #[test]
-    fn a_refused_spawn_keeps_the_target_by_click_cycle_or_name_with_nothing_sent_or_said() {
+    fn a_refused_spawn_keeps_the_target_by_click_or_cycle_and_a_name_matching_none_clears_it() {
         use crate::online::testing as session;
         const GUARD: u16 = 41;
         const CONTROLLER: u16 = 42;
@@ -1344,13 +1512,20 @@ mod tests {
         assert_eq!(selected(&app), Some(GUARD));
         assert!(commands.try_recv().is_err());
 
-        // `/target` by its name finds no target, as for a spawn not there.
+        // `/target` by its name finds no target, as for a spawn not there:
+        // Titanium then sends the target naming no one, with no line (read
+        // R49-33 b).
         app.world_mut()
             .resource_mut::<super::super::chat::ChatState>()
             .requested_target = Some("zone controller".into());
         app.update();
-        assert_eq!(selected(&app), Some(GUARD));
+        assert_eq!(selected(&app), None);
+        assert!(matches!(
+            commands.try_recv(),
+            Ok(ClientCommand::SelectTarget { spawn_id: None, .. })
+        ));
         assert!(commands.try_recv().is_err());
+        assert_eq!(said(&app), lines);
     }
 
     #[test]
@@ -1723,14 +1898,23 @@ mod tests {
 
     /// A door with id 0 in the middle of the view, drawn with its pick mesh.
     fn door_scene(app: &mut App) {
+        door_scene_of(
+            app,
+            vec![[-2.0, -2.0, 0.0], [2.0, -2.0, 0.0], [0.0, 2.0, 0.0]],
+            vec![0, 1, 2],
+        );
+    }
+
+    /// Door 0 of model TEST, these faces, before the test camera.
+    fn door_scene_of(app: &mut App, positions: Vec<[f32; 3]>, indices: Vec<u32>) {
         app.init_resource::<Time>()
             .init_resource::<super::super::doors::Hinges>()
             .init_resource::<super::super::doors::LiftReach>();
         let source = eq_client_assets::ZoneModel {
             name: "TEST".into(),
             primitives: vec![eq_client_assets::ZonePrimitive {
-                positions: vec![[-2.0, -2.0, 0.0], [2.0, -2.0, 0.0], [0.0, 2.0, 0.0]],
-                indices: vec![0, 1, 2],
+                positions,
+                indices,
                 normals: Vec::new(),
                 texture_coordinates: Vec::new(),
                 texture: None,
@@ -1741,6 +1925,7 @@ mod tests {
             collision: Vec::new(),
             no_hit_collision: Vec::new(),
             vertex_count: None,
+            radius: None,
         };
         let mut models = super::super::doors::Models::default();
         models.0.insert(
@@ -1750,6 +1935,7 @@ mod tests {
                 primitives: vec![(Handle::default(), Handle::default())],
                 collision: Vec::new(),
                 pick: super::super::doors::PickMesh::from_model(&source),
+                radius: None,
             },
         );
         app.insert_resource(models)
@@ -1919,7 +2105,9 @@ mod tests {
         assert_eq!(
             app.world_mut().resource_mut::<ScenePointer>().aim.take(),
             Some(Err(
-                "that spawn is covered or off screen from here".to_owned()
+                "that spawn is covered or off screen from here: it isn't drawn, or is behind \
+                 the camera"
+                    .to_owned()
             ))
         );
         scripted_frame(&mut app, Thing::Spawn(NPC + 1), Some(center), true);
@@ -1999,6 +2187,43 @@ mod tests {
         // A door the pick doesn't name there is refused on the press.
         scripted_frame(&mut app, Thing::Door(1), Some(center), true);
         assert!(app.world().resource::<ScenePointer>().refused.is_some());
+    }
+
+    #[test]
+    fn a_script_clicks_a_door_drawn_as_bars_on_a_bar() {
+        // Two bars with a gap between, as the Neriak cells' doors are
+        // drawn: the middle of the door's mesh is in the gap, where a click
+        // meets nothing of it.
+        let bar = |left: f32| {
+            [
+                [left, -2.0, 0.0],
+                [left + 0.5, -2.0, 0.0],
+                [left + 0.5, 2.0, 0.0],
+                [left, 2.0, 0.0],
+            ]
+        };
+        let positions = [bar(-3.0), bar(2.5)].concat();
+        let indices = vec![0, 1, 2, 0, 2, 3, 4, 5, 6, 4, 6, 7];
+        let center = Vec2::new(400.0, 300.0);
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        door_scene_of(&mut app, positions, indices);
+        app.add_systems(Update, aim.after(input));
+        app.update();
+        scripted_frame(&mut app, Thing::Door(0), None, false);
+        let aimed = app.world_mut().resource_mut::<ScenePointer>().aim.take();
+        let Some(Ok(at)) = aimed else {
+            panic!("a bar's point is clickable: {aimed:?}");
+        };
+        assert!(at.distance(center) > 10.0, "aimed at the gap: {at:?}");
+        for pressed in [true, false, true, false] {
+            scripted_frame(&mut app, Thing::Door(0), Some(at), pressed);
+        }
+        assert!(matches!(
+            commands.try_recv().unwrap(),
+            ClientCommand::ClickDoor { door_id: 0, .. }
+        ));
+        assert!(app.world().resource::<ScenePointer>().refused.is_none());
     }
 
     /// A spawn's body at the scene's origin, which the test camera sees at

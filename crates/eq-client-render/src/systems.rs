@@ -7,8 +7,8 @@ use crate::{
     motion, move_player, names, navigation, navmesh_prebuild, notices, online, options,
     orbit_camera, outbox, outfit, paperdoll, pet, profile_files, projectiles, raid, reading,
     resources, schedule_screenshot, select_preview, sharing, sheets, skills, skin, skinned, sounds,
-    speed, spell_effects, spell_icons, spellbook, target, tooltip, tracking, trade, tradeskills,
-    training, translocate, update_hud, weather, whereabouts, who, windows, zone_audio,
+    speed, spell_effects, spell_icons, spellbook, surname, target, tooltip, tracking, trade,
+    tradeskills, training, translocate, update_hud, weather, whereabouts, who, windows, zone_audio,
 };
 use bevy::prelude::*;
 /// Starts the presentation state (HUD, windows, chat, targeting, inventory,
@@ -44,6 +44,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<weather::Field>()
         .init_resource::<crate::breath::State>()
         .init_resource::<trade::TradeState>()
+        .init_resource::<crate::report_windows::ReportWindows>()
         .init_resource::<escape::Escape>()
         .init_resource::<windows::pointer::Wheel>()
         .init_resource::<skin::UiSkin>()
@@ -54,6 +55,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<abilities::choices::Files>()
         .init_resource::<abilities::picker::Picker>()
         .init_resource::<guild::Invitations>()
+        .init_resource::<surname::Pending>()
         .init_resource::<crate::socials::State>()
         .init_resource::<hud::hotbar::carry::Presses>()
         .init_resource::<target::ScenePointer>()
@@ -152,6 +154,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::lighting::update,
                 character::lie,
                 doors::reconcile,
+                doors::report_radii,
                 crate::carriers::reconcile,
                 ground::reconcile,
                 projectiles::update,
@@ -182,7 +185,12 @@ pub(super) fn schedule(app: &mut App) {
                 navigation::update,
                 login::depart,
                 skinned::type_amount,
-                map::search_input,
+                (
+                    map::search_input,
+                    crate::report_windows::focus,
+                    crate::report_windows::input,
+                )
+                    .chain(),
             )
                 .chain()
                 .in_set(Stage::Typing),
@@ -213,6 +221,13 @@ pub(super) fn schedule(app: &mut App) {
                 whereabouts::answers,
                 crate::motd::answers,
                 crate::reports::say,
+                (
+                    crate::report_windows::open,
+                    crate::report_windows::buttons,
+                    crate::report_windows::question,
+                    crate::report_windows::show,
+                )
+                    .chain(),
                 crate::fastdrop::answers,
                 crate::slash::answers,
                 crate::slash::assist_named,
@@ -231,7 +246,12 @@ pub(super) fn schedule(app: &mut App) {
                     .chain(),
                 (contacts::answers, contacts::persist).chain(),
                 abilities::choices::persist,
-                (guild::invitations, guild::commands, sharing::commands),
+                (
+                    guild::invitations,
+                    guild::commands,
+                    sharing::commands,
+                    surname::command,
+                ),
                 pet::window,
                 (group::window, group::join),
                 raid::window,
@@ -375,7 +395,7 @@ pub(super) fn schedule(app: &mut App) {
                     (
                         training::window,
                         tracking::window,
-                        tracking::say_rangers_only,
+                        tracking::answer_option,
                         pet::say_pet_target,
                         crate::targeted::say,
                     ),
@@ -554,6 +574,7 @@ pub(super) fn liquid_and_movement()
         crate::breath::update,
         crate::arrival::place,
         crate::piloting::update,
+        motion::stop_autorun_after_failed_script,
         motion::input,
         motion::spend_endurance,
     )

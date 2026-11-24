@@ -45,7 +45,9 @@ pub use landings::Landing;
 pub use link::Link;
 pub use melody::{Melody, melody_gems};
 pub use motions::{CastDone, Motion};
-pub use notice::{ChannelLine, DuelNotice, ListingNotice, Notice, Party, YellBearing};
+pub use notice::{
+    ChannelLine, DuelNotice, InterruptPrint, ListingNotice, Notice, OtherCaster, Party, YellBearing,
+};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
@@ -1095,9 +1097,7 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            // The surname's answer takes its arm in that thread's rebuild.
-            unshown @ (WorldEvent::SurnameAnswer { .. }
-            | WorldEvent::SpellTable(_)
+            unshown @ (WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
@@ -1150,7 +1150,11 @@ impl ClientWorld {
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
-            | WorldEvent::SystemInfoReported { .. }) => {
+            | WorldEvent::SystemInfoReported { .. }
+            // A bind spell's landing refused with the program's line (0x69
+            // or 0x103, 6.615 slice 2): the client half that says the line
+            // is a gap row.
+            | WorldEvent::BindRefused { .. }) => {
                 // Each still counts in the session's gap file, by kind.
                 news.unshown = crate::gaps::variant_name(unshown);
             }
@@ -1361,6 +1365,20 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
+            // The name tag follows the zone's own last-name update, not this.
+            WorldEvent::SurnameAnswer {
+                accepted,
+                last_name,
+            } => match &self.player {
+                Some(player) if self.session_id.is_some() => {
+                    news.notices.push(Notice::SurnameAnswer {
+                        accepted: *accepted,
+                        name: player.name.clone(),
+                        last_name: last_name.clone(),
+                    });
+                }
+                _ => news.ignored = true,
+            },
             // The titles the player may choose: kept, the latest replacing
             // the one before, only where the session offers them, until the
             // zone changes.
@@ -2036,8 +2054,28 @@ impl ClientWorld {
             WorldEvent::CastLateBegin { session_id, requested_spell } => {
                 self.cast_late_begin(*session_id, *requested_spell, news);
             }
-            WorldEvent::CastSuperseded { session_id, spell_id } => {
+            // A superseded cast, or one the Titanium program's own hit roll
+            // cleared locally (mode 1 of 0x40f8a0, read R49-50; 6.645 S2):
+            // the bar drops, with no line.
+            WorldEvent::CastSuperseded { session_id, spell_id }
+            | WorldEvent::CastCleared { session_id, spell_id } => {
                 news.ignored = !self.release_cast_hold(*session_id, *spell_id);
+            }
+            // The program's own stun roll was saved by a stun resist (read
+            // R49-50; 6.646): its line, in colour 10.
+            WorldEvent::StunSaved {
+                session_id,
+                string_id,
+            } => {
+                if self.accepts_reply(*session_id) && self.death.is_none() {
+                    news.notices.push(Notice::ServerString {
+                        id: *string_id,
+                        arguments: Vec::new(),
+                        message_type: Some(STUN_SAVED_COLOUR),
+                    });
+                } else {
+                    news.ignored = true;
+                }
             }
             WorldEvent::Singing { session_id, spell_id } => {
                 if self.accepts_reply(*session_id) {
@@ -2543,6 +2581,10 @@ mod tests;
 fn plain(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).collect()
 }
+
+/// The colour the Titanium program prints a stun save's line in (0x1679,
+/// 0x2375; read R49-50).
+const STUN_SAVED_COLOUR: u32 = 10;
 
 /// Whether a generation's program tells an incoming duel acceptance. The
 /// Titanium program has no case for 0x1b09 (read R49-6); the others are

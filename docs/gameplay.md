@@ -26,14 +26,21 @@ steps. The display interpolates accepted movement instead of waiting for each
 remote position update. Speed, elapsed time and admission checks constrain the
 outgoing requests; corrections replace the predicted position.
 
-A standing Titanium walk climbs onto an edge it runs into up to 1.25 above
-the body's origin, 5 units for a human of size 6, as the official client was
-seen to climb a pier rail and its posts. A ducking walk, or one whose
-origin is in water or lava, climbs only what the floor sweep reaches, and so
-do feet that land, fall or are placed under a floor. Wading with the origin
-above the water climbs as on dry ground. The tallest edge the official client climbs is
-unmeasured, so a taller one stops here even where it might not there. The
-body's width is unchanged (recording checklist 6.482).
+A standing Titanium walk climbs onto an edge it runs into. The official
+client sweeps the body as a sphere lifted over its origin, so an edge under the
+sphere's bottom passes beneath it (program reads R49-25 and R49-25b). The lift
+is at least 1.9, and half the stand height for barbarians, trolls and ogres.
+The sphere's radius isn't yet taken from the model files, so no body climbs
+more than 1.25 above its origin here, as a human of size 6 was seen to climb
+a pier rail and its 5-unit posts. A body taller than that human and not of
+those races climbs a little less. A ducking walk, or one whose origin is in
+water or lava, climbs only what the floor sweep reaches, and so do feet that
+land, fall or are placed under a floor. Wading with the origin above the water
+climbs as on dry ground. The body's width is unchanged (recording checklist
+6.482). The zone's navigation mesh is shared by every body and steps up to 2
+units, under every standing body's climb; a small body ducking, or with its
+origin in water, climbs less than that, so a route may lead it to an edge
+its walk refuses until it stands or leaves the water.
 
 A standing Titanium jump or fall passes over an edge whose top the floor
 sweep reaches, 3.375 above the feet for a human of size 6, and lands on
@@ -110,7 +117,13 @@ policies. P99 jump notices are capture-backed; Quarm's movement and transfers
 reuse the source-checked EQMac path. New public-server scenarios still need live
 verification. Physics uses installed-client
 rules and zone gravity where available, with an explicit provisional fallback
-when those data cannot be read. Project 1999 and Titanium EQEmu sessions
+when those data cannot be read. The original client slows a body in the air,
+and ramps the turn keys, once a rendered frame with no frame cap by default,
+so its falls and turns depend on the machine's frame rate. This client takes
+60 frames a second for both whatever its own frame rate, three of the
+program's frames in each 50 ms step (inferred, checklists 6.416 and 6.419):
+its falls and jumps go as the original's at 60, the same for every player,
+and never gentler than the original running faster. Project 1999 and Titanium EQEmu sessions
 offer bounded swimming in classic water marked by the installed zone.
 Wet movement starts when the character's body origin enters that region.
 On Titanium, water moves the body as the original client's own water step
@@ -384,6 +397,18 @@ server's updates. On P99 and Titanium EQEmu, when a song stops, the gems
 whose songs have no recast time are ready again at once, and so is the short
 wait before any spell, as in the official client. There, a Bard's songs also
 leave no such wait after they are sung, so the next song can follow at once.
+There, when the server interrupts a Bard's song or cast, its line shows in the
+song colour and follows the Bard songs filter, like the song stop line.
+
+On P99 and Titanium EQEmu, a bash from a player, or a kick from a Warrior above
+level 54, can also stun you or interrupt your cast or song on your side alone,
+as the official client rolls it (read R49-50). Ogres and Oggok citizens are
+spared. Nothing is sent, so the server may still finish the cast or keep the
+song going. An interrupted song ends with the program's own line and resets the
+gems as any song stop does, and an interrupted cast drops the cast bar with no
+line. When a stun resist saves you instead, its line shows in the official
+client's colour. Your buffs' stun chances and resists count; worn items do not
+yet. There is no setting for this.
 
 On P99 and Titanium EQEmu, a Bard can type `/melody` followed by gem numbers,
 such as `/melody 1 3 2`, to play those songs in turn, as the official client
@@ -505,6 +530,33 @@ reported by the current admission.
 
 The P99 paths follow Titanium source and await attended checks.
 
+## Surname
+
+`/surname Name` asks the server for a surname, as the Titanium program
+asks (read R49-10). It runs these checks in order and sends nothing when
+one refuses:
+
+- Under level 20, a line says so.
+- `/surname` alone shows its usage. With a surname already set, the
+  program asks a different question whose answer hasn't been read yet, so
+  this client says that in its own words and sends nothing.
+- Words after the command 32 bytes or more long are refused as too long.
+  The whole argument is measured, not just the first word (inferred).
+- Otherwise the first word, with `'` or `"` quotes taken whole, is cut to
+  19 bytes and kept in its case. A question names that exact word for
+  10 seconds. Yes sends it and says the request went. No, the time running
+  out or the session ending sends nothing.
+
+The server's answer is always shown: a refusal, or the line naming your
+new full name. The name tag follows the zone's own last-name update.
+Scripts run the same command with `slash("surname Name")` and answer the
+question with the confirmation window's buttons, as a player does.
+
+The Mac-era client's `/surname` isn't read yet. Its servers' handlers say
+the client refuses under 20 and cuts to 19, as Titanium does, so the same
+flow runs there (inferred). Project 1999 doesn't offer it from this client
+yet. A quoted surname's spaces go as typed.
+
 `/ttell message` sends a tell to your target, as `/tell Name message`
 would, and `/whotarget` lists the target's name in the zone's `/who`. On
 Titanium servers both follow the original client (read R49-18, recording
@@ -546,13 +598,53 @@ recording checklist 6.511), in the installation's own lines:
 - Where the world turns the petition window on, the official client shows
   its petition window instead and ignores the words. Which window that is
   is unread, so this client sends the words as above: a departure.
-- The official `/bugreport` and `/feedback` open a window and ignore the
-  words. This client has no such windows yet, so the **Typed Reports**
-  setting (on by default until the windows are built) sends the words
-  instead. A bug report then prints the official sent line, or its empty-box
-  line with no words; feedback prints nothing, as the official window does.
-  With the setting off, the words are ignored and a line says there is no
-  window yet.
+- `/bugreport` and `/feedback` open the installed skin's bug report and
+  feedback windows and ignore the words, as the official client does:
+  - Opening the bug report fills its three place labels with where you
+    stand, each cut to a whole number, and clears its four check boxes and
+    the target's name. The place and heading go with the report as shown.
+    This client clears it on every open (inferred).
+  - **Location** fills the place again. **Target**, checked with a target,
+    names it and sends it; with no target it stays unchecked. **Dup**,
+    **Crash** and **Flags** go with the report as the official bits.
+  - The drop-down picks the category. The official client names the
+    categories from its own table; this client lists them in its own
+    words, the names the servers use.
+  - Click the box to type in it; Enter or Escape gives the keyboard back.
+    The box takes up to 1024 bytes, as the official one.
+  - **Send** first asks the official question in the skin's confirmation
+    dialog, with Yes and No, and the window stays open behind it. Every
+    answer sends, and so does the question's own close after 60 seconds.
+    It is asked on every Send, unless the installation's `eqclient.ini`
+    has `SendSystemInfo=1` under `[Defaults]`; this client reads that
+    setting and never writes it.
+  - After the answer, an empty box prints the official empty-box line and
+    sends nothing. Otherwise it sends, clears the box and prints the
+    official sent line once the session says it went. The window closes
+    either way.
+  - Yes, or `SendSystemInfo=1`, has the official client add your
+    processor, video card and driver to the report. This client never
+    sends anything about your machine, so the report is the same for
+    either answer, and it prints a line of its own saying so (a
+    departure).
+  - **Cancel** prints the official cancelled line and closes the window;
+    the box keeps its words. A question already up stays up, and its
+    answer still sends what the box holds, as the official client does.
+  - A second Send while the question is up does nothing (a departure: the
+    official client would ask again in a second dialog).
+  - If you leave the world while the question is up (zoning, camping, a
+    disconnect, `/quit`), the question goes away and nothing is sent, as
+    with the official client. The official client then still clears the
+    box and prints its sent line; this client keeps the words and prints
+    no sent line for a report that never went (a departure).
+  - The feedback window's **Send** sends the words with your place and
+    heading, clears the box and closes, with no line; empty, it only
+    closes. Its **Cancel** clears the box and closes.
+  - The **Typed Reports** setting (off by default) sends the typed words
+    instead, as earlier versions of this client did: a bug report then
+    prints the official sent line, or its empty-box line with no words.
+  - If the installed skin has no such window, a line says so and points to
+    Typed Reports (a departure: the official client always has them).
 
 Elsewhere, or on any server:
 - A bug report's first word may name its category with a colon, such as
@@ -896,6 +988,15 @@ ownership conflict invalidates the old snapshot for that ID.
 Camp uses timed preparation and acknowledgement where offered. The local
 `--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).
+
+A boat carries whoever stands or jumps over its deck. As in the Titanium
+program, the floor under the feet links the player to the boat however far
+down it is, so a jump on a moving ferry comes down on the deck where it
+left. Past 600 from the boat's origin the link ends, which is this
+client's bound, not the program's. Other players and NPCs on a moving boat
+are drawn moving with its deck between their reports, by their own motion
+across it, and one moving only up or down plays its jump or fall (read
+R49-27, recording checklist 6.611).
 
 On EQEmu, take a race-141 boat you stand on by right-clicking it, as the
 Titanium program does; right-click it again to let it go. A right-click on a

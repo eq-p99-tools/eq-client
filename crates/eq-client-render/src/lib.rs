@@ -113,6 +113,7 @@ mod profile_files;
 mod projectiles;
 mod raid;
 mod reading;
+mod report_windows;
 mod reports;
 mod resources;
 mod resurrection;
@@ -132,6 +133,7 @@ mod speed;
 mod spell_effects;
 mod spell_icons;
 mod spellbook;
+mod surname;
 mod target;
 mod targeted;
 mod theme;
@@ -406,16 +408,18 @@ fn seed_official_options(
                 option_defaults.set(toggle, on);
             }
         }
-        // Only a race and gender the file names is seeded; the keys are
-        // inferred (R49-44a), so a file that names none leaves every model
-        // classic.
+        // Only a race and gender the file names is seeded; one it lacks
+        // stays unset, so the server's mask decides it (read R49-44 a).
         for (&(_, race, gender), said) in eq_client_assets::ui::LUCLIN_MODEL_KEYS
             .iter()
             .zip(official.luclin_models)
         {
-            if let Some(on) = said {
-                option_defaults.luclin_models.set(race, gender, on);
+            if said.is_some() {
+                option_defaults.luclin_models.set(race, gender, said);
             }
+        }
+        if let Some(off) = official.all_luclin_models_off {
+            option_defaults.luclin_models.all_off = off;
         }
         if let Some(level) = official
             .show_names_level
@@ -428,6 +432,19 @@ fn seed_official_options(
         }
         if let Some(on) = official.attack_on_assist {
             option_defaults.attack_on_assist = on;
+        }
+        if let Some(sort) = official
+            .track_sort
+            .and_then(eq_client_core::track_options::TrackSort::saved)
+        {
+            option_defaults.track_sort = sort;
+        }
+        if let Some(mask) = official.track_filter {
+            option_defaults.track_filter = eq_client_core::track_options::TrackFilter(mask);
+        }
+        if let Some(first) = official.track_players {
+            option_defaults.track_players =
+                eq_client_core::track_options::TrackPlayers::saved(&first.to_string());
         }
         seed_levels(option_defaults, &official);
     }
@@ -969,14 +986,15 @@ fn spawn_static_zone(
                     additive: source.material_mode == MaterialMode::Additive,
                 });
             }
-            door_models.0.insert(
-                doors::model_key(&model.name),
+            door_models.0.insert(doors::model_key(&model.name), {
+                let collision = doors::collision(model.collision, model.no_hit_collision);
                 doors::Model {
+                    radius: doors::model_radius(model.radius, &collision),
                     primitives: primitives.clone(),
-                    collision: doors::collision(model.collision, model.no_hit_collision),
+                    collision,
                     pick,
-                },
-            );
+                }
+            });
             drawn_models.push(drawn);
             primitives
         })
@@ -1274,6 +1292,7 @@ fn move_player(
         terminal_speed: 40.0,
         jump_speed: 10.0,
         air_factor: 1.0,
+        frames_per_step: 1,
         ground_tolerance: eq_client_core::movement::MAX_GROUNDED_STEP,
         climb: eq_client_core::movement::MAX_GROUNDED_STEP,
         edge_climb: None,

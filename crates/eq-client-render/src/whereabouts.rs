@@ -90,13 +90,22 @@ impl Asked {
     }
 }
 
-/// Whether the installed client's own answers to `/played` and
-/// `/guildstatus` have been read from its program, so they can be given as
-/// it gives them; one arm for each generation, so a new one is decided here.
-const fn read_answers(installed: InstalledClient) -> bool {
+/// Whether the installed client's own answer to `/played` has been read
+/// from its program, so it can be given as it gives it; one arm for each
+/// generation, so a new one is decided here.
+const fn read_played(installed: InstalledClient) -> bool {
     match installed {
         InstalledClient::Titanium => true,
         InstalledClient::EqMac | InstalledClient::Rof2 => false,
+    }
+}
+
+/// Whether the installed client's own `/guildstatus` answer has been read:
+/// Titanium's (R49-6k) and the Mac-era program's (read 6.575m, 0x4f4bb1).
+const fn read_guild_status(installed: InstalledClient) -> bool {
+    match installed {
+        InstalledClient::Titanium | InstalledClient::EqMac => true,
+        InstalledClient::Rof2 => false,
     }
 }
 
@@ -113,13 +122,13 @@ fn answer(
     let clock = installed.clock();
     Ok(match asked {
         Asked::CharInfo => vec![bound_in(world, messages)],
-        Asked::GuildStatus(_) if !read_answers(installed) => {
-            return Err("/guildstatus on the Mac client waits for its program read".to_owned());
+        Asked::GuildStatus(_) if !read_guild_status(installed) => {
+            return Err("/guildstatus on this client waits for its program read".to_owned());
         }
         Asked::GuildStatus(named) => guild_status(world, named.as_deref(), messages)
             .into_iter()
             .collect(),
-        Asked::Played if !read_answers(installed) => {
+        Asked::Played if !read_played(installed) => {
             return Err("/played on the Mac client waits for its program read".to_owned());
         }
         Asked::Played => {
@@ -201,14 +210,26 @@ const BOUND_IN: u32 = 0x32a7;
 /// player. None where the installation lacks the string or the client
 /// can't tell yet. A player in no guild gets this client's own words, as
 /// the program's are its own and not in the strings.
+///
+/// The Mac-era program (read 6.575m, 0x52f36b) says the same string ids,
+/// colour 0x111, except that 12259 (0x2fe3) takes the guild as well; who
+/// it answers for is in [`ClientWorld::guild_status`].
 fn guild_status(world: &ClientWorld, named: Option<&str>, messages: &Messages) -> Option<Said> {
     use eq_client_core::world::GuildStatus;
     let (id, arguments) = match world.guild_status(named)? {
         GuildStatus::NoPlayer => (12260, Vec::new()),
         GuildStatus::NoGuild { name } => {
+            // Our words, so the name as players see it (an NPC's on Mac).
+            let name = eq_client_core::entities::display_name(&name);
             return Some(Said::own(format!("{name} is not in a guild.")).typed(GUILD_STATUS_TYPE));
         }
-        GuildStatus::Ranked { name } => (12259, vec![name]),
+        GuildStatus::Ranked { name, guild } => match world.generation() {
+            eq_client_core::GameDialect::EqMac => (12259, vec![name, guild]),
+            // RoF2's line is Titanium's, inferred (6.489).
+            eq_client_core::GameDialect::Titanium | eq_client_core::GameDialect::Rof2 => {
+                (12259, vec![name])
+            }
+        },
         GuildStatus::Member { name, guild } => (12256, vec![name, guild]),
         GuildStatus::Officer { name, guild } => (12257, vec![name, guild]),
         GuildStatus::Leader { name, guild } => (12258, vec![name, guild]),
@@ -534,16 +555,68 @@ mod tests {
         );
         assert_eq!(said(&state, &messages, None), []);
         assert_eq!(said(&state, &Messages::default(), None), []);
-        // The Mac client's answer wasn't read.
-        assert!(
-            answer(
-                Asked::GuildStatus(None),
-                state.world(),
-                earth,
-                &messages,
-                EQMAC
-            )
-            .is_err()
+    }
+
+    #[test]
+    fn guild_status_on_the_mac_client_answers_an_npc_and_names_the_guild_for_any_rank() {
+        use eq_client_core::listing::{GuildRank, ListingChange};
+        // Read 6.575m (0x4f4bb1): the same string ids, but 0x2fe3 (12259)
+        // takes the guild too, and only a corpse is refused.
+        let messages = Messages::parse(
+            "EQST0002
+0 3
+12258 %1 leads %2
+12259 %1 holds a rank in %2
+12260 Target a player
+",
+        );
+        let earth = jiff::civil::date(2026, 10, 3).at(12, 0, 0, 0);
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 1, testing::player(7));
+        crate::online::testing::generation(&mut state, eq_client_core::GameDialect::EqMac);
+        let said = |state: &OnlineState, named: Option<&str>| {
+            let asked = Asked::GuildStatus(named.map(str::to_owned));
+            answer(asked, state.world(), earth, &messages, EQMAC).unwrap()
+        };
+        let official = |text: String| Said::official(text).typed(GUILD_STATUS_TYPE);
+        let npc = eq_client_core::SpawnState {
+            name: "a_moss_snake00".into(),
+            pet_owner: None,
+            ..testing::pet(20, 0)
+        };
+        let corpse = eq_client_core::SpawnState {
+            name: "Gone's corpse0".into(),
+            kind: eq_client_core::SpawnKind::PlayerCorpse,
+            pet_owner: None,
+            ..testing::pet(21, 0)
+        };
+        testing::news(&mut state, [WorldEvent::Spawns(vec![npc, corpse])]);
+        state.select_target(Some(21));
+        assert_eq!(said(&state, None), [official("Target a player".into())]);
+        state.select_target(Some(20));
+        assert_eq!(
+            said(&state, None),
+            [Said::own("a moss snake is not in a guild.".to_owned()).typed(GUILD_STATUS_TYPE)]
+        );
+        state.select_target(Some(7));
+        let name = state.world().player().unwrap().name.clone();
+        testing::news(
+            &mut state,
+            [
+                WorldEvent::GuildNames(vec![(3, "Seekers".into())]),
+                WorldEvent::Listing {
+                    spawn_id: 7,
+                    change: ListingChange::Guild(Some(3)),
+                },
+                WorldEvent::Listing {
+                    spawn_id: 7,
+                    change: ListingChange::GuildRank(GuildRank::Other(4)),
+                },
+            ],
+        );
+        assert_eq!(
+            said(&state, None),
+            [official(format!("{name} holds a rank in Seekers"))]
         );
     }
 

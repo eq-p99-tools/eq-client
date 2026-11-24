@@ -12,11 +12,202 @@
   - The heat goes on while swimming lava: it reads the origin's region kind, not movement's liquids.
   - EQMac-era sessions keep stopping at lava. That's an unread gap, not a choice: the Mac-era program's liquid kinds and wet step aren't read yet (gap row, 3.2).
 - Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). This repins eq-network to main 010536e, which carries #418's cold report and #424's event saves.
+- eq-network is repinned to bd80661, which carries #441 (the program's line for a refused item use, and refusal before an item's recast), #440 (the Titanium scribe waits out the program's gauge) and #436 (the bind landing decision, off here until the client sets `bind_slot`). A refused bind landing (`WorldEvent::BindRefused`) counts in the gap file with the other news this client doesn't show yet.
+- Follow program reads R49-24 and R49-24b on Titanium for the per-frame steps (checklists 6.416, 6.418, 6.419).
+  - **Falls and jumps:** the air slows a body once a program frame, three frames each 50 ms step at the 60 frames a second taken (inferred), with gravity and the move in each frame's share. Falls now reach about a third of the old top speed, and a jump rises about 5.25 rather than 4.95, as the official client does at 60 frames a second. The program has no frame cap by default, so the official client on a present-day PC falls no faster than this. A fall's damage follows the slower landing. The first fall on P99 or Quarm with this build is attended.
+  - **Turn keys:** the ramp's cap is a race rule: 12 steps (240 heading units a second) for most races, 8 for races 216 and 472, and 3 for race 141. Walking no longer lowers it to 8.
+  - **Mouse look:** sensitivity takes the program's eight steps, shown 1 to 8 on the slider. The default is its 4 (s = 1.143), and a saved 50, the old default, reads as 4. Races 216 and 472 turn at most 8 heading units a step by mouse, and race 141 3. The program's dead zone waits on a read, so a straight up-and-down drag still looks fully up and down.
+- The track window's options, as the Titanium program keeps them (read
+  R49-30 e, checklist 6.638):
+  - **`/tracksort`** (Rangers): N, D, C, RD or RC by their first letters,
+    with lines 0x335d-0x3361, or 0x3362 for any other word. Distance and
+    reverse distance order the list by the server's distances; normal,
+    consider and reverse consider keep the server's order, as the program's
+    sort does. Saved at once.
+  - **`/trackfilter`** (Rangers): a colour word (the installation's words
+    for green, blue, white, yellow, red and light blue) toggles hiding NPCs
+    of that colour, with line 0x336c or 0x336b. For the session only, as
+    the program's; the character's saved mask applies when they start
+    playing. A word for no colour says nothing (the program's answer is
+    unread).
+  - **`/trackplayers`** (anyone): on, off or group, with lines
+    0x3354-0x3357. Off hides players; group lists only your group's. Saved
+    at once.
+  - Another class's sort or filter still gets the Rangers-only line 0x3363,
+    and another class's list keeps the server's order with no colour
+    filter.
+  - Kept with each character's options, seeded once from an installed
+    `eqclient.ini` (`TrackSortType`, `TrackFilterType`, `TrackPlayers` in
+    `[Defaults]`); labelled departure: the program keeps them per
+    installation. The skin's controls for them (its sort and players
+    combo boxes and six colour checkboxes) stay greyed for now; wiring
+    them is a follow-up.
+- Follow program reads R49-25 and R49-25b on Titanium for the walk's edge climb (checklist 6.482). The lift over the origin is now worked out per body: at least 1.9, half the stand height for barbarians, trolls and ogres, and none while ducking or in posture 120. The climb is the sphere's bottom, S + L − r. Until the models' radii are read from their files, no body climbs more than the 1.25 over its origin a human was seen to climb, so races 2, 9 and 10 gain nothing yet, and a taller body of another race climbs a little less (a Vah Shir of size 7: 5.52). The walk stops climbing only when its origin is in water or lava, not when its feet are, so wading out over a pool's rim climbs as on dry ground.
+- Guild invitations follow the Titanium program further (read R49-33 d, checklist 6.633). An offer of a lower rank in your own guild is taken at once with that rank and no dialog, as the program does; only an offer of a member's rank prints its line. Before, a lower offer other than a member's went unanswered. And the invitation dialog's 10-second wait now answers as No does (response 5), where it used to send nothing; that the program's wait reaches that answer is inferred. Scripts answer the dialog with `click("answer", "yes")` or `"no"`, as before.
+- The track window draws light blue as the Titanium program does (read
+  R49-30 d, checklist 6.637): a green entry near the green edge is light
+  blue instead, when e = their level less the green threshold, less 1 for
+  each of your level under 55, under 41 and under 31, is above -6 and your
+  level is above 7. Those entries were drawn green. The green threshold's
+  rounding (down) and its strict edge are now read, no longer inferred.
+- Ride boats as the Titanium client does (read R49-27, checklist 6.611).
+  - **A jump on a moving boat comes down on its deck.** The link to the boat was the floor within 0.05 under the feet, so a jump on a moving ferry let go of it and the boat sailed out from under you. Now, as the program's floor sweep does, the first floor under the feet links you however far down it is: a body in the air over the deck stays with the boat, and one over the water or a dock doesn't. The link still ends 600 from the boat's origin, the session guard's bound (6.469), which is ours.
+  - **Other riders move with the boat between their reports.** Another player or NPC standing on a moving ferry was left standing in the water until its next report, then jumped on. Now a spawn whose report puts it over a boat's deck is carried with the boat, by its own motion across the deck. This is only in zones with a boat.
+  - **Jumps and falls of other spawns.** A spawn moving only up or down plays its jump (L04, L03 for race 49) or, faster than 45 a second down, its fall (L05), as the program's picker does, where it used to stand. Moving is now a speed of 2 a second in any direction.
+  - **A passing ship no longer takes a rider's link.** With two ships alongside, part of a rider's footprint could meet the other ship's side and the link went to that ship, which carried the rider along its own deck. The ship a rider is linked to now stays its link while any part of the footprint is over its deck, for your own character and for others drawn aboard. The program's choice between two ships is unread: this is inferred, the stricter side (6.611).
+  - Our own sender still reports no vertical speed on a jump or fall; that is a separate row.
+- **Luclin player models follow the viewer's eqclient.ini keys, a set key on every server** (read R49-44 a, checklist 6.554):
+  - **The keys are read now, not recalled.** `[Defaults] UseLuclin<Race>Male` / `Female` counts as on when its value starts with T, t or 1, and off otherwise. The race words are the program's: Human, Barbarian, Erudite, WoodElf, HighElf, DarkElf, HalfElf, Dwarf, Troll, Ogre, Halfling, Gnome, Iksar and VahShir.
+  - **A key that isn't set follows the server's expansion mask,** as the program's default does: on where it has Luclin or Planes of Power (bit 0x4 or 0x8), classic where it hasn't or no mask came. So on P99 (Kunark and Velious) a missing key is classic. The program also writes `TRUE` back to its ini where it counts a key on; this client never writes the official ini.
+  - **A set key decides on every server, a stated departure.** The program draws classic whatever the keys say where the mask lacks those bits. This client follows a set key everywhere, P99 included.
+  - **`[Defaults] AllLuclinPcModelsOff`** turns every race classic but Vah Shir.
+  - **Fallbacks:** when a race's own key is off, Human also takes Erudite's, and Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's. A missing fallback key counts by the same mask rule.
+  - **Vah Shir** follows its own key alone, past the all-off key, and is on when unset whatever the mask.
+  - **Froglok stays classic,** since the program's loader doesn't walk it.
+  - **The options file** keeps the keys set on as `luclin_models = ...`, the keys set off as `classic_models = ...`, and `all_luclin_models_off`. A code in both lines is off. A file's keys lie over eqclient.ini's, key by key.
+- **A Titanium door spawned away from its rest opens and goes back as the program's mover does** (eqgame.exe 0x4368b3, read R49-28b; checklist 6.423). Repinned eq-network to 6d62512 (#450).
+  - **Spawn poses:** the renderer takes Titanium's new `titanium::endpoint` (RoF2 too, inferred; EQMac unchanged). A door spawned in state 1 or 2 heads open from its base: a lift rises at its opening rate instead of standing at full travel, and a hinged door swings open. One spawned in state 0 or 3 stands at its base. The mover's skipped types (50-52, 54-58, 153-155) stand at their base.
+  - **Returns:** a door spawned away from its rest goes back its delay after spawn, even while still opening. With rest 1 it heads for the open end it already has, so nothing visible changes. A door spawned shut or in state 3 with rest 0 no longer goes back. Types 110-152 but 115 close as soon as a vertical one stands open.
+  - **Hinge speed:** a hinged door swings at the program's 8 a step of ms x 0.02, a quarter turn in 0.8 s (was half a turn a second, faster than the program). A script walk waits 1.8 s for a door's swing (was 1.5 s).
+  - Not built, as gap rows: a door entity first drawn after its spawn is posed at its target at once, not at the swing it would have reached (at most 0.8 s). The rest are listed in eq-network #450.
+- `/target Name` on Titanium follows the program (read R49-33 b, checklist
+  6.635). A spawn whose full server name is exactly the name is picked
+  first, then the nearest whose name starts with it, over every known spawn
+  rather than only the drawn ones. A name that matches none sends the
+  target naming no one, with no line, as the program does (it said "No
+  nearby target named ..."). `/target` with no name says the program's line
+  0x33d3. Spawns this client can't target are still skipped (Adam's call, a
+  labelled departure from the program's look over all spawns). Labelled:
+  the program sends this choice as `OP_TargetCommand`, and this client
+  sends it as the ordinary target choice, which EQEmu handles alike. The
+  Mac-era rule is unchanged.
+- A slash word with no command now gets the Titanium program's line 0x305c
+  (colour 0xd) instead of passing over silently (read R49-33 a, checklist
+  6.634), from the keyboard, a hotbutton, a social or a script's `slash`
+  step alike. A game master's command typed by a player who isn't one gets
+  the same line, as the program's search stops there. For a GM the program
+  runs it; those handlers aren't built here, so it still passes over
+  silently [I], and a GM's `#` line reaches the server. The command table
+  was checked against the program's table row by row (read R49-33e): same
+  names, order, game master rows and shared handlers, and no row has an
+  alias, so no prefix changes. Mac-era and RoF2 sessions stay silent, as
+  their program's answer is unread. Line 0x21a (a command run in character
+  states 3 or 4) waits on a read and isn't built.
+- A gem cast short of mana goes to the server, as the Titanium program's
+  does: it compares no mana before it sends the cast, and never prints the
+  low-mana line itself (read R49-34 g, slice G, G5). Before, this client
+  refused it locally with line 199. The server's answer prints as it
+  arrives, in whatever words it uses, and ends the cast's hold.
+- `/guildstatus` answers on the Mac-era client as its program does (checklist 6.623, TAKP program read 6.575m: 0x4f4bb1 and 0x52f36b). It is local only and sends nothing. It uses the same string ids as Titanium's, colour 0x111:
+  - Unlike Titanium, it answers for any spawn but a corpse, so an NPC is answered (usually as not in a guild).
+  - The line for a rank past the three (12259, 0x2fe3) also names the guild.
+  - A typed name or the target picks the spawn, as on Titanium.
+  - A player in no guild still gets this client's words, because the program's are its own; the name is shown as players see it.
+  - The program also refuses a game master (spawn +0x109, inferred to be the spawn record's GM byte). The session doesn't decode that byte for Mac spawns yet, so no Mac spawn is refused for it. That is a labelled follow-up.
+  - `/played` on the Mac client still waits for its read.
+- The scribe press and the gems follow the Titanium program further (reads
+  R49-34 a, d and i, slice G, G2 and G4, checklist 6.639). A scroll skips
+  the race mask, as the program's usability test does, so a scroll no race
+  may use still scribes for its class. Lines 0x2f0f (your class can't) and
+  0x2f12 (already in your book) name the cursor item, as R49-34 i reads,
+  where they named nothing and the spell. A left click on a gem clears the
+  melody before its cast, whatever comes of the cast; a gem key clears it
+  only while singing, as before. A right click forgets a filled gem at once
+  even mid-cast, and does nothing and says nothing while a request is
+  pending, where it was refused with this client's words. The session lets
+  the mid-cast forget go (eq-network #445), and a song stop is said only for
+  a Bard, not at another class's cast end (#444); both ride main's eq-network
+  pin. Not built yet,
+  labelled: the deity and level tests of the usability check (the item
+  fields aren't decoded here), an Alt left click picking the gem up (read
+  R49-34 n names the keys, but what 0x4ebe36 puts on the cursor isn't
+  read, so ours keeps its hold), and the popup menu on an empty gem.
+- A gem cast meets the Titanium program's own checks before it goes, in its
+  order (reads R49-34 e and h-j, slice G, checklist 6.639; audit table in
+  the PR). The gem click comes first (0x4ecb56): while a cast is under way
+  or the gem's refresh runs it says 0x2efd in colour 0x108, where it said
+  this client's words (kept as the fallback), and a Bard's song still
+  passes; while a request waits on the server it does nothing and says
+  nothing, where it said "Waiting for the server". Then the cast start
+  (0x411f3d): a sitting player stands first when Allow Auto Stand is on
+  (step 4); stunned says 0xae (5); a level below the spell's for the class
+  says 0x309b (10), from the installed spell data; and a spell that isn't a
+  song, cast while crouched, says 0xd5 (16), these in colour 0x121. A song
+  is one a Bard has a level for [I]. Sitting without Allow Auto Stand is
+  still left to the server, as only spells with the record's +0x1fc byte
+  clear need standing and that byte isn't mapped; the same byte holds back
+  0xd4 (a song while lying). The global recast the click also tests isn't
+  kept here. The program has no local mana check (read R49-34 g); the G5
+  entry above takes this client's out.
+- Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). It needs eq-network's #418 cold report and #424's event saves, which main's eq-network pin already carries, so it has no repin of its own.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.
   - The cold total follows the program's: the profile base (byte 12872; a Barbarian's 35, an Iksar's 10 lower), effects 47 and 111, the Ranger and Beastlord term, and worn items' cold (field 16). The resist cap of 500 can't change a cold amount and isn't applied.
   - Rune absorbs aren't taken off the amount for any hazard yet: a labelled departure, and the server applies its own.
   - When the fire or cold resist total can't be worked out yet, no lava or cold report goes out, where the program reports by its own total. That's a labelled departure, counted in the gap log each time it holds a report back (checklist 6.632).
+- **A lift's rider reach now comes from the door model's own radius, and the session uses the same number** (eqgame.exe 0x4368b3, reads R49-28 (b), R49-28c and R49-28d; checklist 6.426). The program carries a rider within 10 + the door actor's radius + 200. That radius is the actor definition's model radius × the door's scale × the model's own scale, or 100 with no actor.
+  - **Radius:** a WLD door model's authored bounding radius: its one mesh's 0x36 radius field, or its skeleton's 0x10 bounding radius (new `ZoneModel::radius`). This replaces the farthest solid point. That these fields are the program's radius is inferred, until an offline comparison or the 0x14 builder's read settles it. An EQG model, which the reads don't cover, and a WLD model with neither field keep the farthest solid point.
+  - **Scale:** size / 100, with a size of 0, below 0 or 255 counted as 100 (0x48f826). Open types 50 and 54, and 57 standing at its base, take scale 1. A type 57 door is taken to stand at its base, as at spawn (inferred). The model's own scale (model +0x60) is unread and taken as 1 (inferred).
+  - **One number for both sides:** the client tells the session each door's radius (`DoorRadii`) at each zone entry and whenever the doors or their models change. An unchanged frame compares without allocating. A refusal that can't clear in the zone (no door capability, dead, session ended) isn't tried again; a passing one (not admitted yet, between zones, queue full) is tried next frame. Nothing is told on EQMac, whose session keeps no lifts, as this client keeps none there. The session's lift carry and the client's `LiftReach` measure by the same reach, so a rider at the edge isn't carried by one and not the other. A door with no model loaded keeps the program's 100 on both sides.
+  - Repinned eq-network to bc980db: #448, where a Titanium door in state 1 marked -2 ignores clicks silently (0x4906c5, read R49-28; checklist 6.428 in part), and #449, the session half of this entry.
+- **A script's click on a door drawn as bars lands on a bar, and a refused script click says why** (#668). The click used to aim at the middle of the door's mesh, which is the gap between bars, so it missed doors such as Neriak's cell bars as a person's click there would. It now tries the middle and then up to 32 points on the door's drawn faces nearest it. A refusal names the reason, and how many points on the drawn faces it tried.
+- **A jump or fall sends its own vertical speed, as the Titanium program does** (checklist 6.617, the client half of eq-network #423). Each movement update in the air on land carries the body's own vertical speed at that moment, up positive, so other clients draw the rise and fall of a jump. Updates on the ground, and the one that lands, send none, which goes as 0. A rider's is its own, without the boat's. Flight, the water and the shoreline's updates are unchanged.
+- `/surname` alone, with a surname already set, says this client's own line in colour 15 like the program's refusal lines; it had no colour (live row 6.507 item h).
+
+- A script run that fails takes the autorun latch off, so the character stops instead of running on unattended (seen when a failed run carried a character off a dock). It comes off even when the player latched it themselves, before or during the run, and only once: a latch set again afterwards stays on. A run the player stops, or one that completes, leaves autorun as it is. This is this client's rule for its scripts. The script reference also notes that `face(heading)` turns at the turn keys' rate (at most 240 heading units a second, so a near-full turn takes over two seconds), and that `look("world", …)` turns as a mouse does.
+- **The bug report window asks before it sends**, as the Titanium program does (reads R49-52, R49-52b and R49-52c; checklist 6.647). Send asks the official question (line 0x1aa3) in the skin's confirmation dialog, with Yes and No, every time, unless the installation's `eqclient.ini` has `[Defaults] SendSystemInfo=1` (read only).
+  - Every answer sends, and so does the question's own close after 60 seconds. After the answer, the empty-box and sent lines follow as before.
+  - Cancel leaves the question up, and its answer still sends what the box holds (read); the close box and Esc do the same (inferred).
+  - The official client adds the machine's processor, video card and driver on Yes or with `SendSystemInfo=1`. This client never sends anything about the machine, so the report is the same either way, and a line of its own says so (a labelled departure).
+  - A second Send while the question is up does nothing (a departure: the program would ask in a second dialog). Leaving the world while it is up (zoning, a camp, a drop, `/quit`) loses the report, as the program's does (reads R49-52d, R49-52e); the program then still clears the words and says its sent line, while this client keeps the words and says nothing (a labelled departure). A script's `Script report windows` event has `question_up`.
+- `/surname` runs as read R49-10 reads the Titanium program (checklist 6.507). This supersedes the earlier draft #565.
+  - **Checks, in order, each sending nothing:** under level 20 (line 0x328c); a bare `/surname` with no surname set (usage 0x328d); words 32 bytes or more (0x8bf). The read gives `strlen >= 0x20` on the argument, and that this is the whole argument rather than the first word is inferred.
+  - **A bare `/surname` with one set:** the program asks a question whose yes path isn't read (R49-10e), so this client says in its own words that it waits for that read (a gap).
+  - **The question:** the first word, with `'` and `"` quotes taken, cut to 19 bytes at a character boundary and its case kept. Question 0x235a names exactly that word for 10 seconds. Yes sends it and says 0x235b. No, the time running out or the session ending sends nothing.
+  - **The answer** is always shown, as the program shows it: refused 0x55e, taken 0x55f with the player's name and the surname. No gate on our own request, and nothing local changes. The name tag follows the zone's last-name update.
+  - The lines come in colour 15. Scripts run the same handler through `slash("surname Name")` and answer the question with its buttons (Scripts = Users, 11-23).
+  - The Mac-era client's `/surname` isn't read (R49-10d). Quarm's and TAKP's handlers say the client refuses under 20 and cuts to 19, so the same flow runs there (inferred), with the first use attended. Project 1999 stays unoffered.
+  - A quoted surname's spaces go as typed, and an answer word other than 0 shows as taken, as the program shows it (eq-network #409, on main's pin).
+
+- **A body at rest more than half a unit above a floor falls onto it, as the programs' does** (checklist 6.648, read R-s: Titanium 0x48a2f4, Mac-era 0x50ba07). A still player counted any floor within 2 units under their feet as ground, so one left that high stayed in the air: a `#goto` onto a ship's deck put a rider 1.9 over the deck for a whole crossing, and watchers drew it on the deck with every report 1.9 above (the #631 riders look). The on-ground test now takes the generation's own tolerance, 0.5 + 0.001, on land too. A client with no read physics keeps the 2.
+- Buying from a merchant follows the Titanium program's order and lines
+  (read R49-35 a, checklist 6.627), for the one-click buy and the quantity
+  window alike. A pending trade, a ware the merchant no longer lists and a
+  quantity below one pass silently, as the program's do. Something on the
+  cursor is refused with the program's line 0x2164 (colour 0x114) before
+  the coins are counted, and coins short of one of the ware with line
+  0x2f1c (colour 0x111), both from the installation, in this client's
+  words where it lacks them. There is still no room check: the program has
+  none, and the server says when the item doesn't fit. The program's
+  +0x2a8 guard is unread and not built. Selling and the Mac-era buy are
+  unchanged.
+- **`/bugreport` and `/feedback` open their windows**, as the Titanium program does (read R49-23 and the bug report window's fill and send passes; checklist 6.511, C1b client half). The installed skin's `BugReportWindow` and `FeedbackWindow` are drawn and work:
+  - Opening the bug report fills its place labels with the player's place, each truncated to a whole number as the program's ftol does, keeps the heading the same way, and clears its four check boxes and the target's name. The report sends that place and heading. This client resets it on every open (inferred).
+  - **Location** fills the place again. **Target**, checked with a target, names it (the cleaned name) and carries it; checked with none it stays unchecked; unchecked it clears. **Dup**, **Crash**, **Flags** and **Target** send the report's bits 1, 2, 8 and 4, carried by eq-network #443.
+  - The category drop-down lists this client's own names for the categories (the program's come from a table in itself). Scripts reach it as `dropdown bug_type`, the text boxes as `report bug_text` and `report feedback_text`, and the buttons by ScreenID. A script's `report()` adds a `Script report windows` event with what both windows show.
+  - **Send** with an empty box says line 0x22b0 and sends nothing; otherwise it sends, clears the box and says 0x22ae once the session says it went. **Cancel** says 0x22af and keeps the words. The window hides either way. Send first asks the program's question (see the entry above).
+  - The feedback window's **Send** sends the words with the player's place and heading, clears and closes, with no line; empty, it only closes. **Cancel** clears and closes.
+  - **Typed Reports is now off by default**, so the commands behave as the program's. On, it sends the typed words as before. It changes nothing on EqMac and RoF2, which always send the typed words.
+  - If the installed skin lacks a window, a line says so and points to Typed Reports (a departure; the program always has them).
+  - Comboboxes now honour the skin's anchors (`AutoStretch`), as the bug report's drop-down needs.
+- **A bash or a kick can stun or interrupt you on your side, as the Titanium program rolls it** (eq-network #446 and #447, reads R49-50 and R49-50b, checklist 6.646 and 6.645 S2). On P99 and Titanium EQEmu alike, with no setting. Nothing is sent.
+  - A saved stun prints the program's line by id (0x1679 or 0x2375) in its colour 10.
+  - A cast cleared locally drops the cast bar with no line, and the next gem press casts. A song cleared locally ends with line 0x318e and resets the gems as any song stop does; `/melody` sees it as it sees the server's stop.
+  - The roll's chance and resists are your buffs' totals from the spell file at the caster's level (`effect_total`); a landing counts only for a spell that lasts. Worn items count 0 (inferred, in the gap log).
+  - Repins eq-network to ae61866 (network main with #446 and #447).
+- A skinned hot button's tooltip says what the button holds and how long it waits, as the client's own hotbar window says in its detail line: a knight's special shows "Server reuse N s", with "(estimated)" where the session estimated it, a gem its spell and timer, an empty slot "Unassigned". Before, the skin's fixed words showed (checklist 6.626, look L8). The wording is this client's.
+- A script's `gm` line is a user's typed `#` line (6.584, scripts are
+  users). `gm` takes any line a player could type after `#`, on any server,
+  with only the chat line's own limits (no control characters, the chat
+  length counting the `#`), and it goes the typed way under the same chat
+  pace. The server decides what a `#` line does; a player who is not a GM
+  gets the server's answer. The old word list, argument filters and the
+  local-session and generation gates are gone, and `chat("say #...")` is no
+  longer refused. The `gm("depop")` helper for a selected NPC stays a local
+  Titanium test convenience; elsewhere `#depop` goes as typed. Breaking for
+  scripts that relied on the old refusals: those lines now send.
+- **An interruption the server names prints as the Titanium program prints it** (reads R49-51 and R49-51b, checklist 6.645 S1). On P99 and Titanium EQEmu, your own interruption line and another caster's take the program's colour 0x108. As a Bard, your own line is hidden where the song stop line is: only with the Bard songs filter at Hide (read R49-48 e: the program's filter 9 value 1 is that row's last option; that the options run in the Options window's order is inferred, as the read maps them by index with their labels unread). Another class's own line always shows, as before. Another caster's line follows the filter for who they are: a Bard's the Bard songs filter, another player's the other players' spells filter, an NPC's the NPC spells filter. A group member's shows at Show and Group only, anyone else's at Show only (options by index, inferred as above). A caster this client doesn't know shows (inferred). The Mac and RoF2 programs are unread and keep this client's colour and show every line.
+- **Fix: the Bard songs filter hides the song stop line at Hide, not Mine only** (read R49-48 e). The earlier entry below took the program's filter 9 value 1 for Mine only; it is the row's last option, Hide.
 - **Chat server channel commands follow the Titanium program** (read R49-12, checklist 6.616).
   - `/join`, `/leave`, `/leaveall` and `/list` go to the chat server as typed, slash and all, and `/leave` alone goes as it is. `/1` to `/10` go as `;N text`.
   - **`/autojoin channel, ...`** keeps the channels to join at each login in your character's options and sends nothing now. Each time the chat server takes the login, the client says so and sends `/join` with the list. The list is yours, else the official client's `[ChatManager]` `ChannelAutoJoin` for the character, else `eqclient.ini`'s `[Defaults]` one; `NONE` joins nothing. The official client's files are only read.
@@ -25,7 +216,7 @@
   - "You are not connected to the chat server." stays: the program says nothing then, so it is an always-on, labelled departure. It is said, and nothing is sent, whenever no link is up: before the chat server takes the login, and after a link ends.
   - The autojoin waits for the character to be in the world: the chat server can take the login while the character is still entering, and the list is that character's. `/autojoin NONE` says you will join no channels.
   - `/announce` and `/chat words` go after a `/` too (`/announce on`, `/kick general Someone`). Inferred: `/announce`'s handler is unread and `/chat`'s sent form only partly read; the chat server skips a command's first byte, so this is the form it takes.
-  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422), and works against a stock chat server: one-byte opcodes, its keep-alive read past, commands as typed, and a log line saying why a link ended (eq-network #438, pinned at bb4c8d7). The repin also takes #443's bug-report fields, which this client leaves unticked.
+  - The link now ends after 30 seconds of silence and logs in with the program's language tag (eq-network #422), and works against a stock chat server: one-byte opcodes, its keep-alive read past, commands as typed, and a log line saying why a link ended (eq-network #438, pinned at bb4c8d7). The repin also takes #443's bug-report fields, which the typed line leaves unticked and the bug report window (below) ticks.
 - A swimmer climbs out of a pool onto a rim up to about 3.3 above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483b, 6.483c):
   - Stroking forward with the view pitched up toward dry ground just ahead hops, at most once in 1500 ms: three times the jump strength added to the rise and a push along the heading (0x48a793, 0x48a026, read R33b).
   - The wet step ends on the frame that takes the origin out of the water, so the fall that follows keeps the velocity it left with instead of losing it to the water's damping for the rest of the sample.
@@ -143,7 +334,7 @@
     drops the program's. Project 1999 offers none of the three.
   - No repin of its own: it uses main's eq-network pin (614d1c0, #635),
     which carries `reports::petition_form` and the feedback's place.
-- A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when the Bard songs filter is "mine only" (filter 9 holding 1), and so does this client, through the local filter gate (`chat_filters::hidden_locally`). Read R49-48 e asks to confirm that compare. On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
+- A Bard's song stop says the Titanium program's line (0x40f06d, read R49-21), from eq-network #421's `WorldEvent::SongStopped`. It shows in the program's colour 0x108, in the installation's words (string 0x318f), or this client's where the installation lacks them. A gem click that stops the song now shows that line, not a cast refusal. As read, the program hides the line when filter 9 holds 1, and so does this client, through the local filter gate (`chat_filters::hidden_locally`). That value is the Bard songs row's Hide option (read R49-48 e; see the fix above). On Titanium, where the program's line is the only one, this client's own "Song stop requested" and "Song stop unconfirmed" lines no longer show beside it. The Mac-era servers, which send no program line, keep them.
 - A Bard's `/melody`, as the Titanium program's (0x472156, read R49-33 c; gap 3.5, plan approved with Y1 to Y4). It is offered where the session offers `Capability::Melody`, on P99 (by Adam's word) and Titanium EQEmu. Elsewhere it answers as an unknown game command does.
   - **`/melody 1 3 2`** clears the list, then, unless a song is sung, plays gems 1, 3 and 2 in turn. It presses the first at once through the same gem press as a click, with the same refusals and lines.
   - **Each refresh of the player's own gem** sends the song stop, then presses the next gem, cycling. Nothing else moves the melody (no timer, no retry), so with no refresh after a refused press it stalls ([I]; read R49-48 f is filed for the program's index on a refusal).
