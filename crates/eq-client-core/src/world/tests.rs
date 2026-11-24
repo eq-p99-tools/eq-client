@@ -7522,8 +7522,13 @@ fn chat_channel_lines_take_their_slot_from_the_last_joined_list() {
     assert_eq!(listed.notices, []);
     assert_eq!(world.chat_channels(), ["general", "Trade"]);
     assert_eq!(slot_of(&game(&mut world, message("trade"))), Some(2));
+    // The link counts as up from its login until it ends, across zones.
+    assert!(!world.chat_link_up());
+    game(&mut world, WorldEvent::ChannelLink(ChannelLink::Up));
+    assert!(world.chat_link_up());
     // A zone change keeps the list.
     game(&mut world, entered(2));
+    assert!(world.chat_link_up());
     assert_eq!(slot_of(&game(&mut world, message("general"))), Some(1));
     // A lost link says so once and forgets the list.
     let lost = game(
@@ -7534,6 +7539,7 @@ fn chat_channel_lines_take_their_slot_from_the_last_joined_list() {
     );
     assert_eq!(lost.notices, [Notice::Channel(ChannelLine::Lost)]);
     assert_eq!(world.chat_channels().len(), 0);
+    assert!(!world.chat_link_up());
     // A refusal for this admission is told; one for another is not.
     let refused = game(
         &mut world,
