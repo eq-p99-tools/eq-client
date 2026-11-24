@@ -669,8 +669,8 @@ pub(crate) struct Typing {
     pub editing_script: bool,
     /// The character creation form owns the keyboard.
     pub creating_character: bool,
-    /// This frame's Escape closed the chat line or left the quantity
-    /// window's number, so nothing else takes it.
+    /// This frame's Escape closed the chat line, dismissed a dropdown or
+    /// left the quantity window's number, so nothing else takes it.
     pub escape_consumed: bool,
 }
 

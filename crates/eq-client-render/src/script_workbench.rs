@@ -7,6 +7,7 @@ mod editor;
 mod help;
 mod icons;
 mod input;
+mod lengths;
 mod library;
 mod syntax;
 mod view;
@@ -69,7 +70,7 @@ struct Workbench {
     source_scroll: isize,
     /// The run length the next Run uses: the launch's
     /// `--script-run-length`, the default unless given, until the player
-    /// steps it with the selector.
+    /// chooses another with the selector.
     run_length: crate::script::RunLength,
 }
 
@@ -145,31 +146,10 @@ impl Workbench {
 
 /// Installs the workbench on every launch, independent of CLI script options.
 pub(crate) fn install(app: &mut App) {
-    let config = &app.world().resource::<crate::ViewerSettings>().0;
-    let mut workbench = Workbench {
-        run_length: config.script_run_length,
-        ..Workbench::default()
-    };
-    workbench.library.root = config
-        .eq_directory
-        .as_ref()
-        .map(|directory| directory.join("Scripts"));
-    if let Some(program) = &config.script {
-        workbench.document = Document::new(program.source().to_owned(), config.script_path.clone());
-        workbench.path = config
-            .script_path
-            .as_ref()
-            .map_or_else(String::new, |path| workbench.library.relative(path));
-        workbench.tab = Tab::Execution;
-    }
-    if config.script_editor {
-        app.world_mut()
-            .resource_mut::<Shown>()
-            .open(WindowId::Scripts);
-    }
+    seed(app);
     editor::install(app);
-    app.insert_resource(workbench)
-        .add_systems(Startup, view::spawn)
+    lengths::install(app);
+    app.add_systems(Startup, view::spawn)
         .add_systems(
             PreUpdate,
             (release_running_editor, input::forward)
@@ -206,6 +186,33 @@ pub(crate) fn install(app: &mut App) {
                 .chain()
                 .in_set(crate::Stage::Present),
         );
+}
+
+/// Construct launch state independently of the native editor surface.
+fn seed(app: &mut App) {
+    let config = &app.world().resource::<crate::ViewerSettings>().0;
+    let mut workbench = Workbench {
+        run_length: config.script_run_length,
+        ..Workbench::default()
+    };
+    workbench.library.root = config
+        .eq_directory
+        .as_ref()
+        .map(|directory| directory.join("Scripts"));
+    if let Some(program) = &config.script {
+        workbench.document = Document::new(program.source().to_owned(), config.script_path.clone());
+        workbench.path = config
+            .script_path
+            .as_ref()
+            .map_or_else(String::new, |path| workbench.library.relative(path));
+        workbench.tab = Tab::Execution;
+    }
+    if config.script_editor {
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .open(WindowId::Scripts);
+    }
+    app.insert_resource(workbench);
 }
 
 /// Script-injected keys must never be interpreted as edits to their own source.
@@ -400,8 +407,8 @@ fn controls(
                 }
             }
             Action::Save => state.save(),
-            Action::Length => {
-                state.run_length = state.run_length.next();
+            Action::SetLength(length) => {
+                state.run_length = *length;
                 state.message = match state.run_length {
                     crate::script::RunLength::Default => {
                         "Runs keep the default bounds: 15 minutes, 5,000 statements, 500 actions and loops of 100.".into()
@@ -458,7 +465,8 @@ fn controls(
             | Action::Step
             | Action::StepInto
             | Action::StepOut
-            | Action::Stop => (),
+            | Action::Stop
+            | Action::Length => (),
         }
     }
 }
@@ -499,6 +507,45 @@ mod tests {
     use super::*;
     use crate::script::Step;
     use bevy::input_focus::FocusCause;
+
+    #[test]
+    fn workbench_startup_opens_only_when_the_editor_is_explicitly_requested() {
+        use crate::script::{InputMode, Program};
+        for editor in [false, true] {
+            for mode in [InputMode::Attended, InputMode::Background] {
+                for controlled in [false, true] {
+                    for scripted in [false, true] {
+                        let mut app = crate::testing::app();
+                        app.world_mut().resource_mut::<crate::ViewerSettings>().0 =
+                            crate::ViewerConfig {
+                                script_editor: editor,
+                                script_input_mode: mode,
+                                script_control: controlled.then(|| PathBuf::from("new-control")),
+                                script: scripted.then(|| {
+                                    Program::parse("wait(1)\n", std::path::Path::new(".")).unwrap()
+                                }),
+                                script_path: scripted.then(|| PathBuf::from("scenario.eqscript")),
+                                ..default()
+                            };
+                        // Production construction, without running native graphics or input.
+                        seed(&mut app);
+                        assert_eq!(
+                            app.world().resource::<Shown>().displayed(WindowId::Scripts),
+                            editor,
+                            "editor={editor}, mode={mode:?}, control={controlled}, script={scripted}"
+                        );
+                        if scripted {
+                            assert_eq!(
+                                app.world().resource::<Workbench>().document.text,
+                                "wait(1)\n"
+                            );
+                            assert_eq!(app.world().resource::<Workbench>().tab, Tab::Execution);
+                        }
+                    }
+                }
+            }
+        }
+    }
 
     #[test]
     fn run_controls_are_icons_named_by_tooltip_above_both_script_areas() {

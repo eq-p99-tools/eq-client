@@ -14,6 +14,14 @@ text. The option requires `--script` and cannot be combined with `--script-follo
 It executes no steps; session permissions and world conditions are checked when
 a script runs.
 
+## Workbench opening at launch
+
+Scripts starts closed unless the launch includes `--script-editor`. Supplying
+`--script`, `--script-control` or `--script-background` does not open it. If a
+test shortcut opens the workbench unexpectedly, check its launch options for
+`--script-editor` and leave that option out when the window is not wanted.
+The sample in a new editor buffer does not run until you choose Run.
+
 ## Execution view
 
 The current line is highlighted in the running source snapshot. Linear scripts show completed and total actions. Structured scripts show how many statements ran and how many actions finished, since the path depends on observations and loop counts. The Execution state panel shows the last branch result, current loop iterations and initialized variables. Scroll that panel for more bindings. Recent events and the final outcome remain after execution, including the source line that failed. The event list retains the most recent 64 entries.
@@ -75,7 +83,7 @@ Background mode does not enable `gm` or `chat`, change the selected server, or i
 
 ### Run length
 
-How long a run may go is your choice, on every server. The selector beside the run controls names the length the next Run uses; click it for the next one. It starts at the default on each launch, or at what `--script-run-length` gives: `default`, a number of minutes from 1 to 1440, or `none`. Runs started from `--script` and the control inbox use the flag. No statement or line in a script can set or raise its own length.
+How long a run may go is your choice, on every server. The dropdown beside the run controls in both the Editor and Execution tabs names the length the next Run uses. Open it and choose default (15 minutes), 30 minutes, 1, 2, 4, 8 or 24 hours, or no limit. Opening or dismissing the list does not change the length. Both tabs show the same choice; it cannot change during a run. It starts at the default on each launch, or at what `--script-run-length` gives: `default`, a number of minutes from 1 to 1440, or `none`. A custom number of minutes from the flag remains in the dropdown. Runs started from `--script` and the control inbox use the flag. No statement or line in a script can set or raise its own length.
 
 - **Default** keeps the bounds above: 15 minutes, 5,000 statements, 500 actions and loops of at most 100.
 - **Minutes** caps the run's time at that many minutes and lifts the counts of statements, actions and loop iterations.
