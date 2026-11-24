@@ -2665,6 +2665,11 @@ pub(super) fn input(
     let boat_sample = boat
         .map(|riding| riding.sample)
         .or(boat_under.map(|(sample, _)| sample));
+    let vertical_speed = if placement_blocked || flying || swimming || shore.is_some() {
+        None
+    } else {
+        own_vertical_speed(controls.airborne.as_ref())
+    };
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
@@ -2683,9 +2688,7 @@ pub(super) fn input(
             support: boat_sample
                 .map(Support::Spawn)
                 .or(support.map(Support::Door)),
-            // Our own vertical speed is the 6.617 client half's; none sends
-            // 0, as before.
-            vertical_speed: None,
+            vertical_speed,
         })
     });
     if let Err(reason) = sent {
@@ -2909,6 +2912,20 @@ fn unsupported(
     tolerance: f32,
 ) -> bool {
     world.support(feet).is_none() && world.ground(feet, 0.01, tolerance).is_none()
+}
+
+/// Our own vertical speed for a sample, as the programs send their actor's
+/// (6.617): the jump's or fall's at that moment, in world units a second,
+/// up positive, while the body is in the air; none on the ground and on
+/// the sample that lands, which sends 0. It is the body's own, so a rider's
+/// carries none of the boat's. A body in the air with no vertical speed,
+/// as one the ground tolerance holds, sends none too. Flight, the water and
+/// the shoreline's samples send their own or none, not this.
+fn own_vertical_speed(airborne: Option<&AirborneController>) -> Option<f32> {
+    airborne
+        .filter(|airborne| airborne.peak().is_some())
+        .map(AirborneController::velocity)
+        .filter(|speed| *speed != 0.0 && speed.is_finite())
 }
 
 /// Walks like a grounded step but keeps going past ledges and falls under gravity,
@@ -4791,6 +4808,90 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn our_own_vertical_speed_goes_while_in_the_air_and_none_on_the_ground_or_landing() {
+        // The programs send their actor's vertical speed in the air and 0 on
+        // the ground and on the landing (capture-derived, 6.617): a jump
+        // rises, then falls, then lands; a walk off a ledge falls.
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let world = CollisionWorld::new([
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ])
+        .unwrap();
+        let titanium = physics(InstalledClient::Titanium, None);
+        let step = |airborne: &mut AirborneController, feet, delta, jump| {
+            super::fall_step(
+                airborne, &world, titanium, None, feet, delta, 0.15, 6.0, jump,
+            )
+        };
+        let mut airborne = AirborneController::default();
+        let feet = step(&mut airborne, Vec3::ZERO, Vec3::X, false);
+        assert_eq!(super::own_vertical_speed(Some(&airborne)), None, "a walk");
+        assert_eq!(super::own_vertical_speed(None), None);
+        let mut feet = step(&mut airborne, feet, Vec3::ZERO, true);
+        let rising = super::own_vertical_speed(Some(&airborne)).expect("take-off");
+        assert!(rising > 0.0 && rising < titanium.jump_speed, "{rising}");
+        assert!((rising - airborne.velocity()).abs() < f32::EPSILON);
+        let mut speeds = vec![rising];
+        while airborne.peak().is_some() {
+            feet = step(&mut airborne, feet, Vec3::ZERO, false);
+            speeds.push(super::own_vertical_speed(Some(&airborne)).unwrap_or(0.0));
+            assert!(speeds.len() < 40, "the jump lands");
+        }
+        assert!(feet.y.abs() < 0.001, "{feet:?}");
+        assert_eq!(speeds.last(), Some(&0.0), "the landing sends none");
+        assert!(speeds.iter().any(|speed| *speed < 0.0), "{speeds:?}");
+        assert!(
+            speeds[..speeds.len() - 1].iter().all(|speed| *speed != 0.0),
+            "{speeds:?}"
+        );
+        // A walk off the edge falls at the fall's own speed.
+        let mut falling = AirborneController::default();
+        step(
+            &mut falling,
+            Vec3::new(19.5, 0.0, 0.0),
+            Vec3::X * 3.0,
+            false,
+        );
+        assert!(
+            super::own_vertical_speed(Some(&falling)).is_some_and(|speed| speed < 0.0),
+            "{}",
+            falling.velocity()
+        );
+    }
+
+    #[test]
+    fn a_jump_sample_carries_its_take_off_speed() {
+        let (mut app, receiver) = standing_jump(InstalledClient::EqMac);
+        app.update();
+        app.update();
+        let earlier = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        app.world_mut().resource_mut::<Controls>().crouch = Some(Crouch::Until(earlier));
+        app.update();
+        let moves: Vec<MovementRequest> = receiver
+            .try_iter()
+            .filter_map(|command| match command {
+                ClientCommand::Move(request) => Some(request),
+                _ => None,
+            })
+            .collect();
+        let velocity = app
+            .world()
+            .resource::<Controls>()
+            .airborne
+            .as_ref()
+            .unwrap()
+            .velocity();
+        assert!(velocity > 0.0);
+        assert_eq!(
+            moves.last().and_then(|sample| sample.vertical_speed),
+            Some(velocity)
+        );
+    }
+
+    #[test]
     fn a_goto_just_over_a_steep_face_stands_up_and_climbs_it() {
         // Live's look (11-01, 85b9d33d): a goto 1 u over a 50° face, then
         // a run and a walk up it, moved 0.0 on every sample. Each sample
@@ -6589,6 +6690,7 @@ pub(super) mod tests {
         assert_eq!(fall.session_id, 12);
         assert_eq!(fall.mode, MovementMode::Fall);
         assert!(fall.position.z < above.z);
+        assert!(fall.vertical_speed.is_some_and(|speed| speed < 0.0));
         assert_eq!(
             app.world()
                 .resource::<online::OnlineState>()

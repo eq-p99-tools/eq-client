@@ -58,6 +58,34 @@ pub(super) enum Unavailable {
     Capacity,
 }
 
+impl Unavailable {
+    /// A short name for the gap log.
+    pub(super) const fn name(self) -> &'static str {
+        match self {
+            Self::OutsideAdmission => "outside admission",
+            Self::Gills => "gills",
+            Self::OutOfWorld => "out of world",
+            Self::MovementPending => "movement pending",
+            Self::MovementUnconfirmed => "movement unconfirmed",
+            Self::SceneLoading => "scene loading",
+            Self::MissingHeadBasis => "missing head basis",
+            Self::ModelChanged => "model changed",
+            Self::ModelMismatch => "model mismatch",
+            Self::MissingZoneScale => "missing zone scale",
+            Self::InvalidHeadOffset => "invalid head offset",
+            Self::UnresolvedMedium => "unresolved medium",
+            Self::MissingProfile => "missing profile",
+            Self::AlternateAdvancement => "alternate advancement",
+            Self::Equipment => "equipment",
+            Self::Food => "food",
+            Self::BuffSlots => "buff slots",
+            Self::Effects => "effects",
+            Self::UnslottedModifier => "unslotted modifier",
+            Self::Capacity => "capacity",
+        }
+    }
+}
+
 type Probe = (Option<Medium>, Result<Sample, Unavailable>);
 type Observation = (Option<Medium>, Result<(Sample, Option<u32>), Unavailable>);
 
@@ -274,8 +302,8 @@ pub(super) fn update(
     ) {
         report(LiquidHazard::Drowning, amount);
     }
-    if let Some(amount) = state.heat.advance(now, &online, qol, &spells, movement) {
-        report(LiquidHazard::Lava, amount);
+    if let Some((hazard, amount)) = state.heat.advance(now, &online, qol, &spells, movement) {
+        report(hazard, amount);
     }
     match (state.air().is_some(), shown.is_open(WindowId::Breath)) {
         (true, false) => shown.open(WindowId::Breath),

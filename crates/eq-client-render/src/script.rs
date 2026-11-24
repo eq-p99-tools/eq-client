@@ -3942,8 +3942,9 @@ fn log_partial_route(online: &super::online::OnlineState, end: Vec3) {
 const DOOR_WAIT: Duration = Duration::from_secs(3);
 /// How long an opened door may take to swing open as drawn, and may still
 /// block the way after the walk has searched around it once: the swing, a
-/// quarter turn at half a turn a second, and a second to spare.
-const DOOR_SWING: Duration = Duration::from_millis(1500);
+/// quarter turn in 0.8 s at the program's rate (read R49-28b), and a second
+/// to spare.
+const DOOR_SWING: Duration = Duration::from_millis(1800);
 /// Clicks one door may take in one walk: the first, and one more if it shut
 /// again before the walker got through.
 const DOOR_CLICKS: u8 = 2;
@@ -4277,7 +4278,10 @@ fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
         .doors()
         .entries()
         .values()
-        .filter(|door| online.world().doors().supports_use(door.id) && super::doors::swings(door))
+        .filter(|door| {
+            online.world().doors().supports_use(door.id)
+                && super::doors::swings(door, online.world().generation())
+        })
         .map(|door| door.id)
         .collect()
 }
@@ -4967,18 +4971,18 @@ mod tests {
         );
         // Still across the way after that: the door is a wall.
         assert_eq!(
-            stuck.act(Some(true), Some(1.0), true, at(1_600)),
+            stuck.act(Some(true), Some(1.0), true, at(1_900)),
             DoorAction::Refuse("it opened but still blocks the way")
         );
         let mut slow = DoorWait::new(4);
         slow.act(Some(false), Some(0.0), true, at(0));
         slow.act(Some(true), Some(0.0), true, at(100));
         assert_eq!(
-            slow.act(Some(true), Some(0.9), true, at(1_599)),
+            slow.act(Some(true), Some(0.9), true, at(1_899)),
             DoorAction::Wait
         );
         assert_eq!(
-            slow.act(Some(true), Some(0.9), true, at(1_600)),
+            slow.act(Some(true), Some(0.9), true, at(1_900)),
             DoorAction::Refuse("it never finished swinging")
         );
         assert_eq!(
@@ -5051,8 +5055,8 @@ mod tests {
     #[test]
     fn a_door_drawn_open_slowly_is_searched_round_only_once_its_leaf_stands_open() {
         // Slow frames: each draws at most a tenth of a second of swing, so a
-        // quarter turn at half a turn a second takes five of them, whatever
-        // time passes between them.
+        // quarter turn in 0.8 s takes eight of them, whatever time passes
+        // between them.
         let frame = Duration::from_millis(250);
         let mut wait = DoorWait::new(4);
         assert_eq!(
@@ -5064,7 +5068,7 @@ mod tests {
         let mut rerouted_at = None;
         // Within the swing's bound: past it, a leaf still across the way
         // after the search round it makes the door a wall.
-        for _ in 0..6 {
+        for _ in 0..8 {
             now += frame;
             swing = super::super::doors::advance_hinge(
                 swing,
@@ -5082,7 +5086,7 @@ mod tests {
                 other => panic!("{other:?} at {now:?}"),
             }
         }
-        assert_eq!(rerouted_at, Some(frame * 5));
+        assert_eq!(rerouted_at, Some(frame * 8));
     }
 
     #[test]
