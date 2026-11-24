@@ -976,6 +976,35 @@ impl CollisionWorld {
             )
     }
 
+    /// [`Self::sweep`] for a fall straight down, which a body whose upper
+    /// part starts inside something over it, such as a swimmer surfaced
+    /// under a ramp into the water, still makes: going down leaves what the
+    /// head overlaps, and only what the lower body meets can stop it. The
+    /// lower body leads, halved until its sweep isn't refused where it
+    /// starts. Ours: the program's sphere differs (R40) and this case is
+    /// unread.
+    fn fall_sweep(
+        &self,
+        feet: Vec3,
+        drop: f32,
+        height: f32,
+    ) -> Result<Option<parry3d::query::ShapeCastHit>, parry3d::query::Unsupported> {
+        let delta = Vec3::Y * drop;
+        let hit = self.sweep(feet, delta, height)?;
+        if drop >= 0.0 || hit.as_ref().is_none_or(|hit| hit.time_of_impact > 0.0) {
+            return Ok(hit);
+        }
+        let mut lower = height / 2.0;
+        while lower >= 2.5 * CAPSULE_RADIUS {
+            let below = self.sweep(feet, delta, lower)?;
+            if below.as_ref().is_none_or(|hit| hit.time_of_impact > 0.0) {
+                return Ok(below);
+            }
+            lower /= 2.0;
+        }
+        Ok(hit)
+    }
+
     /// Sweeps one segment with a skin gap, keeping the collision query separate from sliding.
     fn sweep(
         &self,

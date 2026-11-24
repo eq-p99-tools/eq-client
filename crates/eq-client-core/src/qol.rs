@@ -420,7 +420,7 @@ impl Fix {
                 "Let the Use key use the nearest door, item on the ground or world container within reach, wherever you face. The original client uses only what lies at the centre of your view; turn this off to play it that way."
             }
             Self::TypedReports => {
-                "Send /bugreport and /feedback from the words typed after them. The original client ignores those words and opens its report windows, which this client does not have yet; turn this off to ignore them as it does."
+                "Send /bugreport and /feedback from the words typed after them, instead of opening the report windows as the original client does. Off by default, as the original behaves. On EqMac and RoF2 servers this changes nothing: there the typed words are always sent."
             }
             Self::AnswerListPolls => {
                 "Answer supported P99 list presence polls after a local delay. This does not join a list or answer numeric challenges."
@@ -571,13 +571,12 @@ impl Fix {
             // The original client stands a sitter when hit (read R19 b).
             | Self::StandWhenHit
             // Adam's choice (11-23): the card, on by default.
-            | Self::DuelAnswerCard
-            // On until the report windows are built (6.511, C1b), so a bug
-            // report can be filed; then off, as the program behaves.
-            | Self::TypedReports => Availability::Setting { default: true },
+            | Self::DuelAnswerCard => Availability::Setting { default: true },
             // A comfort the player has to ask for starts as the official
-            // client behaves: off.
-            Self::HiddenWindows
+            // client behaves: off. With it off, the report windows open as
+            // the program's do (6.511, C1b).
+            Self::TypedReports
+            | Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::ClearView
             | Self::WalkWhileWinded
@@ -799,9 +798,8 @@ mod tests {
         assert!(settings.on(Fix::DuelAnswerCard));
         assert_eq!(Fix::DuelAnswerCard.needs(), Some(Capability::Dueling));
         assert!(!Fix::DuelAnswerCard.is_unsafe());
-        // Typed reports are on until the report windows are built (6.511,
-        // C1b), when this default turns off.
-        assert!(settings.on(Fix::TypedReports));
+        // The report windows open as the program's do (6.511, C1b).
+        assert!(!settings.on(Fix::TypedReports));
         assert_eq!(Fix::TypedReports.needs(), Some(Capability::ReportingBugs));
         assert!(!Fix::TypedReports.is_unsafe());
     }

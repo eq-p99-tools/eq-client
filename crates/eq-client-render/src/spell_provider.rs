@@ -64,6 +64,38 @@ impl eq_client_core::vision::SightCatalog for SightProvider {
             })
     }
 
+    /// The total of an SPA's values the spell gives at the caster's level
+    /// (the program's buff sum 0x417b9c, read R49-50b), for the session's
+    /// hit roll: the stun-bash chance and the two stun saves. A landing
+    /// counts only for a spell that lasts, as for See Invisible. 0 where
+    /// the spell isn't known.
+    fn effect_total(&self, spell_id: u32, caster_level: u16, landed: bool, spa: u16) -> i32 {
+        let Ok(provider) = self.0.lock() else {
+            return 0;
+        };
+        provider
+            .get(spell_id)
+            .and_then(|spell| spell.mechanics.as_ref())
+            .filter(|mechanics| {
+                !landed
+                    || !matches!(
+                        mechanics.base_duration(caster_level),
+                        None | Some(eq_client_assets::spells::BaseDuration::Ticks(0))
+                    )
+            })
+            .map_or(0, |mechanics| {
+                mechanics
+                    .effects
+                    .iter()
+                    .filter(|effect| effect.id == u32::from(spa))
+                    .filter_map(|effect| effect.base_magnitude(caster_level))
+                    .fold(0_i64, i64::saturating_add)
+                    .clamp(i64::from(i32::MIN), i64::from(i32::MAX))
+                    .try_into()
+                    .unwrap_or_default()
+            })
+    }
+
     /// The spell's installed recast (field 15), which the Titanium program's
     /// knight specials wait out after the server refreshes their gem (read
     /// R49-29 b: the spell's +0x1c). The replayed table where it's ready,
