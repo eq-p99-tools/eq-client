@@ -78,11 +78,11 @@ pub struct ClientFalls {
     /// The landing rule counts the carried weight in whole units, cut
     /// toward zero, as an integer field holds it; else as the weight is.
     pub whole_weight: bool,
-    /// How far above the origin a walk climbs onto an edge it runs into,
-    /// in units, where known: the horizontal move's own climb, which can
-    /// reach past the floor sweep's ([`Self::walk_climb`]). None keeps the
-    /// floor sweep's climb.
-    pub edge_climb: Option<f32>,
+    /// How the generation's horizontal move lifts a walking body over its
+    /// origin, so it climbs an edge it runs into, where known: the move's own
+    /// climb, which can reach past the floor sweep's ([`Self::walk_climb`]).
+    /// None keeps the floor sweep's climb.
+    pub edge_lift: Option<EdgeLift>,
     /// Where a spawn other than the player's that falls under the zone with
     /// no floor beneath it is put back.
     pub underworld_return: UnderworldReturn,
@@ -197,19 +197,18 @@ impl ClientFalls {
         }
     }
 
-    /// How far one step can lift the feet of a walking body whose origin
-    /// stands `stand_height` above them, at `size`, in units: the floor
-    /// sweep's climb ([`Self::climb_per_step`]), or higher where the
-    /// generation's horizontal move climbs edges ([`Self::edge_climb`]),
-    /// never past [`EDGE_LIFT_FLOOR`] above the origin. `raised` is false
-    /// where the program sweeps the body at the origin itself (L = 0 in
-    /// 0x489a32: ducking, among others), and the floor sweep's climb holds.
+    /// How far one step can lift the feet of a walking `body`, in units:
+    /// the floor sweep's climb ([`Self::climb_per_step`]), or higher where
+    /// the generation's horizontal move lifts the body over its origin
+    /// ([`Self::edge_lift`], [`EdgeLift::over_origin`]). A body the program
+    /// sweeps at the origin itself ([`EdgeBody::lifted`] false: L = 0 in
+    /// 0x489a32) keeps the floor sweep's climb.
     #[must_use]
-    pub fn walk_climb(&self, stand_height: f32, size: f32, raised: bool) -> f32 {
-        let floor = self.climb_per_step(stand_height, size);
-        match self.edge_climb {
-            Some(above) if raised => {
-                let edge = stand_height + above.clamp(0.0, EDGE_LIFT_FLOOR);
+    pub fn walk_climb(&self, body: EdgeBody) -> f32 {
+        let floor = self.climb_per_step(body.stand_height, body.size);
+        match self.edge_lift {
+            Some(rule) if body.lifted => {
+                let edge = body.stand_height + rule.over_origin(body);
                 if edge.is_finite() {
                     edge.max(floor)
                 } else {
@@ -312,7 +311,7 @@ pub const EQMAC: ClientFalls = ClientFalls {
     // W is the weight routine's float (R3, 0x4bbb78).
     whole_weight: false,
     // The Mac-era horizontal move is unread: the floor sweep's climb holds.
-    edge_climb: None,
+    edge_lift: None,
     // Titanium's (below), taken as the Mac-era program's until read (6.362).
     underworld_return: TITANIUM_UNDERWORLD_RETURN,
 };
@@ -357,26 +356,114 @@ pub const TITANIUM: ClientFalls = ClientFalls {
     // read); that it holds the carried weight cut toward zero is inferred
     // with the field itself (6.303).
     whole_weight: true,
-    edge_climb: Some(TITANIUM_EDGE_CLIMB),
+    edge_lift: Some(TITANIUM_EDGE_LIFT),
     underworld_return: TITANIUM_UNDERWORLD_RETURN,
     ..EQMAC
 };
 
-/// The least height above the origin at which the Titanium program sweeps
-/// a walking body sideways: L = max(1.9, the model's radius) (0x489a32,
-/// read R40). A walk never climbs an edge past it here.
-pub const EDGE_LIFT_FLOOR: f32 = 1.9;
+/// A walking body, as a generation's horizontal move lifts it
+/// ([`ClientFalls::walk_climb`]).
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeBody {
+    /// The body's race (the profile's), which picks its lift.
+    pub race: u32,
+    /// How far its origin stands over its soles, in units (S).
+    pub stand_height: f32,
+    /// The size it is drawn at, which sizes the floor sweep.
+    pub size: f32,
+    /// Whether the move lifts it at all: not while ducking, in posture 120
+    /// (0x78) or with the origin in a liquid region (0x489a32).
+    pub lifted: bool,
+}
 
-/// How far above the origin the Titanium client's walk climbs an edge, as
-/// measured: a human of size 6 (origin 3.75 above the soles, R40b) walked
-/// into a solid rail 4 high and onto its posts 5.000 high and climbed both
-/// like stairs (attended, local server, 11-19). The move sweeps the body
-/// sideways from the origin raised by L (0x48acef, R40), and the engine's
-/// contact response, unread, slides it up; that the bound sits at the
-/// measured 5.000 for that body, and scales with the origin for others, is
-/// inferred (recording checklist 6.482): the tallest edge it climbs is
-/// unmeasured, so this keeps to what was seen.
-const TITANIUM_EDGE_CLIMB: f32 = 5.0 - 3.75;
+/// How a generation's horizontal move lifts a walking body's sideways sweep
+/// over its origin: by L, which is S × [`Self::tall_share`] for the
+/// [`Self::tall_races`] and at least [`Self::floor`] and the model's sphere
+/// radius r for every body.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct EdgeLift {
+    /// The races whose lift grows with their stand height.
+    pub tall_races: &'static [u32],
+    /// The share of the stand height those races are lifted by.
+    pub tall_share: f32,
+    /// The least lift.
+    pub floor: f32,
+    /// The highest edge over the origin any body was seen to climb, which no
+    /// body passes until the sweep's shape is read.
+    pub seen_over_origin: f32,
+}
+
+impl EdgeLift {
+    /// L for `body` over its origin, in units (0x489a32): 0 for a body that
+    /// isn't lifted, else max(S × share, floor, r) for a tall race and
+    /// max(floor, r) for the rest.
+    #[must_use]
+    pub fn lift(&self, body: EdgeBody) -> f32 {
+        if !body.lifted || !body.stand_height.is_finite() {
+            return 0.0;
+        }
+        let radius = sphere_radius(body.stand_height);
+        let lift = self.floor.max(radius);
+        if self.tall_races.contains(&body.race) {
+            lift.max(body.stand_height * self.tall_share)
+        } else {
+            lift
+        }
+    }
+
+    /// How high over its origin `body` climbs an edge, in units: the lift
+    /// less the sphere's radius, S + L − r over the soles. The engine casts
+    /// a sphere of radius r centred L over the origin and stops at its first
+    /// contact, with no step of its own (R49-25b), so an edge under the
+    /// sphere's bottom passes beneath it. Never past
+    /// [`Self::seen_over_origin`], what was seen, nor below 0: r is
+    /// estimated until the models' bounding radii are read from their files
+    /// (recording checklist 6.482), so a body whose lift would reach past
+    /// what was seen (races 2, 9 and 10 by the formula) climbs only that.
+    #[must_use]
+    pub fn over_origin(&self, body: EdgeBody) -> f32 {
+        if !body.lifted || !body.stand_height.is_finite() {
+            return 0.0;
+        }
+        let over = self.lift(body) - sphere_radius(body.stand_height);
+        over.clamp(0.0, self.seen_over_origin)
+    }
+}
+
+/// The model's sphere radius r for a body whose origin stands
+/// `stand_height` over its soles, until it is read: the engine's is the
+/// actor definition's bounding radius × its factor × the race's instance
+/// scale (R49-25b), not yet taken from the model files. This is the 0.65
+/// that puts the human seen (S 3.75, L 1.9) on the posts it climbed, growing
+/// with the stand height and never under it (inferred, recording checklist
+/// 6.482).
+fn sphere_radius(stand_height: f32) -> f32 {
+    const SEEN: f32 = TITANIUM_EDGE_FLOOR - TITANIUM_SEEN_OVER_ORIGIN;
+    SEEN.max(SEEN * stand_height / SEEN_STAND_HEIGHT)
+}
+
+/// The stand height of the human seen climbing the posts (R40b).
+const SEEN_STAND_HEIGHT: f32 = 3.75;
+
+/// The Titanium program's least lift (0x489a32, [0x6484ac]).
+const TITANIUM_EDGE_FLOOR: f32 = 1.9;
+
+/// How far above the origin the Titanium client's walk was seen to climb an
+/// edge: a human of size 6 (origin 3.75 above the soles, R40b) walked into a
+/// solid rail 4 high and onto its posts 5.000 high and climbed both like
+/// stairs (attended, local server, 11-19). The tallest edge it climbs is
+/// unmeasured.
+const TITANIUM_SEEN_OVER_ORIGIN: f32 = 5.0 - SEEN_STAND_HEIGHT;
+
+/// The Titanium move's lift (0x489a32, read R49-25): races 2, 9 and 10
+/// (barbarian, troll, ogre) by half their stand height, every body by at
+/// least 1.9 and its sphere radius.
+const TITANIUM_EDGE_LIFT: EdgeLift = EdgeLift {
+    tall_races: &[2, 9, 10],
+    tall_share: 0.5,
+    floor: TITANIUM_EDGE_FLOOR,
+    seen_over_origin: TITANIUM_SEEN_OVER_ORIGIN,
+};
 
 #[cfg(test)]
 mod tests {
@@ -464,20 +551,63 @@ mod tests {
         assert!(TITANIUM.climb_per_step(-0.1, 6.0).abs() < f32::EPSILON);
     }
 
+    fn body(race: u32, size: f32, lifted: bool) -> EdgeBody {
+        EdgeBody {
+            race,
+            stand_height: 0.625 * size,
+            size,
+            lifted,
+        }
+    }
+
     #[test]
     fn a_titanium_walk_climbs_an_edge_to_the_measured_height_over_the_origin() {
-        // A human of size 6: the posts it was seen to climb, 5 over the floor.
-        assert!((TITANIUM.walk_climb(3.75, 6.0, true) - 5.0).abs() < 1e-5);
+        let human = body(1, 6.0, true);
+        // A human of size 6: the posts it was seen to climb, 5 over the floor,
+        // and not past them.
+        assert!((TITANIUM.walk_climb(human) - 5.0).abs() < 1e-5);
+        assert!(TITANIUM.walk_climb(human) < 5.001);
+        assert!((TITANIUM_EDGE_LIFT.lift(human) - 1.9).abs() < 1e-5);
         // Ducking, the body is swept at the origin: the floor sweep's climb.
-        assert!((TITANIUM.walk_climb(3.75, 6.0, false) - 3.375).abs() < 1e-5);
-        // Other bodies keep the same reach over their own origin.
-        assert!((TITANIUM.walk_climb(1.875, 3.0, true) - 3.125).abs() < 1e-5);
-        assert!((TITANIUM.walk_climb(5.0, 8.0, true) - 6.25).abs() < 1e-5);
-        // Never past the sweep's least lift over the origin.
-        const { assert!(TITANIUM_EDGE_CLIMB <= EDGE_LIFT_FLOOR) };
-        // The Mac-era move is unread: the floor sweep's climb, raised or not.
-        assert!((EQMAC.walk_climb(3.75, 6.0, true) - 2.75).abs() < 1e-5);
-        assert!((TITANIUM.walk_climb(f32::NAN, 6.0, true)).abs() < f32::EPSILON);
+        let ducked = body(1, 6.0, false);
+        assert!((TITANIUM.walk_climb(ducked) - 3.375).abs() < 1e-5);
+        assert!(TITANIUM_EDGE_LIFT.lift(ducked).abs() < f32::EPSILON);
+        // A gnome keeps the same reach over its own origin.
+        assert!((TITANIUM.walk_climb(body(12, 3.0, true)) - 3.125).abs() < 1e-5);
+        // The Mac-era move is unread: the floor sweep's climb, lifted or not.
+        assert!((EQMAC.walk_climb(human) - 2.75).abs() < 1e-5);
+        let unknown = EdgeBody {
+            stand_height: f32::NAN,
+            ..human
+        };
+        assert!(TITANIUM.walk_climb(unknown).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn a_titanium_lift_grows_for_the_tall_races_but_no_body_climbs_past_what_was_seen() {
+        // An ogre of size 9 is lifted by half its stand height (R49-25)...
+        let ogre = body(10, 9.0, true);
+        assert!((TITANIUM_EDGE_LIFT.lift(ogre) - 2.8125).abs() < 1e-5);
+        // ...but climbs no more over its origin than the human was seen to,
+        // until the engine's sweep is read (R49-25b).
+        assert!((TITANIUM.walk_climb(ogre) - (5.625 + 1.25)).abs() < 1e-5);
+        for race in [2, 9] {
+            let tall = body(race, 8.0, true);
+            assert!((TITANIUM_EDGE_LIFT.lift(tall) - 2.5).abs() < 1e-5);
+            assert!((TITANIUM.walk_climb(tall) - 6.25).abs() < 1e-5);
+        }
+        // Another race as tall isn't lifted by its height, and its larger
+        // sphere leaves it less: a Vah Shir of size 7 climbs 5.52.
+        let vah_shir = body(130, 7.0, true);
+        assert!((TITANIUM_EDGE_LIFT.lift(vah_shir) - 1.9).abs() < 1e-5);
+        assert!((TITANIUM.walk_climb(vah_shir) - 5.5167).abs() < 1e-3);
+        // No body climbs more over its origin than was seen.
+        for race in [1, 2, 9, 10, 12, 130] {
+            for size in [2.0, 3.0, 6.0, 9.0, 20.0] {
+                let over = TITANIUM_EDGE_LIFT.over_origin(body(race, size, true));
+                assert!((0.0..=1.25 + 1e-5).contains(&over), "{race} {size} {over}");
+            }
+        }
     }
 
     #[test]
