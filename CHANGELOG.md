@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- Buying from a merchant follows the Titanium program's order and lines
+  (read R49-35 a, checklist 6.627), for the one-click buy and the quantity
+  window alike. A pending trade, a ware the merchant no longer lists and a
+  quantity below one pass silently, as the program's do. Something on the
+  cursor is refused with the program's line 0x2164 (colour 0x114) before
+  the coins are counted, and coins short of one of the ware with line
+  0x2f1c (colour 0x111), both from the installation, in this client's
+  words where it lacks them. There is still no room check: the program has
+  none, and the server says when the item doesn't fit. The program's
+  +0x2a8 guard is unread and not built. Selling and the Mac-era buy are
+  unchanged.
 - **`/bugreport` and `/feedback` open their windows**, as the Titanium program does (read R49-23 and the bug report window's fill and send passes; checklist 6.511, C1b client half). The installed skin's `BugReportWindow` and `FeedbackWindow` are drawn and work:
   - Opening the bug report fills its place labels with the player's place, each truncated to a whole number as the program's ftol does, keeps the heading the same way, and clears its four check boxes and the target's name. The report sends that place and heading. This client resets it on every open (inferred).
   - **Location** fills the place again. **Target**, checked with a target, names it (the cleaned name) and carries it; checked with none it stays unchecked; unchecked it clears. **Dup**, **Crash**, **Flags** and **Target** send the report's bits 1, 2, 8 and 4, carried by eq-network #443.
