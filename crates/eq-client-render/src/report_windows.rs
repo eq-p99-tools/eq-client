@@ -586,6 +586,54 @@ pub(crate) fn show(
     }
 }
 
+/// What a script's report says of the two windows, as they show it: whether
+/// each is open, the bug report's category, check boxes, place and target's
+/// name, and the words in each box.
+#[derive(Debug, PartialEq)]
+pub(crate) struct Observation {
+    /// Whether the bug report window is open.
+    pub(crate) bug_shown: bool,
+    /// The category its drop-down shows.
+    pub(crate) category: &'static str,
+    /// The Dup, Crash, Flags and Target check boxes, in that order.
+    pub(crate) checked: [bool; 4],
+    /// The place its labels show.
+    pub(crate) place: Option<[i32; 3]>,
+    /// The target's name its label shows.
+    pub(crate) target_name: String,
+    /// The words in its box.
+    pub(crate) bug_text: String,
+    /// Whether the feedback window is open.
+    pub(crate) feedback_shown: bool,
+    /// The words in its box.
+    pub(crate) feedback_text: String,
+    /// The box that has the keyboard.
+    pub(crate) editing: Option<Report>,
+}
+
+impl ReportWindows {
+    /// What the windows show, for a script's report.
+    pub(crate) fn observe(&self, shown: &Shown, world: &ClientWorld) -> Observation {
+        Observation {
+            bug_shown: shown.displayed(WindowId::BugReport),
+            category: self.bug.category().name(),
+            checked: [
+                ReportButton::Repeatable,
+                ReportButton::Crash,
+                ReportButton::Flags,
+                ReportButton::Target,
+            ]
+            .map(|button| self.checked(button)),
+            place: self.bug.place,
+            target_name: self.label(ReportLabel::TargetName, world),
+            bug_text: self.bug.text.clone(),
+            feedback_shown: shown.displayed(WindowId::Feedback),
+            feedback_text: self.feedback.clone(),
+            editing: self.editing,
+        }
+    }
+}
+
 /// The names the category drop-down lists, in the servers' order.
 pub(crate) fn category_names() -> Vec<String> {
     BugCategory::ALL

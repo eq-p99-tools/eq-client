@@ -991,6 +991,7 @@ type Observed<'w> = (
         Option<Res<'w, crate::abilities::Choices>>,
         Option<Res<'w, crate::abilities::picker::Picker>>,
         Option<Res<'w, crate::keys::Typing>>,
+        Option<Res<'w, crate::report_windows::ReportWindows>>,
     ),
 );
 
@@ -2710,6 +2711,13 @@ pub(super) fn drive(
                 detached_camera.single().ok(),
             );
             report::surroundings(&online, &observed);
+            if let Some(windows) = observed.15.3.as_deref() {
+                info!(
+                    label,
+                    report_windows = ?windows.observe(&shown, online.world()),
+                    "Script report windows"
+                );
+            }
             report::game_messages(&mut script.chat_seen, &chat);
             report::item_links(label, &online, &chat, &item);
             report::dialogs(label, online.world());

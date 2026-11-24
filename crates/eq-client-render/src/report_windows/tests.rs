@@ -317,3 +317,32 @@ fn without_an_installation_the_command_says_there_is_no_window() {
         .contains("Turn on Typed Reports")
     );
 }
+
+#[test]
+fn a_scripts_report_reads_what_the_windows_show() {
+    let (online, stamp) = world(Some(20));
+    let world = online.world();
+    let mut shown = Shown::default();
+    let mut windows = ReportWindows::default();
+    windows.open(Report::Bug, world, &mut shown);
+    for button in [ReportButton::Crash, ReportButton::Target] {
+        windows.press(button, world, Some(stamp), &mut shown);
+    }
+    windows.bug.text = "the guard".into();
+    windows.feedback = "a note".into();
+    windows.editing = Some(Report::Bug);
+    assert_eq!(
+        windows.observe(&shown, world),
+        Observation {
+            bug_shown: true,
+            category: BugCategory::ALL[0].name(),
+            checked: [false, true, false, true],
+            place: Some([10, -3, 2]),
+            target_name: "a guard".into(),
+            bug_text: "the guard".into(),
+            feedback_shown: false,
+            feedback_text: "a note".into(),
+            editing: Some(Report::Bug),
+        }
+    );
+}
