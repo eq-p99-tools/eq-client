@@ -2,6 +2,11 @@
 
 ## Unreleased
 
+- **A Titanium door spawned away from its rest opens and goes back as the program's mover does** (eqgame.exe 0x4368b3, read R49-28b; checklist 6.423). Repinned eq-network to 6d62512 (#450).
+  - **Spawn poses:** the renderer takes Titanium's new `titanium::endpoint` (RoF2 too, inferred; EQMac unchanged). A door spawned in state 1 or 2 heads open from its base: a lift rises at its opening rate instead of standing at full travel, and a hinged door swings open. One spawned in state 0 or 3 stands at its base. The mover's skipped types (50-52, 54-58, 153-155) stand at their base.
+  - **Returns:** a door spawned away from its rest goes back its delay after spawn, even while still opening. With rest 1 it heads for the open end it already has, so nothing visible changes. A door spawned shut or in state 3 with rest 0 no longer goes back. Types 110-152 but 115 close as soon as a vertical one stands open.
+  - **Hinge speed:** a hinged door swings at the program's 8 a step of ms x 0.02, a quarter turn in 0.8 s (was half a turn a second, faster than the program). A script walk waits 1.8 s for a door's swing (was 1.5 s).
+  - Not built, as gap rows: a door entity first drawn after its spawn is posed at its target at once, not at the swing it would have reached (at most 0.8 s). The rest are listed in eq-network #450.
 - `/target Name` on Titanium follows the program (read R49-33 b, checklist
   6.635). A spawn whose full server name is exactly the name is picked
   first, then the nearest whose name starts with it, over every known spawn
