@@ -1186,6 +1186,32 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "testing")]
+    #[test]
+    fn every_titanium_own_liquid_surfaces_but_guarded_lava_does_not() {
+        for kind in [
+            RegionKind::WATER,
+            RegionKind::SLIME,
+            RegionKind::LAVA,
+            RegionKind::VELIOUS_WATER,
+            RegionKind::WATER_2,
+            RegionKind::WATER_3,
+        ] {
+            let regions = ZoneRegions::test_kind_surface(0.0, kind);
+            let guarded = regions.clone().with_titanium_liquids();
+            let own = regions.with_titanium_own_liquids();
+            let (wet, air) = ([0.0, -0.01, 0.0], [0.0, 0.04, 0.0]);
+            assert_eq!(
+                guarded.water_surface_exit(wet, air),
+                kind != RegionKind::LAVA,
+                "guarded: {kind:?}"
+            );
+            assert!(own.water_surface_exit(wet, air), "own: {kind:?}");
+            assert!(!own.water_surface_exit(wet, [0.0; 3]), "{kind:?}");
+            assert_eq!(own.medium_at(wet), Some(kind.medium()));
+        }
+    }
+
     #[test]
     fn every_water_kind_keeps_forbidden_and_unknown_surface_exit_spans() {
         let split = |distance, front, back| Node {
@@ -1218,11 +1244,32 @@ mod tests {
             .with_titanium_liquids();
             let (wet, air) = ([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]);
             assert!(!regions.water_surface_exit(wet, air), "lava: {kind:?}");
+            assert!(
+                regions
+                    .clone()
+                    .with_titanium_own_liquids()
+                    .water_surface_exit(wet, air),
+                "own lava: {kind:?}"
+            );
             regions.liquids.remove(&1);
+            regions.kinds.remove(&1);
             regions.media.insert(1, Medium::OtherSubmerging);
             assert!(!regions.water_surface_exit(wet, air), "unmapped: {kind:?}");
+            assert!(
+                !regions
+                    .clone()
+                    .with_titanium_own_liquids()
+                    .water_surface_exit(wet, air),
+                "own unmapped: {kind:?}"
+            );
             regions.nodes[2].back = None;
             assert!(!regions.water_surface_exit(wet, air), "unknown: {kind:?}");
+            assert!(
+                !regions
+                    .with_titanium_own_liquids()
+                    .water_surface_exit(wet, air),
+                "own unknown: {kind:?}"
+            );
         }
     }
 

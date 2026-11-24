@@ -7547,6 +7547,7 @@ pub(super) mod tests {
         for kind in [
             RegionKind::WATER,
             RegionKind::SLIME,
+            RegionKind::LAVA,
             RegionKind::VELIOUS_WATER,
             RegionKind::WATER_2,
             RegionKind::WATER_3,
@@ -7575,6 +7576,45 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn following_from_inside_lava_can_surface_into_ordinary_motion() {
+        use eq_client_assets::regions::{Liquid as AssetLiquid, ZoneRegions};
+        // Following supplies level input. As in the plain-water case, a
+        // falling liquid surface takes that stroke into known air. The
+        // guarded view is attached too, so leaving must use the own view.
+        let regions = ZoneRegions::test_sloping_liquid_surface(0.0, 0.25, AssetLiquid::Lava);
+        let world = CollisionWorld::new(flat_surface(-60.0))
+            .unwrap()
+            .with_liquids(crate::scene_collision::ZoneLiquids(
+                regions.clone().with_titanium_liquids(),
+            ))
+            .with_own_liquids(crate::scene_collision::ZoneLiquids(
+                regions.with_titanium_own_liquids(),
+            ))
+            .with_swim_origin(3.75);
+        let seen = move_from(
+            world,
+            Vec3::new(0.0, -3.76, 0.0),
+            0.0,
+            (Some(WET_SWIMMER), 0.0),
+            8,
+            Mover::Follow,
+        )
+        .unwrap();
+        let exit = seen
+            .iter()
+            .position(|(mode, feet, _)| {
+                *mode == MovementMode::Swim && feet.y + 3.75 + 0.25 * feet.x > 0.0
+            })
+            .unwrap_or_else(|| panic!("following never surfaced: {seen:?}"));
+        assert!(
+            seen[exit + 1..]
+                .iter()
+                .any(|(mode, _, _)| matches!(mode, MovementMode::Forward | MovementMode::Fall)),
+            "following never handed off to ordinary motion: {seen:?}"
+        );
+    }
+
+    #[test]
     fn every_titanium_water_kind_keeps_a_bank_that_stops_plain_water_solid() {
         use eq_client_assets::regions::RegionKind;
         let wall = [
@@ -7585,6 +7625,7 @@ pub(super) mod tests {
         for kind in [
             RegionKind::WATER,
             RegionKind::SLIME,
+            RegionKind::LAVA,
             RegionKind::VELIOUS_WATER,
             RegionKind::WATER_2,
             RegionKind::WATER_3,
@@ -7593,6 +7634,7 @@ pub(super) mod tests {
             world.set_obstacles(vec![std::sync::Arc::new(
                 eq_client_core::movement::CollisionMesh::new(wall).unwrap(),
             )]);
+            let world = world.own_moves().unwrap_or(world);
             let held = world.wet_step(Vec3::new(-0.8, -3.76, 0.0), Vec3::new(1.6, 0.1, 0.0), 7.5);
             assert!(held.x < -0.4, "{kind:?}: {held:?}");
             let plain_water = *baseline.get_or_insert(held);
