@@ -453,7 +453,10 @@ fn draw(
     };
     // The look changes only which model is drawn: the size, feet and name
     // height below come from the race and size as for a classic model.
-    let own_generation = player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen);
+    // Only a key the viewer never set reads the server's mask (R49-44 a).
+    let offered = player_models::offered(state.world().expansions());
+    let own_generation =
+        player_models::generation((spawn.race, spawn.gender, spawn.kind), chosen, offered);
     // A spawn whose own model the installation lacks is drawn as the
     // program draws it (0x43c84b, read R49-37a): a Human of its gender,
     // taken as race 1 for its size and feet unless its race is 216 or 472.
@@ -464,7 +467,8 @@ fn draw(
         .is_some_and(|code| matches!(nearby_state.models.get(&(code, own_generation)), Some(None)));
     let (model, race, generation) = if unavailable && !carrier && races::drawn(spawn.race) {
         let (code, race) = races::stand_in(spawn.race, spawn.gender);
-        let generation = player_models::generation((race, spawn.gender, spawn.kind), chosen);
+        let generation =
+            player_models::generation((race, spawn.gender, spawn.kind), chosen, offered);
         (Some(code), race, generation)
     } else {
         (own, spawn.race, own_generation)
@@ -939,7 +943,8 @@ mod tests {
                 .insert(("HUM", Generation::Luclin), Some(taller));
             let mut chosen = LuclinModels::NONE;
             chosen.set(1, 0, Some(luclin));
-            // Human also takes Erudite's key (0x43ac64), and an unset key is on.
+            // Human also takes Erudite's key (0x43ac64), set here so the mask
+            // plays no part.
             chosen.set(3, 0, Some(luclin));
             nearby.luclin = Some(chosen);
             nearby.elapsed = 1.0;

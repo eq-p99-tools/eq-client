@@ -5,21 +5,28 @@
 //! - **`[Defaults] AllLuclinPcModelsOff`** turns every race but Vah Shir
 //!   classic.
 //! - **`[Defaults] UseLuclin<Race>Male` / `Female`** decides per race and
-//!   gender. A key the viewer never set counts as on, the program's own
-//!   default (it then writes `TRUE` back to its ini; this client never
-//!   writes the official ini, a stated departure).
+//!   gender, on every server.
+//! - **A key the viewer never set** follows the server's expansion mask, as
+//!   the program's default does: on where bit 0x4 or 0x8 (Luclin or Planes
+//!   of Power, 0x45386d) is set, and off (classic) where it isn't or no
+//!   mask came. So on P99, whose mask is Kunark and Velious (0x3), a
+//!   missing key is classic (Adam, 11-24). The program then writes `TRUE`
+//!   back to its ini where it counts a key on; this client never writes
+//!   the official ini, a stated departure.
 //! - **Fallbacks** when a race's own key is off: Human also takes Erudite's;
 //!   Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's.
-//! - **Vah Shir (130)** follows its own key alone, past the all-off key.
+//! - **Vah Shir (130)** follows its own key alone, past the all-off key,
+//!   and is on when unset whatever the mask.
 //!
-//! **No server gate, a stated departure.** The program also offers the
-//! models only when the server's expansion mask has bit 0x4 or 0x8
-//! (0x45386d), and with it shut it draws classic whatever the keys say.
-//! This client follows the keys on every server instead (Adam's call,
-//! 11-24), so a viewer's ini decides on P99 too.
+//! **A set key decides past the mask, a stated departure.** The program
+//! offers the models only where the mask has bit 0x4 or 0x8, and with it
+//! shut draws classic whatever the keys say. This client follows a set key
+//! on every server instead (Adam's call, 11-24), so a viewer's ini decides
+//! on P99 too; only a missing key reads the mask.
 //!
 //! The read is Titanium's. The Mac client (TAKP) has the same keys, reader
-//! and default (R49-44 e).
+//! and default (R49-44 e); that its mask's bits count the same way is
+//! inferred by analogy.
 //!
 //! The program reads the keys once, at start-up (R49-44 b); this client
 //! reads them with the character's options at each entry into the world and
@@ -31,7 +38,7 @@
 //! Here it is players and their corpses only; non-players of player races
 //! and illusions draw classic until the read says otherwise.
 
-use crate::SpawnKind;
+use crate::{SpawnKind, rules::Expansions};
 
 /// The player races the program's loader walks for Luclin models (0x43df32),
 /// in the order a choice's bits keep them (male, then female, for each).
@@ -40,6 +47,21 @@ const RACES: [u32; 14] = [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 128, 130];
 
 /// Vah Shir, whose key alone decides (0x43ac64).
 const VAH_SHIR: u32 = 130;
+
+/// The expansion mask's bits under which a missing key counts as on
+/// (0x45386d).
+const OFFERING_BITS: u32 = 0x4 | 0x8;
+
+/// Whether the server's expansion mask has Luclin or Planes of Power (bit
+/// 0x4 or 0x8), so that a key the viewer never set counts as on (read R49-44
+/// a). With no mask seen, it hasn't.
+#[must_use]
+pub const fn offered(expansions: Option<Expansions>) -> bool {
+    match expansions {
+        Some(Expansions(mask)) => mask & OFFERING_BITS != 0,
+        None => false,
+    }
+}
 
 /// The look a spawn's model draws with.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -52,7 +74,7 @@ pub enum Generation {
 }
 
 /// The viewer's Luclin model keys: per race and gender on, off, or unset,
-/// and the all-off key. Unset by default, which counts as on.
+/// and the all-off key. Unset by default, so the server's mask decides.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
 pub struct LuclinModels {
     on: u32,
@@ -159,10 +181,12 @@ impl LuclinModels {
         }
     }
 
-    /// Whether the race and gender's key counts as on: as set, or on where
-    /// unset (0x43ab98).
-    fn on(self, race: u32, gender: u32) -> bool {
-        self.key(race, gender).unwrap_or(true)
+    /// Whether the race and gender's key counts as on: as set, or, unset,
+    /// on where the server's mask offers the models, and for Vah Shir
+    /// (0x43ab98).
+    fn on(self, race: u32, gender: u32, offered: bool) -> bool {
+        self.key(race, gender)
+            .unwrap_or(offered || race == VAH_SHIR)
     }
 }
 
@@ -176,20 +200,25 @@ const fn fallbacks(race: u32) -> &'static [u32] {
 }
 
 /// The model generation a spawn draws with: Luclin for a player, or a
-/// player's corpse, where the viewer's keys say so (0x43ac64, without the
-/// program's server gate); classic otherwise.
+/// player's corpse, where the viewer's keys say so (0x43ac64), a set key on
+/// every server; classic otherwise. `offered` is [`offered`] for the
+/// session, which only a missing key reads.
 #[must_use]
-pub fn generation((race, gender, kind): (u32, u32, SpawnKind), keys: LuclinModels) -> Generation {
+pub fn generation(
+    (race, gender, kind): (u32, u32, SpawnKind),
+    keys: LuclinModels,
+    offered: bool,
+) -> Generation {
     let player = matches!(kind, SpawnKind::Player | SpawnKind::PlayerCorpse);
     let luclin = player
         && LuclinModels::offered(race, gender)
         && if race == VAH_SHIR {
-            keys.on(race, gender)
+            keys.on(race, gender, offered)
         } else {
             !keys.all_off
                 && std::iter::once(race)
                     .chain(fallbacks(race).iter().copied())
-                    .any(|race| keys.on(race, gender))
+                    .any(|race| keys.on(race, gender, offered))
         };
     if luclin {
         Generation::Luclin
@@ -213,84 +242,132 @@ mod tests {
     }
 
     #[test]
-    fn an_unset_key_is_on_and_a_set_key_decides() {
+    fn the_servers_mask_offers_by_bit_0x4_or_0x8() {
+        assert!(!offered(None));
+        assert!(!offered(Some(Expansions(0x3))));
+        assert!(offered(Some(Expansions(0x4))));
+        assert!(offered(Some(Expansions(0x8))));
+        assert!(offered(Some(Expansions(0xF))));
+        assert!(offered(Some(Expansions(0x0007_f7ff))));
+    }
+
+    #[test]
+    fn a_missing_key_follows_the_mask_and_a_set_key_decides_everywhere() {
         let none = LuclinModels::NONE;
-        assert_eq!(generation((1, 0, PLAYER), none), Generation::Luclin);
+        assert_eq!(generation((1, 0, PLAYER), none, true), Generation::Luclin);
+        // P99's mask (0x3) or none: a missing key is classic.
+        assert_eq!(generation((1, 0, PLAYER), none, false), Generation::Classic);
         let off = keys(&[(2, 0, false)]);
-        assert_eq!(generation((2, 0, PLAYER), off), Generation::Classic);
         let on = keys(&[(2, 1, true)]);
-        assert_eq!(generation((2, 1, PLAYER), on), Generation::Luclin);
+        for offered in [true, false] {
+            assert_eq!(
+                generation((2, 0, PLAYER), off, offered),
+                Generation::Classic
+            );
+            assert_eq!(generation((2, 1, PLAYER), on, offered), Generation::Luclin);
+        }
+        // A missing fallback follows the mask too.
+        let human = keys(&[(1, 0, false)]);
+        assert_eq!(generation((1, 0, PLAYER), human, true), Generation::Luclin);
+        assert_eq!(
+            generation((1, 0, PLAYER), human, false),
+            Generation::Classic
+        );
+        // Vah Shir is on when unset, whatever the mask.
+        assert_eq!(
+            generation((130, 0, PLAYER), none, false),
+            Generation::Luclin
+        );
     }
 
     #[test]
     fn only_players_and_their_corpses_draw_luclin() {
         let none = LuclinModels::NONE;
         assert_eq!(
-            generation((1, 0, SpawnKind::PlayerCorpse), none),
+            generation((1, 0, SpawnKind::PlayerCorpse), none, true),
             Generation::Luclin
         );
         for kind in [SpawnKind::Npc, SpawnKind::NpcCorpse] {
-            assert_eq!(generation((1, 0, kind), none), Generation::Classic);
+            assert_eq!(generation((1, 0, kind), none, true), Generation::Classic);
         }
         // Froglok isn't walked by the loader; a neuter has no model.
-        assert_eq!(generation((330, 0, PLAYER), none), Generation::Classic);
         assert_eq!(
-            generation((330, 0, PLAYER), keys(&[(330, 0, true)])),
+            generation((330, 0, PLAYER), none, true),
             Generation::Classic
         );
-        assert_eq!(generation((1, 2, PLAYER), none), Generation::Classic);
+        assert_eq!(
+            generation((330, 0, PLAYER), keys(&[(330, 0, true)]), true),
+            Generation::Classic
+        );
+        assert_eq!(generation((1, 2, PLAYER), none, true), Generation::Classic);
     }
 
     #[test]
     fn all_off_turns_every_race_classic_but_vah_shir() {
         let mut all_off = keys(&[(1, 0, true)]);
         all_off.all_off = true;
-        assert_eq!(generation((1, 0, PLAYER), all_off), Generation::Classic);
-        assert_eq!(generation((130, 0, PLAYER), all_off), Generation::Luclin);
+        assert_eq!(
+            generation((1, 0, PLAYER), all_off, true),
+            Generation::Classic
+        );
+        assert_eq!(
+            generation((130, 0, PLAYER), all_off, true),
+            Generation::Luclin
+        );
     }
 
     #[test]
     fn vah_shir_follows_its_own_key_past_all_off() {
         let mut all_off = LuclinModels::NONE;
         all_off.all_off = true;
-        assert_eq!(generation((130, 1, PLAYER), all_off), Generation::Luclin);
+        assert_eq!(
+            generation((130, 1, PLAYER), all_off, true),
+            Generation::Luclin
+        );
         let mut off = keys(&[(130, 1, false)]);
-        assert_eq!(generation((130, 1, PLAYER), off), Generation::Classic);
+        assert_eq!(generation((130, 1, PLAYER), off, true), Generation::Classic);
         off.all_off = true;
-        assert_eq!(generation((130, 1, PLAYER), off), Generation::Classic);
+        assert_eq!(generation((130, 1, PLAYER), off, true), Generation::Classic);
         // Iksar has no such exception.
-        assert_eq!(generation((128, 1, PLAYER), all_off), Generation::Classic);
+        assert_eq!(
+            generation((128, 1, PLAYER), all_off, true),
+            Generation::Classic
+        );
     }
 
     #[test]
     fn human_and_wood_elf_take_their_fallbacks_keys() {
         let human = keys(&[(1, 0, false), (3, 0, true)]);
-        assert_eq!(generation((1, 0, PLAYER), human), Generation::Luclin);
+        assert_eq!(generation((1, 0, PLAYER), human, true), Generation::Luclin);
         // The fallback is per gender, and only Human takes Erudite's.
         assert_eq!(
             generation(
                 (1, 1, PLAYER),
-                keys(&[(1, 1, false), (3, 1, false), (3, 0, true)])
+                keys(&[(1, 1, false), (3, 1, false), (3, 0, true)]),
+                true
             ),
             Generation::Classic
         );
         assert_eq!(
-            generation((3, 0, PLAYER), keys(&[(3, 0, false), (1, 0, true)])),
+            generation((3, 0, PLAYER), keys(&[(3, 0, false), (1, 0, true)]), true),
             Generation::Classic
         );
         let elf_off = [(4, 1, false), (6, 1, false), (7, 1, false)];
         let mut high_elf = elf_off.to_vec();
         high_elf.push((5, 1, true));
         assert_eq!(
-            generation((4, 1, PLAYER), keys(&high_elf)),
+            generation((4, 1, PLAYER), keys(&high_elf), true),
             Generation::Luclin
         );
         let mut none = elf_off.to_vec();
         none.push((5, 1, false));
-        assert_eq!(generation((4, 1, PLAYER), keys(&none)), Generation::Classic);
+        assert_eq!(
+            generation((4, 1, PLAYER), keys(&none), true),
+            Generation::Classic
+        );
         // An unset fallback counts as on.
         assert_eq!(
-            generation((4, 1, PLAYER), keys(&[(4, 1, false)])),
+            generation((4, 1, PLAYER), keys(&[(4, 1, false)]), true),
             Generation::Luclin
         );
     }

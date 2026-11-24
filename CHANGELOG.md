@@ -2,13 +2,13 @@
 
 ## Unreleased
 
-- **Luclin player models follow the viewer's eqclient.ini keys, on every server** (read R49-44 a, checklist 6.554):
+- **Luclin player models follow the viewer's eqclient.ini keys, a set key on every server** (read R49-44 a, checklist 6.554):
   - **The keys are read now, not recalled.** `[Defaults] UseLuclin<Race>Male` / `Female` counts as on when its value starts with T, t or 1, and off otherwise. The race words are the program's: Human, Barbarian, Erudite, WoodElf, HighElf, DarkElf, HalfElf, Dwarf, Troll, Ogre, Halfling, Gnome, Iksar and VahShir.
-  - **A key that isn't set is on,** the program's own default. The program also writes `TRUE` back to its ini; this client never writes the official ini.
-  - **No server gate, a stated departure.** The program also needs the server's expansion mask to have Luclin or Planes of Power (bit 0x4 or 0x8), and draws classic otherwise. This client follows the keys on every server, P99 included.
+  - **A key that isn't set follows the server's expansion mask,** as the program's default does: on where it has Luclin or Planes of Power (bit 0x4 or 0x8), classic where it hasn't or no mask came. So on P99 (Kunark and Velious) a missing key is classic. The program also writes `TRUE` back to its ini where it counts a key on; this client never writes the official ini.
+  - **A set key decides on every server, a stated departure.** The program draws classic whatever the keys say where the mask lacks those bits. This client follows a set key everywhere, P99 included.
   - **`[Defaults] AllLuclinPcModelsOff`** turns every race classic but Vah Shir.
   - **Fallbacks:** when a race's own key is off, Human also takes Erudite's, and Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's.
-  - **Vah Shir** follows its own key alone, past the all-off key.
+  - **Vah Shir** follows its own key alone, past the all-off key, and is on when unset whatever the mask.
   - **Froglok stays classic,** since the program's loader doesn't walk it.
   - **The options file** keeps the keys set on as `luclin_models = ...`, the keys set off as `classic_models = ...`, and `all_luclin_models_off`. A code in both lines is off. A file's keys lie over eqclient.ini's, key by key.
 - The scribe press and the gems follow the Titanium program further (reads

@@ -512,7 +512,7 @@ pub struct Options {
     pub music_volume: u16,
     /// The Luclin model keys per race and gender, and the all-off key, as
     /// the official client keeps them in `eqclient.ini` (read R49-44 a):
-    /// every key unset by default, which counts as on
+    /// every key unset by default, so the server's mask decides
     /// ([`crate::player_models::generation`]). A file's keys lie over the
     /// ini's seed key by key.
     pub luclin_models: LuclinModels,

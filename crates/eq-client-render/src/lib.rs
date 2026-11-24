@@ -409,8 +409,7 @@ fn seed_official_options(
             }
         }
         // Only a race and gender the file names is seeded; one it lacks
-        // stays unset, which counts as on, as the program's own default
-        // (read R49-44 a).
+        // stays unset, so the server's mask decides it (read R49-44 a).
         for (&(_, race, gender), said) in eq_client_assets::ui::LUCLIN_MODEL_KEYS
             .iter()
             .zip(official.luclin_models)
