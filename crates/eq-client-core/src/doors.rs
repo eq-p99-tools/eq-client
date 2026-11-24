@@ -2,7 +2,7 @@
 //! the motion and returns that clients do on their own.
 use crate::{GameDialect, WorldPosition};
 pub use eq_network_game::doors::titanium::{Slide, Solidity, Vertical};
-pub use eq_network_game::doors::{Door, DoorUpdate, Doors, decode, eqmac, titanium};
+pub use eq_network_game::doors::{Door, DoorRadius, DoorUpdate, Doors, decode, eqmac, titanium};
 use std::collections::BTreeMap;
 use std::time::Instant;
 
@@ -313,6 +313,47 @@ mod tests {
     }
 
     #[test]
+    fn a_titanium_door_spawned_opening_closes_its_delay_after_spawn_unless_its_rest_is_open() {
+        // Read R49-28b: a hinged door spawned in state 1 or 2 opens from its
+        // base and, with rest 0, goes back its 10 s after spawn.
+        let now = Instant::now();
+        let mut table = DoorTable::default();
+        let opening = Door {
+            state_at_spawn: 1,
+            ..ordinary()
+        };
+        table.apply(&DoorUpdate::Spawn(vec![opening]), now);
+        assert_eq!(titanium::endpoint(&table.entries()[&7]), Some(true));
+        assert!(!table.closes_due(now + Duration::from_millis(9_999)));
+        table.close_due(now + CLOSE_DELAY);
+        assert_eq!(titanium::endpoint(&table.entries()[&7]), Some(false));
+        // With rest 1 the return heads for the open end the door already
+        // stands at: nothing visible changes.
+        let mut table = DoorTable::default();
+        let resting_open = Door {
+            state_at_spawn: 2,
+            invert_state: 1,
+            ..ordinary()
+        };
+        table.apply(&DoorUpdate::Spawn(vec![resting_open]), now);
+        assert_eq!(titanium::endpoint(&table.entries()[&7]), Some(true));
+        assert!(table.closes_due(now + CLOSE_DELAY));
+        table.close_due(now + CLOSE_DELAY);
+        assert_eq!(titanium::endpoint(&table.entries()[&7]), Some(true));
+        // A door spawned shut, or closing (state 3), with rest 0 stays put.
+        for state in [0, 3] {
+            let mut table = DoorTable::default();
+            let shut = Door {
+                state_at_spawn: state,
+                ..ordinary()
+            };
+            table.apply(&DoorUpdate::Spawn(vec![shut]), now);
+            assert_eq!(titanium::endpoint(&table.entries()[&7]), Some(false));
+            assert!(!table.closes_due(now + Duration::from_secs(60)), "{state}");
+        }
+    }
+
+    #[test]
     fn titanium_never_clicks_the_open_types_its_click_routine_skips() {
         let now = Instant::now();
         let mut definition = ordinary();
@@ -551,12 +592,15 @@ mod tests {
     fn doors_that_spawn_open_close_too_and_inverted_doors_close_their_own_way() {
         let start = Instant::now();
         let mut table = DoorTable::default();
-        // Spawned open; inverted and closed (spawn state 1); inverted and open.
+        // Spawned opening (state 1, rest 0); opening with rest 1; shut with
+        // rest 1.
         let doors = vec![door(1, 1, 0), door(2, 1, 1), door(3, 0, 1)];
         table.apply(&DoorUpdate::Spawn(doors), start);
         table.close_due(start + CLOSE_DELAY);
         assert_eq!(action(&table, 1), Some(CLOSE));
-        assert_eq!(action(&table, 2), None);
+        // Its spawned state (2) isn't its rest (1), so the mover sends it
+        // opening again: the open end it already heads for (read R49-28b).
+        assert_eq!(action(&table, 2), Some(OPEN));
         // An inverted door's close is the plain open action.
         assert_eq!(action(&table, 3), Some(OPEN));
         assert_eq!(table.entries()[&3].active_endpoint(), Some(true));
@@ -649,16 +693,18 @@ mod tests {
             ..lift(4, 69)
         };
         table.apply(&DoorUpdate::Spawn(vec![raised]), start);
+        // Spawned opening, it rises its 69 at 9 a second (read R49-28b).
+        let risen = start + Duration::from_secs(8);
         let at = |z: f32| WorldPosition {
             z,
             ..WorldPosition::default()
         };
         for z in [0.0, 34.5] {
-            assert_eq!(table.use_distance(4, at(z), start), None, "from {z}");
+            assert_eq!(table.use_distance(4, at(z), risen), None, "from {z}");
         }
         assert!(
             table
-                .use_distance(4, at(69.0), start)
+                .use_distance(4, at(69.0), risen)
                 .is_some_and(|d| d < 0.01)
         );
     }

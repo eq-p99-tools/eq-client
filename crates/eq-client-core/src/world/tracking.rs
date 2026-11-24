@@ -26,15 +26,14 @@ pub struct TrackWindow {
 }
 
 /// An entry's colour in the track window by the program's own rule (read R14
-/// section 2), from the level difference d, theirs less yours: green below
-/// the green threshold (three quarters of your level up to 60, your level
-/// less 15 above it) when d is under -3, blue for any other d under 0, white
-/// at 0, yellow under 3, and red beyond. The program's light blue near the
-/// green edge for levels above 7 is not read closely enough to draw, so
-/// those entries are blue (recording checklist 6.444). The threshold's
-/// rounding (three quarters taken in whole levels, rounded down) and its
-/// edge (green only strictly below it) are inferred, under the same label.
-/// Consider's colours follow their own rule; the two are not one rule.
+/// section 2, R49-30 d), from the level difference d, theirs less yours:
+/// green below the green threshold T (three quarters of your level, rounded
+/// down, up to 60; your level less 15 above it) when d is under -3, blue for
+/// any other d under 0, white at 0, yellow under 3, and red beyond. A green
+/// entry near the edge is light blue instead: with e = theirs - T, less 1 for
+/// each of your level under 55, under 41 and under 31, light blue when e is
+/// above -6 and your level above 7 (0x566fe6). Consider's colours follow
+/// their own rule; the two are not one rule.
 #[must_use]
 pub fn track_color(yours: u8, theirs: u8) -> ConColor {
     let difference = i16::from(theirs) - i16::from(yours);
@@ -44,12 +43,56 @@ pub fn track_color(yours: u8, theirs: u8) -> ConColor {
         i16::from(yours) - 15
     };
     match difference {
-        _ if i16::from(theirs) < threshold && difference < -3 => ConColor::Green,
+        _ if i16::from(theirs) < threshold && difference < -3 => {
+            let edge = i16::from(theirs)
+                - threshold
+                - [55, 41, 31]
+                    .into_iter()
+                    .map(|level| i16::from(yours < level))
+                    .sum::<i16>();
+            if edge > -6 && yours > 7 {
+                ConColor::LightBlue
+            } else {
+                ConColor::Green
+            }
+        }
         ..0 => ConColor::Blue,
         0 => ConColor::White,
         1..3 => ConColor::Yellow,
         _ => ConColor::Red,
     }
+}
+
+/// The Tracking skill (53).
+const TRACKING_SKILL: u32 = 53;
+
+/// The most entries the Mac-era program's list holds (TAKP read 10c).
+const EQMAC_MOST_TRACKED: usize = 1000;
+
+/// The races the Mac-era program leaves off its list (TAKP read 10c):
+/// 0x8f, 0x8d, 0x48, 0x49, 0x72 and 0x8e.
+const EQMAC_UNTRACKED_RACES: [u32; 6] = [0x8f, 0x8d, 0x48, 0x49, 0x72, 0x8e];
+
+/// How far the Mac-era program tracks (TAKP read 10c), in units, from the
+/// Tracking skill and the zone header's time type (`OP_NewZone` +424,
+/// [0x79892c]; read 10f): zone types 1, 2 and 5 take skill × 10 + 500,
+/// others skill / 2 + 500 (whole units); above 100, (skill − 100) × 10 or
+/// × 4 is added. The read gives the above-100 term as added to the same
+/// formula, which is how it is taken here.
+#[must_use]
+pub fn eqmac_track_range(skill: u32, time_type: u8) -> f32 {
+    let above = skill.saturating_sub(100);
+    let range = if matches!(time_type, 1 | 2 | 5) {
+        skill * 10 + 500 + above * 10
+    } else {
+        skill / 2 + 500 + above * 4
+    };
+    #[expect(
+        clippy::cast_precision_loss,
+        reason = "a skill's range is far below f32's exact integers"
+    )]
+    let range = range as f32;
+    range
 }
 
 /// A line's arguments with the spawn named first as players see names; the
@@ -86,13 +129,95 @@ impl ClientWorld {
         self.zone.tracking.open = false;
     }
 
-    /// The press reached the server: the window opens, emptied until the
-    /// list comes.
+    /// The press reached the server: the window opens. On Titanium it is
+    /// emptied until the server's list comes; the Mac-era program builds its
+    /// list itself (TAKP read 10c), and no Mac server sends one.
     pub(super) fn tracking_pressed(&mut self) {
+        let built = match self.generation {
+            crate::GameDialect::EqMac => Some(self.eqmac_track_list()),
+            // RoF2's is Titanium's, inferred (6.489).
+            crate::GameDialect::Titanium | crate::GameDialect::Rof2 => None,
+        };
         let tracking = &mut self.zone.tracking;
         tracking.open = true;
-        tracking.entries.clear();
+        if let Some(entries) = built {
+            let listed = |id: &u16| entries.iter().any(|entry| entry.spawn_id == *id);
+            tracking.selected = tracking.selected.filter(listed);
+            tracking.entries = entries;
+        } else {
+            tracking.entries.clear();
+        }
         tracking.revision += 1;
+    }
+
+    /// The Mac-era program's list on a press (TAKP read 10c, 0x4bdf2f): the
+    /// player's group members in the zone first, at any range, then every
+    /// other spawn within [`eqmac_track_range`] but the player, corpses, the
+    /// untracked races and invisible spawns, up to 1000 entries.
+    ///
+    /// Inferred, and labelled: the distance (0x4b1f80, unread) is taken as
+    /// the straight line between the two places; the program's visibility
+    /// test 0x4afa90 as the spawn's invisible flag; the spawn list's order as
+    /// the spawn IDs' (the window sorts, which is unread). The program also
+    /// skips a spawn whose actor +0x198 is set, which is unread and not
+    /// modelled.
+    fn eqmac_track_list(&self) -> Vec<Tracked> {
+        let Some(player) = self.player.as_ref() else {
+            return Vec::new();
+        };
+        let skill = super::character::skill_value(player, TRACKING_SKILL).unwrap_or_default();
+        // Before a zone header has told the time type, the smaller range
+        // (a type outside 1, 2 and 5), never the larger: the program's own
+        // default of 1 comes with a header this session would have read.
+        let time_type = self.zone.sky.map_or(0, |sky| sky.time_type);
+        let range = eqmac_track_range(skill, time_type);
+        let own = player.position;
+        let distance = |at: crate::WorldPosition| {
+            ((at.x - own.x).powi(2) + (at.y - own.y).powi(2) + (at.z - own.z).powi(2)).sqrt()
+        };
+        let mut listed: Vec<Tracked> = self
+            .group()
+            .into_iter()
+            .flat_map(|group| &group.members)
+            .filter_map(|name| {
+                self.zone
+                    .spawns
+                    .iter()
+                    .find(|(id, spawn)| {
+                        **id != player.spawn_id
+                            && spawn.state.kind == crate::SpawnKind::Player
+                            && spawn.state.name.eq_ignore_ascii_case(name)
+                    })
+                    .map(|(id, spawn)| Tracked {
+                        spawn_id: *id,
+                        distance: distance(spawn.state.position),
+                    })
+            })
+            .take(5)
+            .collect();
+        let grouped = listed.len();
+        for (id, spawn) in &self.zone.spawns {
+            if listed.len() >= EQMAC_MOST_TRACKED {
+                break;
+            }
+            let state = &spawn.state;
+            if *id == player.spawn_id
+                || !matches!(state.kind, crate::SpawnKind::Player | crate::SpawnKind::Npc)
+                || EQMAC_UNTRACKED_RACES.contains(&state.race)
+                || state.invisible
+                || listed[..grouped].iter().any(|entry| entry.spawn_id == *id)
+            {
+                continue;
+            }
+            let away = distance(state.position);
+            if away <= range {
+                listed.push(Tracked {
+                    spawn_id: *id,
+                    distance: away,
+                });
+            }
+        }
+        listed
     }
 
     /// What the session said of tracking.
@@ -174,18 +299,35 @@ mod tests {
 
     #[test]
     fn the_track_colours_follow_the_programs_level_rule() {
-        // Level 20: the green threshold is 15.
-        assert_eq!(track_color(20, 14), ConColor::Green);
+        // Level 20: the green threshold is 15, and the edge takes 3 off.
+        assert_eq!(track_color(20, 12), ConColor::Green);
+        assert_eq!(track_color(20, 13), ConColor::LightBlue);
+        assert_eq!(track_color(20, 14), ConColor::LightBlue);
         assert_eq!(track_color(20, 15), ConColor::Blue);
         assert_eq!(track_color(20, 19), ConColor::Blue);
         assert_eq!(track_color(20, 20), ConColor::White);
         assert_eq!(track_color(20, 22), ConColor::Yellow);
         assert_eq!(track_color(20, 23), ConColor::Red);
-        // Low levels: d must also be under -3.
+        // A level-30 Ranger: T = 22, light blue from 20.
+        assert_eq!(track_color(30, 19), ConColor::Green);
+        assert_eq!(track_color(30, 20), ConColor::LightBlue);
+        assert_eq!(track_color(30, 21), ConColor::LightBlue);
+        assert_eq!(track_color(30, 22), ConColor::Blue);
+        // Level 40 takes 2 off, level 50 takes 1.
+        assert_eq!(track_color(40, 26), ConColor::Green);
+        assert_eq!(track_color(40, 27), ConColor::LightBlue);
+        assert_eq!(track_color(50, 32), ConColor::Green);
+        assert_eq!(track_color(50, 33), ConColor::LightBlue);
+        // Low levels: d must also be under -3, and light blue needs a level
+        // above 7.
         assert_eq!(track_color(4, 1), ConColor::Blue);
-        assert_eq!(track_color(8, 4), ConColor::Green);
-        // Above 60 the threshold is the level less 15.
-        assert_eq!(track_color(65, 49), ConColor::Green);
+        assert_eq!(track_color(7, 3), ConColor::Green);
+        assert_eq!(track_color(8, 3), ConColor::Green);
+        assert_eq!(track_color(8, 4), ConColor::LightBlue);
+        // Above 60 the threshold is the level less 15, with nothing off.
+        assert_eq!(track_color(65, 44), ConColor::Green);
+        assert_eq!(track_color(65, 45), ConColor::LightBlue);
+        assert_eq!(track_color(65, 49), ConColor::LightBlue);
         assert_eq!(track_color(65, 50), ConColor::Blue);
     }
 }

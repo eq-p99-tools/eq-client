@@ -12,6 +12,12 @@ fn definitions() -> Arc<Definitions> {
             fields[0] = id.to_string();
             fields[1] = format!("Destination {id}");
             fields[8] = format!("Fade {id}");
+            fields[14] = "2500".to_owned();
+            fields[15] = if id == 4 {
+                "0".to_owned()
+            } else {
+                (id * 10_000).to_string()
+            };
             fields[19] = (id * 10).to_string();
             fields[83] = (id % 2).to_string();
             fields[144] = (id * 3).to_string();
@@ -406,4 +412,56 @@ fn unknown_run_identity_withdraws_ready_mechanics_without_clearing_snapshots() {
         provider.readiness(),
         &Readiness::Unavailable(Failure::RunIdentity)
     );
+}
+
+#[test]
+fn a_knight_special_waits_the_installed_recast() {
+    use eq_client_core::vision::SightCatalog;
+    let sight = SightProvider::from_definitions(Binding::new(Policy::Installed), definitions());
+    assert_eq!(sight.recast(3), Some(std::time::Duration::from_secs(30)));
+    // A recast of 0 and a spell the file lacks give none.
+    assert_eq!(sight.recast(4), None);
+    assert_eq!(sight.recast(99), None);
+    // Before a P99 replay is ready, the installed file's recast still holds.
+    let waiting = SightProvider::from_definitions(Binding::new(Policy::Project1999), definitions());
+    assert_eq!(waiting.recast(1), Some(std::time::Duration::from_secs(10)));
+}
+
+#[test]
+fn an_effect_total_sums_the_spells_values_at_the_casters_level() {
+    use eq_client_core::vision::SightCatalog;
+    // Spell 1 lasts 50 ticks and gives SPA 0xe7 twice (5, and 2 per
+    // level) and SPA 0xc3 once; spell 2 gives SPA 0xe7 at once.
+    let text = (1..=2)
+        .map(|id| {
+            let mut fields = vec!["0".to_owned(); 183];
+            fields[0] = id.to_string();
+            fields[16] = if id == 1 { "4" } else { "0" }.to_owned();
+            for slot in 0..12 {
+                fields[86 + slot] = "254".to_owned();
+            }
+            fields[86] = "231".to_owned();
+            fields[20] = "5".to_owned();
+            if id == 1 {
+                fields[87] = "231".to_owned();
+                fields[21] = "0".to_owned();
+                fields[71] = "2".to_owned();
+                fields[88] = "195".to_owned();
+                fields[22] = "40".to_owned();
+            }
+            fields.join("^")
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    let definitions = Definitions::parse(&text, &eq_client_assets::spells::Layout::TITANIUM).into();
+    let sight = SightProvider::from_definitions(Binding::new(Policy::Installed), definitions);
+    assert_eq!(sight.effect_total(1, 10, false, 0xe7), 25);
+    assert_eq!(sight.effect_total(1, 10, true, 0xe7), 25);
+    assert_eq!(sight.effect_total(1, 10, true, 0xc3), 40);
+    assert_eq!(sight.effect_total(1, 10, true, 0x125), 0);
+    // A landing of a spell that doesn't last counts nothing; its buff does.
+    assert_eq!(sight.effect_total(2, 10, true, 0xe7), 0);
+    assert_eq!(sight.effect_total(2, 10, false, 0xe7), 5);
+    // A spell the file lacks gives 0.
+    assert_eq!(sight.effect_total(99, 10, false, 0xe7), 0);
 }

@@ -643,6 +643,21 @@ impl InstalledClient {
         }
     }
 
+    /// Whether a right-click on a player inspects them (checklist 6.644):
+    /// the Titanium program's use routine 0x4a7356 ends, for a player or
+    /// the player's own spawn, with an inspect when `InspectOthers` is on
+    /// and nothing is on the cursor (reads R49-16 and R49-16e). The Mac-era
+    /// and `RoF2` programs are unread, so they keep this client's rule:
+    /// consider only.
+    #[must_use]
+    pub const fn right_click_inspects(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            // Not read for the Mac era or RoF2.
+            Self::EqMac | Self::Rof2 => false,
+        }
+    }
+
     /// How a typed `/target Name` picks among the spawns it matches.
     #[must_use]
     pub const fn target_by_name(self) -> TargetByName {
@@ -998,6 +1013,15 @@ pub trait OfficialSettings {
         None
     }
 
+    /// Whether the program sends a bug report with the machine's details
+    /// without asking first: `SendSystemInfo=1` in `[Defaults]`. The
+    /// program keeps it at 0 until its own window sets it, and asks on
+    /// every bug report until then (read R49-52b). This client never
+    /// writes it.
+    fn sends_system_info(&self) -> bool {
+        false
+    }
+
     /// The options in `eqclient.ini`.
     fn options(&self) -> OfficialOptions {
         OfficialOptions::default()
@@ -1080,6 +1104,14 @@ pub trait OfficialSettings {
         None
     }
 
+    /// The chat server channels the official client joins for a character
+    /// at login: `ChannelAutoJoin` in `[ChatManager]` of the character's
+    /// own ini (read R49-12 c), as written. Which of the character's files
+    /// the program means is inferred: the one that keeps its inspect text.
+    fn channel_autojoin(&self, _character: &str, _world: &str) -> Option<String> {
+        None
+    }
+
     /// The account and world the official login screen last used.
     fn login(&self) -> LoginMemory {
         LoginMemory::default()
@@ -1134,6 +1166,18 @@ impl OfficialSettings for Titanium<'_> {
         Some(character_contacts_from_ini(&String::from_utf8_lossy(
             &bytes,
         )))
+    }
+
+    /// `SendSystemInfo` in `[Defaults]` of `eqclient.ini`, set to 1.
+    fn sends_system_info(&self) -> bool {
+        std::fs::read(self.0.join("eqclient.ini")).is_ok_and(|bytes| {
+            ini_value(
+                &String::from_utf8_lossy(&bytes),
+                "Defaults",
+                "SendSystemInfo",
+            )
+            .is_some_and(|value| value.trim() == "1")
+        })
     }
 
     /// `LastSysInfoDate` in `[Defaults]` of `eqclient.ini`, else of
@@ -1239,6 +1283,19 @@ impl OfficialSettings for Titanium<'_> {
         .ok()
     }
 
+    fn channel_autojoin(&self, character: &str, world: &str) -> Option<String> {
+        if !plain_name(character) || !plain_name(world) {
+            return None;
+        }
+        let bytes = std::fs::read(self.0.join(format!("{character}_{world}.ini"))).ok()?;
+        ini_value(
+            &String::from_utf8_lossy(&bytes),
+            "ChatManager",
+            "ChannelAutoJoin",
+        )
+        .map(|list| list.trim().to_owned())
+    }
+
     fn inspect_text(&self, character: &str, world: &str) -> Option<String> {
         if !plain_name(character) || !plain_name(world) {
             return None;
@@ -1286,7 +1343,7 @@ impl OfficialSettings for Unchecked {}
 /// What the official client's `eqclient.ini` says of the options this
 /// client keeps per character; each None when the file or setting is missing
 /// or says neither on nor off.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct OfficialOptions {
     /// Whether the chat is logged from login: `Log` in `[Defaults]`, which
     /// the official `/log` saves.
@@ -1302,6 +1359,10 @@ pub struct OfficialOptions {
     /// Whether combat music plays: `CombatMusic` in `[Defaults]` (read
     /// R49-7 c), TRUE when missing.
     pub combat_music: Option<bool>,
+    /// Whether the player's right-click inspects other players:
+    /// `InspectOthers` in `[Defaults]` (read R49-16), on when its first
+    /// letter is t, T or 1 and off otherwise, TRUE when missing.
+    pub inspect_others: Option<bool>,
     /// Whether spell-effect particles play: `ShowSpellEffects` in
     /// `[Defaults]`, or a non-zero `SpellParticleDensity` where that is the
     /// key the installation carries.
@@ -1330,21 +1391,35 @@ pub struct OfficialOptions {
     /// 0x4af32c), unclamped here. The section it sits in is unread, so
     /// `[Defaults]` is tried before `[Options]` (checklist 6.487).
     pub loot_no_drop: Option<i64>,
-    /// Whether each player race and gender draws with its Luclin model, in
-    /// the order of [`LUCLIN_MODEL_KEYS`].
+    /// Each player race and gender's Luclin model key, in the order of
+    /// [`LUCLIN_MODEL_KEYS`]: on when its value starts with T, t or 1, off
+    /// otherwise, and none where the file lacks it (0x43ab98).
     pub luclin_models: [Option<bool>; LUCLIN_MODEL_KEYS.len()],
+    /// `[Defaults] AllLuclinPcModelsOff` (0x4cd3c7, default false).
+    pub all_luclin_models_off: Option<bool>,
     /// Whether an assist's answer starts auto attack: `AttackOnAssist` in
     /// `[Defaults]` (Titanium setup 0x4a3341, read R49-8 d).
     pub attack_on_assist: Option<bool>,
+    /// How a Ranger's track list is ordered: `TrackSortType` in
+    /// `[Defaults]` (read R49-30 e), a word such as NORMAL.
+    pub track_sort: Option<&'static str>,
+    /// The colours a Ranger's track list hides at startup:
+    /// `TrackFilterType` in `[Defaults]`, a number.
+    pub track_filter: Option<u8>,
+    /// Which players a track list shows: `TrackPlayers` in `[Defaults]`,
+    /// TRUE, FALSE or GROUP; only its first letter is read.
+    pub track_players: Option<char>,
+    /// The chat server channels joined at login for a character that keeps
+    /// none of its own: `ChannelAutoJoin` in `[Defaults]` (read R49-12 c),
+    /// as written. The program's default is `NONE`.
+    pub channel_autojoin: Option<String>,
 }
 
-/// The `[Defaults]` keys this client takes the official client's Luclin
-/// model choice from, with the race and gender (0 male, 1 female) each
-/// chooses for. Inferred, unread (R49-44a): the names are recalled as
-/// `UseLuclin<Race><Gender>`, not read from the program, so no key is
-/// trusted to exist; where none is set every model stays classic. The table
-/// is the one place to rename them once the read lands.
-pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 30] = [
+/// The `[Defaults]` keys the official client takes its Luclin model choice
+/// from, with the race and gender (0 male, 1 female) each sets: read R49-44
+/// a, `UseLuclin<Race>Male` / `Female` with `<Race>` from 0x437915, for the
+/// races its loader walks (0x43df32: 1-12, 128 and 130).
+pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 28] = [
     ("UseLuclinHumanMale", 1, 0),
     ("UseLuclinHumanFemale", 1, 1),
     ("UseLuclinBarbarianMale", 2, 0),
@@ -1373,8 +1448,6 @@ pub const LUCLIN_MODEL_KEYS: [(&str, u32, u32); 30] = [
     ("UseLuclinIksarFemale", 128, 1),
     ("UseLuclinVahShirMale", 130, 0),
     ("UseLuclinVahShirFemale", 130, 1),
-    ("UseLuclinFroglokMale", 330, 0),
-    ("UseLuclinFroglokFemale", 330, 1),
 ];
 
 fn options_from_ini(text: &str) -> OfficialOptions {
@@ -1389,6 +1462,8 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         music: ini_value(text, "Defaults", "Music").and_then(|v| v.trim().parse().ok()),
         env_sounds: flag("Defaults", "EnvSounds"),
         combat_music: flag("Defaults", "CombatMusic"),
+        inspect_others: ini_value(text, "Defaults", "InspectOthers")
+            .map(|value| matches!(value.trim().chars().next(), Some('t' | 'T' | '1'))),
         spell_effects: flag("Defaults", "ShowSpellEffects").or_else(|| {
             // Some installations carry the choice as the particles page's
             // density instead; zero density means the same "off".
@@ -1408,8 +1483,22 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         loot_no_drop: ini_value(text, "Defaults", "LootNoDrop")
             .or_else(|| ini_value(text, "Options", "LootNoDrop"))
             .and_then(|v| v.trim().parse().ok()),
-        luclin_models: LUCLIN_MODEL_KEYS.map(|(key, _, _)| flag("Defaults", key)),
+        luclin_models: LUCLIN_MODEL_KEYS.map(|(key, _, _)| {
+            ini_value(text, "Defaults", key).map(|value| value.starts_with(['T', 't', '1']))
+        }),
+        all_luclin_models_off: flag("Defaults", "AllLuclinPcModelsOff"),
         attack_on_assist: flag("Defaults", "AttackOnAssist"),
+        track_sort: ini_value(text, "Defaults", "TrackSortType").and_then(|word| {
+            ["NORMAL", "DISTANCE", "CONSIDER", "RDISTANCE", "RCONSIDER"]
+                .into_iter()
+                .find(|sort| sort.eq_ignore_ascii_case(word.trim()))
+        }),
+        track_filter: ini_value(text, "Defaults", "TrackFilterType")
+            .and_then(|mask| mask.trim().parse().ok()),
+        track_players: ini_value(text, "Defaults", "TrackPlayers")
+            .and_then(|word| word.trim().chars().next()),
+        channel_autojoin: ini_value(text, "Defaults", "ChannelAutoJoin")
+            .map(|list| list.trim().to_owned()),
     }
 }
 
@@ -2224,6 +2313,25 @@ Log=maybe
         )
         .expect("ini");
         assert_eq!(settings.last_sysinfo_date(), Some(9));
+        // The bug report's question is asked until SendSystemInfo is 1.
+        assert!(!settings.sends_system_info());
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nSendSystemInfo=0\nLastSysInfoDate=9\n",
+        )
+        .expect("ini");
+        assert!(!settings.sends_system_info());
+        std::fs::write(
+            install.join("eqclient.ini"),
+            "[Defaults]\nSendSystemInfo=1\nLastSysInfoDate=9\n",
+        )
+        .expect("ini");
+        assert!(settings.sends_system_info());
+        assert!(
+            !InstalledClient::Titanium
+                .settings(&root.join("missing"))
+                .sends_system_info()
+        );
         // Ours is kept in our own folder, made where missing, and replaced
         // in place; the installed files are left exactly as they were.
         let official = std::fs::read(install.join("eqclient.ini")).expect("ini");
@@ -2278,6 +2386,21 @@ Log=maybe
     }
 
     #[test]
+    fn eqclient_ini_inspect_others_is_on_by_its_first_letter_and_when_missing() {
+        let read = |value: &str| {
+            options_from_ini(&format!("[Defaults]\nInspectOthers={value}\n")).inspect_others
+        };
+        for on in ["TRUE", "true", "1", "Turnip"] {
+            assert_eq!(read(on), Some(true), "{on}");
+        }
+        for off in ["FALSE", "0", "yes", ""] {
+            assert_eq!(read(off), Some(false), "{off:?}");
+        }
+        // Missing: the client's own default, which is on, stands.
+        assert_eq!(options_from_ini("[Defaults]\n").inspect_others, None);
+    }
+
+    #[test]
     fn eqclient_ini_says_whether_music_ambient_and_combat_music_play() {
         let read = options_from_ini("[Defaults]\nMusic=0\nEnvSounds=FALSE\nCombatMusic=TRUE\n");
         assert_eq!(
@@ -2320,6 +2443,7 @@ LookSpring=1
                 music: None,
                 env_sounds: None,
                 combat_music: None,
+                inspect_others: None,
                 spell_effects: None,
                 pc_names: Some(true),
                 npc_names: Some(false),
@@ -2329,11 +2453,29 @@ LookSpring=1
                 mouse_sensitivity: Some(4),
                 look_spring: Some(true),
                 loot_no_drop: None,
-                luclin_models: [None; 30],
+                luclin_models: [None; 28],
+                all_luclin_models_off: None,
                 attack_on_assist: None,
+                track_sort: None,
+                track_filter: None,
+                track_players: None,
+                channel_autojoin: None,
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+        let track = options_from_ini(
+            "[Defaults]\nTrackSortType=rdistance\nTrackFilterType=5\nTrackPlayers=GROUP\n",
+        );
+        assert_eq!(
+            (track.track_sort, track.track_filter, track.track_players),
+            (Some("RDISTANCE"), Some(5), Some('G'))
+        );
+        assert_eq!(
+            options_from_ini("[Defaults]\nChannelAutoJoin= general, trade \n")
+                .channel_autojoin
+                .as_deref(),
+            Some("general, trade")
+        );
         assert_eq!(
             options_from_ini("[Defaults]\nAttackOnAssist=1\n").attack_on_assist,
             Some(true)
@@ -2347,7 +2489,7 @@ LookSpring=1
     #[test]
     fn eqclient_ini_seeds_only_the_luclin_models_it_names() {
         let read = options_from_ini(
-            "[Defaults]\nUseLuclinHumanMale=TRUE\nUseLuclinDarkElfFemale=FALSE\nUseLuclinGnomeMale=maybe\n",
+            "[Defaults]\nUseLuclinHumanMale=TRUE\nUseLuclinDarkElfFemale=FALSE\nUseLuclinGnomeMale=maybe\nUseLuclinVahShirFemale=1x\nUseLuclinIksarMale=true\nUseLuclinTrollMale=0\nUseLuclinOgreMale=\nAllLuclinPcModelsOff=TRUE\n",
         );
         let said = |race, gender| {
             LUCLIN_MODEL_KEYS
@@ -2355,19 +2497,26 @@ LookSpring=1
                 .position(|&(_, r, g)| (r, g) == (race, gender))
                 .and_then(|index| read.luclin_models[index])
         };
+        // On when the value starts with T, t or 1 (0x43ab98); off otherwise.
         assert_eq!(said(1, 0), Some(true));
+        assert_eq!(said(130, 1), Some(true));
+        assert_eq!(said(128, 0), Some(true));
         assert_eq!(said(6, 1), Some(false));
-        // A word that is neither, and every key not there, says nothing.
-        assert_eq!(said(12, 0), None);
+        assert_eq!(said(12, 0), Some(false));
+        assert_eq!(said(9, 0), Some(false));
+        assert_eq!(said(10, 0), Some(false));
+        // A key not there says nothing.
         assert_eq!(said(1, 1), None);
-        assert_eq!(read.luclin_models.iter().flatten().count(), 2);
+        assert_eq!(read.luclin_models.iter().flatten().count(), 7);
+        assert_eq!(read.all_luclin_models_off, Some(true));
         // In another section, the keys are not the choice.
-        assert!(
-            options_from_ini("[Options]\nUseLuclinHumanMale=TRUE\n")
-                .luclin_models
-                .iter()
-                .all(Option::is_none)
-        );
+        let elsewhere = options_from_ini("[Options]\nUseLuclinHumanMale=TRUE\n");
+        assert!(elsewhere.luclin_models.iter().all(Option::is_none));
+        assert_eq!(elsewhere.all_luclin_models_off, None);
+        // The table holds the races the loader walks, both genders, no Froglok.
+        assert_eq!(LUCLIN_MODEL_KEYS.len(), 28);
+        assert!(LUCLIN_MODEL_KEYS.iter().all(|&(_, race, _)| race != 330));
+        assert!(LUCLIN_MODEL_KEYS.contains(&("UseLuclinVahShirFemale", 130, 1)));
     }
 
     #[test]
@@ -2753,6 +2902,25 @@ LookSpring=1
         std::fs::remove_dir_all(&install).unwrap();
         assert_eq!(chosen.as_deref(), Some("velious"));
         assert_eq!((unsafe_skin, missing, escaping), (None, None, None));
+    }
+
+    #[test]
+    fn a_characters_autojoin_list_is_read_from_its_own_ini_only() {
+        let install =
+            std::env::temp_dir().join(format!("eq-autojoin-profile-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        std::fs::write(
+            install.join("Example_One.ini"),
+            "[ChatManager]\r\nChannelAutoJoin= general, trade \r\n",
+        )
+        .unwrap();
+        let settings = InstalledClient::Titanium.settings(&install);
+        let read = settings.channel_autojoin("Example", "One");
+        let other = settings.channel_autojoin("Example", "Two");
+        let escaping = settings.channel_autojoin("../Example", "One");
+        std::fs::remove_dir_all(&install).unwrap();
+        assert_eq!(read.as_deref(), Some("general, trade"));
+        assert_eq!((other, escaping), (None, None));
     }
 
     #[test]

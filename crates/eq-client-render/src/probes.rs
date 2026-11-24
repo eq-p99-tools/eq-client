@@ -2875,7 +2875,8 @@ fn the_erudin_pier_rail_and_its_posts_are_climbed() {
         motion::physics(InstalledClient::Titanium, None),
         InstalledClient::Titanium,
         &HUMAN,
-        true,
+        1,
+        (true, false),
     );
     let south = Vec3::from_array(eq_client_core::render_vector([0.0, -1.0, 0.0]));
     // World X, Y of the starts on the dock floor (z 20), the rail's span
@@ -3016,7 +3017,8 @@ fn the_erud_crossing_ship_at_its_dock_stop() {
         motion::physics(InstalledClient::Titanium, None),
         InstalledClient::Titanium,
         &human,
-        true,
+        1,
+        (true, false),
     );
     let west = Vec3::from_array(eq_client_core::render_vector([-1.0, 0.0, 0.0]));
     // The hull's triangles that reach the band a walker on the planks sweeps

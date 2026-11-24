@@ -12,9 +12,13 @@ pub struct VerticalPhysics {
     pub terminal_speed: f32,
     /// Initial upward speed for a grounded jump.
     pub jump_speed: f32,
-    /// The share of the speed kept after each 50 ms program step in the air,
+    /// The share of the speed kept after each program frame in the air,
     /// vertical and horizontal alike; 1 keeps all of it.
     pub air_factor: f32,
+    /// How many program frames each 50 ms step stands for: the programs slow
+    /// a body in the air once a rendered frame, and add gravity and move it
+    /// by the frame's share of a step (R49-24 b). 1 slows it once a step.
+    pub frames_per_step: u32,
     /// How far below the feet a floor may lie for a walking step to keep
     /// them on it, in world units; past it the step leaves the ground and
     /// falls. Both programs count a spawn on the ground while its feet,
@@ -57,6 +61,22 @@ impl VerticalPhysics {
     }
 }
 
+/// One step's frames in the air from `velocity`, in units a second: each
+/// frame adds its share of the step's gravity and keeps the air's share of
+/// the speed (R49-24 b). Gives the speed at the step's end and the mean
+/// speed it moved at, which the step's move goes by.
+fn frames(velocity: f32, physics: VerticalPhysics) -> (f32, f32) {
+    let count = physics.frames_per_step.max(1);
+    #[allow(clippy::cast_precision_loss)] // A handful of frames.
+    let share = 1.0 / count as f32;
+    let (mut speed, mut moved) = (velocity, 0.0);
+    for _ in 0..count {
+        speed = (speed - physics.gravity * STEP * share) * physics.air_factor;
+        moved += speed * share;
+    }
+    (speed, moved)
+}
+
 /// Provisional tuning shared by the offline preview, online falls and path search.
 /// Not measured EQ gravity or jump impulse; the terminal speed is the fastest
 /// descent the network accepts for a fall. A walk keeps the feet on a floor
@@ -66,6 +86,7 @@ pub const PROVISIONAL_PHYSICS: VerticalPhysics = VerticalPhysics {
     terminal_speed: super::MAX_FALL_SPEED,
     jump_speed: 10.0,
     air_factor: 1.0,
+    frames_per_step: 1,
     ground_tolerance: super::MAX_GROUNDED_STEP,
     climb: super::MAX_GROUNDED_STEP,
     edge_climb: None,
@@ -325,7 +346,9 @@ impl AirborneController {
             input.horizontal
         } else {
             if stepped {
-                self.drift *= physics.air_factor;
+                self.drift *= physics
+                    .air_factor
+                    .powi(i32::try_from(physics.frames_per_step.max(1)).unwrap_or(1));
             }
             self.drift * dt
         };
@@ -365,12 +388,14 @@ impl AirborneController {
         if !stepped {
             return position;
         }
+        let mut moved = self.velocity;
         if !on_ground || input.jump {
-            self.velocity = ((self.velocity - physics.gravity * STEP) * physics.air_factor)
-                .max(-physics.terminal_speed);
+            let (velocity, travel) = frames(self.velocity, physics);
+            self.velocity = velocity.max(-physics.terminal_speed);
+            moved = travel.max(-physics.terminal_speed);
         }
         let speed = self.velocity;
-        let distance = speed * STEP;
+        let distance = moved * STEP;
         let mut target = position + Vec3::Y * distance;
         let mut landed = false;
         // A step on the ground stands the feet on the floor it found; the
@@ -405,7 +430,7 @@ impl AirborneController {
             }
             return position;
         }
-        match world.sweep(position, Vec3::Y * distance, input.height) {
+        match world.fall_sweep(position, distance, input.height) {
             Ok(None) if held.is_some() => {
                 self.hold();
                 target
@@ -517,6 +542,7 @@ mod tests {
         terminal_speed: 40.0,
         jump_speed: 10.0,
         air_factor: 1.0,
+        frames_per_step: 1,
         ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
         climb: crate::movement::MAX_GROUNDED_STEP,
         edge_climb: None,
@@ -596,6 +622,7 @@ mod tests {
             terminal_speed: 40.0,
             jump_speed: 10.0,
             air_factor: 1.0,
+            frames_per_step: 1,
             ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
             climb: crate::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
@@ -644,6 +671,7 @@ mod tests {
         terminal_speed: 792.0,
         jump_speed: 44.55,
         air_factor: 0.99,
+        frames_per_step: 1,
         ground_tolerance: 0.501,
         climb: 3.15,
         edge_climb: None,
@@ -878,6 +906,7 @@ mod tests {
             let mut state = AirborneController::default();
             let physics = VerticalPhysics {
                 air_factor,
+                frames_per_step: 1,
                 ..PROVISIONAL_PHYSICS
             };
             let input = MotionStep {
@@ -911,6 +940,7 @@ mod tests {
             terminal_speed: 40.0,
             jump_speed: 10.0,
             air_factor: 1.0,
+            frames_per_step: 1,
             ground_tolerance: crate::movement::MAX_GROUNDED_STEP,
             climb: crate::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
@@ -1043,6 +1073,52 @@ mod tests {
             );
             assert!((feet.y + height).abs() < 0.001, "{feet:?}");
         }
+    }
+
+    #[test]
+    fn three_frames_a_step_fall_as_the_program_at_60_whatever_the_render_rate() {
+        // The program's frame: a third of a step's gravity, then 0.99
+        // (R49-24 b). Its speed after three frames is the step's.
+        let physics = VerticalPhysics {
+            frames_per_step: 3,
+            ..PROGRAM
+        };
+        let (speed, moved) = frames(0.0, physics);
+        let third = 160.0 * STEP / 3.0;
+        let program = [1, 2, 3].map(|n| (1..=n).fold(0.0_f32, |speed, _| (speed - third) * 0.99));
+        assert!((speed - program[2]).abs() < 1e-4, "{speed}");
+        assert!(
+            (moved - program.iter().sum::<f32>() / 3.0).abs() < 1e-4,
+            "{moved}"
+        );
+        // The same drop lands at the same speed rendered at 30 or 144
+        // frames a second: the steps come every 50 ms either way.
+        let world = CollisionWorld::new(floor(-60.0)).unwrap();
+        let land = |seconds: f32| {
+            let mut state = AirborneController::default();
+            let mut feet = Vec3::ZERO;
+            for _ in 0..4000 {
+                feet = state.step(
+                    &world,
+                    feet,
+                    physics,
+                    MotionStep {
+                        horizontal: Vec3::ZERO,
+                        jump: false,
+                        seconds,
+                        height: 6.0,
+                    },
+                );
+                if let Some(landing) = state.take_landing() {
+                    return landing.impact_speed;
+                }
+            }
+            panic!("no landing at {seconds}");
+        };
+        let (slow, fast) = (land(1.0 / 30.0), land(1.0 / 144.0));
+        assert!((slow - fast).abs() < 1e-3, "{slow} against {fast}");
+        // Slower than at one frame a step, and under the frame's terminal.
+        assert!(slow < 13.2 / STEP + 0.01, "{slow}");
     }
 
     #[test]

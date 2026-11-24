@@ -65,9 +65,9 @@ pub fn zone_heat_damage(disease_resistance: i64) -> Option<u32> {
     resisted(100, 3, 10, disease_resistance)
 }
 
-/// Type-246 cold, feet values 4 and 8: 50 less the effective cold
-/// resistance over 3, floor 10 (read R49-3 b). Nothing samples it yet:
-/// which regions give those values waits on read R49-26.
+/// Type-246 cold, feet values 4 and 8 (region kind 8, Velious water; read
+/// R49-26): 50 less the effective cold resistance over 3, floor 10 (read
+/// R49-3 b).
 #[must_use]
 pub fn cold_damage(cold_resistance: i64) -> Option<u32> {
     resisted(50, 3, 10, cold_resistance)

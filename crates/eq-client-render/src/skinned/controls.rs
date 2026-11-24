@@ -505,6 +505,8 @@ pub(crate) fn show_amount(
 pub(crate) enum Choosing {
     /// Which keys the Keyboard page lists.
     KeyFilter,
+    /// The bug report's category.
+    BugType,
 }
 
 /// The Keyboard page's filter: the choice its drop-down shows, by name.
@@ -527,7 +529,7 @@ pub(crate) struct DropDown {
 
 /// The words a drop-down shows: what is chosen.
 #[derive(Component, Clone, Copy, Debug)]
-pub(crate) struct ChosenWords(Choosing);
+pub(crate) struct ChosenWords;
 
 /// One of an open drop-down's choices.
 #[derive(Component, Clone, Debug)]
@@ -548,7 +550,11 @@ impl DropDown {
 
 /// What a drop-down chooses, if the client keeps a choice for it.
 fn choosing(id: Option<&str>, owner: WindowId) -> Option<Choosing> {
-    (owner == WindowId::Options && id == Some(KEY_FILTER)).then_some(Choosing::KeyFilter)
+    match (owner, id) {
+        (WindowId::Options, Some(KEY_FILTER)) => Some(Choosing::KeyFilter),
+        (WindowId::BugReport, Some("BugTypes")) => Some(Choosing::BugType),
+        _ => None,
+    }
 }
 
 /// A drop-down: its frame, the choice in it and the button beside it.
@@ -559,7 +565,9 @@ pub(super) fn combobox(
     inside: &Area,
     owner: WindowId,
 ) {
-    let area = combobox.area;
+    let area = combobox.anchors.map_or(combobox.area, |anchors| {
+        anchors.within(inside.width, inside.height)
+    });
     let choosing = choosing(combobox.id.as_deref(), owner);
     let mut node = window.spawn(at(
         inside.x + area.x,
@@ -572,7 +580,12 @@ pub(super) fn combobox(
             Button,
             DropDown {
                 choosing,
-                choices: combobox.choices.clone(),
+                // The program fills the bug categories itself; this client
+                // lists them in its own words.
+                choices: match choosing {
+                    Choosing::KeyFilter => combobox.choices.clone(),
+                    Choosing::BugType => crate::report_windows::category_names(),
+                },
                 list_height: combobox.list_height,
                 open: None,
                 look: combobox.template.clone(),
@@ -625,8 +638,8 @@ pub(super) fn combobox(
                 ..default()
             },
         ));
-        if let Some(choosing) = choosing {
-            text.insert(ChosenWords(choosing));
+        if choosing.is_some() {
+            text.insert(ChosenWords);
         }
     });
 }
@@ -641,6 +654,7 @@ pub(crate) fn drop_downs(
     mut drop_downs: Query<(Entity, Ref<Interaction>, &mut DropDown, &ComputedNode)>,
     choices: Query<(&Interaction, &DropDownChoice), Changed<Interaction>>,
     mut filter: ResMut<KeyFilter>,
+    mut reports: ResMut<crate::report_windows::ReportWindows>,
 ) {
     for (interaction, choice) in &choices {
         if *interaction != Interaction::Pressed {
@@ -648,6 +662,7 @@ pub(crate) fn drop_downs(
         }
         match choice.choosing {
             Choosing::KeyFilter => filter.0 = Some(choice.choice.clone()),
+            Choosing::BugType => reports.bug.category = choice.index,
         }
         if let Ok((_, _, mut drop_down, _)) = drop_downs.get_mut(choice.drop_down)
             && let Some(list) = drop_down.open.take()
@@ -787,6 +802,7 @@ pub(crate) fn light_choices(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show_choices(
     filter: Res<KeyFilter>,
+    reports: Res<crate::report_windows::ReportWindows>,
     drop_downs: Query<(&DropDown, &Children)>,
     mut words: Query<(&ChosenWords, &mut Text)>,
 ) {
@@ -796,10 +812,11 @@ pub(crate) fn show_choices(
                 .0
                 .clone()
                 .or_else(|| drop_down.choices.last().cloned()),
+            Choosing::BugType => Some(reports.bug.category().name().to_owned()),
         }
         .unwrap_or_default();
         for child in children {
-            if let Ok((ChosenWords(_), mut text)) = words.get_mut(*child)
+            if let Ok((ChosenWords, mut text)) = words.get_mut(*child)
                 && text.0 != shown
             {
                 text.0.clone_from(&shown);
@@ -1530,6 +1547,11 @@ mod tests {
             Some(Choosing::KeyFilter)
         );
         assert_eq!(choosing(Some("ODP_SkyCombobox"), WindowId::Options), None);
+        assert_eq!(
+            choosing(Some("BugTypes"), WindowId::BugReport),
+            Some(Choosing::BugType)
+        );
+        assert_eq!(choosing(Some("BugTypes"), WindowId::Options), None);
         assert_eq!(
             listing(Some(KEY_LIST), WindowId::Options),
             Some(Listing::Keys)

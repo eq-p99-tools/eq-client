@@ -31,6 +31,10 @@ pub(crate) struct OptionsState {
     /// The server filters given at the character list for the character
     /// entering, which its first admission starts from.
     chosen: Option<eq_client_core::filters::ServerFilters>,
+    /// The colours a Ranger's track list hides this session: the
+    /// character's saved mask when their options load, then as
+    /// `/trackfilter` toggles it, never saved (read R49-30 e).
+    pub(crate) track_filter: eq_client_core::track_options::TrackFilter,
 }
 
 impl Default for OptionsState {
@@ -50,7 +54,16 @@ impl OptionsState {
             helm: None,
             filters: None,
             chosen: None,
+            track_filter: defaults.track_filter,
         }
+    }
+
+    /// For a test: the options in effect are `profile`'s, as after their
+    /// load.
+    #[cfg(test)]
+    pub(crate) fn following(&mut self, profile: Option<CharacterProfile>) {
+        self.store.loaded = true;
+        self.store.profile = profile;
     }
 
     /// Whether the toggle is on.
@@ -249,6 +262,7 @@ pub(crate) fn persist(
         .or_else(|| state.store.read(SHARED))
         .unwrap_or_default();
     state.options = Options::read(&text, state.defaults);
+    state.track_filter = state.options.track_filter;
     state.store.loaded_text(state.options.text());
 }
 
@@ -458,7 +472,7 @@ mod tests {
         enter(&mut app, 1, "Example");
         app.update();
         let mut human = eq_client_core::player_models::LuclinModels::NONE;
-        human.set(1, 0, true);
+        human.set(1, 0, Some(true));
         let chosen = |app: &App| {
             crate::online::own_luclin_models(
                 app.world().resource::<OnlineState>().world(),

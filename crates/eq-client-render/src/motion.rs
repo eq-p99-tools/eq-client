@@ -4,6 +4,7 @@ mod belongings_tests;
 #[cfg(test)]
 mod boat_pace_tests;
 mod boats;
+pub(crate) use boats::sweep_depth;
 mod follow;
 mod placement;
 mod shoreline;
@@ -165,6 +166,8 @@ pub(super) struct Controls {
     stun_active: bool,
     /// When the last jump in water began its up stroke (read R39 B).
     water_jump: Option<Instant>,
+    /// When the next surface hop may come (actor +0x6c, read R33b 3).
+    surface_hop: Option<Instant>,
     /// The wet body's velocity between samples (0x4bfe0f; reads R33 and
     /// R41). A correction, placement or admission starts it at rest.
     wet: eq_client_core::movement::water::WetVelocity,
@@ -288,6 +291,7 @@ impl Default for Controls {
             stunned: false,
             stun_active: false,
             water_jump: None,
+            surface_hop: None,
             wet: eq_client_core::movement::water::WetVelocity::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
@@ -1215,20 +1219,19 @@ const TURN_RATE: f32 = 240.0;
 /// units a second (0x4a1d74).
 const TURN_STEP: f32 = 20.0;
 
-/// How often the turn ramp steps. The program steps it once a frame, so
-/// this is taken as 60 a second, which never ramps faster than the program
-/// at 60 frames a second (inferred, recording checklist 6.416).
-const TURN_STEPS_PER_SECOND: f32 = 60.0;
+/// How often the turn ramp steps. The program steps it once a frame with no
+/// time scale (R49-24 c, R49-24b), so this is the frame rate taken for its
+/// once-a-frame steps, 60 a second (inferred, recording checklist 6.416).
+const TURN_STEPS_PER_SECOND: f32 = eq_client_assets::falls::PROGRAM_FRAME_RATE;
 
-/// The most steps the turn ramp takes (0x4a1d74): 12 (240 units a second),
-/// 8 while walking, and 3 for race 141.
-fn turn_cap(walking: bool, race: u32) -> f32 {
-    if race == 141 {
-        3.0
-    } else if walking {
-        8.0
-    } else {
-        12.0
+/// The most steps the turn ramp takes for the controlled spawn's `race`
+/// (0x4a1d74, read R49-24b): 8 for races 216 and 472 (0x47bfd0), 3 for race
+/// 141, else 12 (240 units a second). Walking or running doesn't change it.
+fn turn_cap(race: u32) -> f32 {
+    match race {
+        216 | 472 => 8.0,
+        141 => 3.0,
+        _ => 12.0,
     }
 }
 
@@ -1303,6 +1306,38 @@ fn sample_keys(keys: &ButtonInput<KeyCode>, map: &KeyMap) -> ButtonInput<KeyCode
 /// How long a jump in water strokes up (0x4acbac, read R39 B).
 const WATER_JUMP: Duration = Duration::from_millis(500);
 
+/// How often a swimmer looking up may hop (0x48a793 re-arms actor +0x6c
+/// 1500 ms on, read R33b 3).
+const SURFACE_HOP_INTERVAL: Duration = Duration::from_millis(1500);
+
+/// The hop's rise: actor +0xc0, the jump strength, times 3.0 ([0x640e24],
+/// read R33b 3), in units a tick. That +0xc0 is the 1.65 the jump scales
+/// by 1.35 (`eq_client_assets::falls`) is inferred (checklist 6.483c).
+const SURFACE_HOP_RISE: f32 = 1.65 * 3.0;
+
+/// The hop's push along the heading, in units a tick (0x489c83(0.5), read
+/// R33b 3).
+const SURFACE_HOP_PUSH: f32 = 0.5;
+
+/// Seconds in one program tick: velocities a tick to units a second.
+const PROGRAM_TICK_SECONDS: f32 = 0.05;
+
+/// Whether the point the program's hop test samples is dry: ahead of the
+/// origin along the heading by the origin's height above the soles, one
+/// unit below the origin (0x48a026, read R33b 3). Dry is no mapped water
+/// or lava there.
+fn surface_hop_ground(
+    world: &eq_client_core::movement::CollisionWorld,
+    feet: Vec3,
+    feet_offset: f32,
+    facing: Vec3,
+) -> bool {
+    let origin = feet + Vec3::Y * feet_offset;
+    world
+        .liquid_at(origin + facing * feet_offset - Vec3::Y)
+        .is_none()
+}
+
 /// A swim stroke along `direction`, pitched by the character's look pitch,
 /// and whether it is a forward stroke looking up (the shoreline boost's
 /// cue). The program keeps the full horizontal input and adds sin(pitch) x
@@ -1376,6 +1411,36 @@ type InputExtras<'w, 's> = (
     Local<'s, Option<u64>>,
     Option<Res<'w, crate::doors::LiftReach>>,
 );
+
+/// A script run that fails can no longer steer, so the autorun latch goes
+/// with the keys it held, and the character stops rather than running on
+/// unattended. It comes off even when the player latched it themselves,
+/// before or during the run. A run the player stops, or one that completes,
+/// leaves the latch as it is. This acts once, when a run's status first
+/// reads Failed: the status is copied every frame while the finished run
+/// stays loaded, and a latch the player sets again afterwards stays on.
+/// This is this client's rule for its scripts; the program has none.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn stop_autorun_after_failed_script(
+    status: Option<Res<crate::script::RunStatus>>,
+    mut seen: Local<Option<(std::sync::Arc<()>, crate::script::Phase)>>,
+    mut controls: ResMut<Controls>,
+) {
+    let Some(status) = status else {
+        return;
+    };
+    let phase = status.phase();
+    if seen
+        .as_ref()
+        .is_some_and(|(run, seen)| std::sync::Arc::ptr_eq(run, status.run()) && *seen == phase)
+    {
+        return;
+    }
+    *seen = Some((status.run().clone(), phase));
+    if phase == crate::script::Phase::Failed {
+        controls.autorun = false;
+    }
+}
 
 /// Produces at most one in-flight proposal; renderer stalls never accumulate distance.
 #[allow(
@@ -1696,10 +1761,7 @@ pub(super) fn input(
     } else {
         0.0
     };
-    let cap = turn_cap(
-        controls.walking,
-        online.world().player().map_or(0, |player| player.race),
-    );
+    let cap = turn_cap(online.world().player().map_or(0, |player| player.race));
     controls.observe_turn(
         turning,
         now,
@@ -1812,6 +1874,7 @@ pub(super) fn input(
     if boat.is_none() {
         controls.boat = None;
     }
+    let linked = boat.map(|riding| riding.sample.spawn_id);
     let carried_position = boat.map_or(accepted.position, |riding| riding.position);
     let origin = Vec3::from_array(eq_client_core::render_position(carried_position));
     let feet = origin - Vec3::Y * body.feet_offset;
@@ -2082,16 +2145,46 @@ pub(super) fn input(
             }
         }
         controls.wet.clamp(caps);
-        let (across, up) = controls.wet.advance(
-            swim.set,
-            eq_client_core::movement::water::WetInput {
-                horizontal: [horizontal.x, horizontal.z],
-                vertical,
-                jump,
-            },
-            span,
-        );
-        let mut travel = Vec3::new(across[0], up, across[1]);
+        // A swimmer stroking with the look up hops toward dry ground just
+        // ahead, at most once in 1500 ms: the jump strength times 3 added
+        // to the rise and half a unit a tick along the heading, before the
+        // frame's step (0x4a1d74 to 0x48a793, read R33b 3). The test runs
+        // on the stroke's pitch; the program reads its input record's
+        // pitch (+0x2c), taken as the same (inferred, checklist 6.483c).
+        if vertical > 0.0 && controls.surface_hop.is_none_or(|ready| now >= ready) {
+            controls.surface_hop = Some(now + SURFACE_HOP_INTERVAL);
+            let heading = eq_client_core::render_heading(current_heading);
+            let facing = Vec3::new(heading.sin(), 0.0, heading.cos());
+            if surface_hop_ground(world, feet, body.feet_offset, facing) {
+                let ([x, z], y) = controls.wet.units_per_second();
+                let push = facing * SURFACE_HOP_PUSH / PROGRAM_TICK_SECONDS;
+                let lift = SURFACE_HOP_RISE * controls.jump_factor / PROGRAM_TICK_SECONDS;
+                controls.wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
+                    [x + push.x, z + push.z],
+                    y + lift,
+                );
+            }
+        }
+        let input = eq_client_core::movement::water::WetInput {
+            horizontal: [horizontal.x, horizontal.z],
+            vertical,
+            jump,
+        };
+        // The program steps the wet set only while the origin is in the
+        // water and the dry one from the next frame (read R33): the sample
+        // ends at the frame whose travel takes the origin out, and the fall
+        // that follows carries the velocity it left with.
+        let mut travel = Vec3::ZERO;
+        let mut left = span;
+        while left > 0.0 {
+            let piece = left.min(eq_client_core::movement::water::WET_FRAME_SECONDS);
+            let (across, up) = controls.wet.advance(swim.set, input, piece);
+            travel += Vec3::new(across[0], up, across[1]);
+            left -= piece;
+            if !world.origin_in_liquid(feet + travel, body.height) {
+                break;
+            }
+        }
         if let Some(step) = follow_step {
             // Stop within one frame of reach, as on land.
             let reach = step.beyond + caps.horizontal / 60.0;
@@ -2145,14 +2238,18 @@ pub(super) fn input(
         // limit rather than replacing an already limited land speed.
         speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
     }
-    // A ducking or wet body is swept at its origin (L = 0, 0x489a32), so
-    // only the floor sweep's climb holds; else the walk climbs edges (6.482).
-    let raised = raised_walk(world, feet, posture);
+    // A ducking body, or one with its origin in liquid, is swept at its
+    // origin (L = 0, 0x489a32), so only the floor sweep's climb holds; else
+    // the walk climbs edges (6.482).
+    let raised = raised_walk(world, feet, body.height, posture);
+    // The origin is out of the water and the soles still in it.
+    let leaving_water = raised && water_enabled && world.in_liquid(feet);
     let physics = walking(
         physics(client, online.world().zone_gravity()),
         client,
         body,
-        raised,
+        online.world().player().map_or(0, |player| player.race),
+        (raised, leaving_water),
     );
     // A hurt or burdened player jumps at the share of the speed the session
     // grants, as the program launches its jumps (0x4193c5).
@@ -2187,7 +2284,9 @@ pub(super) fn input(
         && !flying
         && !swimming
         && controls.airborne.as_ref().is_some_and(|airborne| {
-            airborne.velocity() != 0.0 || ride.sinking || unsupported(world, feet)
+            airborne.velocity() != 0.0
+                || ride.sinking
+                || unsupported(world, feet, physics.ground_tolerance)
         });
     // So does a heading sent that still turns toward the facing.
     // A wet body drifts and sinks with no input (0x4bfe0f, gravity in
@@ -2217,7 +2316,8 @@ pub(super) fn input(
         if !placement_blocked
             && !flying
             && !swimming
-            && let Some((sample, pose)) = boats::under(world, online.world().carriers(), feet, now)
+            && let Some((sample, pose)) =
+                boats::under(world, online.world().carriers(), feet, linked, now)
         {
             let position = world_position(origin.to_array(), current_heading);
             let sent = outbox.post(online.world(), |stamp| {
@@ -2522,10 +2622,7 @@ pub(super) fn input(
     } else if mouse_steering {
         steered_heading
     } else if Vec2::new(direction.x, direction.z) == Vec2::ZERO || preserve_facing {
-        let cap = turn_cap(
-            controls.walking,
-            online.world().player().map_or(0, |player| player.race),
-        );
+        let cap = turn_cap(online.world().player().map_or(0, |player| player.race));
         // The frame a key goes down already turns at the first step.
         let held = controls.turn_held.map_or(0.0, |(_, since)| {
             now.saturating_duration_since(since).as_secs_f32() + 1.0 / TURN_STEPS_PER_SECOND
@@ -2556,13 +2653,18 @@ pub(super) fn input(
     let boat_under = if placement_blocked || flying || swimming {
         None
     } else {
-        boats::under(world, online.world().carriers(), landing, now)
+        boats::under(world, online.world().carriers(), landing, linked, now)
     };
     // The sample that walks off still removes the carrying motion from its
     // own budget. Only the floor under the landing carries the next pass.
     let boat_sample = boat
         .map(|riding| riding.sample)
         .or(boat_under.map(|(sample, _)| sample));
+    let vertical_speed = if placement_blocked || flying || swimming || shore.is_some() {
+        None
+    } else {
+        own_vertical_speed(controls.airborne.as_ref())
+    };
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
@@ -2581,6 +2683,7 @@ pub(super) fn input(
             support: boat_sample
                 .map(Support::Spawn)
                 .or(support.map(Support::Door)),
+            vertical_speed,
         })
     });
     if let Err(reason) = sent {
@@ -2593,6 +2696,14 @@ pub(super) fn input(
     if entering {
         controls.water_entry_rollback = previous_airborne;
     }
+    // The velocity the body enters water with: the fall's own, where it
+    // falls, so a wall that stopped the move doesn't stop it (the program
+    // keeps it and damps it, read R33). This sample's travel elsewhere.
+    let entry_velocity = controls
+        .airborne
+        .as_ref()
+        .filter(|airborne| airborne.velocity() != 0.0 || airborne.drift() != Vec3::ZERO)
+        .map(|airborne| (airborne.drift(), airborne.velocity()));
     if !placement_blocked
         && (entering || swimming || matches!(mode, MovementMode::Shoreline(_)))
         && let Some(airborne) = controls.airborne.as_mut()
@@ -2601,12 +2712,16 @@ pub(super) fn input(
     }
     if entering {
         // The program keeps the velocity a body enters water with and damps
-        // it; here it starts from this sample's, held to the water's caps
-        // at the next (the slower side, recording checklist 6.483).
+        // it (read R33): a falling body brings its fall's velocity in, so a
+        // wall that stopped the move doesn't stop it; otherwise this
+        // sample's travel. The next stroke holds it to the water's caps,
+        // where the program would damp it down instead (recording
+        // checklists 6.483 and 6.483b).
         let moved = (position - origin) / span.max(f32::EPSILON);
+        let (across, up) = entry_velocity.unwrap_or((moved, moved.y));
         controls.wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
-            [moved.x, moved.z],
-            moved.y,
+            [across.x, across.z],
+            up,
         );
     } else if swimming
         && wet_travel.is_some()
@@ -2780,13 +2895,32 @@ fn lift_under(
     Some((door, Vec3::new(feet.x, floor, feet.z)))
 }
 
-/// Whether no ground is under the feet within the step the server's
-/// movement guard takes as grounded: the player there falls.
-fn unsupported(world: &eq_client_core::movement::CollisionWorld, feet: Vec3) -> bool {
-    world.support(feet).is_none()
-        && world
-            .ground(feet, 0.01, eq_client_core::movement::MAX_GROUNDED_STEP)
-            .is_none()
+/// Whether feet at rest are in the air: no floor under them within the
+/// generation's ground tolerance, so they fall. The programs' on-ground test
+/// takes feet up to 0.5 + 0.001 over a floor as on it (R-s: Titanium
+/// 0x48a2f4, Mac-era 0x50ba07); past it a body at rest falls, as a rider
+/// a `#goto` left 1.9 over a ship's deck does (6.648). A client with no
+/// read physics keeps the grounded step's 2.
+fn unsupported(
+    world: &eq_client_core::movement::CollisionWorld,
+    feet: Vec3,
+    tolerance: f32,
+) -> bool {
+    world.support(feet).is_none() && world.ground(feet, 0.01, tolerance).is_none()
+}
+
+/// Our own vertical speed for a sample, as the programs send their actor's
+/// (6.617): the jump's or fall's at that moment, in world units a second,
+/// up positive, while the body is in the air; none on the ground and on
+/// the sample that lands, which sends 0. It is the body's own, so a rider's
+/// carries none of the boat's. A body in the air with no vertical speed,
+/// as one the ground tolerance holds, sends none too. Flight, the water and
+/// the shoreline's samples send their own or none, not this.
+fn own_vertical_speed(airborne: Option<&AirborneController>) -> Option<f32> {
+    airborne
+        .filter(|airborne| airborne.peak().is_some())
+        .map(AirborneController::velocity)
+        .filter(|speed| *speed != 0.0 && speed.is_finite())
 }
 
 /// Walks like a grounded step but keeps going past ledges and falls under gravity,
@@ -2906,6 +3040,7 @@ pub(super) fn physics(client: InstalledClient, zone_gravity: Option<f32>) -> Ver
             terminal_speed: falls.terminal_under(gravity),
             jump_speed: falls.jump_speed,
             air_factor: falls.air_factor,
+            frames_per_step: falls.frames_per_step,
             ground_tolerance: falls.ground_tolerance,
             climb: eq_client_core::movement::MAX_GROUNDED_STEP,
             edge_climb: None,
@@ -2934,41 +3069,62 @@ pub(super) fn climbing(
 /// `physics` for the player's own walking body: [`climbing`] for the floor
 /// sweep, which a falling, alighting or placed body keeps, and for the walk
 /// on the ground the climb the generation's horizontal move gives an edge it
-/// runs into (`ClientFalls::walk_climb`) unless `raised` is false
-/// ([`raised_walk`]). The session's guard hears the higher of the two
-/// (`VerticalPhysics::reach`, sent as `ClimbReach`), so the walk and the
-/// guard read one climb.
+/// runs into (`ClientFalls::walk_climb`), by the body's `race`, unless
+/// `raised` is false ([`raised_walk`]). The session's guard hears the higher
+/// of the two (`VerticalPhysics::reach`, sent as `ClimbReach`), so the walk
+/// and the guard read one climb.
 pub(super) fn walking(
     physics: VerticalPhysics,
     client: InstalledClient,
     body: &PlayerBody,
-    raised: bool,
+    race: u32,
+    (raised, leaving_water): (bool, bool),
 ) -> VerticalPhysics {
     let physics = climbing(physics, client, body);
-    client.falls().map_or(physics, |falls| VerticalPhysics {
-        edge_climb: Some(falls.walk_climb(body.feet_offset, body.size, raised)),
-        // A raised jump or fall passes over an edge its floor sweep reaches
-        // and lands on it (R42, 6.484); where the walk climbs edges at all.
-        airborne_clear: if raised && falls.edge_climb.is_some() {
-            physics.climb
-        } else {
-            0.0
-        },
-        ..physics
+    client.falls().map_or(physics, |falls| {
+        let edge_climb = falls.walk_climb(eq_client_assets::falls::EdgeBody {
+            race,
+            stand_height: body.feet_offset,
+            size: body.size,
+            lifted: raised,
+        });
+        VerticalPhysics {
+            edge_climb: Some(edge_climb),
+            // A raised jump or fall passes over an edge its floor sweep
+            // reaches and lands on it (R42, 6.484); where the walk climbs
+            // edges at all. A body whose origin has just left the water,
+            // the soles still in it, passes over what its walk would climb:
+            // the program's sweep has no lower test, and a swimmer pops out
+            // over a rim that way (inferred, recording checklist 6.483b).
+            airborne_clear: match (raised && falls.edge_lift.is_some(), leaving_water) {
+                (true, true) => edge_climb.max(physics.climb),
+                (true, false) => physics.climb,
+                (false, _) => 0.0,
+            },
+            ..physics
+        }
     })
 }
 
 /// Whether the player's walk is swept raised over the origin, so it climbs
-/// edges ([`walking`]): not while ducking, nor with the feet in liquid, where
-/// the program sweeps at the origin itself (L = 0 in 0x489a32; its deep
-/// liquid threshold, +0xad of 5 or more, isn't mapped here, so any liquid
-/// at the feet counts).
+/// edges ([`walking`]): not while ducking or in posture 120 (0x78), nor in
+/// deep liquid, where the program sweeps at the origin itself (L = 0 in
+/// 0x489a32 for +0xad of 5 or more: the origin's region is water or lava,
+/// every liquid kind; reads R33, R40 and R49-26; its dry hazard levels 3 and
+/// 4 are under it). Feet wading with the origin dry climb, as a swimmer
+/// whose origin has just left the water does.
 pub(super) fn raised_walk(
     world: &eq_client_core::movement::CollisionWorld,
     feet: Vec3,
+    height: f32,
     posture: Option<eq_client_core::PostureState>,
 ) -> bool {
-    posture != Some(eq_client_core::PostureState::Ducking) && !world.in_liquid(feet)
+    use eq_client_core::PostureState;
+    let swept_at_origin = matches!(
+        posture,
+        Some(PostureState::Ducking | PostureState::Unknown(0x78))
+    );
+    !swept_at_origin && !world.origin_in_liquid(feet, height)
 }
 
 /// Asks the session to change the player's stance.
@@ -3721,16 +3877,153 @@ pub(super) mod tests {
         // Stood on the lift's floor at rest, with the surface in the body.
         assert!(world.clearance(feet, 6.0, 0.0).is_some_and(|c| c <= 0.0));
         assert_eq!(super::lift_support(&world, &reach, feet), Some(4));
-        assert!(!super::unsupported(&world, feet));
+        assert!(!super::unsupported(&world, feet, 0.501));
         // When it returns the rider falls with it, past nothing of the
         // zone's, onto its floor below.
         let down = start + Duration::from_secs(31);
         let sinking = super::ride(Some(&reach), &doors, Some((4, top)), down);
         assert!(sinking.sinking);
         world.set_door_obstacles_with(vec![(4, deck(80.0), solid)]);
-        assert!(super::unsupported(&world, feet));
+        assert!(super::unsupported(&world, feet, 0.501));
         let landing = Vec3::new(feet.x, 80.0, feet.z);
         assert_eq!(super::lift_support(&world, &reach, landing), Some(4));
+    }
+
+    #[test]
+    fn feet_at_rest_over_the_ground_tolerance_fall_as_the_programs_do() {
+        // The programs take feet up to 0.5 + 0.001 over a floor as on it
+        // (R-s). A rider a `#goto` left 1.86 above its deck (the #631
+        // rerun, 6.648) is past that and falls; 0.3 over stays. A client
+        // with no read physics keeps the grounded step's 2.
+        let world = eq_client_core::movement::CollisionWorld::new([
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+        ])
+        .unwrap();
+        let titanium = physics(InstalledClient::Titanium, None).ground_tolerance;
+        let mac = physics(InstalledClient::EqMac, None).ground_tolerance;
+        for tolerance in [titanium, mac] {
+            assert!((tolerance - 0.501).abs() < 1e-6, "{tolerance}");
+            assert!(!super::unsupported(
+                &world,
+                Vec3::new(0.0, 0.3, 0.0),
+                tolerance
+            ));
+            assert!(!super::unsupported(
+                &world,
+                Vec3::new(0.0, 0.501, 0.0),
+                tolerance
+            ));
+            assert!(super::unsupported(
+                &world,
+                Vec3::new(0.0, 1.86, 0.0),
+                tolerance
+            ));
+        }
+        let provisional = PROVISIONAL_PHYSICS.ground_tolerance;
+        assert!(!super::unsupported(
+            &world,
+            Vec3::new(0.0, 1.86, 0.0),
+            provisional
+        ));
+    }
+
+    #[test]
+    fn a_walk_up_and_down_stairs_and_across_a_slope_never_rests_in_the_air() {
+        // 6.648: with the programs' 0.501 ground tolerance, feet that an
+        // ordinary walk's step leaves on the ground count as on it at rest,
+        // and a walk that stops rests on a floor: nothing on stairs or a
+        // slope flickers between standing and falling.
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let titanium = climbing(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &HUMAN,
+        );
+        let quad = |x0: f32, x1: f32, y0: f32, y1: f32| {
+            [
+                [[x0, y0, -10.0], [x1, y1, -10.0], [x1, y1, 10.0]],
+                [[x0, y0, -10.0], [x1, y1, 10.0], [x0, y0, 10.0]],
+            ]
+        };
+        // Ten treads 1 deep and 0.75 high, up to a landing, with risers.
+        let mut stairs = Vec::new();
+        for tread in 0..10u8 {
+            let x = f32::from(tread);
+            let y = 0.75 * x;
+            stairs.extend(quad(x, x + 1.0, y, y));
+            stairs.push([[x, y - 0.75, -10.0], [x, y, -10.0], [x, y, 10.0]]);
+            stairs.push([[x, y - 0.75, -10.0], [x, y, 10.0], [x, y - 0.75, 10.0]]);
+        }
+        stairs.extend(quad(-20.0, 0.0, 0.0, 0.0));
+        stairs.extend(quad(10.0, 30.0, 7.5, 7.5));
+        // A 30 degree slope.
+        let rise = 20.0 * 30.0_f32.to_radians().tan();
+        let slope = quad(-20.0, 20.0, -rise / 2.0, rise / 2.0).to_vec();
+        for (name, triangles, from, to) in [
+            ("stairs", stairs, Vec3::new(-2.0, 0.0, 0.0), 12.0),
+            (
+                "slope",
+                slope,
+                Vec3::new(-15.0, -0.75 * rise / 2.0, 0.0),
+                15.0,
+            ),
+        ] {
+            let world = CollisionWorld::new(triangles).unwrap();
+            let on_floor = |x: f32| {
+                Vec3::new(
+                    x,
+                    world.ground(Vec3::new(x, 20.0, 0.0), 0.0, 40.0).unwrap(),
+                    0.0,
+                )
+            };
+            for direction in [1.0_f32, -1.0] {
+                let mut airborne = AirborneController::default();
+                let mut feet = on_floor(if direction > 0.0 { from.x } else { to });
+                let mut grounded_steps = 0;
+                for step in 0..80 {
+                    feet = super::fall_step(
+                        &mut airborne,
+                        &world,
+                        titanium,
+                        Some(titanium.reach()),
+                        feet,
+                        Vec3::X * 0.3 * direction,
+                        0.1,
+                        HUMAN.height,
+                        false,
+                    );
+                    // A step the controller ends on the ground is on it
+                    // at rest too: no stand and fall flicker. A step off a
+                    // riser deeper than the tolerance falls, as before.
+                    let grounded = airborne.velocity() == 0.0 && airborne.peak().is_none();
+                    grounded_steps += usize::from(grounded);
+                    assert!(
+                        !grounded || !super::unsupported(&world, feet, titanium.ground_tolerance),
+                        "{name} {direction} step {step}: {feet:?}"
+                    );
+                }
+                assert!(grounded_steps > 40, "{name} {direction}: {grounded_steps}");
+                // Stopped, it rests on a floor.
+                for _ in 0..20 {
+                    feet = super::fall_step(
+                        &mut airborne,
+                        &world,
+                        titanium,
+                        Some(titanium.reach()),
+                        feet,
+                        Vec3::ZERO,
+                        0.1,
+                        HUMAN.height,
+                        false,
+                    );
+                }
+                assert!(
+                    !super::unsupported(&world, feet, titanium.ground_tolerance),
+                    "{name} {direction} at rest: {feet:?}"
+                );
+            }
+        }
     }
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
@@ -4523,6 +4816,90 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn our_own_vertical_speed_goes_while_in_the_air_and_none_on_the_ground_or_landing() {
+        // The programs send their actor's vertical speed in the air and 0 on
+        // the ground and on the landing (capture-derived, 6.617): a jump
+        // rises, then falls, then lands; a walk off a ledge falls.
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let world = CollisionWorld::new([
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ])
+        .unwrap();
+        let titanium = physics(InstalledClient::Titanium, None);
+        let step = |airborne: &mut AirborneController, feet, delta, jump| {
+            super::fall_step(
+                airborne, &world, titanium, None, feet, delta, 0.15, 6.0, jump,
+            )
+        };
+        let mut airborne = AirborneController::default();
+        let feet = step(&mut airborne, Vec3::ZERO, Vec3::X, false);
+        assert_eq!(super::own_vertical_speed(Some(&airborne)), None, "a walk");
+        assert_eq!(super::own_vertical_speed(None), None);
+        let mut feet = step(&mut airborne, feet, Vec3::ZERO, true);
+        let rising = super::own_vertical_speed(Some(&airborne)).expect("take-off");
+        assert!(rising > 0.0 && rising < titanium.jump_speed, "{rising}");
+        assert!((rising - airborne.velocity()).abs() < f32::EPSILON);
+        let mut speeds = vec![rising];
+        while airborne.peak().is_some() {
+            feet = step(&mut airborne, feet, Vec3::ZERO, false);
+            speeds.push(super::own_vertical_speed(Some(&airborne)).unwrap_or(0.0));
+            assert!(speeds.len() < 40, "the jump lands");
+        }
+        assert!(feet.y.abs() < 0.001, "{feet:?}");
+        assert_eq!(speeds.last(), Some(&0.0), "the landing sends none");
+        assert!(speeds.iter().any(|speed| *speed < 0.0), "{speeds:?}");
+        assert!(
+            speeds[..speeds.len() - 1].iter().all(|speed| *speed != 0.0),
+            "{speeds:?}"
+        );
+        // A walk off the edge falls at the fall's own speed.
+        let mut falling = AirborneController::default();
+        step(
+            &mut falling,
+            Vec3::new(19.5, 0.0, 0.0),
+            Vec3::X * 3.0,
+            false,
+        );
+        assert!(
+            super::own_vertical_speed(Some(&falling)).is_some_and(|speed| speed < 0.0),
+            "{}",
+            falling.velocity()
+        );
+    }
+
+    #[test]
+    fn a_jump_sample_carries_its_take_off_speed() {
+        let (mut app, receiver) = standing_jump(InstalledClient::EqMac);
+        app.update();
+        app.update();
+        let earlier = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        app.world_mut().resource_mut::<Controls>().crouch = Some(Crouch::Until(earlier));
+        app.update();
+        let moves: Vec<MovementRequest> = receiver
+            .try_iter()
+            .filter_map(|command| match command {
+                ClientCommand::Move(request) => Some(request),
+                _ => None,
+            })
+            .collect();
+        let velocity = app
+            .world()
+            .resource::<Controls>()
+            .airborne
+            .as_ref()
+            .unwrap()
+            .velocity();
+        assert!(velocity > 0.0);
+        assert_eq!(
+            moves.last().and_then(|sample| sample.vertical_speed),
+            Some(velocity)
+        );
+    }
+
+    #[test]
     fn a_goto_just_over_a_steep_face_stands_up_and_climbs_it() {
         // Live's look (11-01, 85b9d33d): a goto 1 u over a 50° face, then
         // a run and a walk up it, moved 0.0 on every sample. Each sample
@@ -4661,7 +5038,8 @@ pub(super) mod tests {
             physics(InstalledClient::Titanium, None),
             InstalledClient::Titanium,
             body,
-            raised,
+            1,
+            (raised, false),
         );
         let mut triangles = vec![
             [[-40.0, 0.0, -40.0], [40.0, 0.0, 40.0], [40.0, 0.0, -40.0]],
@@ -4708,6 +5086,54 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn the_guard_hears_the_bodys_own_edge_climb_and_the_mesh_asks_no_more() {
+        use eq_client_assets::falls::{EdgeBody, TITANIUM};
+        // An ogre of size 9 and a gnome of size 3: the reach the session's
+        // guard hears (`ClimbReach`) is the walk's own climb for that body.
+        for (race, size) in [(10, 9.0_f32), (12, 3.0), (1, 6.0)] {
+            let body = super::PlayerBody {
+                feet_offset: eq_client_core::drawn_feet_offset(size / 5.0),
+                height: size,
+                size,
+            };
+            let physics = walking(
+                physics(InstalledClient::Titanium, None),
+                InstalledClient::Titanium,
+                &body,
+                race,
+                (true, false),
+            );
+            let climb = TITANIUM.walk_climb(EdgeBody {
+                race,
+                stand_height: body.feet_offset,
+                size,
+                lifted: true,
+            });
+            assert!((physics.reach() - climb).abs() < 1e-5, "{race}: {climb}");
+            // The zone's mesh, shared by every body, never asks a step past
+            // what the body walks up.
+            assert!(
+                eq_client_core::movement::MAX_GROUNDED_STEP <= climb,
+                "{race}: {climb}"
+            );
+            // Unlifted, a body keeps the floor sweep's climb, which for a
+            // small one is under the mesh's step: the mesh may offer a ducking
+            // or deep-water gnome an edge its walk refuses (docs/gameplay.md).
+            let unlifted = TITANIUM.walk_climb(EdgeBody {
+                race,
+                stand_height: body.feet_offset,
+                size,
+                lifted: false,
+            });
+            assert_eq!(
+                eq_client_core::movement::MAX_GROUNDED_STEP <= unlifted,
+                size > 3.0,
+                "{race}: {unlifted}"
+            );
+        }
+    }
+
+    #[test]
     fn a_titanium_walk_stops_at_an_edge_past_the_measured_climb_or_a_wall() {
         let past = solid_box(Vec3::new(-20.0, 0.0, 4.0), Vec3::new(20.0, 5.3, 6.0));
         let wall = solid_box(Vec3::new(-20.0, 0.0, 4.0), Vec3::new(20.0, 7.0, 6.0));
@@ -4728,32 +5154,49 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn a_wading_walk_keeps_the_floor_sweeps_climb_at_a_block_4_high() {
+    fn a_walk_in_deep_water_keeps_the_floor_sweeps_climb_and_wading_climbs() {
         use eq_client_core::movement::CollisionWorld;
-        // With the feet in liquid the program sweeps the walk at the origin
-        // (L = 0 in 0x489a32), so wading keeps the floor sweep's 3.375 and
-        // a block 4 high stops it; on dry ground beside the pool it climbs.
+        // With the origin in liquid (+0xad of 5 or more) the program sweeps
+        // the walk at the origin (L = 0 in 0x489a32), so a block 4 high
+        // stops it; wading with the origin dry climbs it, as on dry ground.
         let dry = CollisionWorld::new(flat_surface(0.0)).unwrap();
-        let wet = CollisionWorld::new(flat_surface(0.0))
-            .unwrap()
-            .with_liquids(Pool {
-                top: 1.5,
-                liquid: Liquid::Water,
-            });
+        let pool = |top| {
+            CollisionWorld::new(flat_surface(0.0))
+                .unwrap()
+                .with_liquids(Pool {
+                    top,
+                    liquid: Liquid::Water,
+                })
+                .with_swim_origin(HUMAN.feet_offset)
+        };
+        let (wading, deep) = (pool(1.5), pool(5.0));
         let feet = Vec3::ZERO;
-        assert!(raised_walk(&dry, feet, None));
-        assert!(raised_walk(&wet, feet + Vec3::Y * 2.0, None));
-        assert!(!raised_walk(&wet, feet, None));
-        assert!(!raised_walk(
-            &dry,
-            feet,
-            Some(eq_client_core::PostureState::Ducking)
-        ));
+        let height = HUMAN.height;
+        assert!(raised_walk(&dry, feet, height, None));
+        assert!(raised_walk(&wading, feet, height, None));
+        assert!(!raised_walk(&deep, feet, height, None));
+        assert!(raised_walk(&deep, feet + Vec3::Y * 2.0, height, None));
+        for posture in [
+            eq_client_core::PostureState::Ducking,
+            eq_client_core::PostureState::Unknown(0x78),
+        ] {
+            assert!(!raised_walk(&dry, feet, height, Some(posture)));
+        }
         let block = solid_box(Vec3::new(-20.0, 0.0, 4.0), Vec3::new(20.0, 4.0, 6.0));
-        let wading = run_into(block.clone(), &HUMAN, raised_walk(&wet, feet, None), 32.0);
-        assert!(wading.z < 4.0 && wading.y.abs() < 0.001, "{wading}");
-        let dry_run = run_into(block, &HUMAN, raised_walk(&dry, feet, None), 32.0);
-        assert!(dry_run.z > 4.5, "{dry_run}");
+        let swum = run_into(
+            block.clone(),
+            &HUMAN,
+            raised_walk(&deep, feet, height, None),
+            32.0,
+        );
+        assert!(swum.z < 4.0 && swum.y.abs() < 0.001, "{swum}");
+        let waded = run_into(
+            block,
+            &HUMAN,
+            raised_walk(&wading, feet, height, None),
+            32.0,
+        );
+        assert!(waded.z > 4.5, "{waded}");
     }
 
     /// Steps `body` from `start` over `triangles` (render frame) in 50 ms
@@ -4769,7 +5212,7 @@ pub(super) mod tests {
         input: impl Fn(usize, Vec3) -> (Vec3, bool),
     ) -> (Vec3, Vec<eq_client_core::movement::Landing>) {
         use eq_client_core::movement::{AirborneController, CollisionWorld};
-        let physics = walking(physics(client, None), client, body, raised);
+        let physics = walking(physics(client, None), client, body, 1, (raised, false));
         let world = CollisionWorld::new(triangles).unwrap();
         let mut airborne = AirborneController::default();
         let mut feet = start;
@@ -4850,7 +5293,7 @@ pub(super) mod tests {
         let start = Vec3::new(0.0, 0.0, -20.0);
         let titanium = (InstalledClient::Titanium, true);
         for (name, side, takeoff, raised) in [
-            // A side 9 high reaches past the soles' rise (about 4.95)
+            // A side 9 high reaches past the soles' rise (about 5.25)
             // plus 3.375.
             ("a side 9 high", 9.0, Some(-1.0), titanium),
             // Off the end with no jump, the soles are far under the side's
@@ -4897,7 +5340,8 @@ pub(super) mod tests {
                 physics(InstalledClient::Titanium, None),
                 InstalledClient::Titanium,
                 &HUMAN,
-                true,
+                1,
+                (true, false),
             );
             let world = eq_client_core::movement::CollisionWorld::new(floor.clone()).unwrap();
             let mut airborne = eq_client_core::movement::AirborneController::default();
@@ -4993,7 +5437,7 @@ pub(super) mod tests {
             peak.get().max(feet.y)
         };
         let apex = highest(floor.clone());
-        assert!((apex - 4.95).abs() < 0.1, "{apex}");
+        assert!((apex - 5.25).abs() < 0.1, "{apex}");
         for top in [3.0, 6.0, 8.0] {
             for thick in [0.1, 0.3] {
                 let mut triangles = floor.clone();
@@ -5023,11 +5467,12 @@ pub(super) mod tests {
             physics(InstalledClient::Titanium, None),
             InstalledClient::Titanium,
             &HUMAN,
-            true,
+            1,
+            (true, false),
         );
         let floor = solid_box(Vec3::new(-20.0, -1.0, -40.0), Vec3::new(20.0, 0.0, 200.0));
         let mut ledge = floor;
-        // Just under what a standing jump mounts (about 4.95 + 3.375).
+        // Under what a standing jump mounts (about 5.25 + 3.375).
         ledge.extend(solid_box(
             Vec3::new(-20.0, 0.0, 1.0),
             Vec3::new(20.0, 8.0, 200.0),
@@ -5087,7 +5532,9 @@ pub(super) mod tests {
                 );
                 feet = next;
             }
-            assert!(lifted == 1 && (feet.y - top).abs() < 0.01, "{name}: {feet}");
+            // The deck is low enough that the arc alone may land on it; the
+            // ledge needs the lift.
+            assert!(lifted <= 1 && (feet.y - top).abs() < 0.01, "{name}: {feet}");
         }
     }
 
@@ -5339,12 +5786,14 @@ pub(super) mod tests {
             &HUMAN,
         );
         assert!((mac.gravity - 160.0).abs() < 0.001, "{}", mac.gravity);
-        // The session's motion guard lets the program's fastest fall through.
+        // Three frames a step slow the fall to 13.2 units a step (R49-24 b),
+        // well inside the session's motion guard.
         assert!(
-            (mac.terminal_speed - eq_client_core::movement::EQMAC_FALL_SPEED).abs() < 0.01,
+            (mac.terminal_speed - 264.0).abs() < 0.01,
             "{}",
             mac.terminal_speed
         );
+        assert!(mac.terminal_speed <= eq_client_core::movement::EQMAC_FALL_SPEED);
         // The zone header's gravity, a step at a time; none pulls nothing.
         let heavy = climbing(
             physics(InstalledClient::EqMac, Some(0.8)),
@@ -5352,14 +5801,19 @@ pub(super) mod tests {
             &HUMAN,
         );
         assert!((heavy.gravity - 320.0).abs() < 0.01, "{}", heavy.gravity);
-        assert!((heavy.terminal_speed - mac.terminal_speed).abs() < 0.01);
+        // A frame's share of a heavier pull meets the air higher: 26.4 a step.
+        assert!(
+            (heavy.terminal_speed - 528.0).abs() < 0.01,
+            "{}",
+            heavy.terminal_speed
+        );
         let light = climbing(
             physics(InstalledClient::EqMac, Some(0.2)),
             InstalledClient::EqMac,
             &HUMAN,
         );
         assert!(
-            (light.terminal_speed - 396.0).abs() < 0.01,
+            (light.terminal_speed - 132.0).abs() < 0.01,
             "{}",
             light.terminal_speed
         );
@@ -5392,10 +5846,13 @@ pub(super) mod tests {
             ramped_turn(1.0 / 60.0, 2.0 / 60.0, 12.0),
             40.0 / 60.0
         ));
-        // Running reaches 240 a second after 11 steps, walking 160 after 7.
-        assert!(close(ramped_turn(1.0, 2.0, 12.0), 240.0));
-        assert!(close(ramped_turn(1.0, 2.0, turn_cap(true, 1)), 160.0));
-        assert!(close(ramped_turn(1.0, 2.0, turn_cap(false, 141)), 60.0));
+        // A human reaches 240 a second after 11 steps, walking or running;
+        // races 216 and 472 160 after 7, and race 141 60 (R49-24b).
+        assert!(close(ramped_turn(1.0, 2.0, turn_cap(1)), 240.0));
+        for race in [216, 472] {
+            assert!(close(ramped_turn(1.0, 2.0, turn_cap(race)), 160.0));
+        }
+        assert!(close(ramped_turn(1.0, 2.0, turn_cap(141)), 60.0));
         // The whole ramp to full speed turns 20 x (1 + ... + 11) / 60.
         assert!(close(ramped_turn(0.0, 11.0 / 60.0, 12.0), 22.0));
         // A span that starts before the key was held counts from the press.
@@ -5723,16 +6180,20 @@ pub(super) mod tests {
     #[test]
     fn a_running_drop_off_a_ledge_at_the_live_cadence_lands_at_the_read_steps_speed() {
         use eq_client_assets::falls::{FallLanding, TITANIUM};
-        // Live's local EQEmu drops (11-01): a run off a ledge this high,
-        // the impact the client logged, and the damage for a carried weight
-        // of 0, of 16.5 (what the four drops fit) and of 18 (the inventory
-        // window two hours earlier): T = whole weight / 100 + v - 4.
-        for (height, impact, damages) in [
-            (30.2, 90.0, [2, 4, 4]),
-            (50.2, 110.8, [23, 28, 29]),
-            (80.2, 144.2, [103, 113, 114]),
-            (100.2, 157.1, [148, 161, 162]),
-        ] {
+        // The heights of live's local EQEmu drops (11-01): a run off a
+        // ledge this high, the impact under the per-frame fall (R49-24 b;
+        // the 11-01 impacts were the old once-a-step fall's: 90, 110.8,
+        // 144.2 and 157.1, costing 2, 23, 103 and 148 unladen), at the 60
+        // frames a second taken (inferred, 6.419), and the damage for a
+        // carried weight of 0, 16.5 and 18: T = whole weight / 100 + v - 4.
+        let expected = [
+            (30.2, 80.15, [0, 0, 0]),
+            (50.2, 105.88, [16, 21, 21]),
+            (80.2, 128.0, [57, 65, 66]),
+            (100.2, 139.77, [89, 99, 100]),
+        ];
+        let mut got = Vec::new();
+        for (height, _, _) in expected {
             let ledge = |x0: f32, x1: f32, y: f32| {
                 [
                     [[x0, y, -20.0], [x1, y, -20.0], [x1, y, 20.0]],
@@ -5770,20 +6231,22 @@ pub(super) mod tests {
                 })
                 .expect("the run lands");
             assert!(feet.y.abs() < 0.01, "{height}: {feet}");
-            assert!(
-                (landing.impact_speed - impact).abs() < 0.06,
-                "{height}: {landing:?}"
-            );
-            for (weight, damage) in [0.0, 16.5, 18.0].into_iter().zip(damages) {
-                let cost = TITANIUM.landing_cost(FallLanding {
-                    impact_speed: landing.impact_speed,
-                    carried_weight: weight,
-                    safe_fall: 0,
-                    safe_fall_ranks: 0,
-                    zone: 1,
-                });
-                assert_eq!(cost.damage, damage, "{height} at {weight}: {landing:?}");
-            }
+            let damages = [0.0, 16.5, 18.0].map(|weight| {
+                TITANIUM
+                    .landing_cost(FallLanding {
+                        impact_speed: landing.impact_speed,
+                        carried_weight: weight,
+                        safe_fall: 0,
+                        safe_fall_ranks: 0,
+                        zone: 1,
+                    })
+                    .damage
+            });
+            got.push((height, landing.impact_speed, damages));
+        }
+        for ((height, impact, damages), (_, landed, cost)) in expected.iter().zip(&got) {
+            assert!((landed - impact).abs() < 0.06, "{height}: {got:?}");
+            assert_eq!(cost, damages, "{height}: {got:?}");
         }
     }
 
@@ -5837,6 +6300,38 @@ pub(super) mod tests {
         assert!(summary.net < 1e-5);
     }
     use std::sync::mpsc;
+
+    #[test]
+    fn a_failed_script_run_stops_autorun_and_a_stopped_or_completed_one_does_not() {
+        use crate::script::{Phase, RunStatus};
+        for (phase, runs_on) in [
+            (Phase::Failed, false),
+            (Phase::Stopped, true),
+            (Phase::Completed, true),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<Controls>()
+                .add_systems(Update, stop_autorun_after_failed_script);
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.update();
+            assert!(app.world().resource::<Controls>().autorun, "no run yet");
+            app.insert_resource(RunStatus::ended(phase));
+            app.update();
+            assert_eq!(
+                app.world().resource::<Controls>().autorun,
+                runs_on,
+                "{phase:?}"
+            );
+            // The player latches it again after the run: the old outcome
+            // no longer takes it off.
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.update();
+            assert!(
+                app.world().resource::<Controls>().autorun,
+                "{phase:?} later"
+            );
+        }
+    }
 
     #[test]
     fn autorun_runs_forward_with_no_key_held_until_back_is() {
@@ -5983,6 +6478,16 @@ pub(super) mod tests {
         created
     }
 
+    /// The fixture body's Titanium walk climb: a human standing 3 high.
+    fn fixture_climb() -> f32 {
+        eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+            race: 1,
+            stand_height: 3.0,
+            size: 6.0,
+            lifted: true,
+        })
+    }
+
     pub(crate) fn fixture() -> (App, mpsc::Receiver<ClientCommand>) {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
@@ -6052,10 +6557,7 @@ pub(super) mod tests {
                 // The session has heard this body's Titanium walk climb
                 // a step, so the samples are the only commands these tests
                 // see ([`the_session_hears_the_bodys_climb_at_each_admission_and_change`]).
-                climb_sent: Some((
-                    11,
-                    eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
-                )),
+                climb_sent: Some((11, fixture_climb())),
                 ..Controls::default()
             });
         app.world_mut().spawn((
@@ -6263,7 +6765,12 @@ pub(super) mod tests {
         );
         app.world_mut().resource_mut::<Controls>().climb_sent = Some((
             12,
-            eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
+            eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+                race: 1,
+                stand_height: 3.0,
+                size: 6.0,
+                lifted: true,
+            }),
         ));
         app.update();
         let ClientCommand::Move(fall) = receiver.try_recv().unwrap() else {
@@ -6272,6 +6779,7 @@ pub(super) mod tests {
         assert_eq!(fall.session_id, 12);
         assert_eq!(fall.mode, MovementMode::Fall);
         assert!(fall.position.z < above.z);
+        assert!(fall.vertical_speed.is_some_and(|speed| speed < 0.0));
         assert_eq!(
             app.world()
                 .resource::<online::OnlineState>()
@@ -6510,6 +7018,454 @@ pub(super) mod tests {
         }
         fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
             None
+        }
+    }
+
+    /// Water below 0 on the near side of a rim at x = 0, as a zone's pool
+    /// region stops at its wall.
+    #[derive(Clone)]
+    struct RimPool;
+
+    impl RimPool {
+        fn wet(point: Vec3) -> bool {
+            point.y < 0.0 && point.x < 0.0
+        }
+    }
+
+    impl Liquids for RimPool {
+        fn liquid_at(&self, point: Vec3) -> Option<Liquid> {
+            Self::wet(point).then_some(Liquid::Water)
+        }
+        fn segment_known(&self, _: Vec3, _: Vec3) -> bool {
+            true
+        }
+        fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
+            liquid == Liquid::Water
+                && (0..=256_u16).any(|i| Self::wet(from.lerp(to, f32::from(i) / 256.0)))
+        }
+        fn first_outside(
+            &self,
+            from: Vec3,
+            to: Vec3,
+            liquid: Liquid,
+        ) -> Option<std::ops::Range<f64>> {
+            if liquid != Liquid::Water {
+                return Some(0.0..1.0);
+            }
+            (0..=1024)
+                .map(|i| f64::from(i) / 1024.0)
+                .find(|&t| !Self::wet(from.as_dvec3().lerp(to.as_dvec3(), t).as_vec3()))
+                .map(|t| t..1.0)
+        }
+        fn water_surface_exit(&self, from: Vec3, to: Vec3) -> bool {
+            Self::wet(from) && !Self::wet(to) && to.y >= 0.0
+        }
+        fn liquid_surface(&self, top: Vec3, bottom: f32) -> Option<(f32, Liquid)> {
+            (top.x < 0.0 && top.y > 0.0 && bottom < 0.0).then_some((0.0, Liquid::Water))
+        }
+        fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
+            Some(Box::new(self.clone()))
+        }
+    }
+
+    /// A pool whose floor is at -8, with a rim at x = 0 rising to `rim`.
+    fn rim_pool(rim: f32) -> CollisionWorld {
+        let quad = |a, b, c, d| [[a, b, c], [a, c, d]];
+        let mut triangles = Vec::from(quad(
+            [-20.0, -8.0, -10.0],
+            [0.0, -8.0, -10.0],
+            [0.0, -8.0, 10.0],
+            [-20.0, -8.0, 10.0],
+        ));
+        triangles.extend(quad(
+            [0.0, rim, -10.0],
+            [200.0, rim, -10.0],
+            [200.0, rim, 10.0],
+            [0.0, rim, 10.0],
+        ));
+        triangles.extend(quad(
+            [0.0, -8.0, -10.0],
+            [0.0, rim, -10.0],
+            [0.0, rim, 10.0],
+            [0.0, -8.0, 10.0],
+        ));
+        CollisionWorld::new(triangles)
+            .unwrap()
+            .with_liquids(RimPool)
+            .with_swim_origin(3.75)
+    }
+
+    /// Swims at a rim for `samples` accepted samples, forward held and the
+    /// look pitched, and gives each sample's mode and feet.
+    fn swim_at_rim(
+        rim: f32,
+        swim: Option<eq_client_core::movement::SwimCalibration>,
+        pitch: f32,
+        samples: usize,
+    ) -> Vec<(MovementMode, Vec3, Duration)> {
+        swim_from(
+            rim_pool(rim),
+            Vec3::new(-1.0, -3.9, 0.0),
+            0.0,
+            (swim, pitch),
+            samples,
+        )
+        .unwrap_or_else(|error| panic!("rim {rim}: {error}"))
+    }
+
+    /// Swims from `feet` facing `heading` (EQ units) for `samples` accepted
+    /// samples, forward held and the look pitched, under a Titanium
+    /// session's bound, and gives each sample's mode, feet and time, or
+    /// the session's refusal with the samples before it.
+    fn swim_from(
+        world: CollisionWorld,
+        feet: Vec3,
+        heading: f32,
+        (swim, pitch): (Option<eq_client_core::movement::SwimCalibration>, f32),
+        samples: usize,
+    ) -> Result<Vec<(MovementMode, Vec3, Duration)>, String> {
+        let (mut app, receiver) = fixture();
+        app.add_systems(Update, input);
+        app.insert_resource(Collision(Some(world)));
+        let origin = feet + Vec3::Y * 3.75;
+        let placement = world_position(origin.to_array(), heading);
+        // The session bounds every sample as a Titanium server's would.
+        let start = Instant::now().checked_sub(Duration::from_secs(1)).unwrap();
+        let mut session = eq_network_game::movement::MotionSession::new(11, 7, placement, start)
+            .unwrap()
+            .with_swimming(true)
+            .with_falls(true)
+            .with_jump(Some((44.55, 160.0)));
+        let grant =
+            eq_network_game::movement::titanium_speeds(&eq_network_game::movement::SpeedState {
+                run: 0.7,
+                walk: 0.46,
+                level: 50,
+                hit_points: Some((500, 500)),
+                rate: 0,
+                weight: 0,
+                capacity: 100,
+                sneaking: false,
+                ducking: false,
+                zone_id: 1,
+                swimming_skill: Some(100),
+            })
+            .motion
+            .unwrap();
+        session.calibrate(grant, start).unwrap();
+        {
+            let world = app.world_mut();
+            online::testing::place(&mut world.resource_mut::<online::OnlineState>(), placement);
+            let mut player =
+                world.query_filtered::<(&mut PlayerBody, &mut Transform), With<Player>>();
+            let (mut body, mut transform) = player.single_mut(world).unwrap();
+            body.feet_offset = 3.75;
+            body.height = 7.5;
+            transform.translation = origin;
+            let mut camera = world.query::<&mut OrbitCamera>();
+            let mut camera = camera.single_mut(world).unwrap();
+            camera.yaw = crate::camera::behind(eq_client_core::render_heading(heading));
+            camera.look = pitch;
+            let mut controls = world.resource_mut::<Controls>();
+            controls.speed = Some(grant.units_per_second);
+            controls.swim = swim;
+            controls.airborne = Some(AirborneController::default());
+            let mut keys = world.resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::KeyW);
+        }
+        let mut seen = Vec::new();
+        for _ in 0..samples * 8 {
+            std::thread::sleep(Duration::from_millis(17));
+            app.update();
+            while let Ok(command) = receiver.try_recv() {
+                if let ClientCommand::ClimbReach { per_step, .. } = command {
+                    session.set_climb(per_step);
+                }
+                if let ClientCommand::Move(request) = command {
+                    if let Err(error) =
+                        session.send_move_sample(&request, Instant::now(), |_| Ok(()))
+                    {
+                        return Err(format!(
+                            "{:?} {:?} at {:?}: {error}; before {seen:?}",
+                            request.mode,
+                            request.position,
+                            request.created.duration_since(start)
+                        ));
+                    }
+                    accept_now(&mut app, &request);
+                    let at = Vec3::from_array(eq_client_core::render_position(request.position))
+                        - Vec3::Y * 3.75;
+                    seen.push((request.mode, at, request.created.duration_since(start)));
+                }
+            }
+            if seen.len() >= samples {
+                break;
+            }
+        }
+        Ok(seen)
+    }
+
+    fn accept_now(app: &mut App, request: &MovementRequest) {
+        let created = app.world().resource::<Controls>().pending.unwrap().created;
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::MotionSent {
+                session_id: request.session_id,
+                created,
+                position: request.position,
+                refused: None,
+            }],
+        );
+        let world = app.world_mut();
+        let mut players = world.query_filtered::<&Transform, With<Player>>();
+        let drawn = *players.single(world).unwrap();
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        assert!(controls.moved(Some(request.session_id), created));
+        controls.display_sample(drawn, request.position);
+        controls.resolve_water_entry(false);
+    }
+
+    #[test]
+    fn a_swimmer_hops_out_of_the_water_onto_a_rim_above_it() {
+        // Temple of Life's pool (attended and local looks, 11-23): forward
+        // with the view pitched up at a rim 3 to 3.3 above the water. Dry
+        // ground just ahead gives the program's surface hop (read R33b 3),
+        // the origin leaves the water on that frame and the fall carries
+        // the rise on, passing over what the walk climbs (origin + 1.25
+        // for this body) onto the rim, inside the session's bound. A rim
+        // higher than the hop reaches keeps the swimmer in the pool.
+        for (rim, climbs) in [
+            (0.0, true),
+            (1.25, true),
+            (2.5, true),
+            (3.3, true),
+            (4.5, false),
+        ] {
+            let seen = swim_at_rim(rim, Some(WET_SWIMMER), 0.4, 40);
+            let out = seen
+                .iter()
+                .find(|(_, at, _)| at.x > 0.0)
+                .map(|(mode, at, _)| (*mode, *at));
+            assert_eq!(out.is_some(), climbs, "rim {rim}: {seen:?}");
+            if let Some((mode, at)) = out {
+                assert_eq!(mode, MovementMode::Forward, "rim {rim}");
+                assert!((at.y - rim).abs() < 0.01, "rim {rim}: {at}");
+            }
+        }
+    }
+
+    #[test]
+    fn a_swimmer_looking_up_away_from_dry_ground_does_not_hop() {
+        // Open water ahead (the rim behind): no hop, so the origin rises
+        // only by the stroke, a little above the surface.
+        let seen = swim_from(
+            rim_pool(3.0),
+            Vec3::new(-1.0, -3.9, 0.0),
+            256.0,
+            (Some(WET_SWIMMER), 0.4),
+            30,
+        )
+        .unwrap();
+        let highest = seen
+            .iter()
+            .map(|(_, at, _)| at.y + 3.75)
+            .fold(f32::MIN, f32::max);
+        assert!(seen.iter().all(|(_, at, _)| at.x < 0.0), "{seen:?}");
+        assert!(highest < 1.0, "origin rose to {highest}: {seen:?}");
+    }
+
+    /// A made-up ramp out of a pool whose surface is at -2: 14 wide,
+    /// rising from 1 below the surface at its lip to 8 above it, in two
+    /// overlapping faces split at a crease, with a wall along one side and
+    /// a floor at -16.
+    fn pool_ramp() -> CollisionWorld {
+        let (lip, crease, far) = (-6.0, -3.0, 22.0);
+        let mut triangles = vec![
+            [[0.0, 1.0, 0.0], [14.0, 8.0, far], [0.0, 8.0, far]],
+            [[14.0, 8.0, far], [0.0, 1.0, 0.0], [0.0, 0.0, crease]],
+            [[14.0, 1.0, 0.0], [0.0, 0.0, crease], [14.0, 0.0, crease]],
+            [[0.0, 0.0, crease], [14.0, 1.0, 0.0], [14.0, 8.0, far]],
+            [[0.0, 1.0, 0.0], [0.0, 10.0, far], [0.0, 1.0, lip]],
+            [[0.0, 10.0, far], [0.0, 1.0, 0.0], [0.0, 8.0, far]],
+            [[0.0, 1.0, 0.0], [0.0, 0.0, lip], [0.0, 0.0, crease]],
+            [[0.0, 0.0, lip], [0.0, 1.0, 0.0], [0.0, 1.0, lip]],
+            [[14.0, -1.0, lip], [0.0, 0.0, crease], [0.0, -1.0, lip]],
+            [[0.0, 0.0, crease], [14.0, -1.0, lip], [14.0, 0.0, crease]],
+            [[0.0, 0.0, crease], [0.0, 0.0, lip], [0.0, -1.0, lip]],
+        ];
+        triangles.extend(flat_surface(-16.0));
+        CollisionWorld::new(triangles)
+            .unwrap()
+            .with_liquids(Pool {
+                top: -2.0,
+                liquid: Liquid::Water,
+            })
+            .with_swim_origin(3.75)
+    }
+
+    #[test]
+    fn a_body_surfacing_under_a_ramp_drops_back_into_the_water() {
+        // A swimmer came up under a ramp (Temple of Life, local look,
+        // 11-23): its origin just out of the water, its head in the ramp's
+        // underside. It must drop back in and swim on, not freeze.
+        for origin in [Vec3::new(1.5, -1.6, 0.025), Vec3::new(1.55, -1.5, -0.005)] {
+            let feet = origin - Vec3::Y * 3.75;
+            let seen = swim_from(pool_ramp(), feet, 0.0, (Some(WET_SWIMMER), 0.0), 20).unwrap();
+            assert!(
+                seen.iter().any(|(_, at, _)| at.distance(feet) > 0.1),
+                "frozen at {origin}: {seen:?}"
+            );
+            assert!(
+                seen.iter().any(|(mode, _, _)| *mode == MovementMode::Swim),
+                "{seen:?}"
+            );
+        }
+    }
+
+    /// The live look's three Temple of Life spots (North Qeynos), swum
+    /// against the installed zone's own collision and water as zone entry
+    /// builds them. Prints the floor and water along each spot's heading and
+    /// every sample, and says whether the swimmer got out. Needs an
+    /// `EverQuest` folder in `EQ_DIR`; reads files only.
+    #[test]
+    #[ignore = "reads an EverQuest installation named by EQ_DIR"]
+    #[allow(clippy::too_many_lines)] // A diagnostic printout.
+    fn installed_temple_of_life_rim() {
+        let directory = std::path::PathBuf::from(
+            std::env::var_os("EQ_DIR").expect("EQ_DIR names an EverQuest folder"),
+        );
+        let zone = eq_client_assets::load_zone(&directory, "qeynos2").expect("qeynos2 loads");
+        let world = || {
+            crate::scene_collision::collision_world(
+                &zone,
+                crate::scene_collision::collision_triangles(&zone),
+                Some(3.75),
+            )
+            .expect("collision builds")
+        };
+        let surface: f32 = std::env::var("RIM_SURFACE")
+            .ok()
+            .and_then(|z| z.parse().ok())
+            .unwrap_or(-2.0);
+        let pitches: Vec<f32> = std::env::var("RIM_PITCHES").ok().map_or_else(
+            || vec![0.0, 0.3, 0.45, 0.55],
+            |list| list.split(',').filter_map(|p| p.parse().ok()).collect(),
+        );
+        let profile = world();
+        // RIM_DUMP=x,y,z,radius prints the collision triangles (renderer
+        // frame) whose every corner lies within the box around that world
+        // point, for a local reproduction.
+        if let Ok(dump) = std::env::var("RIM_DUMP") {
+            let values: Vec<f32> = dump
+                .split(',')
+                .filter_map(|v| v.trim().parse().ok())
+                .collect();
+            if let [x, y, z, radius] = values[..] {
+                let centre = Vec3::from_array(eq_client_core::render_position(
+                    eq_client_core::WorldPosition {
+                        x,
+                        y,
+                        z,
+                        heading: 0.0,
+                    },
+                ));
+                for triangle in crate::scene_collision::collision_triangles(&zone) {
+                    if triangle.iter().any(|corner| {
+                        (Vec3::from_array(*corner) - centre).abs().max_element() <= radius
+                    }) {
+                        println!("tri {triangle:?}");
+                    }
+                }
+                println!("centre {centre}");
+            }
+        }
+        // name,x,y,z,heading;... with z empty for the surface.
+        let spots: Vec<(String, f32, f32, f32, f32)> = std::env::var("RIM_SPOTS").map_or_else(
+            |_| {
+                [
+                    ("A", -306.0_f32, -191.0_f32, surface, 128.0_f32),
+                    ("B", -306.0, -216.0, surface, 128.0),
+                    ("C", -308.8, -180.0, surface, 0.0),
+                    ("C2", -314.02, -179.86, surface, 0.0),
+                    ("W", -314.15, -166.45, -1.6, 0.0),
+                ]
+                .into_iter()
+                .map(|(name, x, y, z, heading)| (name.to_owned(), x, y, z, heading))
+                .collect()
+            },
+            |list| {
+                list.split(';')
+                    .filter_map(|spot| {
+                        let mut parts = spot.split(',');
+                        let name = parts.next()?.trim().to_owned();
+                        let mut number = || parts.next().map(str::trim);
+                        let x = number()?.parse().ok()?;
+                        let y = number()?.parse().ok()?;
+                        let z = number()?.parse().unwrap_or(surface);
+                        let heading = number()?.parse().ok()?;
+                        Some((name, x, y, z, heading))
+                    })
+                    .collect()
+            },
+        );
+        for (name, x, y, z, heading) in spots {
+            let ahead = Vec3::from_array(eq_client_core::render_vector([
+                (heading / 512.0 * std::f32::consts::TAU).sin(),
+                (heading / 512.0 * std::f32::consts::TAU).cos(),
+                0.0,
+            ]));
+            let origin = Vec3::from_array(eq_client_core::render_position(
+                eq_client_core::WorldPosition { x, y, z, heading },
+            ));
+            println!("spot {name}: origin {origin} ahead {ahead}");
+            for step in 0..=80_u16 {
+                let at = origin + ahead * (f32::from(step) * 0.25);
+                let floor = profile.ground(at + Vec3::Y * 12.0, 0.0, 40.0);
+                let wet = |dy: f32| profile.in_liquid(at + Vec3::Y * dy);
+                let world_at = eq_client_core::world_position((at).to_array(), heading);
+                let above = profile.ray_distance(at, Vec3::Y, 12.0);
+                println!(
+                    "  d {:5.2} world ({:8.2},{:8.2}) floor {:?} ceiling {:?} liquid at origin {:?} +0.5 {:?} -0.5 {:?} -1 {:?} -3.75 {:?}",
+                    f32::from(step) * 0.25,
+                    world_at.x,
+                    world_at.y,
+                    floor.map(|f| f - origin.y + z),
+                    above.map(|d| z + d),
+                    wet(0.0),
+                    wet(0.5),
+                    wet(-0.5),
+                    wet(-1.0),
+                    wet(-3.75),
+                );
+            }
+            for &pitch in &pitches {
+                let feet = origin - Vec3::Y * 3.75;
+                match swim_from(world(), feet, heading, (Some(WET_SWIMMER), pitch), 120) {
+                    Ok(seen) => {
+                        let last = seen.last().map(|(_, at, _)| *at);
+                        println!(
+                            "  pitch {pitch}: {} samples, last feet {last:?}",
+                            seen.len()
+                        );
+                        for (mode, at, time) in &seen {
+                            let world_at = eq_client_core::world_position(
+                                (*at + Vec3::Y * 3.75).to_array(),
+                                0.0,
+                            );
+                            println!(
+                                "    {:>6.3}s {:?} origin ({:.2},{:.2},{:.2})",
+                                time.as_secs_f32(),
+                                mode,
+                                world_at.x,
+                                world_at.y,
+                                world_at.z
+                            );
+                        }
+                    }
+                    Err(error) => println!("  pitch {pitch}: REFUSED {error}"),
+                }
+            }
         }
     }
 
@@ -6870,7 +7826,12 @@ pub(super) mod tests {
         }
         app.world_mut().resource_mut::<Controls>().climb_sent = Some((
             12,
-            eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
+            eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+                race: 1,
+                stand_height: 3.0,
+                size: 6.0,
+                lifted: true,
+            }),
         ));
         app.update();
         assert!(app.world().resource::<Controls>().following.is_none());
@@ -7250,7 +8211,12 @@ pub(super) mod tests {
                 .unwrap();
             controls.climb_sent = Some((
                 session,
-                eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
+                eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+                    race: 1,
+                    stand_height: 3.0,
+                    size: 6.0,
+                    lifted: true,
+                }),
             ));
         };
         let next_move = |app: &mut App, session| {
@@ -7372,7 +8338,12 @@ pub(super) mod tests {
             controls.airborne = Some(AirborneController::default());
             controls.climb_sent = Some((
                 12,
-                eq_client_assets::falls::TITANIUM.walk_climb(3.0, 6.0, true),
+                eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
+                    race: 1,
+                    stand_height: 3.0,
+                    size: 6.0,
+                    lifted: true,
+                }),
             ));
         }
         movement_choice(&mut app, Fix::JesusMode, true);
@@ -9235,6 +10206,181 @@ pub(super) mod tests {
     }
 
     #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "two samples of one jump on a moving, turning boat"
+    )]
+    fn a_jump_on_a_moving_boat_stays_linked_and_gains_only_the_boats_motion() {
+        use eq_client_core::movement::{
+            CollisionInstance, CollisionMesh, carrier_local, carrier_world,
+        };
+        use eq_client_core::{GameDialect, SpawnKind, SpawnState, WorldEvent, WorldPosition};
+        // The program's floor sweep links the first carrier below on every
+        // move step, so a body in the air over the deck is carried with it
+        // (read R49-27 (d), 6.611). The boat moves 5 and turns 8 between
+        // samples; the jump goes straight up.
+        let (mut app, receiver) = stationary_airborne_app();
+        let origin = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        let start = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        let boat = SpawnState {
+            body_type: None,
+            spawn_id: 8,
+            race: 72,
+            kind: SpawnKind::Npc,
+            position: WorldPosition::default(),
+            class: None,
+            name: String::new(),
+            gender: 2,
+            velocity: [0.0; 3],
+            forward: 0.0,
+            walk_speed: 0.0,
+            run_speed: 0.0,
+            size: 1.0,
+            invisible: false,
+            appearance: eq_client_core::outfit::Appearance::default(),
+            level: 1,
+            listing: eq_client_core::listing::Listing::default(),
+            pet_owner: None,
+            hp_percent: None,
+            posture: None,
+            name_parts: eq_client_core::names::NameParts::default(),
+        };
+        let mut carriers = eq_client_core::movement::Carriers::default();
+        let spawned = carriers.observe(
+            &WorldEvent::Spawns(vec![boat]),
+            GameDialect::Titanium,
+            start,
+        );
+        let deck = std::sync::Arc::new(
+            CollisionMesh::new([
+                [
+                    [-200.0, 0.0, -200.0],
+                    [200.0, 0.0, -200.0],
+                    [200.0, 0.0, 200.0],
+                ],
+                [
+                    [-200.0, 0.0, -200.0],
+                    [200.0, 0.0, 200.0],
+                    [-200.0, 0.0, 200.0],
+                ],
+            ])
+            .unwrap(),
+        );
+        let water_floor = [
+            [
+                [-2000.0, -30.0, -2000.0],
+                [2000.0, -30.0, -2000.0],
+                [2000.0, -30.0, 2000.0],
+            ],
+            [
+                [-2000.0, -30.0, -2000.0],
+                [2000.0, -30.0, 2000.0],
+                [-2000.0, -30.0, 2000.0],
+            ],
+        ];
+        // The boat reaches `pose`, and its collision is placed there.
+        let sail = |app: &mut App, carriers: &mut eq_client_core::movement::Carriers, pose| {
+            let moved = carriers.observe(
+                &WorldEvent::Position {
+                    spawn_id: 8,
+                    position: pose,
+                    velocity: [0.0; 3],
+                    forward: 0.0,
+                },
+                GameDialect::Titanium,
+                Instant::now(),
+            );
+            online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [WorldEvent::Carriers(moved)],
+            );
+            let mut world = CollisionWorld::new(water_floor).unwrap();
+            world.set_spawn_instances(vec![(
+                8,
+                CollisionInstance::new(
+                    std::sync::Arc::clone(&deck),
+                    Vec3::from_array(eq_client_core::render_position(pose)),
+                    Quat::from_rotation_y(eq_client_core::static_yaw(pose.heading)),
+                )
+                .unwrap(),
+            )]);
+            app.insert_resource(Collision(Some(world)));
+        };
+        online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [WorldEvent::Carriers(spawned)],
+        );
+        let local = carrier_local(WorldPosition::default(), origin);
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.boat = Some(boats::Riding {
+                sample: carriers.latest(8).unwrap().sample(),
+                pose: WorldPosition::default(),
+                position: origin,
+            });
+            controls.last_sent = Some(start);
+            controls.last_accepted = start;
+            // The standing jump's crouch is over, so it goes at once.
+            controls.jump = Some(Instant::now());
+            controls.crouch = Some(Crouch::Over);
+        }
+        let mut pose = WorldPosition::default();
+        let mut previous = origin;
+        for step in 1..=2 {
+            pose = WorldPosition {
+                x: pose.x + 5.0,
+                heading: pose.heading + 8.0,
+                ..pose
+            };
+            sail(&mut app, &mut carriers, pose);
+            app.update();
+            let request = std::iter::from_fn(|| past_climb(&receiver).ok())
+                .find_map(|command| match command {
+                    ClientCommand::Move(request) => Some(request),
+                    _ => None,
+                })
+                .unwrap_or_else(|| panic!("step {step}: no sample"));
+            assert!(
+                matches!(request.support, Some(Support::Spawn(sample)) if sample.spawn_id == 8),
+                "step {step}: {:?}",
+                request.support
+            );
+            // Across, exactly where the boat took the rider's point; only
+            // the jump's own height on top.
+            let carried = carrier_world(pose, local);
+            assert!(
+                (request.position.x - carried.x).abs() < 0.001
+                    && (request.position.y - carried.y).abs() < 0.001,
+                "step {step}: {:?} against {carried:?}",
+                request.position
+            );
+            assert!(request.position.z > previous.z - 0.001, "step {step}");
+            // Still linked for the next pass, in the air over the deck.
+            let pending = app.world().resource::<Controls>().boat_pending;
+            assert!(
+                pending.is_some_and(|(_, riding)| riding.is_some()),
+                "step {step}: the jump unlinked"
+            );
+            accept(&mut app, &request);
+            app.world_mut()
+                .resource_mut::<Controls>()
+                .resolve_carrier(request.created, false);
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+            previous = request.position;
+        }
+    }
+
+    #[test]
     fn native_diagonal_keys_start_together_or_join_forward_on_the_first_sample() {
         for (key, side) in [
             (KeyCode::KeyA, StrafeSide::Left),
@@ -10138,7 +11284,14 @@ pub(super) mod tests {
         app.update();
         let climb = |feet: f32, size: f32| ClientCommand::ClimbReach {
             session_id: 11,
-            per_step: eq_client_assets::falls::TITANIUM.walk_climb(feet, size, true),
+            per_step: eq_client_assets::falls::TITANIUM.walk_climb(
+                eq_client_assets::falls::EdgeBody {
+                    race: 1,
+                    stand_height: feet,
+                    size,
+                    lifted: true,
+                },
+            ),
         };
         assert_eq!(receiver.try_recv().ok(), Some(climb(3.0, 6.0)));
         // Once is enough while the body stays the same.
@@ -10426,13 +11579,13 @@ pub(super) mod tests {
         let all = eq_client_core::Capability::ALL.to_vec();
         // Safe Fall is announced where the player has it.
         for (safe_fall, amount, used) in [
-            // 7.855 units a step at touchdown, the read step's from 100
-            // units up: trunc(10 × 3.855²).
-            (None, 148, false),
-            (Some(0), 148, false),
+            // About 7 units a step at touchdown, the per-frame fall's from
+            // 100 units up (R49-24 b): trunc(10 × (v − 4)²).
+            (None, 89, false),
+            (Some(0), 89, false),
             // The skill takes off all of it, and is still announced.
             (Some(200), 0, true),
-            (Some(254), 148, false),
+            (Some(254), 89, false),
         ] {
             let (mut app, receiver) = landing(safe_fall, all.clone());
             assert_eq!(
@@ -10460,7 +11613,7 @@ pub(super) mod tests {
         use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
 
         for (updates, uncertain_purse, amount) in [
-            (vec![], false, Some(276)),
+            (vec![], false, Some(191)),
             (vec![], true, None),
             (
                 vec![
@@ -10468,7 +11621,7 @@ pub(super) mod tests {
                     InventoryUpdate::Remove(InventorySlot::CURSOR),
                 ],
                 false,
-                Some(276),
+                Some(191),
             ),
             (vec![InventoryUpdate::Invalidated], false, None),
         ] {
@@ -10635,6 +11788,7 @@ pub(super) mod tests {
             gravity: 100.0,
             jump_speed: 25.0,
             air_factor: 1.0,
+            frames_per_step: 1,
             ground_tolerance: 0.0,
             ..physics(InstalledClient::Titanium, None)
         };
@@ -10865,7 +12019,7 @@ pub(super) mod tests {
         assert_eq!(
             app.world().resource::<Controls>().unreported,
             Some(FallCost {
-                damage: 148,
+                damage: 89,
                 safe_fall: false
             })
         );
@@ -10884,7 +12038,7 @@ pub(super) mod tests {
             Some(ClientCommand::EnvironmentalDamage {
                 session_id: 11,
                 hazard: Hazard::Falling,
-                amount: 148,
+                amount: 89,
                 safe_fall: false,
             })
         );

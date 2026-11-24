@@ -3,7 +3,7 @@ use super::{Changes, ClientWorld, ReportedHp, vitals};
 use eq_network_game::world::LANGUAGE_SKILLS;
 
 /// The current value in an existing skill or language slot.
-fn skill_value(player: &crate::PlayerState, skill_id: u32) -> Option<u32> {
+pub(super) fn skill_value(player: &crate::PlayerState, skill_id: u32) -> Option<u32> {
     if let Some(language) = skill_id.checked_sub(LANGUAGE_SKILLS) {
         player
             .languages
@@ -107,6 +107,33 @@ impl ClientWorld {
             }
             TrainingUpdate::Trained { skill, value, .. } => {
                 self.skill_news(*skill, *value, changes);
+                // The `EQMac` program says a language practice it resolves
+                // itself (6.597); the Titanium program's language answers
+                // come from the server.
+                let says = match self.generation {
+                    crate::GameDialect::EqMac => true,
+                    crate::GameDialect::Titanium | crate::GameDialect::Rof2 => false,
+                };
+                let language = skill
+                    .checked_sub(LANGUAGE_SKILLS)
+                    .and_then(|language| u8::try_from(language).ok());
+                if let (true, Some(language)) = (says, language) {
+                    let trainer = self
+                        .zone
+                        .training
+                        .as_ref()
+                        .and_then(|offer| self.zone.spawns.get(&offer.trainer))
+                        .map(|spawn| crate::entities::display_name(&spawn.state.name))
+                        .unwrap_or_default();
+                    changes.notices.push(super::Notice::LanguagePracticed {
+                        trainer,
+                        language,
+                        first: *value == 1,
+                        common_alternate: self
+                            .language_zero_selector
+                            .map(crate::rules::LanguageZeroSelector::alternate_name),
+                    });
+                }
             }
             TrainingUpdate::Practice(update) => {
                 if matches!(

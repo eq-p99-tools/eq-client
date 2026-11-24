@@ -120,6 +120,8 @@ pub(super) enum Does {
     StopsTracking,
     /// Answers the confirmation dialog's question: Yes (true) or No.
     Answers(bool),
+    /// A button of the bug report or feedback window.
+    Report(crate::report_windows::ReportButton),
     /// Turns a book's pages forward (true) or back.
     TurnsPage(bool),
     /// Combines what the tradeskill container in this pack slot holds.
@@ -213,6 +215,15 @@ fn closing_button(id: &str, owner: WindowId) -> Option<Does> {
     }
 }
 
+/// The inventory's Destroy, and the bug report and feedback windows'
+/// buttons.
+fn window_button(id: &str, owner: WindowId) -> Option<Does> {
+    if owner == WindowId::Inventory && id == "IW_Destroy" {
+        return Some(Does::Destroys);
+    }
+    crate::report_windows::ReportButton::of(id, owner).map(Does::Report)
+}
+
 /// What the client does with a skin's button; None for one it leaves out.
 pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
     if let Some((place, coin)) = coin_box(id) {
@@ -227,8 +238,8 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
     if let Some(does) = trading_button(id, owner) {
         return Some(does);
     }
-    if owner == WindowId::Inventory && id == "IW_Destroy" {
-        return Some(Does::Destroys);
+    if let Some(does) = window_button(id, owner) {
+        return Some(does);
     }
     if owner == WindowId::Item {
         return Some(if id == "IconButton" {
@@ -367,8 +378,9 @@ pub(super) fn own_button(id: &str, owner: WindowId) -> Option<Does> {
         WindowId::Spellbook => spellbook_button(id),
         WindowId::CharacterSelect => Some(character_button(id)),
         WindowId::Selector => Some(selector_button(id).map_or(Does::Nothing, Does::Toggles)),
-        // The Ranger's sort, filters and players choice are not read closely
-        // enough to act on (6.446): greyed, as Nothing draws them.
+        // The Ranger's sort, filters and players choice work by their typed
+        // commands (6.638); the skin's controls for them wait on a read of
+        // their names (6.446): greyed, as Nothing draws them.
         WindowId::Tracking => Some(match id {
             "TRW_TrackButton" => Does::Tracks,
             _ => Does::Nothing,

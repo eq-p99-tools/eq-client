@@ -15,6 +15,8 @@ pub mod lighting;
 pub mod maps;
 pub mod merchants;
 pub mod names;
+mod pe;
+pub mod program;
 pub mod regions;
 pub mod scale;
 pub mod sidl;
@@ -25,8 +27,10 @@ pub mod spells;
 pub mod strings;
 #[cfg(test)]
 mod terrain_material_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "testing"))]
 mod test_world;
+#[cfg(feature = "testing")]
+pub mod testing;
 pub mod ui;
 pub mod xmi;
 pub mod zone_sounds;
@@ -72,6 +76,11 @@ pub struct ZonePrimitive {
     pub texture: Option<usize>,
     /// How the material combines with the scene behind it.
     pub material_mode: MaterialMode,
+    /// The light baked into each vertex, as RGBA bytes: the RGB is light the
+    /// vertex has of its own and the alpha how much of the zone ambient it
+    /// takes. One per position, or empty when the mesh has none. See
+    /// `docs/zone-lighting.md`.
+    pub light: Vec<[u8; 4]>,
 }
 
 /// Renderer-independent material behavior used by classic WLD meshes.
@@ -107,8 +116,30 @@ pub struct ZoneModel {
     pub primitives: Vec<ZonePrimitive>,
     /// Authored draw flags, in the order of `primitives`.
     pub materials: Vec<ObjectMaterial>,
-    /// Solid triangles, including invisible collision surfaces.
+    /// Solid triangles a walker meets where the zone places this model,
+    /// including invisible collision surfaces. A face flagged passable is
+    /// left out unless the engine makes its mesh solid throughout (the five
+    /// model names of EQGraphicsDX9.dll 0x10193510), and a mesh in the
+    /// engine's no-hit case (read R49-49c: trees, plants and grass) is in
+    /// [`Self::no_hit_collision`] instead.
     pub collision: Vec<[[f32; 3]; 3]>,
+    /// The solid triangles, by the same face rule, of this model's meshes in
+    /// the no-hit case, which a walker passes through where the zone places
+    /// the model (read R49-49d: a WLD placement always takes the model
+    /// test). A door built from the model keeps them: how the engine sets a
+    /// door's mode (eqgame.exe 0x1006c2b0) is unread, so doors stay as they
+    /// were.
+    pub no_hit_collision: Vec<[[f32; 3]; 3]>,
+    /// How many vertices the model's one mesh has, which a placement's
+    /// colour track must match; None for a model built on a skeleton.
+    pub vertex_count: Option<usize>,
+    /// The authored bounding radius of the model's WLD sprite: its one
+    /// mesh's radius field (fragment 0x36), or its skeleton's bounding
+    /// radius (fragment 0x10); None where the archive gives none, as an EQG
+    /// model doesn't. The program measures a lift's riders by its door
+    /// actor's definition radius (eqgame.exe 0x4368b3, reads R49-28 (b) and
+    /// R49-28c); that these fields are that radius is inferred.
+    pub radius: Option<f32>,
 }
 
 /// Authored sidedness of a placed-object draw call, independent of its alpha mode.
@@ -129,6 +160,9 @@ pub struct ZoneObject {
     pub rotation: [f32; 4],
     /// Scale along the X, Y, and Z axes.
     pub scale: [f32; 3],
+    /// The placement's own baked vertex light (WLD 0x15 -> 0x33 -> 0x32), one
+    /// per vertex of its model's mesh, as in [`ZonePrimitive::light`].
+    pub light: Option<Vec<[u8; 4]>>,
 }
 
 /// Renderer-independent geometry and textures for a zone.
@@ -144,6 +178,8 @@ pub struct ZoneAsset {
     pub terrain_materials: Vec<TerrainMaterial>,
     /// Installed WLD point lights in the zone's renderer frame.
     pub point_lights: Vec<lighting::PlacedLight>,
+    /// The installed program's day ambient table, when it holds one.
+    pub day_ambient: Option<lighting::DayAmbient>,
     /// Deduplicated diffuse textures used by `primitives`.
     pub textures: Vec<ZoneTexture>,
     /// Reusable static models referenced by placed objects.
@@ -156,6 +192,9 @@ pub struct ZoneAsset {
     /// Skins of placed objects left out because their vertices aren't each
     /// on one bone of the object's skeleton.
     pub object_skins_skipped: usize,
+    /// Placement colour tracks left out because they don't hold one colour
+    /// per vertex of a one-mesh model.
+    pub object_lights_skipped: usize,
     /// Solid terrain triangles independent of material visibility.
     pub collision: Vec<[[f32; 3]; 3]>,
 }
@@ -388,8 +427,10 @@ fn read_zone(
     let mut terrain_materials = Vec::new();
 
     if textures_read == Textures::Realize {
-        for mesh in world.meshes() {
-            for staged in stage_mesh(&mesh) {
+        // Both parses list the meshes in the file's order.
+        let raw = doc.fragment_iter::<libeq::wld::parser::DmSpriteDef2>();
+        for (mesh, raw) in world.meshes().zip(raw) {
+            for staged in stage_mesh(&mesh, &mesh_light(raw)) {
                 terrain_materials.push(terrain_material(
                     &doc,
                     staged.material.as_deref(),
@@ -425,11 +466,15 @@ fn read_zone(
         primitives,
         terrain_materials,
         point_lights,
+        day_ambient: (textures_read == Textures::Realize)
+            .then(|| lighting::day_ambient(eq_directory))
+            .flatten(),
         textures,
         models,
         objects,
         objects_unplaced: report.unplaced,
         object_skins_skipped: report.skins_skipped,
+        object_lights_skipped: report.lights_skipped,
         collision,
     })
 }
@@ -560,6 +605,44 @@ struct ObjectPlacement {
     translation: [f32; 3],
     rotation: [f32; 4],
     scale: [f32; 3],
+    light: Option<Vec<[u8; 4]>>,
+}
+
+/// A WLD vertex colour, a D3DCOLOR (0xAARRGGBB), as RGBA bytes.
+fn vertex_light(color: u32) -> [u8; 4] {
+    let [blue, green, red, alpha] = color.to_le_bytes();
+    [red, green, blue, alpha]
+}
+
+/// A mesh's baked vertex light, or none when it doesn't hold one colour per
+/// vertex.
+fn mesh_light(raw: &libeq::wld::parser::DmSpriteDef2) -> Vec<[u8; 4]> {
+    if raw.vertex_colors.len() == raw.positions.len() {
+        raw.vertex_colors
+            .iter()
+            .copied()
+            .map(vertex_light)
+            .collect()
+    } else {
+        Vec::new()
+    }
+}
+
+/// A placement's colour track, 0x15 -> 0x33 -> 0x32.
+fn placement_light(
+    doc: &libeq::wld::parser::WldDoc,
+    actor: &libeq::wld::parser::Actor,
+) -> Option<Vec<[u8; 4]>> {
+    let track = doc.get(actor.vertex_color_reference.as_ref()?)?;
+    let definition = doc.get(&track.reference)?;
+    Some(
+        definition
+            .vertex_colors
+            .iter()
+            .copied()
+            .map(vertex_light)
+            .collect(),
+    )
 }
 
 /// Parses a WLD file into libeq's document and its model view. Building the view
@@ -586,11 +669,14 @@ fn load_object_placements(
     let Some(bytes) = archive.get("objects.wld")? else {
         return Ok(Vec::new());
     };
-    let (_, world) = parse_wld(&bytes, "objects.wld")?;
+    let (doc, world) = parse_wld(&bytes, "objects.wld")?;
 
+    // Both parses list the placements in the file's order.
+    let actors = doc.fragment_iter::<libeq::wld::parser::Actor>();
     Ok(world
         .objects()
-        .filter_map(|object| {
+        .zip(actors)
+        .filter_map(|(object, actor)| {
             let model_name = object.model_name()?.to_owned();
             let (x, y, z) = object.center();
             let (rotation_x, rotation_y, rotation_z) = object.rotation();
@@ -601,6 +687,7 @@ fn load_object_placements(
                 translation: render([x, y, z]),
                 rotation: placement_rotation([rotation_x, rotation_y, rotation_z]),
                 scale: [uniform_scale; 3],
+                light: placement_light(&doc, actor),
             })
         })
         .collect())
@@ -613,6 +700,8 @@ struct ObjectReport {
     unplaced: usize,
     /// Skins of objects on skeletons left out (see [`PosedHierarchy`]).
     skins_skipped: usize,
+    /// Placement colour tracks that don't fit their model.
+    lights_skipped: usize,
 }
 
 /// The zone's object models and the placements that use them, and what the
@@ -630,7 +719,7 @@ fn load_object_models(
         Err(error) if error.kind() == io::ErrorKind::NotFound => {
             let report = ObjectReport {
                 unplaced: placements.len(),
-                skins_skipped: 0,
+                ..ObjectReport::default()
             };
             return Ok((Vec::new(), Vec::new(), report));
         }
@@ -651,11 +740,14 @@ fn load_object_models(
     let mut models = Vec::new();
     let mut model_indices = HashMap::new();
     let mut report = ObjectReport::default();
+    let fragments = mesh_fragments(&doc);
     for model in world.models() {
         let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
             continue;
         };
-        let staged = stage_mesh(&mesh);
+        // Object models carry no light of their own: their placements do.
+        let staged = stage_mesh(&mesh, &[]);
+        let vertex_count = mesh.positions().len();
         let Some(realized) = realize_object(
             &doc,
             staged,
@@ -667,12 +759,17 @@ fn load_object_models(
         else {
             continue;
         };
+        let raw = mesh.name().and_then(|name| fragments.get(name).copied());
+        let (collision, no_hit_collision) = placed_collision(&mesh, raw.is_some_and(no_hit));
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
             name: name.to_owned(),
             primitives: realized.primitives,
             materials: realized.materials,
-            collision: mesh_collision(&mesh),
+            collision,
+            no_hit_collision,
+            vertex_count: Some(vertex_count),
+            radius: raw.and_then(|raw| authored_radius(Some(raw.max_distance))),
         });
     }
     // Objects built on a skeleton (trees, torches), stood in their rest
@@ -707,26 +804,46 @@ fn load_object_models(
             primitives: realized.primitives,
             materials: realized.materials,
             collision: posed.collision,
+            no_hit_collision: posed.no_hit_collision,
+            vertex_count: None,
+            radius: posed.radius,
         });
     }
 
-    let objects = placements
+    let objects = place_objects(placements, &models, &model_indices, &mut report);
+
+    Ok((models, objects, report))
+}
+
+/// The placements whose model the archive draws, each with its colour
+/// track where the track fits the model.
+fn place_objects(
+    placements: Vec<ObjectPlacement>,
+    models: &[ZoneModel],
+    model_indices: &HashMap<String, usize>,
+    report: &mut ObjectReport,
+) -> Vec<ZoneObject> {
+    placements
         .into_iter()
         .filter_map(|placement| {
             let Some(&model) = model_indices.get(&placement.model_name) else {
                 report.unplaced += 1;
                 return None;
             };
+            let light = placement.light.filter(|light| {
+                let fits = models[model].vertex_count == Some(light.len());
+                report.lights_skipped += usize::from(!fits);
+                fits
+            });
             Some(ZoneObject {
                 model,
                 translation: placement.translation,
                 rotation: placement.rotation,
                 scale: placement.scale,
+                light,
             })
         })
-        .collect();
-
-    Ok((models, objects, report))
+        .collect()
 }
 
 struct RealizedObject {
@@ -770,9 +887,18 @@ fn realize_object(
 struct PosedHierarchy {
     staged: Vec<StagedPrimitive>,
     collision: Vec<[[f32; 3]; 3]>,
+    /// The solid triangles of its meshes in the [`no_hit`] case.
+    no_hit_collision: Vec<[[f32; 3]; 3]>,
     /// Skins left out because their vertices aren't each on one bone of
     /// the skeleton.
     skins_skipped: usize,
+    /// The skeleton's authored bounding radius ([`ZoneModel::radius`]).
+    radius: Option<f32>,
+}
+
+/// An authored radius the program can measure by: a positive number.
+fn authored_radius(radius: Option<f32>) -> Option<f32> {
+    radius.filter(|radius| radius.is_finite() && *radius > 0.0)
 }
 
 /// An object archive's meshes, found by the fragment a sprite names rather
@@ -810,6 +936,43 @@ struct PosedMesh {
     solids: Vec<[f32; 3]>,
     /// The vertices of its solid faces.
     indices: Vec<u32>,
+    /// Whether the mesh is in the engine's [`no_hit`] case.
+    no_hit: bool,
+}
+
+/// Solid triangles, each as its three points.
+type Triangles = Vec<[[f32; 3]; 3]>;
+
+/// Posed meshes merged into one primitive per material, with their solid
+/// triangles split as (where the zone places them, in the [`no_hit`] case).
+fn merge_posed(posed: Vec<PosedMesh>) -> (Vec<StagedPrimitive>, Triangles, Triangles) {
+    let mut collision = Vec::new();
+    let mut no_hit_collision = Vec::new();
+    let mut by_material: Vec<StagedPrimitive> = Vec::new();
+    for PosedMesh {
+        staged,
+        solids,
+        indices,
+        no_hit,
+    } in posed
+    {
+        let triangles = solid_triangles(&solids, &indices);
+        if no_hit {
+            no_hit_collision.extend(triangles);
+        } else {
+            collision.extend(triangles);
+        }
+        for primitive in staged {
+            match by_material
+                .iter_mut()
+                .find(|merged| merged.material == primitive.material)
+            {
+                Some(merged) => merged.append(primitive),
+                None => by_material.push(primitive),
+            }
+        }
+    }
+    (by_material, collision, no_hit_collision)
 }
 
 /// Stands an actor built on a skeleton in its rest pose: each bone's mesh
@@ -852,8 +1015,10 @@ fn pose_hierarchy(
     };
     // Each posed mesh's drawn primitives, its vertices and its solid faces.
     let mut posed: Vec<PosedMesh> = Vec::new();
-    let mut pose = |mesh: &libeq::wld::Mesh<'_>, joint_of: &dyn Fn(usize) -> Mat4| {
-        let mut staged = stage_mesh(mesh);
+    let mut pose = |mesh: &libeq::wld::Mesh<'_>,
+                    raw: &libeq::wld::parser::DmSpriteDef2,
+                    joint_of: &dyn Fn(usize) -> Mat4| {
+        let mut staged = stage_mesh(mesh, &[]);
         for primitive in &mut staged {
             for (index, (position, normal)) in primitive
                 .positions
@@ -884,16 +1049,17 @@ fn pose_hierarchy(
         posed.push(PosedMesh {
             staged,
             solids,
-            indices: mesh.collision_indices(),
+            indices: object_solid_faces(mesh),
+            no_hit: no_hit(raw),
         });
     };
     for (index, dag) in definition.dags.iter().enumerate() {
         if dag.mesh_or_sprite_reference == 0 {
             continue;
         }
-        if let Some((mesh, _)) = mesh_of(dag.mesh_or_sprite_reference) {
+        if let Some((mesh, raw)) = mesh_of(dag.mesh_or_sprite_reference) {
             let joint = joints[index];
-            pose(mesh, &|_| joint);
+            pose(mesh, raw, &|_| joint);
         }
     }
     let mut skipped = 0;
@@ -915,32 +1081,16 @@ fn pose_hierarchy(
             skipped += 1;
             continue;
         }
-        pose(mesh, &|vertex| joints[owners[vertex]]);
+        pose(mesh, raw, &|vertex| joints[owners[vertex]]);
     }
-    let mut collision = Vec::new();
-    let mut by_material: Vec<StagedPrimitive> = Vec::new();
+    let (by_material, collision, no_hit_collision) = merge_posed(posed);
     let skins_skipped = skipped;
-    for PosedMesh {
-        staged,
-        solids,
-        indices,
-    } in posed
-    {
-        collision.extend(solid_triangles(&solids, &indices));
-        for primitive in staged {
-            match by_material
-                .iter_mut()
-                .find(|merged| merged.material == primitive.material)
-            {
-                Some(merged) => merged.append(primitive),
-                None => by_material.push(primitive),
-            }
-        }
-    }
     PosedHierarchy {
         staged: by_material,
         collision,
+        no_hit_collision,
         skins_skipped,
+        radius: authored_radius(definition.bounding_radius),
     }
 }
 /// A drawable mesh primitive whose texture is named but not yet decoded, so
@@ -955,12 +1105,20 @@ struct StagedPrimitive {
     texture: Option<String>,
     /// The material's name in upper case, such as `HUMCH0001_MDF`.
     material: Option<String>,
+    /// One per position, or empty.
+    light: Vec<[u8; 4]>,
 }
 
 impl StagedPrimitive {
     /// Adds another primitive of the same material after this one's.
     fn append(&mut self, other: Self) {
         let offset = u32::try_from(self.positions.len()).unwrap_or(u32::MAX);
+        // The merged primitive keeps baked light only when both halves have it.
+        if self.light.len() == self.positions.len() && other.light.len() == other.positions.len() {
+            self.light.extend(other.light);
+        } else {
+            self.light.clear();
+        }
         self.positions.extend(other.positions);
         self.normals.extend(other.normals);
         self.texture_coordinates.extend(other.texture_coordinates);
@@ -994,6 +1152,7 @@ impl StagedPrimitive {
                 .collect(),
             texture,
             material_mode: self.material_mode,
+            light: self.light,
         })
     }
 }
@@ -1022,7 +1181,9 @@ fn placement_rotation(degrees: [f32; 3]) -> [f32; 4] {
 }
 
 /// Reads a mesh's drawable primitives, positioned at the mesh's center.
-fn stage_mesh(mesh: &libeq::wld::Mesh<'_>) -> Vec<StagedPrimitive> {
+/// A mesh's primitives, each over all of the mesh's vertices, with `light`
+/// (one per vertex, or empty) for each.
+fn stage_mesh(mesh: &libeq::wld::Mesh<'_>, light: &[[u8; 4]]) -> Vec<StagedPrimitive> {
     let center = mesh.center();
     let mut primitives = Vec::new();
     for primitive in mesh.primitives() {
@@ -1059,6 +1220,7 @@ fn stage_mesh(mesh: &libeq::wld::Mesh<'_>) -> Vec<StagedPrimitive> {
             material_mode,
             texture,
             material: name,
+            light: light.to_vec(),
         });
     }
     primitives
@@ -1083,6 +1245,115 @@ fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
         .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
         .collect();
     solid_triangles(&positions, &mesh.collision_indices())
+}
+
+/// Each mesh fragment of an object archive by name, the first where two
+/// share one, for the engine's no-hit case.
+fn mesh_fragments(
+    doc: &libeq::wld::parser::WldDoc,
+) -> HashMap<&str, &libeq::wld::parser::DmSpriteDef2> {
+    let mut fragments = HashMap::new();
+    for raw in doc.fragment_iter::<libeq::wld::parser::DmSpriteDef2>() {
+        if let Some(name) = doc.get_string(raw.name_reference) {
+            fragments.entry(name).or_insert(raw);
+        }
+    }
+    fragments
+}
+
+/// A one-mesh model's solid triangles, as (where the zone places it, kept
+/// for a door only): a mesh in the [`no_hit`] case gives a placement none.
+fn placed_collision(mesh: &libeq::wld::Mesh<'_>, no_hit: bool) -> (Triangles, Triangles) {
+    let faces = object_collision(mesh);
+    if no_hit {
+        (Vec::new(), faces)
+    } else {
+        (faces, Vec::new())
+    }
+}
+
+/// A placed object's or door's solid triangles, by [`object_solid_faces`].
+fn object_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
+    let center = mesh.center();
+    let positions: Vec<[f32; 3]> = mesh
+        .positions()
+        .into_iter()
+        .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
+        .collect();
+    solid_triangles(&positions, &object_solid_faces(mesh))
+}
+
+/// The vertices of the faces a placed actor (a door or an object) collides
+/// with: every face of a mesh [`SOLID_THROUGHOUT`] names (read F4b;
+/// 0x10193510 marks it), otherwise every face but those flagged passable
+/// (WLD 0x10). Whether the faces count where the zone places the mesh is
+/// [`no_hit`]'s question.
+fn object_solid_faces(mesh: &libeq::wld::Mesh<'_>) -> Vec<u32> {
+    if mesh.name().is_some_and(solid_by_name) {
+        mesh.indices()
+    } else {
+        mesh.collision_indices()
+    }
+}
+
+/// Read R49-49c's no-hit case: an S3D mesh whose 0x36 flags lack 0x10000
+/// and whose reference at +0x14 is empty (read F4g).
+///
+/// The engine's moving-sphere sweep (EQGraphicsDX9.dll 0x10192400) returns
+/// no hit at once for a mesh whose switch +0x5c is set (0x10192406), which
+/// this case sets (0x101885e0, 0x10193d70). That is every tree, plant and
+/// grass mesh of the object archives, trunks included, so a walker passes
+/// through them where the zone places them. Read R49-49d finds a WLD
+/// placement always takes the model test, and read R49-49e follows the
+/// player's wall sweep call by call to it: the item's test 0x1003e970,
+/// 0x1003eb92, item vt+0x4c 0x10049a10, then the model wrapper's slot
+/// +0x9c, which for a placement without an LOD list is 0x1004aa70, a jump
+/// to 0x10192400. One step is still inferred: a placement with an LOD list
+/// forwards (0x1004e3e0) to its current model's slot +0x9c, taken to be the
+/// same wrapper. The engine's ray tests see every face of such a mesh; this
+/// client's camera shares the walking world and passes through them too, a
+/// labelled departure. Zone terrain, boats and EQG models are unchanged
+/// (the EQG loader sets no switch).
+fn no_hit(raw: &libeq::wld::parser::DmSpriteDef2) -> bool {
+    raw.flags & 0x1_0000 == 0
+        && matches!(
+            raw.fragment4,
+            libeq::wld::parser::FragmentRef::Name(libeq::wld::parser::StringReference(0), _)
+        )
+}
+
+/// How [`SOLID_THROUGHOUT`] compares a mesh's name with one of its entries.
+#[derive(Clone, Copy)]
+enum NameMatch {
+    /// The name starts with it, in any case.
+    PrefixAnyCase,
+    /// The name starts with it, case and all.
+    Prefix,
+    /// The name is it exactly.
+    Exact,
+}
+
+/// The models the engine makes solid throughout by their mesh's name,
+/// passable faces and all (EQGraphicsDX9.dll 0x10193510, read F4b): ladders,
+/// the Neriak bars, one door, one portcullis and the `IT66` models. These are
+/// the zone files' model identifiers.
+const SOLID_THROUGHOUT: [(&str, NameMatch); 5] = [
+    ("LADDER", NameMatch::PrefixAnyCase),
+    ("HHCELL_DMSPRITEDEF", NameMatch::Exact),
+    ("SBDOOR103_", NameMatch::Prefix),
+    ("PORT1414_DMSPRITEDEF", NameMatch::Exact),
+    ("IT66", NameMatch::PrefixAnyCase),
+];
+
+/// Whether [`SOLID_THROUGHOUT`] names this mesh.
+fn solid_by_name(name: &str) -> bool {
+    SOLID_THROUGHOUT.iter().any(|&(entry, how)| match how {
+        NameMatch::PrefixAnyCase => name
+            .get(..entry.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(entry)),
+        NameMatch::Prefix => name.starts_with(entry),
+        NameMatch::Exact => name == entry,
+    })
 }
 
 /// Solid triangles over libeq positions, in the renderer's frame with the
@@ -1331,6 +1602,139 @@ mod tests {
         assert_eq!(zone.objects[0].model, 0);
     }
 
+    /// A zone whose terrain carries baked vertex light, and whose object
+    /// placements carry a fitting colour track, a short one, and none.
+    fn write_lit_zone(install: &Path) {
+        use crate::test_world::{
+            Coordinates, OLD_FORMAT, WorldFile, coloured_triangle, material, palette, triangle,
+            write_archive,
+        };
+        let words = |words: &[u32]| -> Vec<u8> {
+            words.iter().flat_map(|word| word.to_le_bytes()).collect()
+        };
+        let coordinates = Coordinates::Old([(0, 0), (256, 0), (0, 256)]);
+
+        let mut zone = WorldFile::new(OLD_FORMAT);
+        let (m, p, t) = (
+            zone.name("M_MDF"),
+            zone.name("P_MP"),
+            zone.name("R1_DMSPRITEDEF"),
+        );
+        let terrain = zone.fragment(0x30, material(m, 0x8000_0001));
+        let terrain_palette = zone.fragment(0x31, palette(p, terrain));
+        // D3DCOLORs, 0xAARRGGBB.
+        zone.fragment(
+            0x36,
+            coloured_triangle(
+                t,
+                terrain_palette,
+                &coordinates,
+                &[0x0011_2233, 0x80FF_0000, 0xFF00_00FF],
+            ),
+        );
+
+        // Two colour tracks, 0x32 definitions behind 0x33 references, then
+        // three placements: name, model, flags (a location, and 0x100 for a
+        // colour track), sphere, the location and its unknown word, the
+        // track, and no user data.
+        let mut placements = WorldFile::new(OLD_FORMAT);
+        let model = placements.name("OBJ_ACTORDEF");
+        let mut track = |colours: &[u32]| {
+            let mut definition = words(&[0, 1, u32::try_from(colours.len()).unwrap(), 1, 200, 0]);
+            definition.extend(words(colours));
+            let definition = placements.fragment(0x32, definition);
+            placements.fragment(0x33, words(&[0, definition.cast_unsigned(), 0]))
+        };
+        let fitting = track(&[0x0102_0304, 0x0506_0708, 0x090A_0B0C]);
+        let short = track(&[0x0102_0304]);
+        for colours in [Some(fitting), Some(short), None] {
+            let flags = 0x02 | if colours.is_some() { 0x100 } else { 0 };
+            let mut placement = words(&[0, model.cast_unsigned(), flags, 0]);
+            for value in [10.0_f32, 20.0, 30.0, 0.0, 0.0, 0.0] {
+                placement.extend(value.to_le_bytes());
+            }
+            placement.extend(words(&[0]));
+            if let Some(track) = colours {
+                placement.extend(words(&[track.cast_unsigned()]));
+            }
+            placement.extend(words(&[0]));
+            placements.fragment(0x15, placement);
+        }
+
+        let mut objects = WorldFile::new(OLD_FORMAT);
+        let (w, p, t) = (
+            objects.name("W_MDF"),
+            objects.name("P_MP"),
+            objects.name("OBJ_DMSPRITEDEF"),
+        );
+        let model = objects.name("OBJ_ACTORDEF");
+        let wood = objects.fragment(0x30, material(w, 0x8000_0001));
+        let object_palette = objects.fragment(0x31, palette(p, wood));
+        let mesh = objects.fragment(0x36, triangle(t, object_palette, &coordinates, 1));
+        let sprite = objects.fragment(0x2d, words(&[0, mesh.cast_unsigned(), 0]));
+        objects.fragment(
+            0x14,
+            words(&[
+                model.cast_unsigned(),
+                0,
+                0,
+                0,
+                1,
+                0,
+                sprite.cast_unsigned(),
+                0,
+            ]),
+        );
+
+        write_archive(
+            install,
+            "litzone.s3d",
+            &[
+                ("litzone.wld", zone.bytes()),
+                ("objects.wld", placements.bytes()),
+            ],
+        );
+        write_archive(
+            install,
+            "litzone_obj.s3d",
+            &[("litzone_obj.wld", objects.bytes())],
+        );
+    }
+
+    #[test]
+    fn baked_vertex_light_loads_for_terrain_and_fitting_placements() {
+        let install = std::env::temp_dir().join(format!("eq-zone-lit-{}", std::process::id()));
+        std::fs::create_dir_all(&install).unwrap();
+        write_lit_zone(&install);
+        let result = load_zone(&install, "litzone");
+        std::fs::remove_dir_all(&install).unwrap();
+        let zone = result.unwrap();
+
+        // Terrain: one RGBA per vertex, from B,G,R,A bytes.
+        assert_eq!(
+            zone.primitives[0].light,
+            vec![
+                [0x11, 0x22, 0x33, 0x00],
+                [0xFF, 0, 0, 0x80],
+                [0, 0, 0xFF, 0xFF]
+            ]
+        );
+        // The model has no light of its own; its one mesh has 3 vertices.
+        assert_eq!(zone.models[0].vertex_count, Some(3));
+        assert_eq!(zone.models[0].primitives[0].light, [] as [[u8; 4]; 0]);
+        // The fitting track is kept, the short one left out and counted.
+        assert_eq!(zone.objects.len(), 3);
+        assert_eq!(
+            zone.objects[0].light,
+            Some(vec![[2, 3, 4, 1], [6, 7, 8, 5], [0x0A, 0x0B, 0x0C, 0x09]])
+        );
+        assert_eq!(zone.objects[1].light, None);
+        assert_eq!(zone.objects[2].light, None);
+        assert_eq!(zone.object_lights_skipped, 1);
+        // No program in this install: no day table.
+        assert_eq!(zone.day_ambient, None);
+    }
+
     /// A zone whose object archive holds a plain object, a tree built on a
     /// two-bone skeleton (a rigid mesh on the second bone and a skin over
     /// both), and a flame whose one bone carries no mesh; placements name
@@ -1338,8 +1742,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn write_hierarchical_zone(install: &Path) {
         use crate::test_world::{
-            Coordinates, OLD_FORMAT, WorldFile, material, material_with_flags, mesh, palette,
-            palette_of, skinned_triangle, triangle, write_archive,
+            Coordinates, OLD_FORMAT, WorldFile, flagged_triangle, material, material_with_flags,
+            mesh, palette, palette_of, skinned_triangle, triangle, write_archive,
         };
         let words = |words: &[u32]| -> Vec<u8> {
             words.iter().flat_map(|word| word.to_le_bytes()).collect()
@@ -1375,7 +1779,11 @@ mod tests {
         let solid = objects.fragment(0x30, material_with_flags(w, 0x8000_0001, 0x2));
         let object_palette = objects.fragment(0x31, palette(p, solid));
         let tri = objects.name("TRI_DMSPRITEDEF");
-        let tri = objects.fragment(0x36, triangle(tri, object_palette, &coordinates, 1));
+        // Its authored radius, 7.5, after the name, flags, palette, three
+        // references, centre and three unknowns.
+        let mut tri_body = triangle(tri, object_palette, &coordinates, 1);
+        tri_body[48..52].copy_from_slice(&7.5_f32.to_le_bytes());
+        let tri = objects.fragment(0x36, tri_body);
         // The skin's first two vertices are on the root, the third on the arm.
         let skin = objects.name("SKIN_DMSPRITEDEF");
         let skin = objects.fragment(
@@ -1403,6 +1811,34 @@ mod tests {
             );
         };
         actor(&mut objects, "OBJ_ACTORDEF", tri_sprite);
+        // The same triangle, its one face flagged passable (0x10) or not:
+        // an object mesh as most are (flags with 0x10000), the bars the
+        // engine names, and meshes with neither 0x10000 nor a +0x14
+        // reference (read R49-49c's no-hit case, as every installed tree
+        // is), one of them under a name the engine makes solid.
+        for (actor_name, mesh_name, mesh_flags, face_flags) in [
+            ("PASS_ACTORDEF", "PASS_DMSPRITEDEF", 0x0001_4003, 0x10),
+            ("WALL_ACTORDEF", "WALL_DMSPRITEDEF", 0x0001_4003, 0),
+            ("HHCELL_ACTORDEF", "HHCELL_DMSPRITEDEF", 0x0001_4003, 0x10),
+            ("BARE_ACTORDEF", "BARE_DMSPRITEDEF", 0x4003, 0x10),
+            ("TRUNK_ACTORDEF", "TRUNK_DMSPRITEDEF", 0x4003, 0),
+            ("LADDER9_ACTORDEF", "LADDER9_DMSPRITEDEF", 0x4003, 0),
+        ] {
+            let mesh = objects.name(mesh_name);
+            let mesh = objects.fragment(
+                0x36,
+                flagged_triangle(
+                    mesh,
+                    object_palette,
+                    &coordinates,
+                    1,
+                    &[],
+                    (mesh_flags, face_flags),
+                ),
+            );
+            let sprite = objects.fragment(0x2d, words(&[0, mesh.cast_unsigned(), 0]));
+            actor(&mut objects, actor_name, sprite);
+        }
         // Base tracks of one frame: the root at rest, the arm 10 along the
         // file's x and 5 up its z (2560 / 256, 1280 / 256).
         let mut tracks = Vec::new();
@@ -1422,12 +1858,14 @@ mod tests {
                 words(&[track.cast_unsigned(), definition.cast_unsigned(), 0]),
             ));
         }
-        // The tree's skeleton: flags (with skins), two bones, no collision
-        // volume; root (its track, no mesh, the arm its child), arm (its
+        // The tree's skeleton: flags (with skins and a bounding radius), two
+        // bones, no collision volume, the radius; root (its track, no mesh, the arm its child), arm (its
         // track, the rigid mesh); one skin, updated with the root.
         let bone = objects.name("BONE_DAG");
         let tree = objects.name("TREE_HS_DEF");
-        let mut body = words(&[tree.cast_unsigned(), 0x200, 2, 0]);
+        let mut body = words(&[tree.cast_unsigned(), 0x202, 2, 0]);
+        // Its authored bounding radius (flag 0x2).
+        body.extend(12.5_f32.to_le_bytes());
         body.extend(words(&[
             bone.cast_unsigned(),
             0,
@@ -1589,6 +2027,87 @@ mod tests {
             .iter()
             .find(|object| zone.models[object.model].name == "OBJ_ACTORDEF");
         assert!(placed.is_some());
+    }
+
+    #[test]
+    fn a_model_takes_its_sprites_authored_radius() {
+        let zone = load_hierarchical_zone("authored-radius");
+        let radius = |name: &str| {
+            zone.models
+                .iter()
+                .find(|model| model.name == name)
+                .unwrap()
+                .radius
+        };
+        // One mesh: the 0x36 radius field, not its geometry's 1.
+        assert_eq!(radius("OBJ_ACTORDEF"), Some(7.5));
+        // A skeleton: the 0x10 bounding radius.
+        assert_eq!(radius("TREE_ACTORDEF"), Some(12.5));
+        // Neither authored: none, so a door measures its geometry.
+        assert_eq!(radius("WALL_ACTORDEF"), None);
+    }
+
+    #[test]
+    fn a_walker_meets_an_object_face_as_the_engines_sweep_does() {
+        let zone = load_hierarchical_zone("passable-face");
+        let model = |name: &str| zone.models.iter().find(|model| model.name == name).unwrap();
+        let solid = |name: &str| model(name).collision.clone();
+        // Kept for a door built from the model, whose mode is unread.
+        let skipped = |name: &str| model(name).no_hit_collision.clone();
+        let face = vec![rendered([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])];
+        let none = Vec::<[[f32; 3]; 3]>::new();
+        // Skipped as passable (0x10192400 and its kin), drawn as ever; a
+        // face not flagged is met.
+        assert_eq!(solid("PASS_ACTORDEF"), none);
+        assert_eq!(solid("WALL_ACTORDEF"), face);
+        // Made solid throughout by 0x10193510 by its name.
+        assert_eq!(solid("HHCELL_ACTORDEF"), face);
+        for referenced in ["PASS_ACTORDEF", "WALL_ACTORDEF", "HHCELL_ACTORDEF"] {
+            assert_eq!(skipped(referenced), none, "{referenced}");
+        }
+        // No 0x10000 and no +0x14 reference: the sweep skips the whole mesh
+        // where the zone places it (reads R49-49c, R49-49d), leaves and
+        // trunks alike; a door keeps the faces the per-face rule keeps.
+        assert_eq!(solid("BARE_ACTORDEF"), none);
+        assert_eq!(skipped("BARE_ACTORDEF"), none);
+        assert_eq!(solid("TRUNK_ACTORDEF"), none);
+        assert_eq!(skipped("TRUNK_ACTORDEF"), face);
+        // Even under a name the engine makes solid: the sweep's exit comes
+        // first. No installed named mesh is no-hit (the bars and ladders
+        // are referenced), so this pins the order only.
+        assert_eq!(solid("LADDER9_ACTORDEF"), none);
+        assert_eq!(skipped("LADDER9_ACTORDEF"), face);
+    }
+
+    #[test]
+    fn the_engine_names_five_models_solid_throughout() {
+        for name in [
+            "LADDER01_DMSPRITEDEF",
+            "ladder_dmspritedef",
+            "IT66_DMSPRITEDEF",
+            "it661_DMSPRITEDEF",
+            "SBDOOR103_DMSPRITEDEF",
+            "HHCELL_DMSPRITEDEF",
+            "PORT1414_DMSPRITEDEF",
+        ] {
+            assert!(super::solid_by_name(name), "{name}");
+        }
+        for name in [
+            "sbdoor103_DMSPRITEDEF",
+            "SBDOOR103",
+            "HHCELL2_DMSPRITEDEF",
+            "hhcell_dmspritedef",
+            "PORT14140_DMSPRITEDEF",
+            "CAMPFIRE_DMSPRITEDEF",
+            "LADDE",
+            "",
+        ] {
+            assert!(!super::solid_by_name(name), "{name}");
+        }
     }
 
     #[test]

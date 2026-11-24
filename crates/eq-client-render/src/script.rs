@@ -10,10 +10,9 @@
 //! `pointer` module), scrolling a list the control has scrolled out of view as
 //! the wheel does, and lands only on the control under it. A followed
 //! script keeps reading complete lines appended to its file, under the same limits.
-//! `gm` fixture steps (spawn, depop, guild, stun, language, discipline)
-//! require a network-constrained local EQEmu/TAKP session; other `gm` lines and
-//! `chat`, emote, roll and `social` steps run on any server, as the player's
-//! own would.
+//! `gm` lines, `chat`, emote, roll and `social` steps run on any server, as
+//! the player's own would; the server decides what a `#` line does (6.584).
+//! Only the `gm("depop")` helper for a selected NPC is local-test only.
 pub(crate) mod control;
 mod execution;
 mod input;
@@ -938,6 +937,7 @@ type Buttons<'w, 's> = Query<
                         Has<super::tracking::TrackButton>,
                         Option<&'static super::abilities::picker::PickRow>,
                     ),
+                    Option<&'static super::report_windows::ReportBox>,
                 ),
             ),
         ),
@@ -991,6 +991,7 @@ type Observed<'w> = (
         Option<Res<'w, crate::abilities::Choices>>,
         Option<Res<'w, crate::abilities::picker::Picker>>,
         Option<Res<'w, crate::keys::Typing>>,
+        Option<Res<'w, crate::report_windows::ReportWindows>>,
     ),
 );
 
@@ -2352,6 +2353,10 @@ pub(super) fn drive(
                 super::chat::submit_typed_line(command, &mut chat, &mut online, &outbox, &qol)
             {
                 script.stop(&mut keys, &mut mouse, &error);
+            } else if outbox.sent_chat() {
+                // A typed chat word (`say`, `ooc` and the rest) meets the
+                // session's pace, so a refusal after it fails this step.
+                script.chatted = Some((std::time::Instant::now(), script.progress.line()));
             }
             return;
         }
@@ -2507,7 +2512,7 @@ pub(super) fn drive(
             };
             // Whatever goes as chat meets the session's pace, a `#` command
             // among it, so a refusal after it fails this step (6.523).
-            let chats = command.as_ref().is_ok_and(is_chat);
+            let chats = command.as_ref().is_ok_and(super::outbox::is_chat);
             let sent = command.and_then(|command| {
                 observed
                     .1
@@ -2706,6 +2711,13 @@ pub(super) fn drive(
                 detached_camera.single().ok(),
             );
             report::surroundings(&online, &observed);
+            if let Some(windows) = observed.15.3.as_deref() {
+                info!(
+                    label,
+                    report_windows = ?windows.observe(&shown, online.world()),
+                    "Script report windows"
+                );
+            }
             report::game_messages(&mut script.chat_seen, &chat);
             report::item_links(label, &online, &chat, &item);
             report::dialogs(label, online.world());
@@ -3029,21 +3041,12 @@ fn aa_request(
         .map_err(|refusal| refusal.text().to_owned())
 }
 
-/// Whether a command goes as chat, which the session paces (6.523). A slash
-/// step's game commands never do: an emote or a roll is its own request,
-/// outside the pace, and a script has no `/ttell`.
-const fn is_chat(command: &eq_client_core::ClientCommand) -> bool {
-    matches!(
-        command,
-        eq_client_core::ClientCommand::SendChat(_)
-            | eq_client_core::ClientCommand::SendChatInAdmission { .. }
-    )
-}
-
-/// The request for a validated GM command. A fixture form needs a local
-/// session; any other line goes as a typed `#` line would, on any server.
-/// Fixture cleanup carries the admission and reconciled NPC selection to the
-/// zone's send owner.
+/// The request for a script's `gm` line: what typing the line after `#`
+/// sends, on any server, through the same chat pace (6.523). The server
+/// decides what the line does (6.584). On a local Titanium test session a
+/// bare `depop` with a current NPC target takes the fixture helper instead,
+/// which carries the admission and reconciled NPC selection to the zone's
+/// send owner; without that target it goes as typed too.
 fn gm_request(
     command: &str,
     local: bool,
@@ -3051,49 +3054,30 @@ fn gm_request(
 ) -> Result<eq_client_core::ClientCommand, String> {
     use eq_client_core::{ClientCommand, OutboundChat, SpawnKind};
 
-    if !local && parse::gm_fixture(command) {
-        return Err(
-            "gm fixture steps only run on a local EQEmu or TAKP server (EQ_PROTOCOL=eqemu or takp)"
-                .into(),
-        );
-    }
     let words: Vec<_> = command.split_ascii_whitespace().collect();
     let command = parse::gm_command(&words)?;
-    let depop = command == "depop";
-    let full_spawn = words.first() == Some(&"spawn") && words.len() > 5;
     let titanium = match world.generation() {
         eq_client_core::GameDialect::Titanium => true,
-        // No RoF2 server takes fixtures yet.
+        // The fixture helpers are Titanium EQEmu's.
         eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
     };
-    if (depop || full_spawn) && !titanium {
-        return Err("Full fixture spawn and depop require local EQEmu".into());
-    }
-    if matches!(words.first(), Some(&"traindisc" | &"setlanguage")) && !titanium {
-        return Err("This GM fixture command requires local EQEmu".into());
-    }
-    if words.first() == Some(&"guild") && !titanium {
-        return Err("gm guild requires local EQEmu".into());
-    }
-    if depop {
-        let Some((session_id, target)) =
-            world
-                .session_id()
-                .zip(world.target_intent())
-                .filter(|(_, target)| {
-                    target
-                        .spawn_id
-                        .and_then(|id| world.spawn(id))
-                        .is_some_and(|spawn| spawn.state.kind == SpawnKind::Npc)
-                })
-        else {
-            return Err("gm depop needs a current NPC target".into());
-        };
-        return Ok(ClientCommand::DepopLocalNpc {
-            session_id,
-            target,
-            created: std::time::Instant::now(),
-        });
+    if local && titanium && parse::gm_fixture(&command) {
+        let selection = world
+            .session_id()
+            .zip(world.target_intent())
+            .filter(|(_, target)| {
+                target
+                    .spawn_id
+                    .and_then(|id| world.spawn(id))
+                    .is_some_and(|spawn| spawn.state.kind == SpawnKind::Npc)
+            });
+        if let Some((session_id, target)) = selection {
+            return Ok(ClientCommand::DepopLocalNpc {
+                session_id,
+                target,
+                created: std::time::Instant::now(),
+            });
+        }
     }
     Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
         "#{command}"
@@ -3327,7 +3311,13 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             slider,
             drop_down,
             choice,
-            (dialog, page, combine, map, (raid_row, raid_action, shows, skin_id, tracking)),
+            (
+                dialog,
+                page,
+                combine,
+                map,
+                (raid_row, raid_action, shows, skin_id, tracking, report_box),
+            ),
         ),
     ) in buttons
     {
@@ -3355,6 +3345,9 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::KeyFilter => drop_down.is_some_and(|drop_down| {
                 drop_down.choosing() == super::skinned::Choosing::KeyFilter
             }),
+            ClickTarget::BugType => drop_down
+                .is_some_and(|drop_down| drop_down.choosing() == super::skinned::Choosing::BugType),
+            ClickTarget::ReportBox(report) => report_box.is_some_and(|boxed| boxed.0 == report),
             ClickTarget::Choice(index) => choice.is_some_and(|choice| choice.index == index),
             ClickTarget::Answer(_)
             | ClickTarget::Training(_)
@@ -3949,8 +3942,9 @@ fn log_partial_route(online: &super::online::OnlineState, end: Vec3) {
 const DOOR_WAIT: Duration = Duration::from_secs(3);
 /// How long an opened door may take to swing open as drawn, and may still
 /// block the way after the walk has searched around it once: the swing, a
-/// quarter turn at half a turn a second, and a second to spare.
-const DOOR_SWING: Duration = Duration::from_millis(1500);
+/// quarter turn in 0.8 s at the program's rate (read R49-28b), and a second
+/// to spare.
+const DOOR_SWING: Duration = Duration::from_millis(1800);
 /// Clicks one door may take in one walk: the first, and one more if it shut
 /// again before the walker got through.
 const DOOR_CLICKS: u8 = 2;
@@ -4284,7 +4278,10 @@ fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
         .doors()
         .entries()
         .values()
-        .filter(|door| online.world().doors().supports_use(door.id) && super::doors::swings(door))
+        .filter(|door| {
+            online.world().doors().supports_use(door.id)
+                && super::doors::swings(door, online.world().generation())
+        })
         .map(|door| door.id)
         .collect()
 }
@@ -4974,18 +4971,18 @@ mod tests {
         );
         // Still across the way after that: the door is a wall.
         assert_eq!(
-            stuck.act(Some(true), Some(1.0), true, at(1_600)),
+            stuck.act(Some(true), Some(1.0), true, at(1_900)),
             DoorAction::Refuse("it opened but still blocks the way")
         );
         let mut slow = DoorWait::new(4);
         slow.act(Some(false), Some(0.0), true, at(0));
         slow.act(Some(true), Some(0.0), true, at(100));
         assert_eq!(
-            slow.act(Some(true), Some(0.9), true, at(1_599)),
+            slow.act(Some(true), Some(0.9), true, at(1_899)),
             DoorAction::Wait
         );
         assert_eq!(
-            slow.act(Some(true), Some(0.9), true, at(1_600)),
+            slow.act(Some(true), Some(0.9), true, at(1_900)),
             DoorAction::Refuse("it never finished swinging")
         );
         assert_eq!(
@@ -5058,8 +5055,8 @@ mod tests {
     #[test]
     fn a_door_drawn_open_slowly_is_searched_round_only_once_its_leaf_stands_open() {
         // Slow frames: each draws at most a tenth of a second of swing, so a
-        // quarter turn at half a turn a second takes five of them, whatever
-        // time passes between them.
+        // quarter turn in 0.8 s takes eight of them, whatever time passes
+        // between them.
         let frame = Duration::from_millis(250);
         let mut wait = DoorWait::new(4);
         assert_eq!(
@@ -5071,7 +5068,7 @@ mod tests {
         let mut rerouted_at = None;
         // Within the swing's bound: past it, a leaf still across the way
         // after the search round it makes the door a wall.
-        for _ in 0..6 {
+        for _ in 0..8 {
             now += frame;
             swing = super::super::doors::advance_hinge(
                 swing,
@@ -5089,7 +5086,7 @@ mod tests {
                 other => panic!("{other:?} at {now:?}"),
             }
         }
-        assert_eq!(rerouted_at, Some(frame * 5));
+        assert_eq!(rerouted_at, Some(frame * 8));
     }
 
     #[test]
@@ -5557,144 +5554,69 @@ mod tests {
         );
     }
 
-    #[test]
-    fn gm_lines_run_anywhere_but_fixtures_only_on_a_local_session() {
-        use eq_client_core::{ClientCommand, OutboundChat};
-        let world = eq_client_core::world::ClientWorld::default();
-        // A plain line runs anywhere, as a typed `#` line would.
-        assert_eq!(
-            gm_request("summon", false, &world).unwrap(),
-            ClientCommand::SendChat(OutboundChat::Say("#summon".into()))
-        );
-        assert!(gm_request("stun 8000", false, &world).is_err());
-        assert_eq!(
-            gm_request("givemoney 0 0 5 0", true, &world).unwrap(),
-            ClientCommand::SendChat(OutboundChat::Say("#givemoney 0 0 5 0".into()))
-        );
-        assert!(!Script::new(vec![Step::Gm("summon".into())]).local);
-        assert!(Script::new(Vec::new()).local_session(true).local);
-        // Offline, steps run unattended but a gm fixture step is still refused.
-        let offline = Script::new(Vec::new()).offline_preview(true);
-        assert!(offline.offline && !offline.local);
+    /// What typing `#line` sends, as `gm_request` answers it.
+    #[allow(
+        clippy::unnecessary_wraps,
+        reason = "compared with gm_request's result as it is"
+    )]
+    fn typed(line: &str) -> Result<eq_client_core::ClientCommand, String> {
+        Ok(eq_client_core::ClientCommand::SendChat(
+            eq_client_core::OutboundChat::Say(format!("#{line}")),
+        ))
     }
 
     #[test]
-    fn a_stun_fixture_keeps_both_local_session_gates() {
-        use eq_client_core::{ClientCommand, OutboundChat};
-        let world = eq_client_core::world::ClientWorld::default();
-        let program = Program::parse("gm(\"stun 8000\")", std::path::Path::new(".")).unwrap();
-        assert_eq!(
-            program.instructions()[0].step(),
-            &Step::Gm("stun 8000".into())
-        );
-        assert!(program.check_local_commands(false).is_err());
-        assert!(program.check_local_commands(true).is_ok());
-        assert!(gm_request("stun 8000", false, &world).is_err());
-        assert_eq!(
-            gm_request("stun 8000", true, &world).unwrap(),
-            ClientCommand::SendChat(OutboundChat::Say("#stun 8000".into()))
-        );
-    }
-
-    #[test]
-    fn language_fixture_preserves_local_eqemu_and_admission_gates() {
+    fn any_gm_line_goes_as_typed_on_any_session_and_generation() {
         use crate::online::{OnlineState, testing as session};
-        use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
-        let command = "setlanguage 5 20";
-        let program =
-            Program::parse(&format!("gm(\"{command}\")"), std::path::Path::new(".")).unwrap();
-        assert!(program.check_local_commands(false).is_err());
-        assert!(program.check_local_commands(true).is_ok());
+        use eq_client_core::GameDialect;
         let mut online = OnlineState::new(true);
         session::admit(&mut online, 1, session::player(7));
-        assert!(gm_request(command, false, online.world()).is_err());
-        assert!(gm_request("setlanguage 28 20", true, online.world()).is_err());
-        assert_eq!(
-            gm_request(command, true, online.world()),
-            Ok(ClientCommand::SendChat(OutboundChat::Say(
-                "#setlanguage 5 20".into()
-            )))
-        );
-        session::generation(&mut online, GameDialect::EqMac);
-        assert!(gm_request(command, true, online.world()).is_err());
-    }
-
-    #[test]
-    fn discipline_fixture_keeps_the_local_eqemu_policy() {
-        use crate::online::{OnlineState, testing as session};
-        use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
-
-        let command = "traindisc 55 52";
-        let program =
-            Program::parse(&format!("gm(\"{command}\")"), std::path::Path::new(".")).unwrap();
-        assert!(program.check_local_commands(false).is_err());
-        assert!(program.check_local_commands(true).is_ok());
-
-        let mut online = OnlineState::new(true);
-        session::admit(&mut online, 1, session::player(7));
-        assert!(gm_request(command, false, online.world()).is_err());
-        assert!(gm_request("traindisc 52 55", true, online.world()).is_err());
-        assert_eq!(
-            gm_request(command, true, online.world()),
-            Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
-                "#{command}"
-            ))))
-        );
-        session::generation(&mut online, GameDialect::EqMac);
-        assert!(gm_request(command, true, online.world()).is_err());
-    }
-
-    #[test]
-    fn guild_fixtures_keep_parser_local_and_generation_gates_at_dispatch() {
-        use crate::online::{OnlineState, testing as session};
-        use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
-        let mut online = OnlineState::new(true);
-        session::admit(&mut online, 1, session::player(7));
-        for command in [
-            "guild create Example Synthetic Guild",
-            "guild delete 3",
-            "guild set Example 0",
-        ] {
-            let program =
-                Program::parse(&format!("gm(\"{command}\")"), std::path::Path::new(".")).unwrap();
-            assert!(program.check_local_commands(false).is_err());
-            assert!(program.check_local_commands(true).is_ok());
-            assert!(gm_request(command, false, online.world()).is_err());
-            assert_eq!(
-                gm_request(command, true, online.world()),
-                Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
-                    "#{command}"
-                ))))
-            );
+        let lines = [
+            "summon",
+            "show zone_status",
+            "set invulnerable on",
+            "stun 8000",
+            "setlanguage 28 20",
+            "traindisc 52 55",
+            "guild rename 3 Other",
+            "spawn ScriptFixture 60 1 0 200",
+            "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 3",
+            "depop 1",
+            "depopzone",
+            "givemoney 0 0 5 0",
+        ];
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            session::generation(&mut online, generation);
+            for line in lines {
+                for local in [false, true] {
+                    assert_eq!(
+                        gm_request(line, local, online.world()),
+                        typed(line),
+                        "{line} {generation:?} {local}"
+                    );
+                }
+            }
         }
-        assert!(gm_request("guild rename 3 Other", true, online.world()).is_err());
-        session::generation(&mut online, GameDialect::EqMac);
-        assert!(gm_request("guild set Example 0", true, online.world()).is_err());
-    }
-
-    #[test]
-    fn full_fixture_setup_requires_local_titanium_at_runtime() {
-        use crate::online::{OnlineState, testing as session};
-        use eq_client_core::{ClientCommand, GameDialect, OutboundChat};
-
-        let command = "spawn ScriptFixture 60 1 0 200 2 1 0 0 0 3";
-        let mut online = OnlineState::new(true);
-        session::admit(&mut online, 1, session::player(7));
-        assert!(gm_request(command, false, online.world()).is_err());
+        // Spaces collapse as the words do; only what the chat line cannot
+        // take is refused.
         assert_eq!(
-            gm_request(command, true, online.world()),
-            Ok(ClientCommand::SendChat(OutboundChat::Say(format!(
-                "#{command}"
-            ))))
+            gm_request("  show   buffs ", false, online.world()),
+            typed("show buffs")
         );
-        assert!(gm_request("spawn ScriptFixture 60 1 0 200", true, online.world()).is_err());
-        session::generation(&mut online, GameDialect::EqMac);
-        assert!(gm_request(command, true, online.world()).is_err());
-        assert!(gm_request("spawn ScriptFixture 1 1", true, online.world()).is_ok());
+        assert!(gm_request("", false, online.world()).is_err());
+        assert!(gm_request("#summon", false, online.world()).is_err());
+        assert!(gm_request("bell\u{7}", false, online.world()).is_err());
+        assert_eq!(
+            gm_request("emote caf\u{e9}", false, online.world()),
+            typed("emote caf\u{e9}")
+        );
+        let longest = "x".repeat(crate::chat::MAX_TEXT - 1);
+        assert_eq!(gm_request(&longest, false, online.world()), typed(&longest));
+        assert!(gm_request(&format!("{longest}x"), false, online.world()).is_err());
     }
 
     #[test]
-    fn depop_only_queues_for_the_reconciled_current_npc() {
+    fn the_depop_helper_runs_only_locally_for_the_reconciled_current_npc() {
         use crate::online::{OnlineState, testing as session};
         use eq_client_core::{ClientCommand, SpawnKind, WorldEvent, targets::TargetState};
 
@@ -5718,7 +5640,8 @@ mod tests {
         };
         for (spawn_id, revision) in [(7, 1), (9, 2)] {
             session::news(&mut online, [target(spawn_id, revision)]);
-            assert!(gm_request("depop", true, online.world()).is_err());
+            // No NPC chosen: the line goes as typed, and the server answers.
+            assert_eq!(gm_request("depop", true, online.world()), typed("depop"));
         }
         session::news(&mut online, [target(8, 3)]);
         assert!(matches!(
@@ -5733,18 +5656,28 @@ mod tests {
                 ..
             })
         ));
-        assert!(gm_request("depop", false, online.world()).is_err());
-        assert!(gm_request("depop 1", true, online.world()).is_err());
-        assert!(gm_request("depopzone", true, online.world()).is_err());
+        // Off a local session the helper never runs: the line goes as typed.
+        assert_eq!(gm_request("depop", false, online.world()), typed("depop"));
+        assert_eq!(
+            gm_request("depop 1", true, online.world()),
+            typed("depop 1")
+        );
+        assert_eq!(
+            gm_request("depopzone", true, online.world()),
+            typed("depopzone")
+        );
+        session::generation(&mut online, eq_client_core::GameDialect::EqMac);
+        assert_eq!(gm_request("depop", true, online.world()), typed("depop"));
+        session::generation(&mut online, eq_client_core::GameDialect::Titanium);
 
         // A reused spawn ID cannot inherit the original selection.
         session::news(
             &mut online,
             [WorldEvent::Despawn(8), WorldEvent::Spawns(vec![npc])],
         );
-        assert!(gm_request("depop", true, online.world()).is_err());
+        assert_eq!(gm_request("depop", true, online.world()), typed("depop"));
         online.select_target(Some(8));
-        assert!(gm_request("depop", true, online.world()).is_err());
+        assert_eq!(gm_request("depop", true, online.world()), typed("depop"));
     }
 
     #[test]
@@ -6199,6 +6132,56 @@ mod tests {
             1
         );
         assert_eq!(*app.world().resource::<InputMode>(), InputMode::Background);
+    }
+
+    #[test]
+    fn a_run_that_fails_stops_autorun_once_and_a_relatched_autorun_stays_on() {
+        // The real status copy (`observe`) rewrites the status every frame
+        // while the finished run stays loaded; the stop acts only when the
+        // run first reads Failed.
+        let autorun = |app: &App| app.world().resource::<crate::motion::Controls>().autorun();
+        let (mut app, window) = background(Vec::new());
+        app.init_resource::<crate::motion::Controls>().add_systems(
+            Update,
+            crate::motion::stop_autorun_after_failed_script.after(observe),
+        );
+        app.insert_resource(Script::new(vec![Step::Hold(
+            vec![KeyCode::KeyW],
+            Duration::from_secs(1),
+        )]));
+        app.world_mut()
+            .resource_mut::<crate::motion::Controls>()
+            .set_autorun(true);
+        set_focus(&mut app, window, true);
+        frame_at(&mut app, 0);
+        frame_at(&mut app, 10);
+        assert!(autorun(&app), "the run is under way");
+        set_focus(&mut app, window, false);
+        frame_at(&mut app, 20);
+        assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+        assert!(
+            app.world().get_resource::<Script>().is_some(),
+            "the run stays loaded"
+        );
+        assert!(!autorun(&app), "a failed run takes the latch off");
+        app.world_mut()
+            .resource_mut::<crate::motion::Controls>()
+            .set_autorun(true);
+        for ms in (30..=200).step_by(10) {
+            frame_at(&mut app, ms);
+        }
+        assert!(autorun(&app), "the player's latch after the run stays on");
+        // A run that completes leaves the latch.
+        app.insert_resource(Script::new(vec![Step::Wait(Duration::from_millis(10))]));
+        set_focus(&mut app, window, true);
+        for ms in (210..=400).step_by(10) {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed
+        );
+        assert!(autorun(&app), "a completed run leaves the latch");
     }
 
     #[test]
