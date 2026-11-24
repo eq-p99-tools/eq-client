@@ -49,6 +49,14 @@ pub(super) struct CombatState {
     /// turns auto attack off without a line (read R19b 3; the 0x117 line of
     /// its second call is not modelled, recording checklist 6.455).
     off_quiet: bool,
+    /// The last auto attack toggle that left for a session. The Titanium
+    /// program's character tick (0x422198) sends `OP_AutoAttack` whenever
+    /// its flag differs from the last value it sent (\[0x79db92\], which
+    /// only the tick writes), so a zone change that turned the flag off
+    /// sends the off on the first tick in play (read R49-32). Nothing else
+    /// writes it, so it outlasts a camp and a new login in the same run.
+    /// None until a toggle has left.
+    last_sent: Option<bool>,
     /// The assist answers seen ([`eq_client_core::world::ClientWorld::assist_answer`]).
     seen_assists: u32,
     /// The spawn an assist answer named while Attack On Assist was on, and
@@ -63,6 +71,17 @@ pub(super) struct CombatState {
 const ASSIST_ATTACK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl CombatState {
+    /// Forgets the admission's requests, keeping only the tick's comparison.
+    /// From the Titanium program (0x422198, read R49-32), only its character
+    /// tick writes \[0x79db92\], so it outlasts a camp and a new login in the
+    /// same run. A fresh client still starts with no toggle sent.
+    pub(super) fn reset(&mut self) {
+        *self = Self {
+            last_sent: self.last_sent,
+            ..Self::default()
+        };
+    }
+
     /// Arms Attack On Assist for a new assist answer that names a target,
     /// when the option is `on`: the answer that sets the target starts auto
     /// attack. The program's attack block \[0x92384c\] is unread; the attack
@@ -77,15 +96,19 @@ impl CombatState {
         }
     }
 
-    /// A new zone session starts with auto attack off, as the session does,
-    /// so the two agree; whether the program turns it off at a zone change
-    /// is unread (recording checklist 6.445).
-    fn follow_session(&mut self, session_id: Option<u64>) {
+    /// A new zone session starts with auto attack off. The Titanium
+    /// program's zone change turns it off without a word or a send
+    /// (0x4a7cd3 and 0x4a861d call 0x4a2f7a(0)), and its tick then sends
+    /// the off, quietly, once the player is in play in the new zone, if the
+    /// last value sent was on (read R49-32). `tick_sends` says the installed
+    /// client's tick does that. The Mac-era and `RoF2` programs' ticks are
+    /// unread, so they send nothing, as before (checklist 6.625).
+    fn follow_session(&mut self, session_id: Option<u64>, tick_sends: bool) {
         if self.session_id != session_id {
             self.session_id = session_id;
             self.auto_attack = false;
-            self.off_unsent = false;
-            self.off_quiet = false;
+            self.off_unsent = tick_sends && self.last_sent == Some(true);
+            self.off_quiet = self.off_unsent;
             self.idle = IdleSwings::default();
         }
     }
@@ -209,7 +232,14 @@ pub(super) fn input(
 ) {
     use super::keys::Act;
     let world = online.world();
-    combat.follow_session(world.session_id());
+    combat.follow_session(
+        world.session_id(),
+        match world.generation() {
+            eq_client_core::GameDialect::Titanium => true,
+            // Their programs' ticks are unread (checklist 6.625).
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+        },
+    );
     // AttackOnAssist, on a client that runs R46's forms (read R49-8 d).
     let on = options
         .as_ref()
@@ -252,10 +282,12 @@ pub(super) fn input(
     // goes again each frame until it leaves, so the session never stays
     // attacking while the host shows it off. Any other refusal means the
     // session cannot be attacking on this connection.
-    if combat.off_unsent {
+    // Only in play: the program's tick runs there (read R49-32).
+    if combat.off_unsent && world.connected() {
         match outbox.try_post(world, attack(false)) {
             Ok(()) => {
                 combat.off_unsent = false;
+                combat.last_sent = Some(false);
                 if !std::mem::take(&mut combat.off_quiet) {
                     chat.history.push(toggle_line(toggle, false, &messages));
                 }
@@ -273,6 +305,7 @@ pub(super) fn input(
         && outbox.post(world, attack(true)).is_ok()
     {
         combat.auto_attack = true;
+        combat.last_sent = Some(true);
         combat.idle = IdleSwings::default();
         chat.history.push(toggle_line(toggle, true, &messages));
     }
@@ -331,6 +364,7 @@ pub(super) fn input(
             return;
         }
         combat.auto_attack = enable;
+        combat.last_sent = Some(enable);
         combat.idle = IdleSwings::default();
         chat.history.push(toggle_line(toggle, enable, &messages));
     }
@@ -581,15 +615,43 @@ mod tests {
     #[test]
     fn a_new_zone_session_turns_the_hosts_auto_attack_off_as_the_sessions_is() {
         let mut combat = CombatState::default();
-        combat.follow_session(Some(1));
+        combat.follow_session(Some(1), true);
         combat.auto_attack = true;
-        combat.follow_session(Some(1));
+        combat.follow_session(Some(1), true);
         assert!(combat.auto_attack);
-        combat.follow_session(Some(2));
+        combat.follow_session(Some(2), true);
         assert!(!combat.auto_attack);
         combat.auto_attack = true;
-        combat.follow_session(None);
+        combat.follow_session(None, true);
         assert!(!combat.auto_attack);
+        // Nothing was sent on, so no off is owed.
+        assert!(!combat.off_unsent);
+    }
+
+    #[test]
+    fn a_reset_keeps_only_the_process_lifetime_tick_comparison() {
+        assert!(CombatState::default().last_sent.is_none());
+        for last_sent in [None, Some(false), Some(true)] {
+            let mut combat = CombatState {
+                auto_attack: true,
+                idle: IdleSwings([1.0, 2.0]),
+                session_id: Some(7),
+                off_unsent: true,
+                off_quiet: true,
+                last_sent,
+                seen_assists: 9,
+                assist_attack: Some((30, std::time::Instant::now())),
+            };
+            combat.reset();
+            assert_eq!(combat.last_sent, last_sent);
+            assert!(!combat.auto_attack);
+            assert_eq!(combat.idle, IdleSwings::default());
+            assert!(combat.session_id.is_none());
+            assert!(!combat.off_unsent);
+            assert!(!combat.off_quiet);
+            assert_eq!(combat.seen_assists, 0);
+            assert!(combat.assist_attack.is_none());
+        }
     }
 
     #[test]
@@ -1048,5 +1110,235 @@ mod tests {
         app.update();
         assert_eq!(sent(&full), None);
         assert!(!app.world().resource::<CombatState>().off_unsent);
+    }
+
+    /// The toggles that left for `session`, in order.
+    fn toggles(rx: &std::sync::mpsc::Receiver<ClientCommand>, session: u64) -> Vec<bool> {
+        rx.try_iter()
+            .map(|command| {
+                let ClientCommand::AutoAttack {
+                    session_id,
+                    enabled,
+                    ..
+                } = command
+                else {
+                    panic!("something else was sent: {command:?}");
+                };
+                assert_eq!(session_id, session, "sent to the wrong session");
+                enabled
+            })
+            .collect()
+    }
+
+    /// Leaves the zone of session 7, then arrives in session 8: the world
+    /// is out of play for a frame between.
+    fn change_zone(app: &mut App) {
+        use crate::online::testing;
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+        testing::connect(&mut online, false);
+        app.update();
+        let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+        testing::admit(&mut online, 8, testing::player(12));
+    }
+
+    #[test]
+    fn titanium_sends_the_off_quietly_on_the_first_frame_in_play_after_a_zone_change() {
+        // Read R49-32: the zone change turns auto attack off without a send,
+        // and the tick sends the off once in play in the new zone.
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        press(&mut app);
+        assert_eq!(toggles(&rx, 7), [true]);
+        let before = lines(&app).len();
+        change_zone(&mut app);
+        assert_eq!(toggles(&rx, 7), Vec::<bool>::new(), "nothing while leaving");
+        app.update();
+        assert_eq!(toggles(&rx, 8), [false]);
+        assert_eq!(lines(&app).len(), before, "no line: {:?}", lines(&app));
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        // Once only: the next zone change owes nothing.
+        app.update();
+        assert_eq!(toggles(&rx, 8), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn a_zone_change_owes_no_off_when_the_last_toggle_sent_was_off() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        press(&mut app);
+        press(&mut app);
+        assert_eq!(toggles(&rx, 7), [true, false]);
+        change_zone(&mut app);
+        app.update();
+        app.update();
+        assert_eq!(toggles(&rx, 8), Vec::<bool>::new());
+    }
+
+    #[test]
+    fn the_mac_era_client_sends_nothing_at_a_zone_change_until_its_tick_is_read() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::EqMac);
+        press(&mut app);
+        assert_eq!(toggles(&rx, 7), [true]);
+        change_zone(&mut app);
+        app.update();
+        app.update();
+        assert_eq!(toggles(&rx, 8), Vec::<bool>::new());
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+    }
+
+    /// Install the production receiver before combat input, including the
+    /// presentation panels whose admission reset is absent from `change_zone`.
+    fn receive_updates(app: &mut App) -> std::sync::mpsc::Sender<eq_client_core::WorldUpdate> {
+        use bevy::mesh::skinning::SkinnedMeshInverseBindposes;
+        let (tx, rx) = std::sync::mpsc::channel();
+        app.insert_resource(crate::online::Updates(std::sync::Mutex::new(Some(rx))))
+            .init_resource::<crate::hud::HudState>()
+            .init_resource::<crate::notices::Lines>()
+            .init_resource::<crate::motion::Controls>()
+            .init_resource::<crate::trade::TradeState>()
+            .init_resource::<crate::items::ItemState>()
+            .init_resource::<crate::inventory::InventoryState>()
+            .init_resource::<crate::sounds::Sounds>()
+            .init_resource::<Assets<Image>>()
+            .init_resource::<Assets<Mesh>>()
+            .init_resource::<Assets<SkinnedMeshInverseBindposes>>()
+            .init_resource::<Assets<StandardMaterial>>()
+            .add_systems(Update, crate::online::receive.before(input));
+        tx
+    }
+
+    fn arrival(session_id: u64) -> eq_client_core::WorldUpdate {
+        eq_client_core::WorldUpdate::Game(eq_client_core::WorldEvent::Entered {
+            capabilities: eq_client_core::Capability::ALL.to_vec(),
+            choices: Vec::new(),
+            session_id,
+            zone: "example".into(),
+            player: Box::new(crate::online::testing::player(12)),
+            far_clip: None,
+            spell_landing_flag: None,
+            zone_id: 0,
+        })
+    }
+
+    #[test]
+    fn titanium_receive_resets_preserve_the_last_toggle_until_arrival() {
+        use eq_client_core::{CampStatus, WorldEvent, WorldUpdate, world::Link};
+        // Both orders occur: the receiver may drain admission and Connected
+        // together, or render a frame between those updates. Camp and a new
+        // session must retain the same process-lifetime comparison value.
+        for boundary in [
+            WorldUpdate::Connection(Link::Zoning),
+            WorldUpdate::Game(WorldEvent::Camp(CampStatus::Camped)),
+            WorldUpdate::Connection(Link::Ended),
+        ] {
+            for split_arrival in [false, true] {
+                let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+                let updates = receive_updates(&mut app);
+                press(&mut app);
+                assert_eq!(toggles(&rx, 7), [true]);
+                let before = lines(&app).len();
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .reset_all();
+                updates.send(boundary.clone()).unwrap();
+                app.update();
+                assert_eq!(toggles(&rx, 7), Vec::<bool>::new());
+                updates.send(arrival(8)).unwrap();
+                if split_arrival {
+                    app.update();
+                    assert_eq!(toggles(&rx, 8), Vec::<bool>::new());
+                }
+                updates
+                    .send(WorldUpdate::Connection(Link::Connected))
+                    .unwrap();
+                app.update();
+                assert_eq!(
+                    toggles(&rx, 8),
+                    [false],
+                    "{boundary:?}, split={split_arrival}"
+                );
+                assert!(!app.world().resource::<CombatState>().auto_attack);
+                assert!(lines(&app)[before..].iter().all(|(text, _)| text != "Off."));
+                app.update();
+                assert_eq!(toggles(&rx, 8), Vec::<bool>::new());
+            }
+        }
+    }
+
+    #[test]
+    fn receive_does_not_invent_an_off_for_unread_ticks_or_a_last_sent_off() {
+        use eq_client_core::{WorldUpdate, world::Link};
+        for client in [
+            eq_client_assets::ui::InstalledClient::Titanium,
+            eq_client_assets::ui::InstalledClient::EqMac,
+            eq_client_assets::ui::InstalledClient::Rof2,
+        ] {
+            let (mut app, rx) = attacking(client);
+            let updates = receive_updates(&mut app);
+            press(&mut app);
+            if client == eq_client_assets::ui::InstalledClient::Titanium {
+                press(&mut app);
+                assert_eq!(toggles(&rx, 7), [true, false]);
+            } else {
+                assert_eq!(toggles(&rx, 7), [true]);
+            }
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            for update in [
+                WorldUpdate::Connection(Link::Zoning),
+                arrival(8),
+                WorldUpdate::Connection(Link::Connected),
+            ] {
+                updates.send(update).unwrap();
+            }
+            app.update();
+            app.update();
+            assert_eq!(toggles(&rx, 8), Vec::<bool>::new());
+            assert!(!app.world().resource::<CombatState>().auto_attack);
+        }
+    }
+
+    #[test]
+    fn the_off_after_receive_retries_a_full_queue_in_the_new_admission() {
+        use eq_client_core::{WorldUpdate, world::Link};
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        let updates = receive_updates(&mut app);
+        press(&mut app);
+        assert_eq!(toggles(&rx, 7), [true]);
+        // Fill the four-place queue with old-admission requests. These do
+        // not advance CombatState's comparison value and must not make the
+        // automatic new-admission off disappear when try_post returns Busy.
+        {
+            let online = app.world().resource::<crate::online::OnlineState>();
+            let outbox = app.world().resource::<crate::outbox::Outbox>();
+            for _ in 0..4 {
+                outbox
+                    .try_post(online.world(), |stamp| ClientCommand::AutoAttack {
+                        session_id: stamp.session_id,
+                        enabled: true,
+                        created: stamp.created,
+                    })
+                    .unwrap();
+            }
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        for update in [
+            WorldUpdate::Connection(Link::Zoning),
+            arrival(8),
+            WorldUpdate::Connection(Link::Connected),
+        ] {
+            updates.send(update).unwrap();
+        }
+        app.update();
+        assert!(app.world().resource::<CombatState>().off_unsent);
+        assert_eq!(toggles(&rx, 7), [true; 4]);
+        app.update();
+        assert_eq!(toggles(&rx, 8), [false]);
+        app.update();
+        assert_eq!(toggles(&rx, 8), Vec::<bool>::new());
     }
 }
