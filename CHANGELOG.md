@@ -11,6 +11,34 @@
   - **Vah Shir** follows its own key alone, past the all-off key, and is on when unset whatever the mask.
   - **Froglok stays classic,** since the program's loader doesn't walk it.
   - **The options file** keeps the keys set on as `luclin_models = ...`, the keys set off as `classic_models = ...`, and `all_luclin_models_off`. A code in both lines is off. A file's keys lie over eqclient.ini's, key by key.
+- **A Titanium door spawned away from its rest opens and goes back as the program's mover does** (eqgame.exe 0x4368b3, read R49-28b; checklist 6.423). Repinned eq-network to 6d62512 (#450).
+  - **Spawn poses:** the renderer takes Titanium's new `titanium::endpoint` (RoF2 too, inferred; EQMac unchanged). A door spawned in state 1 or 2 heads open from its base: a lift rises at its opening rate instead of standing at full travel, and a hinged door swings open. One spawned in state 0 or 3 stands at its base. The mover's skipped types (50-52, 54-58, 153-155) stand at their base.
+  - **Returns:** a door spawned away from its rest goes back its delay after spawn, even while still opening. With rest 1 it heads for the open end it already has, so nothing visible changes. A door spawned shut or in state 3 with rest 0 no longer goes back. Types 110-152 but 115 close as soon as a vertical one stands open.
+  - **Hinge speed:** a hinged door swings at the program's 8 a step of ms x 0.02, a quarter turn in 0.8 s (was half a turn a second, faster than the program). A script walk waits 1.8 s for a door's swing (was 1.5 s).
+  - Not built, as gap rows: a door entity first drawn after its spawn is posed at its target at once, not at the swing it would have reached (at most 0.8 s). The rest are listed in eq-network #450.
+- `/target Name` on Titanium follows the program (read R49-33 b, checklist
+  6.635). A spawn whose full server name is exactly the name is picked
+  first, then the nearest whose name starts with it, over every known spawn
+  rather than only the drawn ones. A name that matches none sends the
+  target naming no one, with no line, as the program does (it said "No
+  nearby target named ..."). `/target` with no name says the program's line
+  0x33d3. Spawns this client can't target are still skipped (Adam's call, a
+  labelled departure from the program's look over all spawns). Labelled:
+  the program sends this choice as `OP_TargetCommand`, and this client
+  sends it as the ordinary target choice, which EQEmu handles alike. The
+  Mac-era rule is unchanged.
+- A slash word with no command now gets the Titanium program's line 0x305c
+  (colour 0xd) instead of passing over silently (read R49-33 a, checklist
+  6.634), from the keyboard, a hotbutton, a social or a script's `slash`
+  step alike. A game master's command typed by a player who isn't one gets
+  the same line, as the program's search stops there. For a GM the program
+  runs it; those handlers aren't built here, so it still passes over
+  silently [I], and a GM's `#` line reaches the server. The command table
+  was checked against the program's table row by row (read R49-33e): same
+  names, order, game master rows and shared handlers, and no row has an
+  alias, so no prefix changes. Mac-era and RoF2 sessions stay silent, as
+  their program's answer is unread. Line 0x21a (a command run in character
+  states 3 or 4) waits on a read and isn't built.
 - A gem cast short of mana goes to the server, as the Titanium program's
   does: it compares no mana before it sends the cast, and never prints the
   low-mana line itself (read R49-34 g, slice G, G5). Before, this client
