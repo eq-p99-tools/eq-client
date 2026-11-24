@@ -433,6 +433,19 @@ fn seed_official_options(
         if let Some(on) = official.attack_on_assist {
             option_defaults.attack_on_assist = on;
         }
+        if let Some(sort) = official
+            .track_sort
+            .and_then(eq_client_core::track_options::TrackSort::saved)
+        {
+            option_defaults.track_sort = sort;
+        }
+        if let Some(mask) = official.track_filter {
+            option_defaults.track_filter = eq_client_core::track_options::TrackFilter(mask);
+        }
+        if let Some(first) = official.track_players {
+            option_defaults.track_players =
+                eq_client_core::track_options::TrackPlayers::saved(&first.to_string());
+        }
         seed_levels(option_defaults, &official);
     }
 }
