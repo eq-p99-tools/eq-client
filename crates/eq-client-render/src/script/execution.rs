@@ -132,6 +132,15 @@ impl RunStatus {
         }
     }
 
+    /// A run that ended in `phase`, for other systems' tests.
+    #[cfg(test)]
+    pub(crate) fn ended(phase: Phase) -> Self {
+        Self {
+            phase,
+            ..Self::default()
+        }
+    }
+
     /// The same status with these dots, for the editor's tests.
     #[cfg(test)]
     pub(crate) fn with_breakpoints(mut self, lines: &[usize]) -> Self {

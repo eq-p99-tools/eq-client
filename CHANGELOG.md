@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A script run that fails takes the autorun latch off, so the character stops instead of running on unattended (seen when a failed run carried a character off a dock). A run the player stops, or one that completes, leaves autorun as it is. This is this client's rule for its scripts. The script reference also notes that `face(heading)` turns at the turn keys' rate (at most 240 heading units a second, so a near-full turn takes over two seconds), and that `look("world", …)` turns as a mouse does.
 - Buying from a merchant follows the Titanium program's order and lines
   (read R49-35 a, checklist 6.627), for the one-click buy and the quantity
   window alike. A pending trade, a ware the merchant no longer lists and a
