@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- Guild invitations follow the Titanium program further (read R49-33 d, checklist 6.633). An offer of a lower rank in your own guild is taken at once with that rank and no dialog, as the program does; only an offer of a member's rank prints its line. Before, a lower offer other than a member's went unanswered. And the invitation dialog's 10-second wait now answers as No does (response 5), where it used to send nothing; that the program's wait reaches that answer is inferred. Scripts answer the dialog with `click("answer", "yes")` or `"no"`, as before.
 - The track window draws light blue as the Titanium program does (read
   R49-30 d, checklist 6.637): a green entry near the green edge is light
   blue instead, when e = their level less the green threshold, less 1 for
