@@ -167,15 +167,71 @@ impl Notice {
         match self {
             Self::ServerString { message_type, .. } => *message_type,
             // The program prints the song stop's line in colour 0x108.
-            Self::SongStopped { .. } => Some(SONG_STOP_COLOUR),
+            // And every line of `OP_InterruptCast`'s print tail (0x45e233,
+            // read R49-51b).
+            Self::SongStopped { .. }
+            | Self::CastInterrupted {
+                print:
+                    InterruptPrint::Titanium
+                    | InterruptPrint::TitaniumBard
+                    | InterruptPrint::TitaniumOther(_),
+                ..
+            }
+            | Self::OtherCastInterrupted {
+                print:
+                    InterruptPrint::Titanium
+                    | InterruptPrint::TitaniumBard
+                    | InterruptPrint::TitaniumOther(_),
+                ..
+            } => Some(SONG_STOP_COLOUR),
             _ => None,
         }
     }
 }
 
 /// The colour the program prints a song stop's line in (0x40f06d, read
-/// R49-21).
+/// R49-21), and every interruption line (0x45e233, read R49-51b).
 const SONG_STOP_COLOUR: u32 = 0x108;
+
+/// How the program prints an interruption the server names
+/// (`OP_InterruptCast`'s print tail 0x45e233, reads R49-51 and R49-51b).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterruptPrint {
+    /// An unread program: this client's default colour, and no filter.
+    Unread,
+    /// The Titanium program, the player's own line, not a Bard's: colour
+    /// 0x108, always shown.
+    Titanium,
+    /// The Titanium program, the player's own line as a Bard: colour 0x108,
+    /// hidden by filter 9 (Bard songs) at its last option, as the song
+    /// stop's line.
+    TitaniumBard,
+    /// The Titanium program, another caster's line: colour 0x108, behind
+    /// the filter for who they are (read R49-51b, values R49-48 e).
+    TitaniumOther(OtherCaster),
+}
+
+/// Who another caster is, for the Titanium program's interruption filters
+/// (`OP_InterruptCast`'s print tail 0x45e233, read R49-51b).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OtherCaster {
+    /// A Bard (class 8), player or not: filter 9 (Bard songs).
+    Bard {
+        /// Whether they are in the player's group.
+        grouped: bool,
+    },
+    /// Another player: filter 7 (other players' spells).
+    Player {
+        /// Whether they are in the player's group.
+        grouped: bool,
+    },
+    /// An NPC: filter 8 (NPCs' spells).
+    Npc,
+    /// A spawn this client doesn't know: the program looks the named spawn
+    /// up (0x401b28), and what it prints for one it doesn't find is
+    /// unread, so the line shows (inferred).
+    Unknown,
+}
 
 /// Something to tell the player.
 #[derive(Clone, Debug, PartialEq)]
@@ -480,6 +536,8 @@ pub enum Notice {
     CastInterrupted {
         /// The official client's string for why, in `eqstr_us.txt`.
         string_id: u32,
+        /// How the program prints it.
+        print: InterruptPrint,
     },
     /// The player, or a spawn the player knows, died. No line comes from
     /// the server with the death, so the official client words it itself
@@ -618,6 +676,8 @@ pub enum Notice {
         string_id: u32,
         /// The caster's name, as the server sent it.
         caster: String,
+        /// How the program prints it.
+        print: InterruptPrint,
     },
     /// A line from the chat server's channels (recording checklist 6.509;
     /// how the official client words and colours each is pending read
