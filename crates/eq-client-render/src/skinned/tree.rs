@@ -252,6 +252,11 @@ pub(super) fn text_box(
     if number {
         boxed.insert((Button, controls::AmountBox));
     }
+    // A report window's box takes the keyboard when clicked.
+    let report = crate::report_windows::ReportBox::of(text.id.as_deref(), owner);
+    if let Some(report) = report {
+        boxed.insert((Button, report));
+    }
     boxed.with_children(|frame| {
         let mut client = Area {
             x: 0.0,
@@ -323,6 +328,9 @@ pub(super) fn text_box(
                 }
                 (WindowId::Item, Some("ItemDescription")) => {
                     words.insert(crate::items::ItemText);
+                }
+                _ if let Some(crate::report_windows::ReportBox(report)) = report => {
+                    words.insert(crate::report_windows::ReportWords(report));
                 }
                 _ => (),
             }

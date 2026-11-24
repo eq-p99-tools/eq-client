@@ -17,6 +17,20 @@ pub(super) struct Model {
     pub pick: Vec<PickMesh>,
 }
 
+/// A door's solid triangles from its model's: the faces a placement of
+/// the model is met by, and those of its meshes in the engine's no-hit case
+/// (read R49-49c) too. The engine builds a door by name and takes its
+/// collision mode from eqgame.exe 0x1006c2b0, which is unread (read
+/// R49-49d), so a door keeps the faces it had before that rule.
+pub(super) fn collision(
+    placed: Vec<[[f32; 3]; 3]>,
+    no_hit: Vec<[[f32; 3]; 3]>,
+) -> Vec<[[f32; 3]; 3]> {
+    let mut triangles = placed;
+    triangles.extend(no_hit);
+    triangles
+}
+
 /// Keeps just the drawn positions and indices available after GPU extraction.
 pub(super) struct PickMesh {
     positions: Vec<[f32; 3]>,
@@ -43,28 +57,66 @@ impl PickMesh {
     }
 }
 
-/// Nearest drawn triangle on this door's current model and pose.
-/// The middle of the mesh a click on this door tests, in the world; None
-/// for a hidden door or one whose model isn't loaded.
-pub(super) fn middle(
+/// How many points on a door's drawn faces a script's click tries after
+/// the middle of its mesh.
+const AIM_POINTS: usize = 32;
+
+/// Where a click may name this door, in the world, best first: the middle
+/// of the mesh a click tests, then the middles of its drawn triangles
+/// nearest that, up to [`AIM_POINTS`]. A door drawn as bars or a frame has
+/// no face at its middle, so a click there misses it as a person's would;
+/// a point on a bar is where a person would click. Empty for a hidden door
+/// or one whose model isn't loaded.
+pub(super) fn aim_points(
     door: &DoorEntity,
     transform: &Transform,
     visibility: Visibility,
     models: &Models,
-) -> Option<Vec3> {
+) -> Vec<Vec3> {
     if visibility == Visibility::Hidden {
-        return None;
+        return Vec::new();
     }
-    let (low, high) = models
-        .0
-        .get(&door.model)?
+    let Some(model) = models.0.get(&door.model) else {
+        return Vec::new();
+    };
+    let Some((low, high)) = model
         .pick
         .iter()
         .flat_map(|mesh| mesh.positions.iter().map(|at| Vec3::from_array(*at)))
         .fold(None, |bounds: Option<(Vec3, Vec3)>, at| {
             Some(bounds.map_or((at, at), |(low, high)| (low.min(at), high.max(at))))
-        })?;
-    Some(transform.transform_point((low + high) / 2.0))
+        })
+    else {
+        return Vec::new();
+    };
+    let middle = (low + high) / 2.0;
+    let mut faces: Vec<Vec3> = model
+        .pick
+        .iter()
+        .flat_map(|mesh| {
+            mesh.indices
+                .as_chunks::<3>()
+                .0
+                .iter()
+                .filter_map(|triangle| {
+                    let corner = |index: u32| {
+                        mesh.positions
+                            .get(usize::try_from(index).ok()?)
+                            .map(|at| Vec3::from_array(*at))
+                    };
+                    Some((corner(triangle[0])? + corner(triangle[1])? + corner(triangle[2])?) / 3.0)
+                })
+        })
+        .collect();
+    faces.sort_by(|a, b| {
+        a.distance_squared(middle)
+            .total_cmp(&b.distance_squared(middle))
+    });
+    faces.dedup();
+    std::iter::once(middle)
+        .chain(faces.into_iter().take(AIM_POINTS))
+        .map(|at| transform.transform_point(at))
+        .collect()
 }
 
 pub(super) fn hit(
@@ -640,9 +692,12 @@ mod tests {
                 texture_coordinates: Vec::new(),
                 texture: None,
                 material_mode: eq_client_assets::MaterialMode::Opaque,
+                light: Vec::new(),
             }],
             materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
             collision: Vec::new(),
+            no_hit_collision: Vec::new(),
+            vertex_count: None,
         };
         let mut models = Models::default();
         models.0.insert(
@@ -983,6 +1038,14 @@ mod tests {
             .init_resource::<super::super::chat::ChatState>()
             .insert_resource(crate::outbox::Outbox::new(Some(sender)))
             .add_systems(Update, super::super::interact::input);
+        // The nearest rule answers the key only where the player keeps it;
+        // the centre ray's own tests are in the scene's pick.
+        let mut options = crate::options::OptionsState::default();
+        options
+            .options
+            .qol
+            .set(eq_client_core::qol::Fix::UsePicksNearest, true);
+        app.insert_resource(options);
         let window = app
             .world_mut()
             .spawn((

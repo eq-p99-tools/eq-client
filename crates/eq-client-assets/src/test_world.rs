@@ -1,5 +1,7 @@
 //! Builds S3D archives and the WLD files inside them byte by byte for tests,
 //! laid out as the formats lay them out, so no test needs game files.
+//! Other crates' tests reach a few of them through [`crate::testing`].
+#![cfg_attr(not(test), allow(dead_code))]
 
 use std::io::Cursor;
 use std::path::Path;
@@ -133,14 +135,67 @@ pub(crate) fn skinned_triangle(
     grouped_faces: u16,
     skin: &[(u16, u16)],
 ) -> Vec<u8> {
-    let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
+    triangle_of(
+        name,
+        palette,
+        coordinates,
+        grouped_faces,
+        skin,
+        &[],
+        (0x0001_8003, 0),
+    )
+}
+
+/// [`skinned_triangle`] with the mesh's own 0x36 flags and its one face's
+/// flags, such as 0x10 for a face the player passes through.
+pub(crate) fn flagged_triangle(
+    name: i32,
+    palette: i32,
+    coordinates: &Coordinates,
+    grouped_faces: u16,
+    skin: &[(u16, u16)],
+    flags: (u32, u16),
+) -> Vec<u8> {
+    triangle_of(name, palette, coordinates, grouped_faces, skin, &[], flags)
+}
+
+/// A one-triangle 0x36 mesh whose vertices carry these colours (none, or
+/// one each).
+pub(crate) fn coloured_triangle(
+    name: i32,
+    palette: i32,
+    coordinates: &Coordinates,
+    colours: &[u32],
+) -> Vec<u8> {
+    triangle_of(
+        name,
+        palette,
+        coordinates,
+        1,
+        &[],
+        colours,
+        (0x0001_8003, 0),
+    )
+}
+
+fn triangle_of(
+    name: i32,
+    palette: i32,
+    coordinates: &Coordinates,
+    grouped_faces: u16,
+    skin: &[(u16, u16)],
+    colours: &[u32],
+    (mesh_flags, face_flags): (u32, u16),
+) -> Vec<u8> {
+    let mut body = words(&[name.cast_unsigned(), mesh_flags, palette.cast_unsigned()]);
     // Animation, two unknown references, center, three unknowns, radius,
     // minimum and maximum.
     body.extend([0_u8; 12 + 12 + 12 + 4 + 24]);
     // Positions, coordinates, normals, colors, faces, skin groups, face
     // groups, vertex groups, mesh operations and scale.
     let skin_count = u16::try_from(skin.len()).unwrap();
-    for count in [3_u16, 3, 3, 0, 1, skin_count, 1, 1, 0, 0] {
+    let colour_count = u16::try_from(colours.len()).unwrap();
+    for count in [3_u16, 3, 3, colour_count, 1, skin_count, 1, 1, 0, 0] {
         body.extend(count.to_le_bytes());
     }
     for axis in [0_i16, 0, 0, 1, 0, 0, 0, 1, 0] {
@@ -161,9 +216,10 @@ pub(crate) fn skinned_triangle(
         }
     }
     body.extend([0_u8, 0, 127].repeat(3));
+    body.extend(words(colours));
     // The face (flags, then its vertices), the skin runs, its face group
     // and vertex group.
-    for word in [0_u16, 0, 1, 2] {
+    for word in [face_flags, 0, 1, 2] {
         body.extend(word.to_le_bytes());
     }
     for (count, bone) in skin {
@@ -200,8 +256,21 @@ pub(crate) fn mesh(
     groups: &[(u16, u16)],
     skin: &[(u16, u16)],
 ) -> Vec<u8> {
+    mesh_with_flags(name, palette, positions, faces, groups, skin, 0x0001_8003)
+}
+
+/// [`mesh`] with the mesh's own 0x36 flags; its +0x14 reference is empty.
+pub(crate) fn mesh_with_flags(
+    name: i32,
+    palette: i32,
+    positions: &[[i16; 3]],
+    faces: &[[u16; 3]],
+    groups: &[(u16, u16)],
+    skin: &[(u16, u16)],
+    flags: u32,
+) -> Vec<u8> {
     let count = |n: usize| u16::try_from(n).unwrap();
-    let mut body = words(&[name.cast_unsigned(), 0x0001_8003, palette.cast_unsigned()]);
+    let mut body = words(&[name.cast_unsigned(), flags, palette.cast_unsigned()]);
     body.extend([0_u8; 12 + 12 + 12 + 4 + 24]);
     let vertices = count(positions.len());
     for n in [

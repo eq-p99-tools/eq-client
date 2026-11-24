@@ -14,6 +14,7 @@ fn triangle(mode: MaterialMode) -> ZonePrimitive {
         indices: vec![0, 1, 2],
         texture: None,
         material_mode: mode,
+        light: Vec::new(),
     }
 }
 
@@ -26,11 +27,13 @@ fn placed_object_sidedness_survives_filtering_batching_and_reflection() {
         primitives: Vec::new(),
         terrain_materials: Vec::new(),
         point_lights: Vec::new(),
+        day_ambient: None,
         textures: Vec::new(),
         models: Vec::new(),
         objects: Vec::new(),
         objects_unplaced: 0,
         object_skins_skipped: 0,
+        object_lights_skipped: 0,
         collision: Vec::new(),
     };
     for mode in [
@@ -53,6 +56,8 @@ fn placed_object_sidedness_survives_filtering_batching_and_reflection() {
                     ObjectMaterial { double_sided },
                 ],
                 collision: Vec::new(),
+                no_hit_collision: Vec::new(),
+                vertex_count: None,
             });
             for scale in [[1.0; 3], [-1.0, 1.0, 1.0], [-1.0, -1.0, 1.0]] {
                 zone.objects.push(ZoneObject {
@@ -60,6 +65,7 @@ fn placed_object_sidedness_survives_filtering_batching_and_reflection() {
                     translation: [10.0, 0.0, 10.0],
                     rotation: Quat::IDENTITY.to_array(),
                     scale,
+                    light: None,
                 });
             }
         }

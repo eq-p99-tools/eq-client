@@ -72,11 +72,13 @@ fn read(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
         primitives: Vec::new(),
         terrain_materials: Vec::new(),
         point_lights: Vec::new(),
+        day_ambient: crate::lighting::day_ambient(eq_directory),
         textures: Vec::new(),
         models: Vec::new(),
         objects: Vec::new(),
         objects_unplaced: 0,
         object_skins_skipped: 0,
+        object_lights_skipped: 0,
         collision: Vec::new(),
     };
     // Each of the descriptor's models, as a model of the asset's when it is
@@ -125,6 +127,8 @@ fn read(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
                         .collect(),
                     primitives: staged.primitives,
                     collision: staged.collision,
+                    no_hit_collision: Vec::new(),
+                    vertex_count: None,
                 });
             }
         }
@@ -142,6 +146,7 @@ fn read(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
             translation: render(placement.position),
             rotation: placement_rotation(placement.rotation),
             scale: [placement.scale; 3],
+            light: None,
         });
     }
     asset.textures = textures;
@@ -233,6 +238,7 @@ impl Staged {
                 indices: Vec::new(),
                 texture: None,
                 material_mode: MaterialMode::Opaque,
+                light: Vec::new(),
             });
             for vertex in corners {
                 let index = u32::try_from(primitive.positions.len()).unwrap_or(u32::MAX);
