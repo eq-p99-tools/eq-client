@@ -28,9 +28,10 @@ outgoing requests; corrections replace the predicted position.
 
 A standing Titanium walk climbs onto an edge it runs into up to 1.25 above
 the body's origin, 5 units for a human of size 6, as the official client was
-seen to climb a pier rail and its posts. A ducking or wading walk climbs only
-what the floor sweep reaches, and so do feet that land, fall or are placed
-under a floor. The tallest edge the official client climbs is
+seen to climb a pier rail and its posts. A ducking walk, or one whose
+origin is in water or lava, climbs only what the floor sweep reaches, and so
+do feet that land, fall or are placed under a floor. Wading with the origin
+above the water climbs as on dry ground. The tallest edge the official client climbs is
 unmeasured, so a taller one stops here even where it might not there. The
 body's width is unchanged (recording checklist 6.482).
 
@@ -44,8 +45,25 @@ standing jump mounts a ledge up to its own rise plus that reach, about
 8.3 for a human. The program sweeps the air with the same raised body as
 the walk and has no test below it (read R42). Using the floor sweep's
 reach rather than the origin is the stricter reading (recording
-checklist 6.484). Ducking, wet feet and the Mac-era generation keep the
-old behaviour, where an edge at the body stops it.
+checklist 6.484). Ducking, an origin in water and the Mac-era generation
+keep the old behaviour, where an edge at the body stops it.
+
+A swimmer stroking forward with the view pitched up, with dry ground just
+ahead and a little below the origin, hops: at most once in 1500 ms the
+program adds three times the jump strength to the rise and half a unit a
+tick along the heading (0x48a793 and 0x48a026, read R33b). The wet step
+ends on the frame whose travel takes the origin out of the water, and
+the fall that follows carries the velocity it left with, so the hop
+lifts the swimmer clear. A fall whose origin has left the water, the
+feet still in it, passes over what the walk would climb (origin + 1.25),
+so a pool's rim up to about 3.3 above the water, as at Temple of Life in
+North Qeynos, lands the swimmer on it (recording checklists 6.483b and
+6.483c; the jump strength's value and the pitch the test reads are
+inferred). A body that falls back into the water keeps the speed it fell
+with, so a wall that stopped it doesn't stop the stroke. A swimmer that
+surfaces under a ramp or deck over the water, its head inside it, drops
+back into the water: a fall straight down is led by the lower body when
+the whole body's sweep is refused where it starts (ours).
 
 A local movement proposal completes when the worker returns a result for
 its admission and request stamp. That result describes the worker's
