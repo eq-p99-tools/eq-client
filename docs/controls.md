@@ -71,6 +71,14 @@ considered through the normal session command. This keeps the current target.
 The server still checks each requested action; an unread interaction radius
 is left to its existing checks.
 
+On Titanium, a right-click on another player then also inspects them, as the
+original does (reads R49-16 and R49-16e, checklist 6.644). This happens when
+[Inspect Others](settings.md#inspect-others) is on and nothing is on your
+cursor. A player 20 or more away is not inspected; the original's line names
+them instead. Right-clicking yourself inspects you, with no consider. The
+Mac-era and RoF2 programs are unread there, so on them a right-click only
+considers, as before.
+
 Double-click a visible door with the left button to use it within reach.
 Two clicks must land on the same door. The double-click itself, its 500 ms
 window and its 4-pixel slop are inferred (recording checklist 6.385).

@@ -114,7 +114,9 @@ pub struct ZoneModel {
     pub primitives: Vec<ZonePrimitive>,
     /// Authored draw flags, in the order of `primitives`.
     pub materials: Vec<ObjectMaterial>,
-    /// Solid triangles, including invisible collision surfaces.
+    /// Solid triangles, including invisible collision surfaces. A face
+    /// flagged passable is left out unless the engine makes its mesh solid
+    /// throughout (the five model names of EQGraphicsDX9.dll 0x10193510).
     pub collision: Vec<[[f32; 3]; 3]>,
     /// How many vertices the model's one mesh has, which a placement's
     /// colour track must match; None for a model built on a skeleton.
@@ -742,7 +744,7 @@ fn load_object_models(
             name: name.to_owned(),
             primitives: realized.primitives,
             materials: realized.materials,
-            collision: mesh_collision(&mesh),
+            collision: object_collision(&mesh),
             vertex_count: Some(vertex_count),
         });
     }
@@ -973,7 +975,7 @@ fn pose_hierarchy(
         posed.push(PosedMesh {
             staged,
             solids,
-            indices: mesh.collision_indices(),
+            indices: object_solid_faces(mesh),
         });
     };
     for (index, dag) in definition.dags.iter().enumerate() {
@@ -1184,6 +1186,73 @@ fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
         .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
         .collect();
     solid_triangles(&positions, &mesh.collision_indices())
+}
+
+/// A placed object's or door's solid triangles, by [`object_solid_faces`].
+fn object_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
+    let center = mesh.center();
+    let positions: Vec<[f32; 3]> = mesh
+        .positions()
+        .into_iter()
+        .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
+        .collect();
+    solid_triangles(&positions, &object_solid_faces(mesh))
+}
+
+/// The vertices of the faces a placed actor (a door or an object) collides
+/// with: the one place the engine's rule lives. The engine skips a face
+/// flagged passable (WLD 0x10) unless it has made the whole mesh solid
+/// (EQGraphicsDX9.dll 0x10193510, read F4b). Every face of a mesh
+/// [`SOLID_THROUGHOUT`] names is solid.
+///
+/// Read F4b gives 0x10193510 a second case: a mesh whose 0x36 flags lack
+/// 0x10000 and whose reference at +0x14 is empty. Read that way it covers
+/// the trees, plants and grass of the object archives (their leaves and
+/// blades are flagged passable), and in the original client a player walks
+/// through those leaves and grass. So that case is not applied until a read
+/// settles why it does not reach them (inferred, read F4d). Zone terrain
+/// keeps [`mesh_collision`]'s skip (its own test is unread), and boats and
+/// EQG models are unchanged.
+fn object_solid_faces(mesh: &libeq::wld::Mesh<'_>) -> Vec<u32> {
+    if mesh.name().is_some_and(solid_by_name) {
+        mesh.indices()
+    } else {
+        mesh.collision_indices()
+    }
+}
+
+/// How [`SOLID_THROUGHOUT`] compares a mesh's name with one of its entries.
+#[derive(Clone, Copy)]
+enum NameMatch {
+    /// The name starts with it, in any case.
+    PrefixAnyCase,
+    /// The name starts with it, case and all.
+    Prefix,
+    /// The name is it exactly.
+    Exact,
+}
+
+/// The models the engine makes solid throughout by their mesh's name,
+/// passable faces and all (EQGraphicsDX9.dll 0x10193510, read F4b): ladders,
+/// the Neriak bars, one door, one portcullis and the `IT66` models. These are
+/// the zone files' model identifiers.
+const SOLID_THROUGHOUT: [(&str, NameMatch); 5] = [
+    ("LADDER", NameMatch::PrefixAnyCase),
+    ("HHCELL_DMSPRITEDEF", NameMatch::Exact),
+    ("SBDOOR103_", NameMatch::Prefix),
+    ("PORT1414_DMSPRITEDEF", NameMatch::Exact),
+    ("IT66", NameMatch::PrefixAnyCase),
+];
+
+/// Whether [`SOLID_THROUGHOUT`] names this mesh.
+fn solid_by_name(name: &str) -> bool {
+    SOLID_THROUGHOUT.iter().any(|&(entry, how)| match how {
+        NameMatch::PrefixAnyCase => name
+            .get(..entry.len())
+            .is_some_and(|start| start.eq_ignore_ascii_case(entry)),
+        NameMatch::Prefix => name.starts_with(entry),
+        NameMatch::Exact => name == entry,
+    })
 }
 
 /// Solid triangles over libeq positions, in the renderer's frame with the
@@ -1572,8 +1641,8 @@ mod tests {
     #[allow(clippy::too_many_lines)]
     fn write_hierarchical_zone(install: &Path) {
         use crate::test_world::{
-            Coordinates, OLD_FORMAT, WorldFile, material, material_with_flags, mesh, palette,
-            palette_of, skinned_triangle, triangle, write_archive,
+            Coordinates, OLD_FORMAT, WorldFile, flagged_triangle, material, material_with_flags,
+            mesh, palette, palette_of, skinned_triangle, triangle, write_archive,
         };
         let words = |words: &[u32]| -> Vec<u8> {
             words.iter().flat_map(|word| word.to_le_bytes()).collect()
@@ -1637,6 +1706,29 @@ mod tests {
             );
         };
         actor(&mut objects, "OBJ_ACTORDEF", tri_sprite);
+        // The same triangle, its one face flagged passable (0x10): an object
+        // mesh as most are (flags with 0x10000), the bars the engine names,
+        // and a mesh with neither 0x10000 nor a +0x14 reference.
+        for (actor_name, mesh_name, mesh_flags) in [
+            ("PASS_ACTORDEF", "PASS_DMSPRITEDEF", 0x0001_4003),
+            ("HHCELL_ACTORDEF", "HHCELL_DMSPRITEDEF", 0x0001_4003),
+            ("BARE_ACTORDEF", "BARE_DMSPRITEDEF", 0x4003),
+        ] {
+            let mesh = objects.name(mesh_name);
+            let mesh = objects.fragment(
+                0x36,
+                flagged_triangle(
+                    mesh,
+                    object_palette,
+                    &coordinates,
+                    1,
+                    &[],
+                    (mesh_flags, 0x10),
+                ),
+            );
+            let sprite = objects.fragment(0x2d, words(&[0, mesh.cast_unsigned(), 0]));
+            actor(&mut objects, actor_name, sprite);
+        }
         // Base tracks of one frame: the root at rest, the arm 10 along the
         // file's x and 5 up its z (2560 / 256, 1280 / 256).
         let mut tracks = Vec::new();
@@ -1823,6 +1915,59 @@ mod tests {
             .iter()
             .find(|object| zone.models[object.model].name == "OBJ_ACTORDEF");
         assert!(placed.is_some());
+    }
+
+    #[test]
+    fn a_passable_face_is_walked_through_unless_the_engine_makes_its_mesh_solid() {
+        let zone = load_hierarchical_zone("passable-face");
+        let solid = |name: &str| {
+            zone.models
+                .iter()
+                .find(|model| model.name == name)
+                .unwrap()
+                .collision
+                .clone()
+        };
+        let face = vec![rendered([
+            [0.0, 0.0, 0.0],
+            [1.0, 0.0, 0.0],
+            [0.0, 0.0, 1.0],
+        ])];
+        let none = Vec::<[[f32; 3]; 3]>::new();
+        // Skipped as passable (0x10192400 and its kin), drawn as ever.
+        assert_eq!(solid("PASS_ACTORDEF"), none);
+        // Neither 0x10000 nor a +0x14 reference, like a tree's leaves: still
+        // walked through, as in the original (F4b's second case unapplied).
+        assert_eq!(solid("BARE_ACTORDEF"), none);
+        // Made solid throughout by 0x10193510 by its name.
+        assert_eq!(solid("HHCELL_ACTORDEF"), face);
+    }
+
+    #[test]
+    fn the_engine_names_five_models_solid_throughout() {
+        for name in [
+            "LADDER01_DMSPRITEDEF",
+            "ladder_dmspritedef",
+            "IT66_DMSPRITEDEF",
+            "it661_DMSPRITEDEF",
+            "SBDOOR103_DMSPRITEDEF",
+            "HHCELL_DMSPRITEDEF",
+            "PORT1414_DMSPRITEDEF",
+        ] {
+            assert!(super::solid_by_name(name), "{name}");
+        }
+        for name in [
+            "sbdoor103_DMSPRITEDEF",
+            "SBDOOR103",
+            "HHCELL2_DMSPRITEDEF",
+            "hhcell_dmspritedef",
+            "PORT14140_DMSPRITEDEF",
+            "CAMPFIRE_DMSPRITEDEF",
+            "LADDE",
+            "",
+        ] {
+            assert!(!super::solid_by_name(name), "{name}");
+        }
     }
 
     #[test]

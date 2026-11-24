@@ -63,6 +63,18 @@ impl eq_client_core::vision::SightCatalog for SightProvider {
                     })
             })
     }
+
+    /// The spell's installed recast (field 15), which the Titanium program's
+    /// knight specials wait out after the server refreshes their gem (read
+    /// R49-29 b: the spell's +0x1c). The replayed table where it's ready,
+    /// else the installed file's; none for a spell neither has, or a recast
+    /// of 0.
+    fn recast(&self, spell_id: u32) -> Option<std::time::Duration> {
+        let provider = self.0.lock().ok()?;
+        let spell = provider.get(spell_id).or_else(|| provider.text(spell_id))?;
+        let recast_ms = spell.timing?.recast_ms;
+        (recast_ms > 0).then(|| std::time::Duration::from_millis(u64::from(recast_ms)))
+    }
 }
 
 /// Mechanics availability for the current provider and zone.
