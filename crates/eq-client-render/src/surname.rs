@@ -200,7 +200,9 @@ pub(crate) fn command(
     let surname_set = !player.name_parts.last_name.is_empty();
     match outcome(&words, player.level, surname_set) {
         Outcome::Line(id, fallback) => chat.history.push(system_line(line(id, fallback, messages))),
-        Outcome::Own(said) => chat.history.push(system_line(Said::own(said))),
+        Outcome::Own(said) => chat
+            .history
+            .push(system_line(Said::own(said).typed(LINE_TYPE))),
         Outcome::Ask(surname) => {
             let Some(session_id) = world.session_id() else {
                 return;
