@@ -309,56 +309,28 @@ or occluded. The counters are independent of damage and inventory.
   `quit()` closes the client.
   `slash("emote")` and `slash("random")` reach everyone nearby, and run on any
   server, as the player's own would.
-- `gm("command [arguments]")`: an allowed GM command, sent as a typed `#` line on any
-  server. Its fixture forms (`spawn`, `depop`, `guild`, `stun`, `setlanguage` and
-  `traindisc`) run only on a network-constrained local test session.
-  Local Titanium EQEmu also supports `gm("guild create CHARACTER_ID_OR_NAME GUILD_NAME")`,
-  `gm("guild delete GUILD_ID")` and `gm("guild set CHARACTER_ID_OR_NAME GUILD_ID")`.
-  These are narrowly bounded fixture setup/cleanup forms: character names use
-  ASCII letters, IDs use unsigned decimal, and guild names contain at most
-  63 ASCII letters/digits/spaces. Create/delete IDs must be positive; `set`
-  accepts guild ID zero to remove membership. The reserved maximum ID is
-  refused. Use the guild ID actually returned by the server for cleanup;
-  request submission alone does not establish fixture creation or deletion.
-  Other GM guild subcommands are unavailable to scripts.
-  On local EQEmu, `gm("setlanguage ID VALUE")` uses the supported SetLanguage
-  alias for a staged fixture: language ID 0..27 and proficiency 0..100.
-  It retains the local-session and Titanium gates. General `gm("set …")` commands
-  remain unavailable. Training itself permits only offered IDs 0..25.
-  On local EQEmu, `gm("traindisc MAX [MIN]")` requests all eligible disciplines
-  in that inclusive level range for a disposable fixture. Each level is a number
-  from 1 to 126 written with up to three decimal digits. Give MAX first. MIN
-  defaults to 1. For example, `gm("traindisc 52 52")` requests only level 52.
-  In GM mode, EQEmu can apply the command to the selected player. Check the
-  received learned disciplines before using them.
-  `gm("stun 8000")` requests an 8,000-millisecond server stun for a local fixture.
-  Check received `own_stun` state; command submission alone does not establish the effect.
-  On local EQEmu, use
-  `gm("spawn NAME RACE LEVEL TEXTURE HEALTH GENDER CLASS PRIMARY_MODEL SECONDARY_MODEL 0 BODY_TYPE")`
-  for a temporary NPC with explicit health and body type. Use a fresh alphabetic
-  name, positive health, and decimal fields. The merchant ID is fixed at zero.
-  The short `gm("spawn NAME [RACE [LEVEL [TEXTURE]]]")` form uses server defaults
-  for the remaining fields.
-  To remove a temporary NPC, confirm that its current incarnation is selected
-  and run `gm("depop")` without arguments. The zone worker rechecks the same
+- `gm("line")`: any line a player could type after `#`, sent as that typed `#`
+  line is, on any server and under the same chat pace as `chat`. The step
+  checks only what the chat line itself takes: no control characters, the
+  chat line's length counting the `#`, and no `#` of its own. The server
+  decides what the line does, for a GM and for anyone else: on most servers a
+  player who is not a GM gets the server's own refusal, or nothing. Sending
+  the line proves nothing about its effect; check what the server answers or
+  what changes.
+  One local test helper remains: on a network-constrained local Titanium
+  EQEmu session, `gm("depop")` with a current NPC selected removes that NPC's
+  current incarnation through the zone worker, which rechecks the same
   admission and target revision before sending. Keep that NPC selected until
-  its removal is observed, since EQEmu acts on its current target and starts
-  no respawn timer. A queued command does not establish creation or removal.
-  `gm("show")` reads the server's own view of the target (or the GM) and changes
-  nothing. The parser takes exactly `gm("show buffs")`, `gm("show currencies")`,
-  `gm("show timers")`, `gm("show distance")` and `gm("show line_of_sight")` (these two
-  need a target other than yourself), and `gm("show inventory SCOPE")` with SCOPE
-  one of `all`, `allbank`, `bank`, `cursor`, `curlimbo`, `equip`, `gen`,
-  `limbo`, `poss`, `shbank`, `trade`, `trib` or `world`. Words are matched
-  exactly, in lower case; every other subcommand, scope or extra word is
-  refused when the script is read. What these print names characters and
-  items, so their output stays in private run notes and never goes into the
-  repository, a pull request or a published page.
+  its removal is observed. Anywhere else, and without a current NPC, it goes as
+  the typed `#depop` line.
+  What a `#` line prints can name characters, items and places; it shows in
+  the chat and the run log as the player's own chat does.
 - `chat("channel message")`: chat on any server, under the session's chat pace,
   with a character in the world.
   The session paces all chat (10 lines in any 5 seconds, 12 far-reaching ones
-  in any minute): a line it holds fails the run at that `chat` or `social`
-  step's line, with the session's wait.
+  in any minute): a line it holds fails the run at that `chat`, `gm` or
+  `social` step's line, with the session's wait. `chat("say #line")` sends
+  what typing `#line` in say does.
 - `quit()`: close the client.
 
 The typed parser and normal client capability checks decide which commands and controls are available. A valid action can still fail at runtime when its target, session or expected result is unavailable.

@@ -1148,6 +1148,35 @@ fn a_chat_pace_refusal_after_a_scripts_chat_fails_the_run() {
 }
 
 #[test]
+fn a_burst_of_gm_lines_off_a_local_session_goes_as_typed_under_the_chat_pace() {
+    // A script's `#` lines are a user's (6.584): on a session that is not a
+    // local test one, each goes as the typed line, and the pace that holds
+    // typed chat holds them, failing the run at the held line.
+    let reason = "You are sending chat too fast. Wait 3 seconds.";
+    let (mut app, rx) = app();
+    let program = Program::parse(
+        "gm(\"show zone_status\")\ngm(\"set invulnerable on\")\ngm(\"depop\")\nwait(5000)",
+        Path::new("."),
+    )
+    .unwrap();
+    app.insert_resource(Script::from_program(program));
+    let mut sent = Vec::new();
+    for ms in (0..=1_000).step_by(10) {
+        frame_at(&mut app, ms);
+        sent.extend(rx.try_iter());
+    }
+    assert_eq!(
+        sent,
+        ["#show zone_status", "#set invulnerable on", "#depop"]
+            .map(|line| ClientCommand::SendChat(eq_client_core::OutboundChat::Say(line.into())))
+    );
+    app.world_mut().resource_mut::<ChatState>().paced =
+        Some((std::time::Instant::now(), reason.into()));
+    frame_at(&mut app, 1_010);
+    refused(&app, 3, reason);
+}
+
+#[test]
 fn a_chat_pace_refusal_after_a_gm_or_typed_say_fails_it_but_not_after_an_emote() {
     let reason = "You are sending chat too fast. Wait 2 seconds.";
     for (source, chats) in [
