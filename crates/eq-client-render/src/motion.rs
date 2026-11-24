@@ -1412,6 +1412,36 @@ type InputExtras<'w, 's> = (
     Option<Res<'w, crate::doors::LiftReach>>,
 );
 
+/// A script run that fails can no longer steer, so the autorun latch goes
+/// with the keys it held, and the character stops rather than running on
+/// unattended. It comes off even when the player latched it themselves,
+/// before or during the run. A run the player stops, or one that completes,
+/// leaves the latch as it is. This acts once, when a run's status first
+/// reads Failed: the status is copied every frame while the finished run
+/// stays loaded, and a latch the player sets again afterwards stays on.
+/// This is this client's rule for its scripts; the program has none.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
+pub(super) fn stop_autorun_after_failed_script(
+    status: Option<Res<crate::script::RunStatus>>,
+    mut seen: Local<Option<(std::sync::Arc<()>, crate::script::Phase)>>,
+    mut controls: ResMut<Controls>,
+) {
+    let Some(status) = status else {
+        return;
+    };
+    let phase = status.phase();
+    if seen
+        .as_ref()
+        .is_some_and(|(run, seen)| std::sync::Arc::ptr_eq(run, status.run()) && *seen == phase)
+    {
+        return;
+    }
+    *seen = Some((status.run().clone(), phase));
+    if phase == crate::script::Phase::Failed {
+        controls.autorun = false;
+    }
+}
+
 /// Produces at most one in-flight proposal; renderer stalls never accumulate distance.
 #[allow(
     clippy::needless_pass_by_value,
@@ -2254,7 +2284,9 @@ pub(super) fn input(
         && !flying
         && !swimming
         && controls.airborne.as_ref().is_some_and(|airborne| {
-            airborne.velocity() != 0.0 || ride.sinking || unsupported(world, feet)
+            airborne.velocity() != 0.0
+                || ride.sinking
+                || unsupported(world, feet, physics.ground_tolerance)
         });
     // So does a heading sent that still turns toward the facing.
     // A wet body drifts and sinks with no input (0x4bfe0f, gravity in
@@ -2630,6 +2662,11 @@ pub(super) fn input(
     let boat_sample = boat
         .map(|riding| riding.sample)
         .or(boat_under.map(|(sample, _)| sample));
+    let vertical_speed = if placement_blocked || flying || swimming || shore.is_some() {
+        None
+    } else {
+        own_vertical_speed(controls.airborne.as_ref())
+    };
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
@@ -2648,9 +2685,7 @@ pub(super) fn input(
             support: boat_sample
                 .map(Support::Spawn)
                 .or(support.map(Support::Door)),
-            // Our own vertical speed is the 6.617 client half's; none sends
-            // 0, as before.
-            vertical_speed: None,
+            vertical_speed,
         })
     });
     if let Err(reason) = sent {
@@ -2862,13 +2897,32 @@ fn lift_under(
     Some((door, Vec3::new(feet.x, floor, feet.z)))
 }
 
-/// Whether no ground is under the feet within the step the server's
-/// movement guard takes as grounded: the player there falls.
-fn unsupported(world: &eq_client_core::movement::CollisionWorld, feet: Vec3) -> bool {
-    world.support(feet).is_none()
-        && world
-            .ground(feet, 0.01, eq_client_core::movement::MAX_GROUNDED_STEP)
-            .is_none()
+/// Whether feet at rest are in the air: no floor under them within the
+/// generation's ground tolerance, so they fall. The programs' on-ground test
+/// takes feet up to 0.5 + 0.001 over a floor as on it (R-s: Titanium
+/// 0x48a2f4, Mac-era 0x50ba07); past it a body at rest falls, as a rider
+/// a `#goto` left 1.9 over a ship's deck does (6.648). A client with no
+/// read physics keeps the grounded step's 2.
+fn unsupported(
+    world: &eq_client_core::movement::CollisionWorld,
+    feet: Vec3,
+    tolerance: f32,
+) -> bool {
+    world.support(feet).is_none() && world.ground(feet, 0.01, tolerance).is_none()
+}
+
+/// Our own vertical speed for a sample, as the programs send their actor's
+/// (6.617): the jump's or fall's at that moment, in world units a second,
+/// up positive, while the body is in the air; none on the ground and on
+/// the sample that lands, which sends 0. It is the body's own, so a rider's
+/// carries none of the boat's. A body in the air with no vertical speed,
+/// as one the ground tolerance holds, sends none too. Flight, the water and
+/// the shoreline's samples send their own or none, not this.
+fn own_vertical_speed(airborne: Option<&AirborneController>) -> Option<f32> {
+    airborne
+        .filter(|airborne| airborne.peak().is_some())
+        .map(AirborneController::velocity)
+        .filter(|speed| *speed != 0.0 && speed.is_finite())
 }
 
 /// Walks like a grounded step but keeps going past ledges and falls under gravity,
@@ -3812,16 +3866,153 @@ pub(super) mod tests {
         // Stood on the lift's floor at rest, with the surface in the body.
         assert!(world.clearance(feet, 6.0, 0.0).is_some_and(|c| c <= 0.0));
         assert_eq!(super::lift_support(&world, &reach, feet), Some(4));
-        assert!(!super::unsupported(&world, feet));
+        assert!(!super::unsupported(&world, feet, 0.501));
         // When it returns the rider falls with it, past nothing of the
         // zone's, onto its floor below.
         let down = start + Duration::from_secs(31);
         let sinking = super::ride(Some(&reach), &doors, Some((4, top)), down);
         assert!(sinking.sinking);
         world.set_door_obstacles_with(vec![(4, deck(80.0), solid)]);
-        assert!(super::unsupported(&world, feet));
+        assert!(super::unsupported(&world, feet, 0.501));
         let landing = Vec3::new(feet.x, 80.0, feet.z);
         assert_eq!(super::lift_support(&world, &reach, landing), Some(4));
+    }
+
+    #[test]
+    fn feet_at_rest_over_the_ground_tolerance_fall_as_the_programs_do() {
+        // The programs take feet up to 0.5 + 0.001 over a floor as on it
+        // (R-s). A rider a `#goto` left 1.86 above its deck (the #631
+        // rerun, 6.648) is past that and falls; 0.3 over stays. A client
+        // with no read physics keeps the grounded step's 2.
+        let world = eq_client_core::movement::CollisionWorld::new([
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+        ])
+        .unwrap();
+        let titanium = physics(InstalledClient::Titanium, None).ground_tolerance;
+        let mac = physics(InstalledClient::EqMac, None).ground_tolerance;
+        for tolerance in [titanium, mac] {
+            assert!((tolerance - 0.501).abs() < 1e-6, "{tolerance}");
+            assert!(!super::unsupported(
+                &world,
+                Vec3::new(0.0, 0.3, 0.0),
+                tolerance
+            ));
+            assert!(!super::unsupported(
+                &world,
+                Vec3::new(0.0, 0.501, 0.0),
+                tolerance
+            ));
+            assert!(super::unsupported(
+                &world,
+                Vec3::new(0.0, 1.86, 0.0),
+                tolerance
+            ));
+        }
+        let provisional = PROVISIONAL_PHYSICS.ground_tolerance;
+        assert!(!super::unsupported(
+            &world,
+            Vec3::new(0.0, 1.86, 0.0),
+            provisional
+        ));
+    }
+
+    #[test]
+    fn a_walk_up_and_down_stairs_and_across_a_slope_never_rests_in_the_air() {
+        // 6.648: with the programs' 0.501 ground tolerance, feet that an
+        // ordinary walk's step leaves on the ground count as on it at rest,
+        // and a walk that stops rests on a floor: nothing on stairs or a
+        // slope flickers between standing and falling.
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let titanium = climbing(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &HUMAN,
+        );
+        let quad = |x0: f32, x1: f32, y0: f32, y1: f32| {
+            [
+                [[x0, y0, -10.0], [x1, y1, -10.0], [x1, y1, 10.0]],
+                [[x0, y0, -10.0], [x1, y1, 10.0], [x0, y0, 10.0]],
+            ]
+        };
+        // Ten treads 1 deep and 0.75 high, up to a landing, with risers.
+        let mut stairs = Vec::new();
+        for tread in 0..10u8 {
+            let x = f32::from(tread);
+            let y = 0.75 * x;
+            stairs.extend(quad(x, x + 1.0, y, y));
+            stairs.push([[x, y - 0.75, -10.0], [x, y, -10.0], [x, y, 10.0]]);
+            stairs.push([[x, y - 0.75, -10.0], [x, y, 10.0], [x, y - 0.75, 10.0]]);
+        }
+        stairs.extend(quad(-20.0, 0.0, 0.0, 0.0));
+        stairs.extend(quad(10.0, 30.0, 7.5, 7.5));
+        // A 30 degree slope.
+        let rise = 20.0 * 30.0_f32.to_radians().tan();
+        let slope = quad(-20.0, 20.0, -rise / 2.0, rise / 2.0).to_vec();
+        for (name, triangles, from, to) in [
+            ("stairs", stairs, Vec3::new(-2.0, 0.0, 0.0), 12.0),
+            (
+                "slope",
+                slope,
+                Vec3::new(-15.0, -0.75 * rise / 2.0, 0.0),
+                15.0,
+            ),
+        ] {
+            let world = CollisionWorld::new(triangles).unwrap();
+            let on_floor = |x: f32| {
+                Vec3::new(
+                    x,
+                    world.ground(Vec3::new(x, 20.0, 0.0), 0.0, 40.0).unwrap(),
+                    0.0,
+                )
+            };
+            for direction in [1.0_f32, -1.0] {
+                let mut airborne = AirborneController::default();
+                let mut feet = on_floor(if direction > 0.0 { from.x } else { to });
+                let mut grounded_steps = 0;
+                for step in 0..80 {
+                    feet = super::fall_step(
+                        &mut airborne,
+                        &world,
+                        titanium,
+                        Some(titanium.reach()),
+                        feet,
+                        Vec3::X * 0.3 * direction,
+                        0.1,
+                        HUMAN.height,
+                        false,
+                    );
+                    // A step the controller ends on the ground is on it
+                    // at rest too: no stand and fall flicker. A step off a
+                    // riser deeper than the tolerance falls, as before.
+                    let grounded = airborne.velocity() == 0.0 && airborne.peak().is_none();
+                    grounded_steps += usize::from(grounded);
+                    assert!(
+                        !grounded || !super::unsupported(&world, feet, titanium.ground_tolerance),
+                        "{name} {direction} step {step}: {feet:?}"
+                    );
+                }
+                assert!(grounded_steps > 40, "{name} {direction}: {grounded_steps}");
+                // Stopped, it rests on a floor.
+                for _ in 0..20 {
+                    feet = super::fall_step(
+                        &mut airborne,
+                        &world,
+                        titanium,
+                        Some(titanium.reach()),
+                        feet,
+                        Vec3::ZERO,
+                        0.1,
+                        HUMAN.height,
+                        false,
+                    );
+                }
+                assert!(
+                    !super::unsupported(&world, feet, titanium.ground_tolerance),
+                    "{name} {direction} at rest: {feet:?}"
+                );
+            }
+        }
     }
 
     fn movement_choice(app: &mut App, fix: Fix, on: bool) {
@@ -4610,6 +4801,90 @@ pub(super) mod tests {
         assert!(
             feet.y.abs() < 0.001 && airborne.velocity() == 0.0,
             "{feet:?}"
+        );
+    }
+
+    #[test]
+    fn our_own_vertical_speed_goes_while_in_the_air_and_none_on_the_ground_or_landing() {
+        // The programs send their actor's vertical speed in the air and 0 on
+        // the ground and on the landing (capture-derived, 6.617): a jump
+        // rises, then falls, then lands; a walk off a ledge falls.
+        use eq_client_core::movement::{AirborneController, CollisionWorld};
+        let world = CollisionWorld::new([
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ])
+        .unwrap();
+        let titanium = physics(InstalledClient::Titanium, None);
+        let step = |airborne: &mut AirborneController, feet, delta, jump| {
+            super::fall_step(
+                airborne, &world, titanium, None, feet, delta, 0.15, 6.0, jump,
+            )
+        };
+        let mut airborne = AirborneController::default();
+        let feet = step(&mut airborne, Vec3::ZERO, Vec3::X, false);
+        assert_eq!(super::own_vertical_speed(Some(&airborne)), None, "a walk");
+        assert_eq!(super::own_vertical_speed(None), None);
+        let mut feet = step(&mut airborne, feet, Vec3::ZERO, true);
+        let rising = super::own_vertical_speed(Some(&airborne)).expect("take-off");
+        assert!(rising > 0.0 && rising < titanium.jump_speed, "{rising}");
+        assert!((rising - airborne.velocity()).abs() < f32::EPSILON);
+        let mut speeds = vec![rising];
+        while airborne.peak().is_some() {
+            feet = step(&mut airborne, feet, Vec3::ZERO, false);
+            speeds.push(super::own_vertical_speed(Some(&airborne)).unwrap_or(0.0));
+            assert!(speeds.len() < 40, "the jump lands");
+        }
+        assert!(feet.y.abs() < 0.001, "{feet:?}");
+        assert_eq!(speeds.last(), Some(&0.0), "the landing sends none");
+        assert!(speeds.iter().any(|speed| *speed < 0.0), "{speeds:?}");
+        assert!(
+            speeds[..speeds.len() - 1].iter().all(|speed| *speed != 0.0),
+            "{speeds:?}"
+        );
+        // A walk off the edge falls at the fall's own speed.
+        let mut falling = AirborneController::default();
+        step(
+            &mut falling,
+            Vec3::new(19.5, 0.0, 0.0),
+            Vec3::X * 3.0,
+            false,
+        );
+        assert!(
+            super::own_vertical_speed(Some(&falling)).is_some_and(|speed| speed < 0.0),
+            "{}",
+            falling.velocity()
+        );
+    }
+
+    #[test]
+    fn a_jump_sample_carries_its_take_off_speed() {
+        let (mut app, receiver) = standing_jump(InstalledClient::EqMac);
+        app.update();
+        app.update();
+        let earlier = Instant::now()
+            .checked_sub(Duration::from_millis(1))
+            .unwrap();
+        app.world_mut().resource_mut::<Controls>().crouch = Some(Crouch::Until(earlier));
+        app.update();
+        let moves: Vec<MovementRequest> = receiver
+            .try_iter()
+            .filter_map(|command| match command {
+                ClientCommand::Move(request) => Some(request),
+                _ => None,
+            })
+            .collect();
+        let velocity = app
+            .world()
+            .resource::<Controls>()
+            .airborne
+            .as_ref()
+            .unwrap()
+            .velocity();
+        assert!(velocity > 0.0);
+        assert_eq!(
+            moves.last().and_then(|sample| sample.vertical_speed),
+            Some(velocity)
         );
     }
 
@@ -5947,6 +6222,38 @@ pub(super) mod tests {
     use std::sync::mpsc;
 
     #[test]
+    fn a_failed_script_run_stops_autorun_and_a_stopped_or_completed_one_does_not() {
+        use crate::script::{Phase, RunStatus};
+        for (phase, runs_on) in [
+            (Phase::Failed, false),
+            (Phase::Stopped, true),
+            (Phase::Completed, true),
+        ] {
+            let mut app = App::new();
+            app.init_resource::<Controls>()
+                .add_systems(Update, stop_autorun_after_failed_script);
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.update();
+            assert!(app.world().resource::<Controls>().autorun, "no run yet");
+            app.insert_resource(RunStatus::ended(phase));
+            app.update();
+            assert_eq!(
+                app.world().resource::<Controls>().autorun,
+                runs_on,
+                "{phase:?}"
+            );
+            // The player latches it again after the run: the old outcome
+            // no longer takes it off.
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.update();
+            assert!(
+                app.world().resource::<Controls>().autorun,
+                "{phase:?} later"
+            );
+        }
+    }
+
+    #[test]
     fn autorun_runs_forward_with_no_key_held_until_back_is() {
         let controls = Controls {
             speed: Some(30.0),
@@ -6380,6 +6687,7 @@ pub(super) mod tests {
         assert_eq!(fall.session_id, 12);
         assert_eq!(fall.mode, MovementMode::Fall);
         assert!(fall.position.z < above.z);
+        assert!(fall.vertical_speed.is_some_and(|speed| speed < 0.0));
         assert_eq!(
             app.world()
                 .resource::<online::OnlineState>()

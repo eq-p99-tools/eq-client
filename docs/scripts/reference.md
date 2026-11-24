@@ -118,6 +118,8 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `camera(heading, pitch[, distance])`: position the camera; pitch is -89 (straight down) to 89 (straight up) degrees, which the chase view holds within its own range: with the Free Chase Tilt setting off it stays between eye level and 30 units above the eyes, so it never looks up. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
 - `face()`: turn the camera toward the target.
 - `face(heading)`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
+  The turn keys' rate is at most 240 heading units a second, after a short ramp, so a half turn takes over a second and a near-full turn over two. An autorunning character keeps running along the arc meanwhile. For a quick turn, use `look("world", x, 0, milliseconds)`, as a mouse turn would, or stop first.
+- A run that fails takes the autorun latch off with the keys it held, so the character stops, even when the player latched autorun themselves before or during the run. A run the player stops, or one that completes, leaves autorun as it is.
 - `move(command, milliseconds)`: hold `forward`, `back`, `camera_forward`,
   `camera_back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`,
   independent of key bindings. In mapped water on Titanium, strokes follow
@@ -172,7 +174,7 @@ latest completed projectile update, normally the preceding frame. Missing assets
 types can produce a receipt without a model. Scene instances may be off-camera
 or occluded. The counters are independent of damage and inventory.
 
-- `report([label])` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known.
+- `report([label])` logs a state summary with an optional label. Its `option_levels` field includes slider settings, with `run_boost` in hundredths of ordinary running speed. For a selected target, `considered` shows the decoded received color and `display_con_color` shows the presentation color. The report includes `selected_target_level` and `own_level` when known. A `Script report windows` event follows with `report_windows`: whether the bug report and feedback windows are open, the bug report's category, its Dup, Crash, Flags and Target boxes (in that order), its place and target name as the labels show them, the words in each box, which box has the keyboard, and `question_up`, whether the bug report's question is waiting for an answer (answer it with `click("button", "confirmation", "Yes_Button")` or `No_Button`).
   `guild_state` is a read-only JSON snapshot of the known guild ID/name/rank
   and last-received member fields. `members: null` means no retained list;
   `members: []` means a received empty list. A member's `note: null` remains
@@ -279,8 +281,10 @@ or occluded. The counters are independent of damage and inventory.
   `auction`), `reply`, `friend`, `ignore`, `quit` and `exit` work as typed. The line is at
   most 512 bytes counting the slash, as the chat line is, and takes no control characters.
   A social goes through the named `social` step instead. `petition`, `guidehelp`,
-  `bugreport` (`bug`) and `feedback` send their report as typed, with the same lines and
-  the Typed Reports setting: a person on the staff reads each one.
+  `bugreport` (`bug`) and `feedback` run as typed, with the same lines and the Typed
+  Reports setting: on Titanium they open their windows unless that setting is on (see
+  `report` and `button bug-report ...` in [targets](targets.md)). A person on the staff
+  reads each report.
   `slash("follow")` queues the ordinary local follow request for the targeted group
   member. Its deferred request keeps the script's expected admission and zone;
   a changed world withdraws it before movement handles it. Completion of the
@@ -303,6 +307,9 @@ or occluded. The counters are independent of damage and inventory.
   remain with the ordinary handlers and session. Queueing a step proves no
   invitation acceptance, roster change or MOTD update; check received evidence.
   `slash("stopsong")` queues the Bard's stop request on Titanium EQEmu.
+  `slash("surname Name")` runs the typed `/surname`: its checks, then the same
+  timed question, which the script answers with the confirmation window's Yes
+  or No.
   `slash("quit")` and `slash("exit")` leave as typing them does, by the same route;
   `quit()` closes the client.
   `slash("emote")` and `slash("random")` reach everyone nearby, and run on any

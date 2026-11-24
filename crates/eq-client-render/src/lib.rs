@@ -113,6 +113,7 @@ mod profile_files;
 mod projectiles;
 mod raid;
 mod reading;
+mod report_windows;
 mod reports;
 mod resources;
 mod resurrection;
@@ -132,6 +133,7 @@ mod speed;
 mod spell_effects;
 mod spell_icons;
 mod spellbook;
+mod surname;
 mod target;
 mod targeted;
 mod theme;
@@ -969,14 +971,15 @@ fn spawn_static_zone(
                     additive: source.material_mode == MaterialMode::Additive,
                 });
             }
-            door_models.0.insert(
-                doors::model_key(&model.name),
+            door_models.0.insert(doors::model_key(&model.name), {
+                let collision = doors::collision(model.collision, model.no_hit_collision);
                 doors::Model {
+                    radius: doors::model_radius(model.radius, &collision),
                     primitives: primitives.clone(),
-                    collision: doors::collision(model.collision, model.no_hit_collision),
+                    collision,
                     pick,
-                },
-            );
+                }
+            });
             drawn_models.push(drawn);
             primitives
         })

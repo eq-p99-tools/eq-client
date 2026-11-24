@@ -873,6 +873,13 @@ fn a_slash_step_runs_its_line_as_typing_would() {
             message: "thanks".into(),
         })]
     );
+    // A surname waits for the typed command's question.
+    let (app, sent) = slash_step("surname Exemplum", |_| ());
+    assert_eq!(sent, []);
+    assert_eq!(
+        app.world().resource::<ChatState>().surname_asked.as_deref(),
+        Some("Exemplum")
+    );
     // The friends list is the typed command's to change.
     let (app, sent) = slash_step("friend Example", |_| ());
     assert_eq!(sent, []);
@@ -912,13 +919,21 @@ fn a_slash_step_runs_its_line_as_typing_would() {
 fn a_slash_report_takes_the_typed_route_and_its_pace() {
     // A script may do what a player types: its report runs the typed line,
     // stamped with its admission, and nothing more is sent than typing the
-    // same line sends.
+    // same line sends. Typed Reports is on here, so the bug report and
+    // feedback go from the line.
+    let mut qol = eq_client_core::qol::Settings::default();
+    qol.set(eq_client_core::qol::Fix::TypedReports, true);
+    let typed_reports = |app: &mut App| {
+        let mut options = crate::options::OptionsState::default();
+        options.options.qol = qol;
+        app.insert_resource(options);
+    };
     for line in [
         "petition I am stuck",
         "bug doors: it will not open",
         "feedback a note",
     ] {
-        let (app, sent) = slash_step(line, |_| ());
+        let (app, sent) = slash_step(line, typed_reports);
         assert_eq!(
             app.world().resource::<RunStatus>().phase(),
             Phase::Completed,
@@ -933,7 +948,7 @@ fn a_slash_report_takes_the_typed_route_and_its_pace() {
             &mut typed,
             &mut online,
             &Outbox::new(Some(sender)),
-            &eq_client_core::qol::Settings::default(),
+            &qol,
         )
         .unwrap();
         let typed: Vec<ClientCommand> = typed_rx.try_iter().collect();
@@ -959,6 +974,23 @@ fn a_slash_report_takes_the_typed_route_and_its_pace() {
                 }
             ),
             "{line}: {sent:?}"
+        );
+    }
+    // With it off, as by default, they open their windows as the
+    // program's do, and send nothing.
+    for (line, report) in [
+        (
+            "bug doors: it will not open",
+            crate::report_windows::Report::Bug,
+        ),
+        ("feedback a note", crate::report_windows::Report::Feedback),
+    ] {
+        let (app, sent) = slash_step(line, |_| ());
+        assert_eq!(sent, [], "{line}");
+        assert_eq!(
+            app.world().resource::<ChatState>().report_window,
+            Some(report),
+            "{line}"
         );
     }
     // Two reports in a row go as a script's steps go, one a frame, each

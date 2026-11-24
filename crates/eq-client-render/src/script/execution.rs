@@ -132,6 +132,15 @@ impl RunStatus {
         }
     }
 
+    /// A run that ended in `phase`, for other systems' tests.
+    #[cfg(test)]
+    pub(crate) fn ended(phase: Phase) -> Self {
+        Self {
+            phase,
+            ..Self::default()
+        }
+    }
+
     /// The same status with these dots, for the editor's tests.
     #[cfg(test)]
     pub(crate) fn with_breakpoints(mut self, lines: &[usize]) -> Self {
@@ -146,6 +155,12 @@ impl RunStatus {
             phase: Phase::Running,
             ..Self::default()
         }
+    }
+
+    /// The run this status belongs to: the same `Arc` for every copy of one
+    /// run's status, a new one for each run.
+    pub(crate) const fn run(&self) -> &Arc<()> {
+        &self.identity
     }
 
     /// The immutable source snapshot used by this run.
