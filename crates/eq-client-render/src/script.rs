@@ -492,6 +492,19 @@ impl Script {
         self
     }
 
+    /// Press through the same authored keyboard path as a `hold` step.
+    #[cfg(test)]
+    pub(crate) fn press_keys_for_test(app: &mut App, keys: &[KeyCode]) {
+        app.add_message::<bevy::input::keyboard::KeyboardInput>()
+            .init_resource::<AuthoredInput>();
+        let mut state = bevy::ecs::system::SystemState::<Keyboard>::new(app.world_mut());
+        let mut keyboard = state.get_mut(app.world_mut()).expect("script keyboard");
+        for &key in keys {
+            keyboard.press(key);
+        }
+        state.apply(app.world_mut());
+    }
+
     /// The same script steering by `route`, as a `walk` step's, for tests
     /// of the systems that read it.
     #[cfg(test)]

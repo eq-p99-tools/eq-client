@@ -106,6 +106,7 @@ mod paperdoll;
 mod pet;
 mod piloting;
 mod poison_wait;
+mod posture;
 mod preview;
 #[cfg(test)]
 mod probes;

@@ -160,6 +160,7 @@ pub(super) fn schedule(app: &mut App) {
                 doors::reconcile,
                 doors::report_radii,
                 crate::carriers::reconcile,
+                crate::posture::refresh,
                 ground::reconcile,
                 projectiles::update,
                 hud::spell_visibility,

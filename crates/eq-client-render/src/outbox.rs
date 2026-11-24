@@ -120,6 +120,7 @@ pub(crate) struct Outbox {
     /// script step's typed line may send it, and a later refusal is then
     /// the step's.
     sent_chat: Arc<AtomicBool>,
+    posture: Arc<Mutex<Option<crate::posture::Context>>>,
 }
 
 /// Whether a command goes as chat, which the session paces (6.523). An emote
@@ -156,6 +157,7 @@ impl Outbox {
             chat_admission: None,
             language: Arc::default(),
             sent_chat: Arc::default(),
+            posture: Arc::default(),
         }
     }
 
@@ -170,6 +172,7 @@ impl Outbox {
             chat_admission,
             language: self.language.clone(),
             sent_chat: Arc::default(),
+            posture: self.posture.clone(),
         }
     }
 
@@ -220,6 +223,25 @@ impl Outbox {
     pub(crate) fn connect(&mut self, queue: Option<SyncSender<ClientCommand>>) {
         self.queue = queue;
         self.book = Arc::default();
+        self.set_posture_context(None);
+    }
+
+    pub(super) fn set_posture_context(&self, context: Option<crate::posture::Context>) {
+        if let Ok(mut saved) = self.posture.lock() {
+            *saved = context;
+        }
+    }
+
+    pub(super) fn posture_allowed(
+        &self,
+        world: &ClientWorld,
+        posture: eq_client_core::Posture,
+    ) -> bool {
+        self.posture
+            .lock()
+            .ok()
+            .and_then(|context| context.clone())
+            .is_none_or(|context| context.allows(world, posture))
     }
 
     /// Claims the book between set steps only after any manual edit settles.
@@ -388,6 +410,14 @@ impl Outbox {
         let interrupt = interrupts_apply(&command);
         let chat = is_chat(&command);
         self.check(world, &command).and_then(|queue| {
+            // Both read programs silently keep a ducked player ducked when
+            // the manual transition lacks room: no packet and no chat line.
+            // Every source, including script facades, goes through here.
+            if let ClientCommand::SetPosture { posture, .. } = &command
+                && !self.posture_allowed(world, *posture)
+            {
+                return Ok(());
+            }
             let mut book = (edit.is_some() || interrupt)
                 .then(|| self.book.lock().map_err(|_| Refusal::Busy))
                 .transpose()?;
@@ -868,6 +898,7 @@ mod tests {
         let world = admitted(vec![Capability::Talking]);
         let jump = |stamp: Stamp| ClientCommand::Jump {
             session_id: stamp.session_id,
+            posture: eq_client_core::JumpPosture::Keep,
             created: stamp.created,
         };
         assert_eq!(

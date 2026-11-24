@@ -376,6 +376,56 @@ pub struct EdgeBody {
     pub lifted: bool,
 }
 
+/// Room above the floor required by a posture (Titanium 0x48bb83,
+/// Mac 0x50453a; ducked-headroom reads 2026-11-24). Player standing
+/// overrides are zero. The strict test includes `margin` on both programs.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Headroom {
+    /// Multiple of S while standing.
+    pub standing: f32,
+    /// Added to S while ducked.
+    pub ducking_extra: f32,
+    /// Multiple of S while mounted.
+    pub mounted: f32,
+    /// Room required beyond the posture's need.
+    pub margin: f32,
+}
+
+impl Headroom {
+    /// Titanium's read need and strict margin.
+    pub const TITANIUM: Self = Self {
+        standing: 2.0,
+        ducking_extra: 1.0,
+        mounted: 3.0,
+        margin: 0.5,
+    };
+
+    /// Mac's ducked need is S; the other factors match Titanium.
+    pub const EQMAC: Self = Self {
+        ducking_extra: 0.0,
+        ..Self::TITANIUM
+    };
+
+    /// The need for the new posture, before the strict margin. The ducked
+    /// branch is explicit in both programs and precedes the other cases.
+    #[must_use]
+    pub fn needed(self, stand_height: f32, ducking: bool, mounted: bool) -> f32 {
+        if ducking {
+            stand_height + self.ducking_extra
+        } else if mounted {
+            self.mounted * stand_height
+        } else {
+            self.standing * stand_height
+        }
+    }
+
+    /// The floor-to-ceiling room that must be exceeded strictly.
+    #[must_use]
+    pub fn room(self, stand_height: f32, ducking: bool, mounted: bool) -> f32 {
+        self.needed(stand_height, ducking, mounted) + self.margin
+    }
+}
+
 /// How a generation's horizontal move lifts a walking body's sideways sweep
 /// over its origin: by L, which is S × [`Self::tall_share`] for the
 /// [`Self::tall_races`] and at least [`Self::floor`] and the model's sphere
@@ -437,7 +487,8 @@ impl EdgeLift {
 /// that puts the human seen (S 3.75, L 1.9) on the posts it climbed, growing
 /// with the stand height and never under it (inferred, recording checklist
 /// 6.482).
-fn sphere_radius(stand_height: f32) -> f32 {
+#[must_use]
+pub fn sphere_radius(stand_height: f32) -> f32 {
     const SEEN: f32 = TITANIUM_EDGE_FLOOR - TITANIUM_SEEN_OVER_ORIGIN;
     SEEN.max(SEEN * stand_height / SEEN_STAND_HEIGHT)
 }
@@ -549,6 +600,17 @@ mod tests {
         assert!((TITANIUM.climb_per_step(1.875, 3.0) - 1.6875).abs() < 1e-5);
         assert!(TITANIUM.climb_per_step(f32::NAN, 6.0).abs() < f32::EPSILON);
         assert!(TITANIUM.climb_per_step(-0.1, 6.0).abs() < f32::EPSILON);
+    }
+
+    #[test]
+    fn ducked_headroom_uses_each_programs_need_and_the_same_strict_margin() {
+        for (rule, extra) in [(Headroom::TITANIUM, 1.5), (Headroom::EQMAC, 0.5)] {
+            for stand in [3.75_f32, 3.75 / 1.3, 1.875, 5.625] {
+                assert!((rule.room(stand, true, false) - (stand + extra)).abs() < 1e-6);
+                assert!((rule.room(stand, false, false) - (2.0 * stand + 0.5)).abs() < 1e-6);
+                assert!((rule.room(stand, false, true) - (3.0 * stand + 0.5)).abs() < 1e-6);
+            }
+        }
     }
 
     fn body(race: u32, size: f32, lifted: bool) -> EdgeBody {
