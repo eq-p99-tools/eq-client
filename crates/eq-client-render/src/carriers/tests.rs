@@ -445,3 +445,54 @@ fn split_spawn_and_carrier_events_do_not_install_an_actor_on_an_old_ordinary_roo
         1
     );
 }
+
+#[test]
+fn a_failed_collider_is_counted_once_per_incarnation_tag_and_scale() {
+    let (app, mut model) = fixture(2, false);
+    let mut sample = app
+        .world()
+        .resource::<OnlineState>()
+        .world()
+        .carriers()
+        .reports()
+        .next()
+        .unwrap()
+        .sample();
+    model.collision = Arc::new(Vec::new());
+    let directory = std::env::temp_dir().join(format!(
+        "eq-carrier-build-gap-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap()
+            .as_nanos()
+    ));
+    let path = eq_client_core::gaps::begin(&directory, jiff::Timestamp::now()).unwrap();
+    let mut cache = BTreeMap::new();
+    let mut transform = Transform::default();
+    for phase in 0..4 {
+        if phase == 1 {
+            transform.scale = Vec3::splat(2.0);
+        } else if phase == 2 {
+            sample.incarnation += 1;
+        }
+        let tag = if phase == 3 { "PRE" } else { "BOAT" };
+        for _ in 0..3 {
+            assert!(cached_collider(&mut cache, sample, tag, &model, &transform).is_none());
+        }
+        assert!(cache[&sample.spawn_id].mesh.is_none());
+    }
+    eq_client_core::gaps::end(&|file| serde_json::to_string(file).map_err(std::io::Error::other))
+        .unwrap();
+    let file: eq_client_core::gaps::GapFile =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    std::fs::remove_dir_all(directory).unwrap();
+    let gap = file
+        .entries
+        .iter()
+        .find(|entry| entry.name.as_deref() == Some("Carrier collision mesh could not be built"))
+        .unwrap();
+    // The warning and gap count share the construction callback. Repeated
+    // frames keep its failed result; each changed cache key tries once more.
+    assert_eq!(gap.count, 4);
+}
