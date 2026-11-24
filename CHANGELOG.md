@@ -2,6 +2,17 @@
 
 ## Unreleased
 
+- A knight's Lay on Hands or Harm Touch waits as the Titanium program's does
+  (read R49-29 b, checklist 6.626, slice B), with eq-network #433 in main's
+  pin. The session now waits the program's own gem-9 timer: 10 s from a
+  press, then the spell's recast
+  after the server refreshes the gem, saying the program's 0x2efd while it
+  runs. This client hands it the recast from the installed spell file
+  (field 15, the replayed table on P99 once ready). The server's long reuse
+  no longer holds the press: the button's hover shows it as "Server reuse
+  N s" (this client's label, "(estimated)" where the session estimated it)
+  and the button still dims while it runs, but the press goes after the
+  local wait and the server decides.
 - On Titanium, a right-click on a player inspects them, as the program's use
   routine ends (reads R49-16 and R49-16e, checklist 6.644).
   - The player is first considered, as before. Then, with Inspect Others
