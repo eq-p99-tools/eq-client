@@ -1,0 +1,1 @@
+- Keep spell names aligned with their icons in the spellbook and Spells window.
