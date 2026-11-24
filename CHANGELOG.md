@@ -7,6 +7,15 @@
   - Cancel leaves the question up, and its answer still sends what the box holds (read); the close box and Esc do the same (inferred).
   - The official client adds the machine's processor, video card and driver on Yes or with `SendSystemInfo=1`. This client never sends anything about the machine, so the report is the same either way, and a line of its own says so (a labelled departure).
   - A second Send while the question is up does nothing (a departure: the program would ask in a second dialog). Leaving the world while it is up (zoning, a camp, a drop, `/quit`) loses the report, as the program's does (reads R49-52d, R49-52e); the program then still clears the words and says its sent line, while this client keeps the words and says nothing (a labelled departure). A script's `Script report windows` event has `question_up`.
+- `/surname` runs as read R49-10 reads the Titanium program (checklist 6.507). This supersedes the earlier draft #565.
+  - **Checks, in order, each sending nothing:** under level 20 (line 0x328c); a bare `/surname` with no surname set (usage 0x328d); words 32 bytes or more (0x8bf). The read gives `strlen >= 0x20` on the argument, and that this is the whole argument rather than the first word is inferred.
+  - **A bare `/surname` with one set:** the program asks a question whose yes path isn't read (R49-10e), so this client says in its own words that it waits for that read (a gap).
+  - **The question:** the first word, with `'` and `"` quotes taken, cut to 19 bytes at a character boundary and its case kept. Question 0x235a names exactly that word for 10 seconds. Yes sends it and says 0x235b. No, the time running out or the session ending sends nothing.
+  - **The answer** is always shown, as the program shows it: refused 0x55e, taken 0x55f with the player's name and the surname. No gate on our own request, and nothing local changes. The name tag follows the zone's last-name update.
+  - The lines come in colour 15. Scripts run the same handler through `slash("surname Name")` and answer the question with its buttons (Scripts = Users, 11-23).
+  - The Mac-era client's `/surname` isn't read (R49-10d). Quarm's and TAKP's handlers say the client refuses under 20 and cuts to 19, so the same flow runs there (inferred), with the first use attended. Project 1999 stays unoffered.
+  - A quoted surname's spaces go as typed, and an answer word other than 0 shows as taken, as the program shows it (eq-network #409, on main's pin).
+
 - Buying from a merchant follows the Titanium program's order and lines
   (read R49-35 a, checklist 6.627), for the one-click buy and the quantity
   window alike. A pending trade, a ware the merchant no longer lists and a

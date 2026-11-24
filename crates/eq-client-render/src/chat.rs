@@ -249,6 +249,8 @@ pub(super) struct ChatState {
     pub(crate) boat_interacted: Option<u16>,
     /// `/follow` typed or pressed, for [`super::motion::input`] to start.
     pub(crate) follow_asked: Option<super::motion::FollowAsked>,
+    /// The words of a `/surname` typed or run, for [`super::surname::command`].
+    pub(crate) surname_asked: Option<String>,
     /// A Ranger's tracking option typed by another class, for
     /// [`super::tracking::say_rangers_only`] to answer.
     pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
@@ -283,6 +285,7 @@ struct ScriptRequests {
     sharing: Option<crate::script::ExpectedWorld>,
     follow: Option<crate::script::ExpectedWorld>,
     boat: Option<crate::script::ExpectedWorld>,
+    surname: Option<crate::script::ExpectedWorld>,
 }
 
 #[allow(clippy::needless_pass_by_value)]
@@ -317,6 +320,11 @@ pub(crate) fn guard_script_requests(
     }
     if let Some(reason) = withdraw(&mut chat.script_requests.follow, &online)
         && chat.follow_asked.take().is_some()
+    {
+        refusal = Some(reason);
+    }
+    if let Some(reason) = withdraw(&mut chat.script_requests.surname, &online)
+        && chat.surname_asked.take().is_some()
     {
         refusal = Some(reason);
     }
@@ -568,6 +576,7 @@ impl ChatState {
             boat_asked,
             boat_interacted,
             follow_asked,
+            surname_asked,
             rangers_only,
             load_skin,
             pet_targeted,
@@ -635,6 +644,7 @@ impl ChatState {
         *boat_asked = None;
         *boat_interacted = None;
         *follow_asked = None;
+        *surname_asked = None;
         *rangers_only = None;
         *load_skin = None;
         *pet_targeted = None;
@@ -2400,6 +2410,21 @@ fn word_asked(input: &str, state: &mut ChatState) -> bool {
     false
 }
 
+/// A typed command that only shows one of this client's own windows or
+/// toggles its log, sending nothing; false for any other line.
+fn window_asked(input: &str, state: &mut ChatState) -> bool {
+    if typed_command(input, "/filter") {
+        // `/filter` reads no words and sends nothing: it shows the Options
+        // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
+        state.filter_page = Some(FilterPage);
+    } else if input.eq_ignore_ascii_case("/log") {
+        state.log_toggle = true;
+    } else {
+        return false;
+    }
+    true
+}
+
 pub(super) fn client_request_in_scope(
     input: &str,
     state: &mut ChatState,
@@ -2430,6 +2455,11 @@ pub(super) fn client_request_in_scope(
     if let Some(guild) = super::guild::Command::typed(input) {
         state.script_requests.guild = scope;
         state.guild_asked = Some(guild);
+        return Some(Ok(()));
+    }
+    if let Some(words) = super::surname::typed(input) {
+        state.script_requests.surname = scope;
+        state.surname_asked = Some(words);
         return Some(Ok(()));
     }
     if let Some(words) = super::languages::typed(input) {
@@ -2470,14 +2500,7 @@ pub(super) fn client_request_in_scope(
     if let Some(request) = zone_who_request(input) {
         return Some(request.map(|filter| state.zone_who = Some(filter)));
     }
-    // `/filter` reads no words and sends nothing: it shows the Options
-    // window on its filter page (eqgame.exe 0x46a245, read R49-2a).
-    if typed_command(input, "/filter") {
-        state.filter_page = Some(FilterPage);
-        return Some(Ok(()));
-    }
-    if input.eq_ignore_ascii_case("/log") {
-        state.log_toggle = true;
+    if window_asked(input, state) {
         return Some(Ok(()));
     }
     if let Some(request) = super::skin::LoadSkin::typed(input) {

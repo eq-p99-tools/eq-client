@@ -1097,9 +1097,7 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            // The surname's answer takes its arm in that thread's rebuild.
-            unshown @ (WorldEvent::SurnameAnswer { .. }
-            | WorldEvent::SpellTable(_)
+            unshown @ (WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
@@ -1363,6 +1361,20 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
+            // The name tag follows the zone's own last-name update, not this.
+            WorldEvent::SurnameAnswer {
+                accepted,
+                last_name,
+            } => match &self.player {
+                Some(player) if self.session_id.is_some() => {
+                    news.notices.push(Notice::SurnameAnswer {
+                        accepted: *accepted,
+                        name: player.name.clone(),
+                        last_name: last_name.clone(),
+                    });
+                }
+                _ => news.ignored = true,
+            },
             // The titles the player may choose: kept, the latest replacing
             // the one before, only where the session offers them, until the
             // zone changes.

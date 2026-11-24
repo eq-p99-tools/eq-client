@@ -360,6 +360,17 @@ pub enum Notice {
         /// The client's own words for it.
         said: String,
     },
+    /// The server's answer to a surname request, shown whenever it comes
+    /// as the Titanium program shows it (read R49-10): no request of ours
+    /// gates it.
+    SurnameAnswer {
+        /// Whether the server took it.
+        accepted: bool,
+        /// The player's own name, which the taken line names first.
+        name: String,
+        /// The surname the answer names.
+        last_name: String,
+    },
     /// A bandaging started or ended.
     BindWound(crate::bind_wound::BindWoundUpdate),
     /// Sense Heading: the compass point the player faces, clockwise from
