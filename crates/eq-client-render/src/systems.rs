@@ -154,6 +154,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::lighting::update,
                 character::lie,
                 doors::reconcile,
+                doors::report_radii,
                 crate::carriers::reconcile,
                 ground::reconcile,
                 projectiles::update,

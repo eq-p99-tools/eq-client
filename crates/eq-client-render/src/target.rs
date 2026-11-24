@@ -1855,6 +1855,7 @@ mod tests {
             collision: Vec::new(),
             no_hit_collision: Vec::new(),
             vertex_count: None,
+            radius: None,
         };
         let mut models = super::super::doors::Models::default();
         models.0.insert(
@@ -1864,6 +1865,7 @@ mod tests {
                 primitives: vec![(Handle::default(), Handle::default())],
                 collision: Vec::new(),
                 pick: super::super::doors::PickMesh::from_model(&source),
+                radius: None,
             },
         );
         app.insert_resource(models)
