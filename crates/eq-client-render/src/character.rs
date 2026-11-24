@@ -41,7 +41,7 @@ pub(super) struct AnimatedCharacter {
     elapsed: f32,
     since_pose: f32,
     moving_for: f32,
-    /// Where it stood when last posed, and the boat it stood on then; none
+    /// Where it stood when last posed, and the boat or lift it stood on then; none
     /// before its first pose, so a character newly drawn at its place is not
     /// taken for moving there.
     previous_position: Option<Footing>,
@@ -537,6 +537,13 @@ pub(super) fn animate(
                     controls
                         .as_deref()
                         .and_then(super::motion::Controls::drawn_carrier)
+                })
+                .flatten(),
+            lift: own
+                .then(|| {
+                    controls
+                        .as_deref()
+                        .and_then(super::motion::Controls::drawn_lift)
                 })
                 .flatten(),
         };
@@ -1133,7 +1140,7 @@ fn played_clip(action: u16, has: impl Fn(&str) -> bool) -> Option<&'static str> 
 }
 
 /// Where a drawn character stands: its root, and for the player the boat
-/// it is drawn on with that boat's drawn pose.
+/// it is drawn on with that boat's drawn pose, or its supporting lift.
 #[derive(Clone, Copy, Debug)]
 struct Footing {
     at: Vec3,
@@ -1141,6 +1148,7 @@ struct Footing {
         eq_client_core::movement::CarrierSample,
         eq_client_core::WorldPosition,
     )>,
+    lift: Option<u8>,
 }
 
 /// How far, squared, a character moved itself between two footings: across
@@ -1149,7 +1157,9 @@ struct Footing {
 /// the rider walking; else across the world. A still rider stands while the
 /// boat moves: the program picks moving or idle from the spawn's own
 /// velocity, which for a rider leaves out the boat's (0x44fa8f, 0x4bf9b2,
-/// read R38).
+/// read R38). On a supporting lift only horizontal deck travel walks the
+/// player, including the step onto it; a fall without that support still
+/// goes by world travel.
 fn moved(previous: Footing, now: Footing) -> f32 {
     let local = |at: Vec3, pose| {
         let world = eq_client_core::world_position(at.to_array(), 0.0);
@@ -1162,6 +1172,12 @@ fn moved(previous: Footing, now: Footing) -> f32 {
             if was.spawn_id == is.spawn_id && was.incarnation == is.incarnation =>
         {
             local(previous.at, then).distance_squared(local(now.at, pose))
+        }
+        (None, None)
+            if now.lift.is_some() && (previous.lift.is_none() || previous.lift == now.lift) =>
+        {
+            let step = now.at - previous.at;
+            step.x * step.x + step.z * step.z
         }
         _ => previous.at.distance_squared(now.at),
     }
@@ -2140,6 +2156,7 @@ mod tests {
             Footing {
                 at: Vec3::from_array(eq_client_core::render_position(world)),
                 carrier: Some((boat, pose)),
+                lift: None,
             }
         };
         let (first, later) = boat_reports(50);
@@ -2162,6 +2179,50 @@ mod tests {
             ..still
         };
         assert!(moved(before, off) > 1.0);
+    }
+
+    #[test]
+    fn a_lift_rider_stands_when_carried_and_walks_across_the_deck() {
+        let at = |lift, height| Footing {
+            at: Vec3::new(3.0, height, 4.0),
+            carrier: None,
+            lift,
+        };
+        let before = at(Some(4), 50.0);
+        for height in [45.0, 55.0] {
+            let carried = at(Some(4), height);
+            assert_eq!(moved(before, carried), 0.0);
+            // Forward, back and strafe all keep their deck travel while
+            // the lift rises or lowers beneath them.
+            for step in [Vec3::X, Vec3::NEG_X, Vec3::Z, Vec3::NEG_Z] {
+                let walking = Footing {
+                    at: carried.at + step,
+                    ..carried
+                };
+                assert_eq!(moved(before, walking), 1.0);
+            }
+        }
+        // First acquiring support, including a landing, does not mistake
+        // the lift's vertical placement for a walk. Walking onto it does.
+        let before = at(None, 45.0);
+        let landed = at(Some(4), 50.0);
+        assert_eq!(moved(before, landed), 0.0);
+        assert_eq!(
+            moved(
+                before,
+                Footing {
+                    at: landed.at + Vec3::X,
+                    ..landed
+                }
+            ),
+            1.0
+        );
+        // A genuine fall has no supporting lift, including the first step
+        // off a deck. Changing lifts also retains world travel.
+        let falling = at(None, 45.0);
+        assert_eq!(moved(at(None, 50.0), falling), 25.0);
+        assert_eq!(moved(at(Some(4), 50.0), falling), 25.0);
+        assert_eq!(moved(at(Some(4), 50.0), at(Some(5), 45.0)), 25.0);
     }
 
     #[test]
