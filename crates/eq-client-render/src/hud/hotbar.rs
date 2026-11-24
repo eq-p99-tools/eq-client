@@ -350,7 +350,7 @@ pub(crate) fn update(
 
 /// A slot's button, as the client draws it or as the skin does: the
 /// client's own shows readiness in its fill, the skin's in its disabled
-/// look.
+/// look and what it holds in its tooltip.
 type SlotButtons<'w, 's> = Query<
     'w,
     's,
@@ -359,8 +359,8 @@ type SlotButtons<'w, 's> = Query<
         &'static Interaction,
         &'static Slot,
         Option<&'static mut BackgroundColor>,
-        Has<crate::skinned::SkinButton>,
-        Has<crate::skinned::Greyed>,
+        (Has<crate::skinned::SkinButton>, Has<crate::skinned::Greyed>),
+        Option<&'static mut crate::tooltip::Tooltip>,
     ),
 >;
 
@@ -399,7 +399,7 @@ pub(crate) fn presentation(
         .iter()
         .find(|(_, interaction, ..)| **interaction != Interaction::None)
         .map(|(_, _, slot, ..)| slot.0);
-    for (entity, interaction, slot, color, skinned, greyed) in &mut slots {
+    for (entity, interaction, slot, color, (skinned, greyed), tooltip) in &mut slots {
         let spell = bindings.gem(slot.0).and_then(|gem| online.world().gem(gem));
         let missing_item = match bindings.0[slot.0] {
             Some(Action::Item { slot, id }) => bound_item(inventory, (slot, id), qol).is_none(),
@@ -445,6 +445,27 @@ pub(crate) fn presentation(
                 commands.entity(entity).insert(crate::skinned::Greyed);
             } else if !waiting && greyed {
                 commands.entity(entity).remove::<crate::skinned::Greyed>();
+            }
+            // The skin has no detail line, so the hovered button's tooltip
+            // says what the client's own window says there, in place of the
+            // skin's fixed words. Written only when it changes.
+            if *interaction != Interaction::None {
+                let detail = hovered_detail(
+                    &bindings,
+                    Some(slot.0),
+                    (online.world(), qol),
+                    (&names, &map),
+                    now,
+                );
+                match tooltip {
+                    Some(mut tooltip) if tooltip.0 != detail => tooltip.0 = detail,
+                    Some(_) => {}
+                    None => {
+                        commands
+                            .entity(entity)
+                            .insert(crate::tooltip::Tooltip(detail));
+                    }
+                }
             }
         } else if let Some(mut color) = color {
             color.0 = theme::readiness(*interaction != Interaction::None, empty, waiting);
@@ -1027,6 +1048,72 @@ mod tests {
             );
             assert_eq!(hover(&online), format!("Lay on Hands\n{words}"));
         }
+    }
+
+    #[test]
+    fn a_skinned_hot_buttons_tooltip_says_what_it_holds_and_its_wait() {
+        use eq_client_core::knights::{KnightAbility, ReuseSource};
+        let mut app = App::new();
+        crate::keys::testing::install(&mut app);
+        let mut online = crate::online::OnlineState::new(true);
+        crate::online::testing::admit(&mut online, 1, crate::online::testing::player(1));
+        let mut bindings = Bindings::default();
+        bindings.0[0] = Some(Action::KnightAbility(KnightAbility::LayOnHands));
+        app.insert_resource(bindings)
+            .init_resource::<crate::options::OptionsState>()
+            .insert_resource(online)
+            .init_resource::<crate::spellbook::SpellNames>()
+            .add_systems(Update, presentation);
+        let button = app
+            .world_mut()
+            .spawn((
+                Slot(0),
+                Interaction::None,
+                crate::skinned::SkinButton(eq_client_assets::sidl::ButtonLook::default()),
+                crate::tooltip::Tooltip("1".into()),
+            ))
+            .id();
+        let tooltip = |app: &App| {
+            app.world()
+                .get::<crate::tooltip::Tooltip>(button)
+                .unwrap()
+                .0
+                .clone()
+        };
+        // Away from the pointer it keeps the skin's words.
+        app.update();
+        assert_eq!(tooltip(&app), "1");
+        *app.world_mut().get_mut::<Interaction>(button).unwrap() = Interaction::Hovered;
+        app.update();
+        assert_eq!(tooltip(&app), "Lay on Hands\nRecovery unknown");
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [eq_client_core::WorldEvent::KnightReuse {
+                session_id: 1,
+                remaining: std::time::Duration::from_mins(72),
+                source: ReuseSource::Profile,
+            }],
+        );
+        app.update();
+        assert_eq!(tooltip(&app), "Lay on Hands\nServer reuse 4320s");
+        // A button the skin gave no words still gets them: the second
+        // starts out on an empty gem.
+        let bare = app
+            .world_mut()
+            .spawn((
+                Slot(1),
+                Interaction::Hovered,
+                crate::skinned::SkinButton(eq_client_assets::sidl::ButtonLook::default()),
+            ))
+            .id();
+        app.update();
+        assert!(
+            app.world()
+                .get::<crate::tooltip::Tooltip>(bare)
+                .unwrap()
+                .0
+                .starts_with("Gem 2 is empty")
+        );
     }
 
     #[test]

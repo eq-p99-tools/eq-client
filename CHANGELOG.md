@@ -2,6 +2,7 @@
 
 ## Unreleased
 
+- A skinned hot button's tooltip says what the button holds and how long it waits, as the client's own hotbar window says in its detail line: a knight's special shows "Server reuse N s", with "(estimated)" where the session estimated it, a gem its spell and timer, an empty slot "Unassigned". Before, the skin's fixed words showed (checklist 6.626, look L8). The wording is this client's.
 - A swimmer climbs out of a pool onto a rim up to about 3.3 above the water, as the Titanium client does (Temple of Life, North Qeynos; checklists 6.482, 6.483b, 6.483c):
   - Stroking forward with the view pitched up toward dry ground just ahead hops, at most once in 1500 ms: three times the jump strength added to the rise and a push along the heading (0x48a793, 0x48a026, read R33b).
   - The wet step ends on the frame that takes the origin out of the water, so the fall that follows keeps the velocity it left with instead of losing it to the water's damping for the rest of the sample.
