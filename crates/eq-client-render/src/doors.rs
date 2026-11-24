@@ -313,7 +313,11 @@ fn radii<'a>(
     doors.entries().values().filter_map(|door| {
         let model = models.0.get(&model_key(&door.model))?;
         model.radius?;
-        Some((door.id, door.model.as_str(), rider_radius(Some(model), door)))
+        Some((
+            door.id,
+            door.model.as_str(),
+            rider_radius(Some(model), door),
+        ))
     })
 }
 
@@ -373,29 +377,24 @@ pub(super) fn tell_radii(
     {
         return;
     }
-    let list: Vec<DoorRadius> = current()
+    let radii: Vec<DoorRadius> = current()
         .map(|(door_id, model, radius)| DoorRadius {
             door_id,
             model: model.to_owned(),
             radius,
         })
         .collect();
-    use crate::outbox::Refusal;
-    let settled = match post(list.clone()) {
-        Ok(()) => true,
-        Err(Refusal::Offline | Refusal::NotAdmitted | Refusal::Away | Refusal::Busy) => false,
-        Err(
-            Refusal::Unavailable(_)
-            | Refusal::Dead
-            | Refusal::Ended
-            | Refusal::SpellData
-            | Refusal::SpellSet
-            | Refusal::BookPending
-            | Refusal::BookUnconfirmed,
-        ) => true,
-    };
-    if settled {
-        *told = Some((session, list));
+    // Only a refusal that may pass later in the admission leaves the list
+    // untold.
+    let passing = matches!(
+        post(radii.clone()),
+        Err(crate::outbox::Refusal::Offline
+            | crate::outbox::Refusal::NotAdmitted
+            | crate::outbox::Refusal::Away
+            | crate::outbox::Refusal::Busy)
+    );
+    if !passing {
+        *told = Some((session, radii));
     }
 }
 
@@ -839,9 +838,7 @@ mod tests {
             .unwrap();
         crate::online::testing::doors(&mut state, &update, std::time::Instant::now());
         let mut models = Models::default();
-        models
-            .0
-            .insert("TEST".into(), model_with_radius(Some(8.0)));
+        models.0.insert("TEST".into(), model_with_radius(Some(8.0)));
         (state, models)
     }
 
