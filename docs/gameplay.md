@@ -177,6 +177,22 @@ and swim speeds remain to be done. The Titanium air meter samples the character'
 model-dependent head reference separately. Drowning and lava reports are
 available on local-only EQEmu. See [settings](settings.md).
 
+On Titanium, Velious water (`VW` regions) at the body's origin is cold, as
+the program's liquid routine reads the origin's region kind: lava's heat
+and Velious water's cold share one once-a-second check, so a check reports
+at most one of them. The cold amount is 50 less a third of the cold
+resist, never under 10. The cold resist is the program's own total: the
+profile's base (a Barbarian's is 35, an Iksar's 10 lower), cold and
+all-resist effects, the Ranger and Beastlord bonus and worn items' cold.
+Rune absorbs aren't taken off any hazard's amount yet, so the server
+applies its own; that's a labelled departure. When the fire or cold
+resist total can't be worked out yet (a buff's or an item's resist isn't
+known), no lava or cold report goes out, where the program reports by its
+own total: another labelled departure, counted in the gap log each time it
+holds a report back (checklist 6.632). Water's other kinds,
+including slime, report nothing. Take Environmental Damage turns cold off
+with the other hazards.
+
 A received placement replaces the local movement projection. A worker can
 accept a movement sample and hold it for pacing. Server position and health
 updates remain separate observations.
