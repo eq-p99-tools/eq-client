@@ -112,15 +112,20 @@ pub(super) fn check(
         .copied()
         .flatten()
         .ok_or_else(|| crate::chat::Said::own(super::empty_gem(gem, map)))?;
-    // While a Bard sings and no other cast is under way, a gem press stops
-    // the song whatever its timers or the mana, and casts nothing
-    // (0x4ecb56, read R49-21c); a forget goes too ([I], R49-48 a). The
-    // session decides both.
-    let singing = world.casting().singing.is_some() && !world.casting().holds_actions();
-    if forgetting || singing {
-        if !singing && let Some(refusal) = busy(world, map) {
-            return Err(Some(refusal));
+    // A right click forgets a filled gem at once, with no confirm, while no
+    // request is pending, even mid-cast; while one is, it does nothing and
+    // says nothing (0x4eccc6, read R49-34 d).
+    if forgetting {
+        if world.casting().pending.is_some() {
+            return Err(None);
         }
+        return Ok(pass(spell_id));
+    }
+    // While a Bard sings and no other cast is under way, a gem press stops
+    // the song whatever its timers, and casts nothing (0x4ecb56, read
+    // R49-21c). The session decides it.
+    let singing = world.casting().singing.is_some() && !world.casting().holds_actions();
+    if singing {
         return Ok(pass(spell_id));
     }
     // The gem click (0x4ecb56, read R49-34 h): while a cast is under way or
