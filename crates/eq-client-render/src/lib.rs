@@ -113,6 +113,7 @@ mod profile_files;
 mod projectiles;
 mod raid;
 mod reading;
+mod report_windows;
 mod reports;
 mod resources;
 mod resurrection;
@@ -132,7 +133,9 @@ mod speed;
 mod spell_effects;
 mod spell_icons;
 mod spellbook;
+mod surname;
 mod target;
+mod targeted;
 mod theme;
 mod tooltip;
 mod tracking;
@@ -389,6 +392,7 @@ fn seed_official_options(
             (Toggle::Sound, official.sound),
             (Toggle::EnvironmentSounds, official.env_sounds),
             (Toggle::CombatMusic, official.combat_music),
+            (Toggle::InspectOthers, official.inspect_others),
             // A music volume of 0 is silent; another value leaves music on,
             // its scale unread [I].
             (
@@ -405,7 +409,8 @@ fn seed_official_options(
             }
         }
         // Only a race and gender the file names is seeded; one it lacks
-        // stays unset, so the server's offer decides it (read R49-44 a).
+        // stays unset, which counts as on, as the program's own default
+        // (read R49-44 a).
         for (&(_, race, gender), said) in eq_client_assets::ui::LUCLIN_MODEL_KEYS
             .iter()
             .zip(official.luclin_models)
@@ -969,14 +974,15 @@ fn spawn_static_zone(
                     additive: source.material_mode == MaterialMode::Additive,
                 });
             }
-            door_models.0.insert(
-                doors::model_key(&model.name),
+            door_models.0.insert(doors::model_key(&model.name), {
+                let collision = doors::collision(model.collision, model.no_hit_collision);
                 doors::Model {
+                    radius: doors::model_radius(model.radius, &collision),
                     primitives: primitives.clone(),
-                    collision: model.collision,
+                    collision,
                     pick,
-                },
-            );
+                }
+            });
             drawn_models.push(drawn);
             primitives
         })

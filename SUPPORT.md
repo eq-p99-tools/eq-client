@@ -29,7 +29,7 @@ prerequisites.
 | Protocol / installation | Titanium | Titanium | EQMac / TAKP | EQMac / TAKP |
 | Login, character selection, world state and chat | Yes | Yes | Yes | Yes |
 | Character appearance preview at selection | Yes | Yes | Yes | Yes |
-| Luclin player models in the world (checklist 6.554) | When the server's expansion mask offers them (bit 0x4 or 0x8), then the viewer's keys; base look | Same | Same, the Mac gate inferred | Same, the Mac gate inferred |
+| Luclin player models in the world (checklist 6.554) | The viewer's eqclient.ini keys (unset is on), no server gate; base look | Same | Same | Same |
 | Movement and falling | Yes | Yes | Yes | Yes |
 | Drowning and lava heat reports | No | Local-only Titanium sessions | No | No |
 | Jumping | Yes | Yes | Yes | Yes |
