@@ -14,7 +14,9 @@
 //!   back to its ini where it counts a key on; this client never writes
 //!   the official ini, a stated departure.
 //! - **Fallbacks** when a race's own key is off: Human also takes Erudite's;
-//!   Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's.
+//!   Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's. A missing
+//!   fallback key counts by the same rule as a missing own key: on where
+//!   the mask offers the models, off where it doesn't.
 //! - **Vah Shir (130)** follows its own key alone, past the all-off key,
 //!   and is on when unset whatever the mask.
 //!
