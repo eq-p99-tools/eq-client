@@ -1,6 +1,6 @@
 //! News about the player's spells: gems and the book, casts, buffs and
 //! lasting effects, and spellbook changes.
-use super::{CastNews, Changes, ClientWorld, InterruptPrint, Notice, SpellCatalog};
+use super::{CastNews, Changes, ClientWorld, InterruptPrint, Notice, OtherCaster, SpellCatalog};
 use crate::{BookActionStatus, Buff, BuffUpdate, SpellEffect, SpellUpdate, buffs::Landing};
 use std::time::Instant;
 
@@ -28,6 +28,12 @@ impl ClientWorld {
             book.apply(update);
         }
         let active = self.connected && self.death.is_none();
+        let other = match (self.generation, update) {
+            (crate::GameDialect::Titanium, SpellUpdate::Interrupted { caster_id, .. }) => {
+                InterruptPrint::TitaniumOther(self.other_caster(*caster_id))
+            }
+            _ => InterruptPrint::Unread,
+        };
         let Some(player) = self.player.as_mut() else {
             return;
         };
@@ -46,7 +52,7 @@ impl ClientWorld {
             changes.notices.push(Notice::OtherCastInterrupted {
                 string_id: *message_id,
                 caster: caster.clone(),
-                print: interrupt_print(self.generation, false),
+                print: other,
             });
         }
         changes.cast = self
@@ -61,6 +67,34 @@ impl ClientWorld {
             changes
                 .notices
                 .push(Notice::CastInterrupted { string_id, print });
+        }
+    }
+
+    /// Who another caster is for the Titanium program's interruption
+    /// filters (0x45e233, read R49-51b): a Bard by class whatever their
+    /// kind, another player, or an NPC, and whether a player is in the
+    /// player's group, by name as the program's group list holds them.
+    fn other_caster(&self, caster_id: u32) -> OtherCaster {
+        let Some(spawn) = u16::try_from(caster_id)
+            .ok()
+            .and_then(|id| self.zone.spawns.get(&id))
+        else {
+            return OtherCaster::Unknown;
+        };
+        let player = spawn.state.kind == crate::SpawnKind::Player;
+        let grouped = player
+            && self.group.as_ref().is_some_and(|group| {
+                group
+                    .members
+                    .iter()
+                    .any(|member| member.eq_ignore_ascii_case(&spawn.state.name))
+            });
+        if spawn.state.class == Some(8) {
+            OtherCaster::Bard { grouped }
+        } else if player {
+            OtherCaster::Player { grouped }
+        } else {
+            OtherCaster::Npc
         }
     }
 
