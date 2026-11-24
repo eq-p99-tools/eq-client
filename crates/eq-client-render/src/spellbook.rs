@@ -274,6 +274,12 @@ impl SpellNames {
         self.0.get(id)
     }
 
+    /// The level this class casts the spell at, 255 for a class that
+    /// can't, from the installed spell table only.
+    pub(crate) fn class_level(&self, id: u32, class: u32) -> Option<u8> {
+        self.installed_scribe_level(id, class)
+    }
+
     /// Class requirements are known only for the installed spell table.
     fn installed_scribe_level(&self, id: u32, class: u32) -> Option<u8> {
         if !matches!(
