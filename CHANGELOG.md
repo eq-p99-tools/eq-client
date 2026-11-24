@@ -11,6 +11,13 @@
   - **Vah Shir** follows its own key alone, past the all-off key, and is on when unset whatever the mask.
   - **Froglok stays classic,** since the program's loader doesn't walk it.
   - **The options file** keeps the keys set on as `luclin_models = ...`, the keys set off as `classic_models = ...`, and `all_luclin_models_off`. A code in both lines is off. A file's keys lie over eqclient.ini's, key by key.
+- `/guildstatus` answers on the Mac-era client as its program does (checklist 6.623, TAKP program read 6.575m: 0x4f4bb1 and 0x52f36b). It is local only and sends nothing. It uses the same string ids as Titanium's, colour 0x111:
+  - Unlike Titanium, it answers for any spawn but a corpse, so an NPC is answered (usually as not in a guild).
+  - The line for a rank past the three (12259, 0x2fe3) also names the guild.
+  - A typed name or the target picks the spawn, as on Titanium.
+  - A player in no guild still gets this client's words, because the program's are its own; the name is shown as players see it.
+  - The program also refuses a game master (spawn +0x109, inferred to be the spawn record's GM byte). The session doesn't decode that byte for Mac spawns yet, so no Mac spawn is refused for it. That is a labelled follow-up.
+  - `/played` on the Mac client still waits for its read.
 - The scribe press and the gems follow the Titanium program further (reads
   R49-34 a, d and i, slice G, G2 and G4, checklist 6.639). A scroll skips
   the race mask, as the program's usability test does, so a scroll no race

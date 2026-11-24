@@ -109,7 +109,10 @@ fn guild_status_names_the_targets_guild_and_rank_as_eqemu_says_them() {
     );
     assert_eq!(
         status(&mut world, Some(10)),
-        Some(GuildStatus::Ranked { name: "Cy".into() })
+        Some(GuildStatus::Ranked {
+            name: "Cy".into(),
+            guild: "Seekers".into()
+        })
     );
     // A typed name finds the player, whatever the target, ignoring case;
     // a name no spawn has, or an NPC's, is refused.
