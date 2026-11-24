@@ -150,6 +150,31 @@ fn supported(world: &CollisionWorld, feet: Vec3, height: f32) -> bool {
     world.support(feet).is_some() || buried_floor(world, feet, height).is_some()
 }
 
+fn valid_step(feet: Vec3, physics: VerticalPhysics, input: &MotionStep) -> bool {
+    feet.is_finite()
+        && input.horizontal.is_finite()
+        && input.height.is_finite()
+        && input.height >= 1.0
+        && input.seconds.is_finite()
+        && input.seconds > 0.0
+        && [physics.terminal_speed, physics.jump_speed]
+            .iter()
+            .all(|v| v.is_finite() && *v > 0.0)
+        && physics.gravity.is_finite()
+        && physics.gravity >= 0.0
+        && physics.air_factor > 0.0
+        && physics.air_factor <= 1.0
+        && physics.ground_tolerance.is_finite()
+        && physics.ground_tolerance >= 0.0
+        && physics.climb.is_finite()
+        && physics.climb >= 0.0
+        && physics
+            .edge_climb
+            .is_none_or(|edge| edge.is_finite() && edge >= 0.0)
+        && physics.airborne_clear.is_finite()
+        && physics.airborne_clear >= 0.0
+}
+
 /// A body's motion as the programs step it, one 50 ms step at a time (R-s,
 /// both generations): on the ground the walk moves it; in the air each
 /// step takes the zone's gravity off its vertical speed, keeps the air
@@ -160,6 +185,9 @@ fn supported(world: &CollisionWorld, feet: Vec3, height: f32) -> bool {
 #[derive(Clone, Default)]
 pub struct AirborneController {
     velocity: f32,
+    /// A grounded launch not yet consumed by the host. A ceiling may remove
+    /// its upward velocity in the same step without undoing this event.
+    jump_started: bool,
     /// The horizontal speed carried in the air, in world units a second:
     /// the walk's at take-off, less the air's share each step.
     drift: Vec3,
@@ -170,6 +198,53 @@ pub struct AirborneController {
 }
 
 impl AirborneController {
+    /// Whether the next valid step can launch a jump from its starting floor,
+    /// including the ordinary raised-floor refresh. This queries the same
+    /// start as [`Self::step`], without changing momentum or emitting an event.
+    /// Invalid body or physics inputs return false.
+    #[must_use]
+    pub fn can_launch(
+        &self,
+        world: &CollisionWorld,
+        feet: Vec3,
+        physics: VerticalPhysics,
+        height: f32,
+    ) -> bool {
+        let input = MotionStep {
+            horizontal: Vec3::ZERO,
+            jump: true,
+            seconds: STEP,
+            height,
+        };
+        valid_step(feet, physics, &input)
+            && self.velocity <= 0.0
+            && self
+                .starting_floor(world, feet, physics.climb, height)
+                .1
+                .is_some()
+    }
+
+    /// Takes the latest unconsumed grounded jump launch. A clipped arc still
+    /// launched; this reports local simulation, never a server acknowledgment.
+    pub fn take_jump(&mut self) -> bool {
+        std::mem::take(&mut self.jump_started)
+    }
+
+    fn starting_floor(
+        &self,
+        world: &CollisionWorld,
+        feet: Vec3,
+        climb: f32,
+        height: f32,
+    ) -> (Vec3, Option<f32>) {
+        let feet =
+            match risen_floor(world, feet, climb).or_else(|| buried_floor(world, feet, height)) {
+                Some(floor) if self.velocity <= 0.0 => Vec3::new(feet.x, floor, feet.z),
+                _ => feet,
+            };
+        (feet, world.support(feet))
+    }
+
     /// Instantaneous upward-positive velocity; not an EQ wire velocity.
     #[must_use]
     pub const fn velocity(&self) -> f32 {
@@ -207,6 +282,7 @@ impl AirborneController {
             self.clock = 0.0;
             self.peak = Some(feet_height);
             self.landing = None;
+            self.jump_started = false;
         }
     }
 
@@ -279,24 +355,7 @@ impl AirborneController {
         input: MotionStep,
         liquids: LiquidGuard,
     ) -> Vec3 {
-        if !feet.is_finite()
-            || !input.horizontal.is_finite()
-            || !input.height.is_finite()
-            || input.height < 1.0
-            || !input.seconds.is_finite()
-            || input.seconds <= 0.0
-            || ![physics.terminal_speed, physics.jump_speed]
-                .iter()
-                .all(|v| v.is_finite() && *v > 0.0)
-            || !(physics.gravity.is_finite() && physics.gravity >= 0.0)
-            || !(physics.air_factor > 0.0 && physics.air_factor <= 1.0)
-            || !(physics.ground_tolerance.is_finite() && physics.ground_tolerance >= 0.0)
-            || !(physics.climb.is_finite() && physics.climb >= 0.0)
-            || !physics
-                .edge_climb
-                .is_none_or(|edge| edge.is_finite() && edge >= 0.0)
-            || !(physics.airborne_clear.is_finite() && physics.airborne_clear >= 0.0)
-        {
+        if !valid_step(feet, physics, &input) {
             return feet;
         }
         let dt = input.seconds.min(STEP);
@@ -306,23 +365,18 @@ impl AirborneController {
         // it at once (6.344, R-s); deeper, it starts under the floor, meets
         // nothing and the body falls.
         let start = feet;
-        let feet = match risen_floor(world, feet, physics.climb)
-            .or_else(|| buried_floor(world, feet, input.height))
-        {
-            Some(floor) if self.velocity <= 0.0 => Vec3::new(feet.x, floor, feet.z),
-            _ => feet,
-        };
+        let (feet, floor) = self.starting_floor(world, feet, physics.climb, input.height);
         // That one sweep is the whole step's rise: a step that stands up
         // walks on only by the reach the lift left it, so it never rises
         // more than its climb from where it started. Its move goes as far
         // up as that allows (inferred, checklist 6.366: the program's
         // horizontal sphere against the face is unread).
         let climb = (physics.reach() - (feet.y - start.y)).max(0.0);
-        let floor = world.support(feet);
         let grounded = self.velocity <= 0.0 && floor.is_some();
         if grounded {
             self.finish_landing(floor.unwrap_or(feet.y), -self.velocity);
             self.velocity = if input.jump { physics.jump_speed } else { 0.0 };
+            self.jump_started |= input.jump;
         }
         // A body in the air whose feet this step's speed would carry to
         // within the tolerance of a floor counts as on the ground: it takes
@@ -566,6 +620,45 @@ mod tests {
                 height: 6.0,
             },
         )
+    }
+
+    #[test]
+    fn a_ducked_capsule_jump_clipped_by_the_ceiling_still_reports_launch() {
+        let world = CollisionWorld::new(floor(0.0).into_iter().chain(floor(4.86))).unwrap();
+        let mut state = AirborneController::default();
+        assert!(state.can_launch(&world, Vec3::ZERO, TICK, 4.0));
+        state.step(
+            &world,
+            Vec3::ZERO,
+            TICK,
+            MotionStep {
+                horizontal: Vec3::ZERO,
+                jump: true,
+                seconds: 0.05,
+                height: 4.0,
+            },
+        );
+        assert!(
+            state.velocity() <= 0.0,
+            "the ceiling removes the rising speed"
+        );
+        assert!(state.take_jump(), "the grounded launch still happened");
+        assert!(!state.take_jump(), "a launch is consumed only once");
+    }
+
+    #[test]
+    fn ducked_launch_eligibility_uses_the_same_raised_floor_as_the_step() {
+        let world = CollisionWorld::new(floor(2.0)).unwrap();
+        let physics = VerticalPhysics { climb: 3.0, ..TICK };
+        let state = AirborneController::default();
+        assert!(world.support(Vec3::ZERO).is_none());
+        assert!(state.can_launch(&world, Vec3::ZERO, physics, 4.0));
+        let rising = AirborneController {
+            velocity: 1.0,
+            ..AirborneController::default()
+        };
+        assert!(!rising.can_launch(&world, Vec3::ZERO, physics, 4.0));
+        assert!(!state.can_launch(&world, Vec3::ZERO, physics, f32::NAN));
     }
     #[test]
     fn a_fall_onto_a_steep_slope_lands_on_it_without_sliding() {

@@ -115,6 +115,29 @@ fn body(feet: Vec3, height: f32) -> (Pose, Capsule) {
     )
 }
 
+/// Maps the program's ducked room onto this client's capsule. The need,
+/// margin and zero ducked lift are read on Titanium and Mac; using a capsule
+/// with its existing radius and base lift is ours, stricter than their shape.
+/// The top never falls below either that room or S plus the host's estimated
+/// native sphere radius. That estimate is distinct from the unchanged capsule
+/// width and is supplied from the same source as the standing-sweep estimate.
+#[must_use]
+pub fn ducked_height(
+    stand_height: f32,
+    room: f32,
+    sphere_radius: f32,
+    standing_height: f32,
+) -> f32 {
+    if !stand_height.is_finite()
+        || !room.is_finite()
+        || !sphere_radius.is_finite()
+        || sphere_radius < 0.0
+    {
+        return standing_height;
+    }
+    (room.max(stand_height + sphere_radius) - LIFT).max(1.0_f32.max(2.0 * CAPSULE_RADIUS))
+}
+
 /// Shared solid geometry accelerated by Parry's triangle-mesh BVH.
 pub struct CollisionMesh {
     mesh: TriMesh,
@@ -192,6 +215,9 @@ pub struct CollisionWorld {
     own_liquids: Option<Arc<dyn Liquids>>,
     liquid_support: bool,
     swim_origin: Option<f32>,
+    /// A per-move shape override; liquid probes still receive their original
+    /// body height and origin. Never part of the static navigation world.
+    collision_height: Option<f32>,
 }
 
 impl CollisionWorld {
@@ -208,7 +234,17 @@ impl CollisionWorld {
             own_liquids: None,
             liquid_support: false,
             swim_origin: None,
+            collision_height: None,
         })
+    }
+
+    /// Uses a posture's collision height without changing liquid/head probes,
+    /// the origin, capsule radius or the base lift. Invalid heights leave the
+    /// shape unchanged. The caller keeps this snapshot local to its move.
+    #[must_use]
+    pub fn with_collision_height(mut self, height: f32) -> Self {
+        self.collision_height = (height.is_finite() && height >= 1.0).then_some(height);
+        self
     }
 
     /// Replaces dynamic obstacles without rebuilding the zone's acceleration structure.
@@ -280,6 +316,7 @@ impl CollisionWorld {
             own_liquids: self.own_liquids.clone(),
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
+            collision_height: self.collision_height,
         }
     }
 
@@ -308,6 +345,7 @@ impl CollisionWorld {
             own_liquids: self.own_liquids.clone(),
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
+            collision_height: self.collision_height,
         }
     }
 
@@ -417,7 +455,7 @@ impl CollisionWorld {
         if !feet.is_finite() || !height.is_finite() || height < 1.0 {
             return None;
         }
-        let (pose, capsule) = body(feet, height);
+        let (pose, capsule) = body(feet, self.collision_height.unwrap_or(height));
         // Inside a closed door, or crossing a thin one's faces (a
         // portcullis's bars, one plane, come down through the body).
         let inside = |mesh: &CollisionMesh| {
@@ -676,6 +714,32 @@ impl CollisionWorld {
         nearest
     }
 
+    /// Clearance for a manual duck-to-stand transition (Titanium 0x483556,
+    /// Mac 0x50be3c): the new posture's strict room test, then ceiling minus
+    /// origin at least S. These rays approximate the programs' probe shapes;
+    /// this helper does not install a headroom gate on movement.
+    #[must_use]
+    pub fn posture_clearance(&self, origin: Vec3, stand_height: f32, room: f32) -> bool {
+        const REACH: f32 = 32_767.0;
+        if !origin.is_finite() || !stand_height.is_finite() || !room.is_finite() {
+            return false;
+        }
+        let up = Ray::new(Vector::from_array(origin.to_array()), Vector::Y);
+        let ceiling = self
+            .labelled_wall_meshes()
+            .filter(|(obstacle, _)| !matches!(obstacle, Obstacle::Carrier(_)))
+            .filter_map(|(_, mesh)| mesh.cast_ray(&up, REACH, false))
+            .min_by(f32::total_cmp)
+            .map(|distance| origin.y + distance);
+        let Some(ceiling) = ceiling else {
+            return true;
+        };
+        let fits = self
+            .solid_ground(origin, 0.0, REACH)
+            .is_none_or(|floor| ceiling <= floor || ceiling - floor > room);
+        fits && ceiling - origin.y >= stand_height
+    }
+
     /// Signed distance from the character's collision capsule to the nearest solid
     /// within `range`; a negative value is how deep the capsule overlaps it.
     pub fn clearance(&self, feet: Vec3, height: f32, range: f32) -> Option<f32> {
@@ -687,7 +751,7 @@ impl CollisionWorld {
         {
             return None;
         }
-        let (pose, capsule) = body(feet, height);
+        let (pose, capsule) = body(feet, self.collision_height.unwrap_or(height));
         self.wall_meshes()
             .filter_map(|mesh| {
                 contact(&pose, &capsule, &mesh.pose, mesh.mesh, range)
@@ -1083,7 +1147,7 @@ impl CollisionWorld {
             stop_at_penetration: false,
             compute_impact_geometry_on_penetration: true,
         };
-        let (pose, capsule) = body(feet, height);
+        let (pose, capsule) = body(feet, self.collision_height.unwrap_or(height));
         let mut nearest: Option<(Obstacle, parry3d::query::ShapeCastHit)> = None;
         for (obstacle, mesh) in self.labelled_wall_meshes() {
             let hit = cast_shapes(
@@ -1125,6 +1189,95 @@ pub fn displacement(direction: Vec3, speed: f32, seconds: f32) -> Vec3 {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ducked_capsule_keeps_its_radius_and_bottom_and_never_undercuts_the_sphere() {
+        let standing = 6.677_319_5;
+        let height = ducked_height(3.75, 5.25, 0.65, standing);
+        let (pose, capsule) = body(Vec3::ZERO, height);
+        assert_eq!(capsule.radius.to_bits(), CAPSULE_RADIUS.to_bits());
+        assert!((pose.translation.y - height * 0.5 - LIFT).abs() < 1e-6);
+        assert!((height + LIFT - 5.25).abs() < 1e-6);
+        assert!(ducked_height(3.75, 3.8, 0.65, standing) + LIFT >= 3.75 + 0.65);
+        assert_eq!(
+            ducked_height(f32::NAN, 5.25, 0.65, standing).to_bits(),
+            standing.to_bits()
+        );
+    }
+
+    #[test]
+    fn a_ducked_sweep_refuses_the_exact_top_and_passes_just_above_it() {
+        let standing = 6.677_319_5;
+        let height = ducked_height(3.75, 5.25, 0.65, standing);
+        let make = |ceiling| {
+            let mut triangles = floor(0.0);
+            triangles.extend([
+                [
+                    [0.0, ceiling, -20.0],
+                    [20.0, ceiling, 20.0],
+                    [20.0, ceiling, -20.0],
+                ],
+                [
+                    [0.0, ceiling, -20.0],
+                    [0.0, ceiling, 20.0],
+                    [20.0, ceiling, 20.0],
+                ],
+            ]);
+            CollisionWorld::new(triangles).unwrap()
+        };
+        let start = Vec3::new(-2.0, 0.0, 0.0);
+        for (ceiling, passes) in [(5.25, false), (5.30, true)] {
+            let world = make(ceiling);
+            let ducked = world.clone().with_collision_height(height);
+            let next = ducked.step(start, Vec3::X * 4.0, standing);
+            assert_eq!(next.x > 1.5, passes, "{ceiling}: {next:?}");
+            let unchanged = world.step(start, Vec3::X * 4.0, standing);
+            assert!(unchanged.x < 0.0, "standing {ceiling}: {unchanged:?}");
+        }
+    }
+
+    #[test]
+    fn manual_posture_clearance_is_strict_and_also_checks_room_above_the_origin() {
+        let make =
+            |ceiling| CollisionWorld::new(floor(0.0).into_iter().chain(floor(ceiling))).unwrap();
+        assert!(!make(8.0).posture_clearance(Vec3::Y * 3.75, 3.75, 8.0));
+        assert!(make(8.001).posture_clearance(Vec3::Y * 3.75, 3.75, 8.0));
+        // The total gap passes, but less than S remains above this origin.
+        assert!(!make(10.0).posture_clearance(Vec3::Y * 8.0, 3.75, 8.0));
+    }
+
+    #[test]
+    fn a_collision_height_override_preserves_liquid_probes_and_world_snapshots() {
+        let standing = 6.677_319_5;
+        let world = CollisionWorld::new(floor(0.0))
+            .unwrap()
+            .with_liquids(liquids::Boxes(vec![(
+                Vec3::splat(-20.0),
+                Vec3::new(20.0, 5.0, 20.0),
+                Liquid::Water,
+            )]));
+        let ducked = world
+            .clone()
+            .with_collision_height(ducked_height(3.75, 5.25, 0.65, standing));
+        assert_eq!(
+            world.guard_view(Vec3::ZERO, standing),
+            ducked.guard_view(Vec3::ZERO, standing)
+        );
+        assert_eq!(
+            world.origin_in_liquid(Vec3::ZERO, standing),
+            ducked.origin_in_liquid(Vec3::ZERO, standing)
+        );
+        assert_eq!(
+            ducked.without_doors(&[]).collision_height,
+            ducked.collision_height
+        );
+        assert_eq!(
+            ducked.near(Vec3::ZERO, 20.0).collision_height,
+            ducked.collision_height
+        );
+        assert!(world.collision_height.is_none());
+    }
+
     fn floor(y: f32) -> Vec<[[f32; 3]; 3]> {
         vec![
             [[-20.0, y, -20.0], [20.0, y, -20.0], [20.0, y, 20.0]],

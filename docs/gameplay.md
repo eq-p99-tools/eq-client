@@ -42,6 +42,33 @@ units, under every standing body's climb; a small body ducking, or with its
 origin in water, climbs less than that, so a route may lead it to an edge
 its walk refuses until it stands or leaves the water.
 
+Ducking lowers the movement collision top to the program's ducked room:
+S + 1.5 on Titanium, S + 0.5 on Mac, where S is the model's stand height
+including the zone's classic scale. The existing capsule radius and base
+lift stay the same, and the top never undercuts S plus the estimated native
+sphere radius, shared with the standing sweep (0.65 for this human). This
+raises Mac's mapped top to S + 0.65; the Mac sphere bound remains inferred. The
+needs and zero ducked lift are read in both programs; mapping their sphere
+or actor shape onto this client's capsule is ours. RoF2 uses Titanium's
+rule provisionally; its ducked sweep is unread. The standing shape,
+position origin and liquid probes do not change.
+
+A manual stand under a low ceiling silently keeps the player ducked and
+sends no posture request, whether pressed, typed or scripted. Titanium
+also tests a duck-to-sit request; Mac lets that sit through. The test uses
+the new posture's strict room requirement and needs at least S above the
+origin. The current floor and ceiling rays approximate the program's
+probe spheres. Automatic ducking and standing after a refused move belong
+to the separate headroom gate work.
+
+A ducked move stays ducked on Titanium and Mac, at the session's ducked
+speed grant. At jump launch the host makes one stand-clearance decision:
+room permits a stand before the jump and the standing shape in that frame;
+otherwise the jump launches ducked, with no posture request or chat line.
+The worker executes that answer rather than deciding a stand without geometry.
+The existing 500 ms standing-still wind-up and backward-jump cancellation
+remain separate; cancelling a wind-up when its duck is refused is still a gap.
+
 A standing Titanium jump or fall passes over an edge whose top the floor
 sweep reaches, 3.375 above the feet for a human of size 6, and lands on
 it with no vertical speed left, where the move ends on that top. A
