@@ -70,6 +70,11 @@ struct Arguments {
     #[arg(long, requires = "start_x", allow_negative_numbers = true, value_parser = finite)]
     start_z: Option<f32>,
 
+    /// Initial EQ heading (0 to 512, 0 north) for the offline viewer's
+    /// character and camera; north by default.
+    #[arg(long, requires = "start_x", value_parser = finite)]
+    start_heading: Option<f32>,
+
     /// Initial camera distance from the character.
     #[arg(long, value_parser = distance)]
     camera_distance: Option<f32>,
@@ -185,6 +190,12 @@ struct Arguments {
     /// window's quality-of-life page wins over this.
     #[arg(long)]
     auto_eat_anything: bool,
+
+    /// Start with Better Water on (the Options window's quality-of-life
+    /// page): water and lava drawn with flowing motion, reflections and
+    /// depth. A character's own choice there wins over this.
+    #[arg(long)]
+    better_water: bool,
 
     /// Hide placed objects to inspect terrain and material transitions.
     #[arg(long)]
@@ -765,7 +776,7 @@ fn viewer_config(
                 x,
                 y,
                 z: arguments.start_z.unwrap_or(0.0),
-                heading: 0.0,
+                heading: arguments.start_heading.unwrap_or(0.0),
             }),
         start_height_known: arguments.start_z.is_some(),
         camera_distance: arguments.camera_distance,
@@ -782,6 +793,11 @@ fn viewer_config(
                 eq_client_core::qol::Fix::SkipModifiedFood,
                 !arguments.auto_eat_anything,
             );
+            if arguments.better_water {
+                defaults
+                    .qol
+                    .set(eq_client_core::qol::Fix::BetterWater, true);
+            }
             defaults
         },
         max_fps: arguments

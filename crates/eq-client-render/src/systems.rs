@@ -607,6 +607,7 @@ pub(super) fn install_overlays(app: &mut App) {
     paperdoll::register(app);
     crate::creation_preview::register(app);
     entities::outline::register(app);
+    crate::water::register(app);
     app.add_systems(
         Update,
         (profile_files::follow, map::follow_landmarks)

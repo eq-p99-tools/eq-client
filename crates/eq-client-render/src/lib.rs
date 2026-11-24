@@ -144,6 +144,7 @@ mod trade;
 mod tradeskills;
 mod training;
 mod translocate;
+mod water;
 mod weather;
 mod whereabouts;
 mod who;
@@ -892,6 +893,24 @@ fn spawn_static_zone(
     materials: &mut Assets<StandardMaterial>,
 ) {
     let texture_images = create_texture_images(zone.textures, images);
+    // Which drawn terrain is the top of water or lava, for Better Water.
+    let solid = water::solid_centroids(&zone.collision);
+    let surfaces: Vec<_> = zone
+        .primitives
+        .iter()
+        .enumerate()
+        .filter(|(_, primitive)| gpu_assets::drawn(primitive))
+        .map(|(index, primitive)| {
+            water::surface_liquid(primitive, &zone.regions, &solid).map(|liquid| {
+                let (frames, frame_millis) = gpu_assets::opaque_frames(
+                    primitive.texture,
+                    zone.terrain_materials.get(index),
+                    &texture_images,
+                );
+                water::WaterSurface::new(liquid, frames, frame_millis)
+            })
+        })
+        .collect();
     let mut lights = lighting::SceneLights::new(
         zone.short_name,
         zone.point_lights,
@@ -925,7 +944,9 @@ fn spawn_static_zone(
         meshes,
         materials,
     );
-    for (draw, (light, positions, normals, additive)) in terrain.into_iter().zip(lit_terrain) {
+    for ((draw, (light, positions, normals, additive)), surface) in
+        terrain.into_iter().zip(lit_terrain).zip(surfaces)
+    {
         let placed_at = (normals.len() == positions.len()).then_some((positions, normals));
         lights.meshes.push(lighting::LitMesh {
             mesh: draw.mesh.clone(),
@@ -940,6 +961,9 @@ fn spawn_static_zone(
         ));
         if let Some(animation) = draw.animation {
             entity.insert(animation);
+        }
+        if let Some(surface) = surface {
+            entity.insert(surface);
         }
     }
 
