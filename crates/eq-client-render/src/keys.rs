@@ -23,6 +23,8 @@ pub(crate) mod search;
 pub(crate) enum Act {
     /// Opens or closes a window.
     Toggle(WindowId),
+    /// Switches between borderless fullscreen and the previous windowed bounds.
+    Fullscreen,
     TargetSelf,
     TargetNext,
     TargetPrevious,
@@ -98,6 +100,7 @@ impl Act {
             Self::Toggle(WindowId::Spellbook) => "Spellbook",
             Self::Toggle(WindowId::Options) => "Options Window",
             Self::Toggle(window) => return format!("{window:?} Window"),
+            Self::Fullscreen => "Toggle Fullscreen",
             Self::TargetSelf => "Target Self",
             Self::TargetNext => "Target Next",
             Self::TargetPrevious => "Target Previous",
@@ -142,7 +145,7 @@ impl Act {
     /// The key list's group for it.
     pub(crate) const fn group(self) -> KeyGroup {
         match self {
-            Self::Toggle(_) => KeyGroup::Ui,
+            Self::Toggle(_) | Self::Fullscreen => KeyGroup::Ui,
             Self::TargetSelf | Self::TargetNext | Self::TargetPrevious => KeyGroup::Target,
             Self::Consider | Self::Hail | Self::Attack | Self::Loot | Self::Trade | Self::Use => {
                 KeyGroup::Commands
@@ -197,7 +200,6 @@ impl Chord {
         }
     }
 
-    #[cfg(test)]
     pub(crate) const fn alt(key: KeyCode) -> Self {
         Self {
             alt: true,
@@ -495,6 +497,7 @@ impl KeyMap {
                 .filter(|chord| !reserved.contains(chord));
             entry.insert([fallback.next(), fallback.next()]);
         }
+        read.insert(Act::Fullscreen, [Some(Chord::alt(KeyCode::Enter)), None]);
         Self(read)
     }
     /// Every action with its keys, in the key map's order.
@@ -761,6 +764,40 @@ impl Keys<'_, '_> {
     /// A fresh press of the action, while the game has the keyboard.
     pub(crate) fn pressed(&self, act: Act) -> bool {
         self.focused() && self.map.just_pressed(&self.input, act, &self.presses)
+    }
+
+    /// Desktop chords work in text fields and before world entry. Return the
+    /// physical edges they own, including repeats, and whether one is fresh.
+    pub(crate) fn desktop_input(
+        &self,
+        act: Act,
+        events: &[&KeyboardInput],
+    ) -> (Vec<KeyCode>, bool) {
+        let mut claimed = Vec::new();
+        let mut fresh = false;
+        if self.window_focused() && !self.typing.rebinding {
+            for chord in self.map.bound(act) {
+                let plain_text = !chord.ctrl
+                    && !chord.alt
+                    && events.iter().any(|event| {
+                        event.key_code == chord.key
+                            && event.text.as_ref().is_some_and(|text| {
+                                text.chars().any(|character| !character.is_control())
+                            })
+                    });
+                if (!self.focused() && plain_text) || !self.presses.matches(chord, &self.input) {
+                    continue;
+                }
+                let relevant = |event: &&KeyboardInput| {
+                    event.state.is_pressed() && event.key_code == chord.key
+                };
+                let repeated_only = events.iter().any(relevant)
+                    && !events.iter().any(|event| relevant(event) && !event.repeat);
+                claimed.push(chord.key);
+                fresh |= !repeated_only;
+            }
+        }
+        (claimed, fresh)
     }
 
     /// The first of these actions freshly pressed, while the game has the
