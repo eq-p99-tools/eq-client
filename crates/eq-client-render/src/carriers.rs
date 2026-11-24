@@ -47,6 +47,8 @@ struct Visual {
 
 /// Admission-scoped actor loads, children and scaled geometry. Failed loads
 /// retain the ordinary spawn's marker and never fabricate collision.
+/// These actor assets and BVHs are memory-only; the navigation disk cache
+/// contains static zone geometry, not spawned carrier instances.
 #[derive(Resource, Default)]
 pub(super) struct Scene {
     admission: Option<u64>,
@@ -63,8 +65,9 @@ struct CachedCollider {
     mesh: Option<Arc<CollisionMesh>>,
 }
 
-/// Scale changes rebuild the geometry once. Each moving frame only places
-/// that same BVH at the shared carrier pose; no world-space triangle baking.
+/// An incarnation, tag or scale change rebuilds the geometry once, including
+/// a failed build. Each moving frame reuses that result and only places the
+/// same BVH at the shared carrier pose; no world-space triangle baking.
 fn cached_collider(
     cache: &mut BTreeMap<u16, CachedCollider>,
     sample: eq_client_core::movement::CarrierSample,
@@ -83,6 +86,11 @@ fn cached_collider(
         let mesh = CollisionMesh::new(model.collision.iter().map(|triangle| {
             triangle.map(|point| (Vec3::from_array(point) * transform.scale).to_array())
         }))
+        .inspect_err(|error| {
+            warn!(spawn_id = sample.spawn_id, tag, triangles = model.collision.len(), %error,
+                "Could not build carrier collision");
+            eq_client_core::gaps::unshown("Carrier collision mesh could not be built");
+        })
         .ok()
         .map(Arc::new);
         cache.insert(
