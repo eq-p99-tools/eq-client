@@ -7,10 +7,15 @@
   - **A key that isn't set follows the server's expansion mask,** as the program's default does: on where it has Luclin or Planes of Power (bit 0x4 or 0x8), classic where it hasn't or no mask came. So on P99 (Kunark and Velious) a missing key is classic. The program also writes `TRUE` back to its ini where it counts a key on; this client never writes the official ini.
   - **A set key decides on every server, a stated departure.** The program draws classic whatever the keys say where the mask lacks those bits. This client follows a set key everywhere, P99 included.
   - **`[Defaults] AllLuclinPcModelsOff`** turns every race classic but Vah Shir.
-  - **Fallbacks:** when a race's own key is off, Human also takes Erudite's, and Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's.
+  - **Fallbacks:** when a race's own key is off, Human also takes Erudite's, and Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's. A missing fallback key counts by the same mask rule.
   - **Vah Shir** follows its own key alone, past the all-off key, and is on when unset whatever the mask.
   - **Froglok stays classic,** since the program's loader doesn't walk it.
   - **The options file** keeps the keys set on as `luclin_models = ...`, the keys set off as `classic_models = ...`, and `all_luclin_models_off`. A code in both lines is off. A file's keys lie over eqclient.ini's, key by key.
+- A gem cast short of mana goes to the server, as the Titanium program's
+  does: it compares no mana before it sends the cast, and never prints the
+  low-mana line itself (read R49-34 g, slice G, G5). Before, this client
+  refused it locally with line 199. The server's answer prints as it
+  arrives, in whatever words it uses, and ends the cast's hold.
 - `/guildstatus` answers on the Mac-era client as its program does (checklist 6.623, TAKP program read 6.575m: 0x4f4bb1 and 0x52f36b). It is local only and sends nothing. It uses the same string ids as Titanium's, colour 0x111:
   - Unlike Titanium, it answers for any spawn but a corpse, so an NPC is answered (usually as not in a guild).
   - The line for a rank past the three (12259, 0x2fe3) also names the guild.
@@ -50,8 +55,8 @@
   still left to the server, as only spells with the record's +0x1fc byte
   clear need standing and that byte isn't mapped; the same byte holds back
   0xd4 (a song while lying). The global recast the click also tests isn't
-  kept here. The local mana check stays for now: the program has none
-  (read R49-34 g), and dropping it is with the reviewer.
+  kept here. The program has no local mana check (read R49-34 g); the G5
+  entry above takes this client's out.
 - Velious water's cold as the Titanium program reports it (reads R49-3 b, R49-3c, R49-3d and R49-26; checklist 6.491d). It needs eq-network's #418 cold report and #424's event saves, which main's eq-network pin already carries, so it has no repin of its own.
   - Each zone region keeps the program's kind for its tag (`RegionKind`: 5 water, 6 slime, 7 lava, 8 Velious water, 9 and 10 the other waters), with `ZoneRegions::kind_at`. The breathing medium is now derived from it, as before for every tag.
   - With the body's origin in Velious water, the once-a-second feet check lava's heat uses reports cold, type 246, by the cold total: 50 − cold / 3, floor 10. A check reports one feet hazard at most, and only where the session offers `ColdWater`.
