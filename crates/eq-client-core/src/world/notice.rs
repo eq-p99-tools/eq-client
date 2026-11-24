@@ -167,15 +167,71 @@ impl Notice {
         match self {
             Self::ServerString { message_type, .. } => *message_type,
             // The program prints the song stop's line in colour 0x108.
-            Self::SongStopped { .. } => Some(SONG_STOP_COLOUR),
+            // And every line of `OP_InterruptCast`'s print tail (0x45e233,
+            // read R49-51b).
+            Self::SongStopped { .. }
+            | Self::CastInterrupted {
+                print:
+                    InterruptPrint::Titanium
+                    | InterruptPrint::TitaniumBard
+                    | InterruptPrint::TitaniumOther(_),
+                ..
+            }
+            | Self::OtherCastInterrupted {
+                print:
+                    InterruptPrint::Titanium
+                    | InterruptPrint::TitaniumBard
+                    | InterruptPrint::TitaniumOther(_),
+                ..
+            } => Some(SONG_STOP_COLOUR),
             _ => None,
         }
     }
 }
 
 /// The colour the program prints a song stop's line in (0x40f06d, read
-/// R49-21).
+/// R49-21), and every interruption line (0x45e233, read R49-51b).
 const SONG_STOP_COLOUR: u32 = 0x108;
+
+/// How the program prints an interruption the server names
+/// (`OP_InterruptCast`'s print tail 0x45e233, reads R49-51 and R49-51b).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum InterruptPrint {
+    /// An unread program: this client's default colour, and no filter.
+    Unread,
+    /// The Titanium program, the player's own line, not a Bard's: colour
+    /// 0x108, always shown.
+    Titanium,
+    /// The Titanium program, the player's own line as a Bard: colour 0x108,
+    /// hidden by filter 9 (Bard songs) at its last option, as the song
+    /// stop's line.
+    TitaniumBard,
+    /// The Titanium program, another caster's line: colour 0x108, behind
+    /// the filter for who they are (read R49-51b, values R49-48 e).
+    TitaniumOther(OtherCaster),
+}
+
+/// Who another caster is, for the Titanium program's interruption filters
+/// (`OP_InterruptCast`'s print tail 0x45e233, read R49-51b).
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum OtherCaster {
+    /// A Bard (class 8), player or not: filter 9 (Bard songs).
+    Bard {
+        /// Whether they are in the player's group.
+        grouped: bool,
+    },
+    /// Another player: filter 7 (other players' spells).
+    Player {
+        /// Whether they are in the player's group.
+        grouped: bool,
+    },
+    /// An NPC: filter 8 (NPCs' spells).
+    Npc,
+    /// A spawn this client doesn't know: the program looks the named spawn
+    /// up (0x401b28), and what it prints for one it doesn't find is
+    /// unread, so the line shows (inferred).
+    Unknown,
+}
 
 /// Something to tell the player.
 #[derive(Clone, Debug, PartialEq)]
@@ -304,6 +360,17 @@ pub enum Notice {
         /// The client's own words for it.
         said: String,
     },
+    /// The server's answer to a surname request, shown whenever it comes
+    /// as the Titanium program shows it (read R49-10): no request of ours
+    /// gates it.
+    SurnameAnswer {
+        /// Whether the server took it.
+        accepted: bool,
+        /// The player's own name, which the taken line names first.
+        name: String,
+        /// The surname the answer names.
+        last_name: String,
+    },
     /// A bandaging started or ended.
     BindWound(crate::bind_wound::BindWoundUpdate),
     /// Sense Heading: the compass point the player faces, clockwise from
@@ -325,6 +392,30 @@ pub enum Notice {
         /// The official client's string for it, in `eqstr_us.txt`.
         string_id: Option<u32>,
     },
+    /// A poison was not put on, and why, worded as
+    /// [`Notice::ConsumeRefused`].
+    ApplyPoisonRefused {
+        /// Why, in the session's words.
+        reason: String,
+        /// The official client's string for it, in `eqstr_us.txt`.
+        string_id: Option<u32>,
+    },
+    /// A poison started going on: the player sat, and the session sends it
+    /// when the program's wait ends (read R49-1).
+    PoisonStarted {
+        /// The program's line for it, in `eqstr_us.txt` (0x305e).
+        string_id: u32,
+    },
+    /// A posture change stopped a poison before it was sent (read R49-1 d).
+    PoisonInterrupted {
+        /// The program's line for it, in `eqstr_us.txt` (0x30d1).
+        string_id: u32,
+    },
+    /// The server's answer to a poison put on: whether it took.
+    PoisonAnswered {
+        /// Whether it took.
+        applied: bool,
+    },
     /// A command to the pet was not sent, and why, worded as
     /// [`Notice::ConsumeRefused`].
     PetRefused {
@@ -341,7 +432,32 @@ pub enum Notice {
         value: u32,
     },
     /// A training request was not sent, and why.
-    TrainingRefused(String),
+    TrainingRefused {
+        /// This library's words for it.
+        reason: String,
+        /// The program's own line, where the session names one.
+        string_id: Option<u32>,
+        /// What that line names, in order. For the `EQMac` program's
+        /// mastered-language line (0x327e), the language's number.
+        arguments: Vec<String>,
+        /// Whether the world names the common tongue by its alternate name,
+        /// for a line that names a language; None until the world says.
+        common_alternate: Option<bool>,
+    },
+    /// A language practice the `EQMac` program resolves at once (read
+    /// 6.597): its line 0x2f22 for the language's first point, else 0x2f23,
+    /// naming the guildmaster and the language.
+    LanguagePracticed {
+        /// The guildmaster's name.
+        trainer: String,
+        /// The language's number.
+        language: u8,
+        /// Whether this was the language's first point.
+        first: bool,
+        /// Whether the world names the common tongue by its alternate name;
+        /// None until the world says.
+        common_alternate: Option<bool>,
+    },
     /// A training request or projection from the current admission.
     TrainingPractice(crate::training::PracticeUpdate),
     /// An answer to a resurrection was not sent, and why.
@@ -431,6 +547,8 @@ pub enum Notice {
     CastInterrupted {
         /// The official client's string for why, in `eqstr_us.txt`.
         string_id: u32,
+        /// How the program prints it.
+        print: InterruptPrint,
     },
     /// The player, or a spawn the player knows, died. No line comes from
     /// the server with the death, so the official client words it itself
@@ -569,6 +687,8 @@ pub enum Notice {
         string_id: u32,
         /// The caster's name, as the server sent it.
         caster: String,
+        /// How the program prints it.
+        print: InterruptPrint,
     },
     /// A line from the chat server's channels (recording checklist 6.509;
     /// how the official client words and colours each is pending read

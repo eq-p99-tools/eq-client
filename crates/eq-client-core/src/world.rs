@@ -45,7 +45,9 @@ pub use landings::Landing;
 pub use link::Link;
 pub use melody::{Melody, melody_gems};
 pub use motions::{CastDone, Motion};
-pub use notice::{ChannelLine, DuelNotice, ListingNotice, Notice, Party, YellBearing};
+pub use notice::{
+    ChannelLine, DuelNotice, InterruptPrint, ListingNotice, Notice, OtherCaster, Party, YellBearing,
+};
 pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
@@ -220,6 +222,16 @@ enum NpcConsider {
     ClassicLevel,
 }
 
+/// The chat server link as the session told it.
+#[derive(Clone, Copy, Debug, Default)]
+struct ChatLinkState {
+    /// How many times a link has taken the login, so the autojoin goes once
+    /// for each (read R49-12 c, checklist 6.616).
+    logins: u64,
+    /// Whether a link has taken the login and not ended since.
+    up: bool,
+}
+
 /// What the server has told the client, kept by one writer. Its fields go
 /// in order of how long they last: the connection's, the admission's, the
 /// character's, and the zone's, which leaving the zone forgets in one step.
@@ -358,6 +370,8 @@ pub struct ClientWorld {
     /// chat server's last list named them; kept across zones until the link
     /// ends or the character leaves the world.
     chat_channels: Vec<String>,
+    /// The chat server link's logins taken, and whether one is up.
+    chat_link: ChatLinkState,
     /// The book or note open to read.
     reading: Option<crate::books::BookText>,
     /// The tradeskill container whose combine waits for the server.
@@ -664,6 +678,20 @@ impl ClientWorld {
         &self.chat_channels
     }
 
+    /// How many times a chat server link has taken the login: a change says
+    /// a link has just come up.
+    #[must_use]
+    pub const fn chat_links_up(&self) -> u64 {
+        self.chat_link.logins
+    }
+
+    /// Whether a chat server link is up: it has taken the login and not
+    /// ended since.
+    #[must_use]
+    pub const fn chat_link_up(&self) -> bool {
+        self.chat_link.up
+    }
+
     /// Puts away the received equipment report.
     pub fn close_player_inspection(&mut self) {
         self.player_inspection = None;
@@ -751,11 +779,6 @@ impl ClientWorld {
                     self.liquid_hazards.revision = Some(*revision);
                 }
             }
-            // Poison news (eq-network #402, 6.493) waits on the client's
-            // poison change (eq-client #556); it answers nothing asked here.
-            WorldEvent::PoisonStarted { .. } | WorldEvent::PoisonInterrupted { .. } => {
-                news.ignored = true;
-            }
             // A Bard's song stopped, with the program's line for the stop
             // (0x40f06d, read R49-21).
             WorldEvent::SongStopped {
@@ -764,6 +787,12 @@ impl ClientWorld {
                 string_id,
             } => {
                 if self.accepts_reply(*session_id) {
+                    // The stop also resets the gems' timers (6.542).
+                    if let Some(player) = &self.player {
+                        self.casting
+                            .cooldowns
+                            .song_stopped(&player.memorized_spells);
+                    }
                     news.notices.push(Notice::SongStopped {
                         spell_id: *spell_id,
                         string_id: *string_id,
@@ -933,13 +962,6 @@ impl ClientWorld {
             WorldEvent::ZoneLineRejected { session_id, reason } => {
                 self.zone_line_refused(*session_id, reason, news);
             }
-            WorldEvent::SameZoneBoundary { session_id } => {
-                if self.accepts_reply(*session_id) {
-                    news.replies.push(Reply::SameZoneBoundary);
-                } else {
-                    news.ignored = true;
-                }
-            }
             WorldEvent::SameZoneRelocated(relocation) => {
                 self.same_zone_relocated(*relocation, now, news);
             }
@@ -971,6 +993,28 @@ impl ClientWorld {
                     && self.popup.as_ref().is_some_and(|offer| offer.serial == *serial)
                 {
                     self.popup = None;
+                }
+            }
+            // Another player looked at the player, on the Mac era (line
+            // 0x57c, %1 their name; always shown, the program's option for
+            // it being unread: 6.621). The words are ours where the
+            // installation lacks the line.
+            WorldEvent::InspectedBy {
+                session_id,
+                name,
+                string_id,
+                ..
+            } => {
+                if self.accepts_reply(*session_id) {
+                    let name = crate::entities::display_name(name);
+                    news.notices.push(Notice::ProgramLine {
+                        string_id: *string_id,
+                        said: format!("{name} inspects you."),
+                        arguments: vec![name],
+                        lines: Vec::new(),
+                    });
+                } else {
+                    news.ignored = true;
                 }
             }
             WorldEvent::PlayerInspection(view) => {
@@ -1053,12 +1097,7 @@ impl ClientWorld {
             // to a player, or the petitions in the queue, for a front end that
             // shows them. The server's regeneration tick waits for its own.
             // Installed spell providers consume table facts before admission staging.
-            // Apply Poison's answer (eq-client #556) and the surname's
-            // answer take their arms in those threads' rebuilds.
-            unshown @ (WorldEvent::PoisonAnswered(_)
-            | WorldEvent::ApplyPoisonRefused { .. }
-            | WorldEvent::SurnameAnswer { .. }
-            | WorldEvent::SpellTable(_)
+            unshown @ (WorldEvent::SpellTable(_)
             | WorldEvent::ChatServer(_)
             | WorldEvent::ZoneUnavailable { .. }
             | WorldEvent::ServerTick(_)
@@ -1322,6 +1361,20 @@ impl ClientWorld {
                 }
             }
             WorldEvent::LastName { name, last_name } => self.last_name(name, last_name),
+            // The name tag follows the zone's own last-name update, not this.
+            WorldEvent::SurnameAnswer {
+                accepted,
+                last_name,
+            } => match &self.player {
+                Some(player) if self.session_id.is_some() => {
+                    news.notices.push(Notice::SurnameAnswer {
+                        accepted: *accepted,
+                        name: player.name.clone(),
+                        last_name: last_name.clone(),
+                    });
+                }
+                _ => news.ignored = true,
+            },
             // The titles the player may choose: kept, the latest replacing
             // the one before, only where the session offers them, until the
             // zone changes.
@@ -1585,8 +1638,12 @@ impl ClientWorld {
             // The chat server's channels (recording checklist 6.509).
             WorldEvent::Channel(event) => self.channel_event(event, news),
             WorldEvent::ChannelLink(link) => match link {
-                eq_network_game::chat_server::ChannelLink::Up => {}
+                eq_network_game::chat_server::ChannelLink::Up => {
+                    self.chat_link.logins = self.chat_link.logins.wrapping_add(1);
+                    self.chat_link.up = true;
+                }
                 eq_network_game::chat_server::ChannelLink::Lost { .. } => {
+                    self.chat_link.up = false;
                     self.chat_channels.clear();
                     news.notices.push(Notice::Channel(ChannelLine::Lost));
                 }
@@ -1690,6 +1747,51 @@ impl ClientWorld {
                     news.notices.push(Notice::ConsumeRefused {
                         reason: reason.clone(),
                         string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            WorldEvent::ApplyPoisonRefused {
+                session_id,
+                reason,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    news.notices.push(Notice::ApplyPoisonRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The wait the session runs before it sends (read R49-1).
+            WorldEvent::PoisonStarted { session_id, string_id, .. }
+            | WorldEvent::PoisonInterrupted {
+                session_id,
+                string_id,
+            } => {
+                if self.session_id == Some(*session_id) {
+                    let started = matches!(event, WorldEvent::PoisonStarted { .. });
+                    news.notices.push(if started {
+                        Notice::PoisonStarted {
+                            string_id: *string_id,
+                        }
+                    } else {
+                        Notice::PoisonInterrupted {
+                            string_id: *string_id,
+                        }
+                    });
+                } else {
+                    news.ignored = true;
+                }
+            }
+            // The server's own inventory record takes the poison out.
+            WorldEvent::PoisonAnswered(answer) => {
+                if self.in_world() {
+                    news.notices.push(Notice::PoisonAnswered {
+                        applied: answer.applied,
                     });
                 } else {
                     news.ignored = true;
@@ -1898,9 +2000,31 @@ impl ClientWorld {
             }
             // Training at a guildmaster, and the practice points it spends.
             WorldEvent::Training(update) => self.training_news(update, news),
-            WorldEvent::TrainingRefused { session_id, reason } => {
+            WorldEvent::TrainingRefused {
+                session_id,
+                reason,
+                string_id,
+                arguments,
+            } => {
                 if self.session_id == Some(*session_id) {
-                    news.notices.push(Notice::TrainingRefused(reason.clone()));
+                    // The coin line (0x2f21) names the guildmaster, shown
+                    // as the program shows a spawn's name.
+                    let arguments = if *string_id == Some(0x2f21) {
+                        arguments
+                            .iter()
+                            .map(|name| crate::entities::display_name(name))
+                            .collect()
+                    } else {
+                        arguments.clone()
+                    };
+                    news.notices.push(Notice::TrainingRefused {
+                        reason: reason.clone(),
+                        string_id: *string_id,
+                        arguments,
+                        common_alternate: self
+                            .language_zero_selector
+                            .map(crate::rules::LanguageZeroSelector::alternate_name),
+                    });
                 } else {
                     news.ignored = true;
                 }
@@ -1926,8 +2050,28 @@ impl ClientWorld {
             WorldEvent::CastLateBegin { session_id, requested_spell } => {
                 self.cast_late_begin(*session_id, *requested_spell, news);
             }
-            WorldEvent::CastSuperseded { session_id, spell_id } => {
+            // A superseded cast, or one the Titanium program's own hit roll
+            // cleared locally (mode 1 of 0x40f8a0, read R49-50; 6.645 S2):
+            // the bar drops, with no line.
+            WorldEvent::CastSuperseded { session_id, spell_id }
+            | WorldEvent::CastCleared { session_id, spell_id } => {
                 news.ignored = !self.release_cast_hold(*session_id, *spell_id);
+            }
+            // The program's own stun roll was saved by a stun resist (read
+            // R49-50; 6.646): its line, in colour 10.
+            WorldEvent::StunSaved {
+                session_id,
+                string_id,
+            } => {
+                if self.accepts_reply(*session_id) && self.death.is_none() {
+                    news.notices.push(Notice::ServerString {
+                        id: *string_id,
+                        arguments: Vec::new(),
+                        message_type: Some(STUN_SAVED_COLOUR),
+                    });
+                } else {
+                    news.ignored = true;
+                }
             }
             WorldEvent::Singing { session_id, spell_id } => {
                 if self.accepts_reply(*session_id) {
@@ -2131,6 +2275,38 @@ impl ClientWorld {
                 own: own(),
                 opponent: name(opponent),
             },
+            // The Mac era's `/decline` answers (6.622). This client offers
+            // no `/decline` yet, so these come only once it does; the
+            // program's lines, in our words where the installation lacks
+            // them.
+            DuelNews::Declining { challenger } => {
+                let challenger = name(challenger);
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33be,
+                    said: format!("You decline {challenger}'s challenge."),
+                    arguments: vec![challenger],
+                    lines: Vec::new(),
+                });
+                return;
+            }
+            DuelNews::NothingToDecline => {
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33bf,
+                    said: "You have no challenge to decline.".to_owned(),
+                    arguments: Vec::new(),
+                    lines: Vec::new(),
+                });
+                return;
+            }
+            DuelNews::DecliningWhileDueling => {
+                news.notices.push(Notice::ProgramLine {
+                    string_id: 0x33bd,
+                    said: "You can't decline while dueling.".to_owned(),
+                    arguments: Vec::new(),
+                    lines: Vec::new(),
+                });
+                return;
+            }
         };
         news.notices.push(Notice::Duel(notice));
     }
@@ -2296,6 +2472,7 @@ impl ClientWorld {
                 self.connected = false;
                 // A camp ends the chat server link.
                 self.chat_channels.clear();
+                self.chat_link.up = false;
             }
             Reset::Lost {
                 ended,
@@ -2329,6 +2506,7 @@ impl ClientWorld {
             self.pending_transfer = None;
             self.inventory = Inventory::default();
             self.chat_channels.clear();
+            self.chat_link.up = false;
             self.forget_zone();
         }
     }
@@ -2399,6 +2577,10 @@ mod tests;
 fn plain(name: &str) -> String {
     name.chars().filter(|c| !c.is_control()).collect()
 }
+
+/// The colour the Titanium program prints a stun save's line in (0x1679,
+/// 0x2375; read R49-50).
+const STUN_SAVED_COLOUR: u32 = 10;
 
 /// Whether a generation's program tells an incoming duel acceptance. The
 /// Titanium program has no case for 0x1b09 (read R49-6); the others are

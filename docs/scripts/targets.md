@@ -70,6 +70,8 @@ merchant action.
 - `filter kind`: a Filters page row's button by its kind's stable name, such as `ooc` or `bard_songs`: a click steps the row to its next choice, as the player's does.
 - `slider name percent` sets a slider by its position from 0 to 100 percent. Names include `clip_plane`, `max_fps`, `mouse_sensitivity`, `ui_scale`, `run_boost`, `sound_volume`, and `quantity`. On the QoL page, `click("slider", "run_boost", 50)` selects 1.20x and `click("slider", "run_boost", 100)` selects 1.40x.
 - `dropdown key_filter`: the options key-binding filter.
+- `dropdown bug_type`: the bug report window's category drop-down.
+- `report bug_text` or `report feedback_text`: the bug report or feedback window's text box, which then takes `press(...)` keys as a player's click does. The windows' buttons are `button bug-report ScreenID` (`LocationButton`, `DupButton`, `CrashButton`, `FlagsButton`, `TargetButton`, `CancelButton`, `SendButton`) and `button feedback FBKW_SendButton` or `FBKW_CancelButton`.
 - `choice number`: a dropdown choice counted from 1.
 - `chat_tab label`: a chat tab by its displayed label, ignoring case.
 

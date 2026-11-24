@@ -21,6 +21,21 @@ pub(super) struct GroundEntity {
     pick: Option<(Vec3, Vec3)>,
 }
 
+/// An item on the ground at its entity's origin, two units across, for
+/// other modules' tests.
+#[cfg(test)]
+pub(super) fn testing_item(drop_id: u32) -> GroundEntity {
+    GroundEntity {
+        object: GroundObject {
+            drop_id,
+            model: "IT63_ACTORDEF".into(),
+            position: eq_client_core::WorldPosition::default(),
+            object_type: 0,
+        },
+        pick: Some((Vec3::splat(-1.0), Vec3::ONE)),
+    }
+}
+
 fn placement(object: &GroundObject) -> Transform {
     Transform::from_translation(Vec3::from_array(eq_client_core::render_position(
         object.position,
