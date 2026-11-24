@@ -26,14 +26,21 @@ steps. The display interpolates accepted movement instead of waiting for each
 remote position update. Speed, elapsed time and admission checks constrain the
 outgoing requests; corrections replace the predicted position.
 
-A standing Titanium walk climbs onto an edge it runs into up to 1.25 above
-the body's origin, 5 units for a human of size 6, as the official client was
-seen to climb a pier rail and its posts. A ducking walk, or one whose
-origin is in water or lava, climbs only what the floor sweep reaches, and so
-do feet that land, fall or are placed under a floor. Wading with the origin
-above the water climbs as on dry ground. The tallest edge the official client climbs is
-unmeasured, so a taller one stops here even where it might not there. The
-body's width is unchanged (recording checklist 6.482).
+A standing Titanium walk climbs onto an edge it runs into. The official
+client sweeps the body as a sphere lifted over its origin, so an edge under the
+sphere's bottom passes beneath it (program reads R49-25 and R49-25b). The lift
+is at least 1.9, and half the stand height for barbarians, trolls and ogres.
+The sphere's radius isn't yet taken from the model files, so no body climbs
+more than 1.25 above its origin here, as a human of size 6 was seen to climb
+a pier rail and its 5-unit posts. A body taller than that human and not of
+those races climbs a little less. A ducking walk, or one whose origin is in
+water or lava, climbs only what the floor sweep reaches, and so do feet that
+land, fall or are placed under a floor. Wading with the origin above the water
+climbs as on dry ground. The body's width is unchanged (recording checklist
+6.482). The zone's navigation mesh is shared by every body and steps up to 2
+units, under every standing body's climb; a small body ducking, or with its
+origin in water, climbs less than that, so a route may lead it to an edge
+its walk refuses until it stands or leaves the water.
 
 A standing Titanium jump or fall passes over an edge whose top the floor
 sweep reaches, 3.375 above the feet for a human of size 6, and lands on
@@ -110,7 +117,13 @@ policies. P99 jump notices are capture-backed; Quarm's movement and transfers
 reuse the source-checked EQMac path. New public-server scenarios still need live
 verification. Physics uses installed-client
 rules and zone gravity where available, with an explicit provisional fallback
-when those data cannot be read. Project 1999 and Titanium EQEmu sessions
+when those data cannot be read. The original client slows a body in the air,
+and ramps the turn keys, once a rendered frame with no frame cap by default,
+so its falls and turns depend on the machine's frame rate. This client takes
+60 frames a second for both whatever its own frame rate, three of the
+program's frames in each 50 ms step (inferred, checklists 6.416 and 6.419):
+its falls and jumps go as the original's at 60, the same for every player,
+and never gentler than the original running faster. Project 1999 and Titanium EQEmu sessions
 offer bounded swimming in classic water marked by the installed zone.
 Wet movement starts when the character's body origin enters that region.
 On Titanium, water moves the body as the original client's own water step
@@ -967,6 +980,15 @@ ownership conflict invalidates the old snapshot for that ID.
 Camp uses timed preparation and acknowledgement where offered. The local
 `--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).
+
+A boat carries whoever stands or jumps over its deck. As in the Titanium
+program, the floor under the feet links the player to the boat however far
+down it is, so a jump on a moving ferry comes down on the deck where it
+left. Past 600 from the boat's origin the link ends, which is this
+client's bound, not the program's. Other players and NPCs on a moving boat
+are drawn moving with its deck between their reports, by their own motion
+across it, and one moving only up or down plays its jump or fall (read
+R49-27, recording checklist 6.611).
 
 On EQEmu, take a race-141 boat you stand on by right-clicking it, as the
 Titanium program does; right-click it again to let it go. A right-click on a

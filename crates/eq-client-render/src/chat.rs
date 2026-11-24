@@ -252,8 +252,8 @@ pub(super) struct ChatState {
     /// The words of a `/surname` typed or run, for [`super::surname::command`].
     pub(crate) surname_asked: Option<String>,
     /// A Ranger's tracking option typed by another class, for
-    /// [`super::tracking::say_rangers_only`] to answer.
-    pub(crate) rangers_only: Option<super::tracking::RangersOnly>,
+    /// [`super::tracking::answer_option`] to answer.
+    pub(crate) track_option: Option<super::tracking::TrackOption>,
     /// A `/loadskin` typed, for [`super::skin`] to load and answer.
     pub(crate) load_skin: Option<super::skin::LoadSkin>,
     /// A `/pet target`'s outcome, for [`super::pet::say_pet_target`] to say.
@@ -576,8 +576,8 @@ impl ChatState {
             boat_asked,
             boat_interacted,
             follow_asked,
+            track_option,
             surname_asked,
-            rangers_only,
             load_skin,
             pet_targeted,
             targeted_line,
@@ -644,8 +644,8 @@ impl ChatState {
         *boat_asked = None;
         *boat_interacted = None;
         *follow_asked = None;
+        *track_option = None;
         *surname_asked = None;
-        *rangers_only = None;
         *load_skin = None;
         *pet_targeted = None;
         *targeted_line = None;
@@ -2009,6 +2009,7 @@ fn submit_draft(
                 .active(state.groups.owner())
                 .unwrap_or_default();
             let Some(mut wire) = crate::commands::spelled(wire.trim()) else {
+                say_unknown(wire.trim(), world, state);
                 return Ok(());
             };
             match targeted(&wire, world) {
@@ -2082,6 +2083,19 @@ fn typed_report(
     Ok(())
 }
 
+/// Says the Titanium program's line for a slash word with no command for
+/// this player (read R49-33 a, 0x498b78, checklist 6.634), where the
+/// program says it.
+fn say_unknown(line: &str, world: &eq_client_core::world::ClientWorld, state: &mut ChatState) {
+    if crate::commands::unknown(line, world) {
+        state.report_lines.push(super::reports::ReportLine::new(
+            crate::commands::UNKNOWN_LINE,
+            crate::commands::UNKNOWN_COLOUR,
+            crate::commands::UNKNOWN_WORDS,
+        ));
+    }
+}
+
 /// Apply an ordinary typed line without changing the chat editor or focus.
 fn submit_line(
     line: &str,
@@ -2091,8 +2105,9 @@ fn submit_line(
     outbox: &crate::outbox::Outbox,
     qol: &Settings,
 ) -> Result<(), Unsent> {
-    // A word that resolves to nothing is passed over without a line.
+    // A word that resolves to nothing gets the program's line (6.634).
     let Some(command) = crate::commands::spelled(line) else {
+        say_unknown(line, online.world(), state);
         return Ok(());
     };
     // A report to the staff goes from a typed line, whoever types it: the
@@ -2128,8 +2143,8 @@ fn submit_line(
         state.follow_asked = Some(super::motion::FollowAsked);
         return Ok(());
     }
-    if super::tracking::rangers_only(&command, online.world()) {
-        state.rangers_only = Some(super::tracking::RangersOnly);
+    if let Some(option) = super::tracking::TrackOption::typed(&command) {
+        state.track_option = Some(option);
         return Ok(());
     }
     if let Some(request) = departure_request(&command) {
@@ -2313,6 +2328,7 @@ pub(super) fn run_game_command(
     qol: &Settings,
 ) {
     let Some(command) = crate::commands::spelled(command) else {
+        say_unknown(command, online.world(), chat);
         return;
     };
     let command = command.as_ref();
@@ -2329,8 +2345,8 @@ pub(super) fn run_game_command(
         chat.follow_asked = Some(super::motion::FollowAsked);
         return;
     }
-    if super::tracking::rangers_only(command, online.world()) {
-        chat.rangers_only = Some(super::tracking::RangersOnly);
+    if let Some(option) = super::tracking::TrackOption::typed(command) {
+        chat.track_option = Some(option);
         return;
     }
     if let Some(result) = super::pet::target_command(command, online, outbox) {
@@ -2550,19 +2566,17 @@ fn command_words<'a>(input: &'a str, name: &str) -> Option<&'a str> {
     typed.eq_ignore_ascii_case(name).then_some(words)
 }
 
-/// The name in a `/target Name` command; underscores match spaces as in spawn names.
+/// The name in a `/target Name` command, empty for none; underscores match
+/// spaces as in spawn names.
 pub(super) fn target_request(input: &str) -> Option<Result<String, String>> {
     let command = input.strip_prefix('/')?;
     let (name, rest) = command.split_once(' ').unwrap_or((command, ""));
     if !name.eq_ignore_ascii_case("target") {
         return None;
     }
-    let rest = rest.trim().replace('_', " ");
-    Some(if rest.is_empty() {
-        Err("Use /target Name".into())
-    } else {
-        Ok(rest)
-    })
+    // An empty name goes on too: the targeting system says the program's
+    // line for it (read R49-33 b).
+    Some(Ok(rest.trim().replace('_', " ")))
 }
 
 /// The name of the player the player targets, themself included; empty
@@ -3383,7 +3397,7 @@ mod tests {
             Some(Ok("a cave rat".into()))
         );
         assert_eq!(target_request("/TARGET Arias"), Some(Ok("Arias".into())));
-        assert!(target_request("/target  ").unwrap().is_err());
+        assert_eq!(target_request("/target  "), Some(Ok(String::new())));
         assert_eq!(target_request("/targetx rat"), None);
         assert_eq!(target_request("target rat"), None);
     }
@@ -4783,14 +4797,22 @@ mod tests {
             app.world_mut().resource_mut::<ChatState>().sharing_asked.take(),
             Some(super::super::sharing::Command::Split(coins)) if coins.platinum == 1
         ));
-        // A game master's command and a word that is no command are passed
-        // over: nothing is sent or said, and the line is spent.
-        let said = app.world().resource::<ChatState>().history.revision();
+        // A game master's command for a player who isn't one, and a word
+        // that is no command, send nothing and get the program's line
+        // 0x305c (6.634); the line is spent.
         for line in ["/zone qeynos", "/group hi", "/b"] {
             send_typed(&mut app, line);
             assert!(receiver.try_recv().is_err(), "{line}");
-            let chat = app.world().resource::<ChatState>();
-            assert_eq!(chat.history.revision(), said, "{line}");
+            let mut chat = app.world_mut().resource_mut::<ChatState>();
+            assert_eq!(
+                std::mem::take(&mut chat.report_lines),
+                [super::super::reports::ReportLine::new(
+                    crate::commands::UNKNOWN_LINE,
+                    crate::commands::UNKNOWN_COLOUR,
+                    crate::commands::UNKNOWN_WORDS,
+                )],
+                "{line}"
+            );
             assert!(chat.draft.text().is_empty(), "{line}");
         }
         // `/raid` is the Raid window's, which leaves the words aside.
@@ -5313,7 +5335,7 @@ mod tests {
         chat.boat_asked = Some(eq_client_core::boats::Intent::Acquire);
         chat.boat_interacted = Some(8);
         chat.follow_asked = Some(super::super::motion::FollowAsked);
-        chat.rangers_only = Some(super::super::tracking::RangersOnly);
+        chat.track_option = Some(super::super::tracking::TrackOption::Sort("d".into()));
         chat.pet_targeted = Some(super::super::pet::PetTargeted::Found);
         chat.local_setting = Some((
             super::super::local_settings::LocalSetting::ClearChat,
@@ -5332,7 +5354,7 @@ mod tests {
             && chat.boat_asked.is_none()
             && chat.boat_interacted.is_none()
             && chat.follow_asked.is_none()
-            && chat.rangers_only.is_none()
+            && chat.track_option.is_none()
             && chat.pet_targeted.is_none()
             && chat.local_setting.is_none()
             && chat.contacts.asked.is_none()
@@ -5411,6 +5433,77 @@ mod tests {
             ..default()
         });
         (app, tx)
+    }
+
+    #[test]
+    fn the_servers_answer_to_a_cast_short_of_mana_prints_as_it_comes_and_ends_the_hold() {
+        use eq_client_core::{SpellUpdate, WorldEvent, WorldUpdate};
+        // No cast is held back for mana here (read R49-34 g): the server
+        // judges it. EQEmu answers with its string 199 and an interruption;
+        // another server may answer in its own words after the cast began.
+        let interrupted = WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Interrupted {
+            caster_id: 7,
+            message_id: 0x1b7,
+            caster_name: None,
+        }));
+        let answered = WorldUpdate::Game(WorldEvent::CastPending {
+            session_id: 1,
+            spell_id: None,
+        });
+        let answers = [
+            (
+                vec![
+                    WorldUpdate::ServerMessage {
+                        string_id: 199,
+                        arguments: Vec::new(),
+                        message_type: Some(13),
+                    },
+                    interrupted.clone(),
+                    answered.clone(),
+                ],
+                "Synthetic short mana.",
+            ),
+            (
+                vec![
+                    answered,
+                    WorldUpdate::Game(WorldEvent::Spell(SpellUpdate::Began {
+                        caster_id: 7,
+                        spell_id: 73,
+                        duration_ms: 3000,
+                    })),
+                    WorldUpdate::Chat(system_line("Synthetic server words.")),
+                    interrupted,
+                ],
+                "Synthetic server words.",
+            ),
+        ];
+        for (answer, words) in answers {
+            let (mut app, tx) = received_chat_app();
+            app.insert_resource(crate::hud::messages::Messages::parse(
+                "EQST0002\n0 1\n199 Synthetic short mana.\n",
+            ));
+            tx.send(WorldUpdate::Game(WorldEvent::Mana(0))).unwrap();
+            tx.send(WorldUpdate::Game(WorldEvent::CastPending {
+                session_id: 1,
+                spell_id: Some(73),
+            }))
+            .unwrap();
+            app.update();
+            let casting = |app: &App| {
+                app.world()
+                    .resource::<crate::online::OnlineState>()
+                    .world()
+                    .casting()
+                    .holds_actions()
+            };
+            assert!(casting(&app));
+            for update in answer {
+                tx.send(update).unwrap();
+            }
+            app.update();
+            assert!(!casting(&app), "{words}");
+            assert!(shown(&mut app).iter().any(|line| line == words), "{words}");
+        }
     }
 
     #[test]

@@ -1,7 +1,8 @@
 //! Local-model presentation of server-defined doors. Door actions remain separate from placement.
 use bevy::prelude::*;
+use eq_client_core::doors::{DoorRadius, titanium::rider_reach};
 use eq_client_core::movement::CollisionMesh;
-use eq_client_core::{GameDialect, doors::Door};
+use eq_client_core::{ClientCommand, GameDialect, doors::Door};
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
@@ -15,6 +16,27 @@ pub(super) struct Model {
     pub primitives: Primitives,
     pub collision: Vec<[[f32; 3]; 3]>,
     pub pick: Vec<PickMesh>,
+    /// The model's radius at size 100, which measures a lift's riders
+    /// ([`rider_radius`]); None for a model with no geometry.
+    pub radius: Option<f32>,
+}
+
+/// A door model's radius at size 100: its WLD sprite's authored bounding
+/// radius where the archive gives one (read R49-28c/d: the program's is
+/// its door actor's definition radius, and that these fields are that
+/// radius is inferred), else the farthest point of its solid triangles from
+/// its origin, as for an EQG model, which the reads don't cover.
+pub(super) fn model_radius(authored: Option<f32>, collision: &[[[f32; 3]; 3]]) -> Option<f32> {
+    authored.or_else(|| {
+        Some(
+            collision
+                .iter()
+                .flatten()
+                .map(|point| Vec3::from_array(*point).length())
+                .fold(0.0, f32::max),
+        )
+        .filter(|radius| *radius > 0.0)
+    })
 }
 
 /// A door's solid triangles from its model's: the faces a placement of
@@ -223,8 +245,8 @@ impl DoorEntity {
         if let Some(fraction) = hinge {
             self.swing = open_swing(definition).unwrap_or(0.0) * fraction;
         } else if replaced {
-            self.swing = hinge_target(definition).unwrap_or(0.0);
-        } else if let Some(target) = hinge_target(definition) {
+            self.swing = hinge_target(definition, generation).unwrap_or(0.0);
+        } else if let Some(target) = hinge_target(definition, generation) {
             self.swing = advance_hinge(self.swing, target, seconds);
         }
         let (distance, slide) = slide_pose(
@@ -249,27 +271,131 @@ fn rise(lift: Option<f32>) -> Vec3 {
 }
 
 /// Where each Titanium lift the player may ride stands and how near the
-/// player must be for its motion to sweep them onto its floor: the door
-/// model's radius, scaled, plus the player's 10 and 200 (0x4368b3; the
-/// model's radius is inferred from its geometry, recording checklist 6.426).
+/// player must be for its motion to sweep them onto its floor: the player's
+/// 10, the door's [`rider_radius`] and 200 (0x4368b3, read R49-28 (b),
+/// recording checklist 6.426). The session measures by the same radius,
+/// which [`report_radii`] gives it.
 #[derive(Resource, Default)]
 pub(crate) struct LiftReach(pub BTreeMap<u8, (Vec3, f32)>);
 
-/// The radius of a door model at its size: the farthest point of its solid
-/// geometry from its origin; the program's 100 where it has none.
-fn reach_of(model: Option<&Model>, size: u16) -> f32 {
-    let radius = model
-        .map(|model| {
-            model
-                .collision
-                .iter()
-                .flatten()
-                .map(|point| Vec3::from_array(*point).length())
-                .fold(0.0, f32::max)
+/// How far from a door the program carries its riders: the door actor's
+/// radius times its scale times its model's own scale (reads R49-28 (b),
+/// R49-28c and R49-28d), or 100 with no actor. The model's radius is
+/// [`model_radius`]; its own scale (model +0x60) is unread and taken as 1,
+/// inferred.
+pub(super) fn rider_radius(model: Option<&Model>, door: &Door) -> f32 {
+    model
+        .and_then(|model| model.radius)
+        .map_or(100.0, |radius| radius * rider_scale(door))
+}
+
+/// A door actor's scale (0x48f826): its size over 100, a size of 0, below 0
+/// or 255 counting as 100. Open types 50 and 54, and 57 standing at its
+/// base, are built at scale 1 (actor virtual +0x18(1), read R49-28 (b)); a
+/// door is taken to stand at its base, as at spawn, inferred.
+fn rider_scale(door: &Door) -> f32 {
+    if matches!(door.open_type, 50 | 54 | 57) {
+        return 1.0;
+    }
+    match door.size.cast_signed() {
+        size if size <= 0 || size == 255 => 1.0,
+        size => f32::from(size) / 100.0,
+    }
+}
+
+/// Each door's [`rider_radius`] where its model is loaded, by door ID, as
+/// the session's lift carry takes it (`DoorRadii`), borrowed so that an
+/// unchanged frame allocates nothing.
+fn radii<'a>(
+    doors: &'a eq_client_core::doors::DoorTable,
+    models: &'a Models,
+) -> impl Iterator<Item = (u8, &'a str, f32)> + 'a {
+    doors.entries().values().filter_map(|door| {
+        let model = models.0.get(&model_key(&door.model))?;
+        model.radius?;
+        Some((
+            door.id,
+            door.model.as_str(),
+            rider_radius(Some(model), door),
+        ))
+    })
+}
+
+/// The radii last told to the session, by admission.
+pub(super) type Told = Option<(u64, Vec<DoorRadius>)>;
+
+/// Tells the session each door's rider radius, so that its lift carry and
+/// this client's agree on who rides: at each admission, and whenever the
+/// doors or their models change. A door the list leaves out keeps the
+/// program's no-actor reach on both sides. `EQMac`'s session keeps no lifts,
+/// as this client doesn't ([`LiftReach`] is filled only for a door with a
+/// lift), so nothing is told there.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn report_radii(
+    state: Res<super::online::OnlineState>,
+    models: Option<Res<Models>>,
+    outbox: Res<crate::outbox::Outbox>,
+    mut told: Local<Told>,
+) {
+    if let Some(models) = models {
+        tell_radii(state.world(), &models, &mut told, |radii| {
+            outbox.try_post(state.world(), |stamp| ClientCommand::DoorRadii {
+                session_id: stamp.session_id,
+                radii,
+            })
+        });
+    }
+}
+
+/// [`report_radii`]'s work, with the post given: compares the current radii
+/// with those told for this admission without allocating, and posts only a
+/// list that differs. A refusal that can't clear within the admission (the
+/// session doesn't offer doors, or the player is dead or the session ended)
+/// counts the list as told, so it isn't tried again each frame; one that can
+/// (not admitted yet, between zones, the queue full) is tried next frame.
+pub(super) fn tell_radii(
+    world: &eq_client_core::world::ClientWorld,
+    models: &Models,
+    told: &mut Told,
+    post: impl FnOnce(Vec<DoorRadius>) -> Result<(), crate::outbox::Refusal>,
+) {
+    match world.generation() {
+        eq_client_core::GameDialect::Titanium | eq_client_core::GameDialect::Rof2 => {}
+        eq_client_core::GameDialect::EqMac => return,
+    }
+    let Some(session) = world.session_id() else {
+        return;
+    };
+    let last = told
+        .as_ref()
+        .filter(|(admission, _)| *admission == session)
+        .map_or(&[][..], |(_, radii)| radii.as_slice());
+    let current = || radii(world.doors(), models);
+    if current().eq(last
+        .iter()
+        .map(|door| (door.door_id, door.model.as_str(), door.radius)))
+    {
+        return;
+    }
+    let radii: Vec<DoorRadius> = current()
+        .map(|(door_id, model, radius)| DoorRadius {
+            door_id,
+            model: model.to_owned(),
+            radius,
         })
-        .filter(|radius| *radius > 0.0)
-        .map_or(100.0, |radius| radius * f32::from(size) / 100.0);
-    10.0 + radius + 200.0
+        .collect();
+    // Only a refusal that may pass later in the admission leaves the list
+    // untold.
+    let passing = matches!(
+        post(radii.clone()),
+        Err(crate::outbox::Refusal::Offline
+            | crate::outbox::Refusal::NotAdmitted
+            | crate::outbox::Refusal::Away
+            | crate::outbox::Refusal::Busy)
+    );
+    if !passing {
+        *told = Some((session, radii));
+    }
 }
 
 /// How far each drawn hinged door has swung toward its open pose, from 0
@@ -280,13 +406,34 @@ pub(super) struct Hinges(pub BTreeMap<u8, f32>);
 /// A hinged door's swing: a quarter turn, in EQ heading units.
 pub(super) const QUARTER_TURN: f32 = eq_client_core::FULL_TURN / 4.0;
 
+/// Which end a door stands at or heads for, by its generation's rule:
+/// Titanium's mover ([`eq_client_core::doors::titanium::endpoint`]: a door
+/// spawned in state 1 or 2 opens from its base, read R49-28b), inferred for
+/// `RoF2` (6.489); `EQMac`'s server state as received.
+#[expect(
+    clippy::match_same_arms,
+    reason = "each RoF2 arm stays its own until a read of its program replaces it (6.489)"
+)]
+fn endpoint(door: &Door, generation: GameDialect) -> Option<bool> {
+    match generation {
+        GameDialect::Titanium => eq_client_core::doors::titanium::endpoint(door),
+        // Titanium's, inferred for RoF2 (6.489).
+        GameDialect::Rof2 => eq_client_core::doors::titanium::endpoint(door),
+        GameDialect::EqMac => door.active_endpoint(),
+    }
+}
+
 /// Hinged types turn a quarter of the way around, to opposite sides, from their
 /// placed heading. The turn is in EQ's own heading units, so it shows the right
 /// way round in the renderer like every other heading. Other mechanisms need
 /// their own motion.
-fn hinge_target(door: &Door) -> Option<f32> {
+fn hinge_target(door: &Door, generation: GameDialect) -> Option<f32> {
     let open = open_swing(door)?;
-    Some(if door.active_endpoint()? { open } else { 0.0 })
+    Some(if endpoint(door, generation)? {
+        open
+    } else {
+        0.0
+    })
 }
 
 /// How far a hinged door turns from its placed heading to stand open.
@@ -306,8 +453,8 @@ fn open_swing(door: &Door) -> Option<f32> {
 /// walked against. Its state now does not matter, since an open door shuts
 /// again on its own before the walker may reach it. Other mechanisms stay
 /// walls to a route.
-pub(super) fn swings(door: &Door) -> bool {
-    hinge_target(door).is_some()
+pub(super) fn swings(door: &Door, generation: GameDialect) -> bool {
+    hinge_target(door, generation).is_some()
 }
 
 /// Titanium's slides (type 15, and 78-81, which also rise or sink) move along
@@ -336,9 +483,7 @@ fn slide_pose(
     else {
         return (0.0, Vec3::ZERO);
     };
-    let target = door
-        .active_endpoint()
-        .map(|active| if active { slide.distance } else { 0.0 });
+    let target = endpoint(door, generation).map(|active| if active { slide.distance } else { 0.0 });
     let distance = match (previous, target) {
         (Some(current), Some(target)) => advance_toward(current, target, seconds, slide.speed),
         (Some(current), None) => current,
@@ -350,12 +495,17 @@ fn slide_pose(
     )
 }
 
-/// Cosmetic interpolation only, half a turn a second; this rate does not drive
-/// packets or claim original-client timing. A frame swings the hinge by at
-/// most a tenth of a second's turn, and the last one lands it exactly on its
-/// target, so a walk waiting for the swing to end sees it end.
+/// Heading units a hinged door (types 0-8) swings in a second, both ways:
+/// 8 a step of elapsed ms x 0.02, so a quarter turn in 0.8 s (0x4368b3,
+/// read R49-28b).
+const HINGE_SPEED: f32 = 8.0 * 20.0;
+
+/// A hinged door's swing toward `target` over a frame, at the program's
+/// rate; it drives no packets. A frame swings the hinge by at most a tenth
+/// of a second's turn, and the last one lands it exactly on its target, so a
+/// walk waiting for the swing to end sees it end.
 pub(super) fn advance_hinge(current: f32, target: f32, seconds: f32) -> f32 {
-    advance_toward(current, target, seconds, 2.0 * QUARTER_TURN)
+    advance_toward(current, target, seconds, HINGE_SPEED)
 }
 
 fn advance_toward(current: f32, target: f32, seconds: f32, speed: f32) -> f32 {
@@ -572,7 +722,10 @@ pub(super) fn reconcile(
                 let model = models.as_ref().and_then(|models| models.0.get(&door.model));
                 reach.0.insert(
                     door.id,
-                    (next.translation, reach_of(model, definition.size)),
+                    (
+                        next.translation,
+                        rider_reach(rider_radius(model, definition)),
+                    ),
                 );
             }
         }
@@ -596,7 +749,7 @@ pub(super) fn reconcile(
             .doors()
             .hinge_fraction(id)
             .and_then(|fraction| open_swing(door).map(|open| open * fraction))
-            .unwrap_or_else(|| hinge_target(door).unwrap_or(0.0));
+            .unwrap_or_else(|| hinge_target(door, generation).unwrap_or(0.0));
         if let Some(open) = open_swing(door) {
             hinges.0.insert(id, hinge_fraction(swing, open));
         }
@@ -611,7 +764,10 @@ pub(super) fn reconcile(
         if rideable(id) {
             reach.0.insert(
                 id,
-                (transform.translation, reach_of(Some(model), door.size)),
+                (
+                    transform.translation,
+                    rider_reach(rider_radius(Some(model), door)),
+                ),
             );
         }
         commands
@@ -645,6 +801,148 @@ pub(super) fn reconcile(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn model_with_radius(radius: Option<f32>) -> Model {
+        Model {
+            primitives: Vec::new(),
+            collision: Vec::new(),
+            pick: Vec::new(),
+            radius,
+        }
+    }
+
+    #[test]
+    fn a_door_model_measures_its_riders_by_its_authored_radius() {
+        let far = [[[0.0, 0.0, 0.0], [30.0, 0.0, 0.0], [0.0, 40.0, 0.0]]];
+        // The sprite's own radius wins over the geometry's 40.
+        assert_eq!(model_radius(Some(7.5), &far), Some(7.5));
+        // Without one, as an EQG model, the farthest solid point.
+        assert_eq!(model_radius(None, &far), Some(40.0));
+        assert_eq!(model_radius(None, &[]), None);
+    }
+
+    #[test]
+    fn a_doors_rider_radius_takes_the_programs_scale() {
+        let mut door = sliding_door();
+        door.open_type = 59;
+        let model = model_with_radius(Some(20.0));
+        let radius = |door: &Door| rider_radius(Some(&model), door);
+        door.size = 150;
+        assert!((radius(&door) - 30.0).abs() < 1e-4);
+        // A size of 0, 255 or below 0 counts as 100 (0x48f826).
+        for size in [0, 255, 0x8000, 0xffff] {
+            door.size = size;
+            assert_eq!(radius(&door), 20.0, "{size}");
+        }
+        // Types 50 and 54, and 57 at its base, are built at scale 1.
+        door.size = 300;
+        for open_type in [50, 54, 57] {
+            door.open_type = open_type;
+            assert_eq!(radius(&door), 20.0, "{open_type}");
+        }
+        door.open_type = 53;
+        assert!((radius(&door) - 60.0).abs() < 1e-4);
+        // With no model drawn, or one without geometry, the program's 100.
+        assert_eq!(rider_radius(None, &door), 100.0);
+        assert_eq!(rider_radius(Some(&model_with_radius(None)), &door), 100.0);
+        assert_eq!(rider_reach(rider_radius(None, &door)), 310.0);
+    }
+
+    /// A world admitted in session 3 with one door of model TEST at size
+    /// 150, and that model at radius 8.
+    fn told_world(generation: GameDialect) -> (super::super::online::OnlineState, Models) {
+        let mut state = super::super::online::OnlineState::new(true);
+        crate::online::testing::generation(&mut state, generation);
+        crate::online::testing::enter(&mut state, 3, crate::online::testing::player(1), None);
+        let mut bytes = [0u8; 80];
+        bytes[..4].copy_from_slice(b"TEST");
+        bytes[52] = 150;
+        let update = eq_client_core::doors::decode(0x4c24, &bytes)
+            .unwrap()
+            .unwrap();
+        crate::online::testing::doors(&mut state, &update, std::time::Instant::now());
+        let mut models = Models::default();
+        models.0.insert("TEST".into(), model_with_radius(Some(8.0)));
+        (state, models)
+    }
+
+    #[test]
+    fn a_refusal_that_cannot_clear_is_tried_once_and_a_passing_one_again() {
+        use crate::outbox::Refusal;
+        let (state, models) = told_world(GameDialect::Titanium);
+        let frames = |refusal: Refusal| {
+            let mut told = None;
+            let mut posts = 0;
+            for _ in 0..3 {
+                tell_radii(state.world(), &models, &mut told, |_| {
+                    posts += 1;
+                    Err(refusal)
+                });
+            }
+            posts
+        };
+        let unavailable = Refusal::Unavailable(eq_client_core::Capability::Doors);
+        assert_eq!(frames(unavailable), 1);
+        assert_eq!(frames(Refusal::Ended), 1);
+        assert_eq!(frames(Refusal::NotAdmitted), 3);
+        assert_eq!(frames(Refusal::Busy), 3);
+        // A list told stays told: no post on the frames after it.
+        let mut told = None;
+        let mut posts = 0;
+        for _ in 0..3 {
+            tell_radii(state.world(), &models, &mut told, |_| {
+                posts += 1;
+                Ok(())
+            });
+        }
+        assert_eq!(posts, 1);
+        // EQMac's session keeps no lifts, so nothing is told there.
+        let (mac, models) = told_world(GameDialect::EqMac);
+        let mut told = None;
+        tell_radii(mac.world(), &models, &mut told, |_| panic!("told EQMac"));
+        assert_eq!(told, None);
+    }
+
+    #[test]
+    fn the_session_hears_the_rider_radius_its_lifts_measure_by() {
+        let mut state = super::super::online::OnlineState::new(true);
+        crate::online::testing::enter(&mut state, 3, crate::online::testing::player(1), None);
+        let mut bytes = [0u8; 80];
+        bytes[..4].copy_from_slice(b"TEST");
+        bytes[52] = 150;
+        let update = eq_client_core::doors::decode(0x4c24, &bytes)
+            .unwrap()
+            .unwrap();
+        crate::online::testing::doors(&mut state, &update, std::time::Instant::now());
+        let mut models = Models::default();
+        models.0.insert("TEST".into(), model_with_radius(Some(8.0)));
+        let (sender, receiver) = std::sync::mpsc::sync_channel(4);
+        let mut app = App::new();
+        app.insert_resource(state)
+            .insert_resource(models)
+            .insert_resource(crate::outbox::Outbox::new(Some(sender)))
+            .add_systems(Update, report_radii);
+        app.update();
+        let expected = |radius| ClientCommand::DoorRadii {
+            session_id: 3,
+            radii: vec![DoorRadius {
+                door_id: 0,
+                model: "TEST".into(),
+                radius,
+            }],
+        };
+        assert_eq!(receiver.try_recv().unwrap(), expected(12.0));
+        // Once for a list that doesn't change.
+        app.update();
+        assert!(receiver.try_recv().is_err());
+        // Again when a model's radius does.
+        app.world_mut()
+            .resource_mut::<Models>()
+            .0
+            .insert("TEST".into(), model_with_radius(Some(10.0)));
+        app.update();
+        assert_eq!(receiver.try_recv().unwrap(), expected(15.0));
+    }
     #[test]
     fn door_collision_follows_the_visible_hinge_pose() {
         use eq_client_core::movement::CollisionWorld;
@@ -655,6 +953,7 @@ mod tests {
                 [[0.0, 0.0, 0.0], [4.0, 10.0, 0.0], [0.0, 10.0, 0.0]],
             ],
             pick: Vec::new(),
+            radius: None,
         };
         let mut world = CollisionWorld::new([
             [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
@@ -698,6 +997,7 @@ mod tests {
             collision: Vec::new(),
             no_hit_collision: Vec::new(),
             vertex_count: None,
+            radius: None,
         };
         let mut models = Models::default();
         models.0.insert(
@@ -706,6 +1006,7 @@ mod tests {
                 primitives: Vec::new(),
                 collision: Vec::new(),
                 pick: PickMesh::from_model(&source),
+                radius: None,
             },
         );
         let mut definition = sliding_door();
@@ -808,6 +1109,7 @@ mod tests {
                     indices: vec![0, 1, 2],
                     double_sided: true,
                 }],
+                radius: None,
             },
         )]));
         let terrain =
@@ -879,6 +1181,33 @@ mod tests {
     }
 
     #[test]
+    fn a_titanium_hinge_spawned_opening_swings_open_at_the_programs_rate() {
+        let mut door = sliding_door();
+        door.open_type = 0;
+        // Read R49-28b: spawn states 1 and 2 both swing open from the base.
+        for state in [1, 2] {
+            door.state_at_spawn = state;
+            assert_eq!(
+                hinge_target(&door, GameDialect::Titanium),
+                Some(QUARTER_TURN)
+            );
+            assert_eq!(hinge_target(&door, GameDialect::Rof2), Some(QUARTER_TURN));
+        }
+        // EQMac keeps its own reading of the received state.
+        door.state_at_spawn = 2;
+        assert_eq!(hinge_target(&door, GameDialect::EqMac), None);
+        door.state_at_spawn = 3;
+        assert_eq!(hinge_target(&door, GameDialect::Titanium), Some(0.0));
+        // 8 a step of ms x 0.02: a quarter turn in 0.8 s, not sooner.
+        let mut swing = 0.0;
+        for _ in 0..7 {
+            swing = advance_hinge(swing, QUARTER_TURN, 0.1);
+        }
+        assert!(swing < QUARTER_TURN);
+        assert_eq!(advance_hinge(swing, QUARTER_TURN, 0.1), QUARTER_TURN);
+    }
+
+    #[test]
     fn a_route_may_open_only_a_hinged_door_open_or_shut() {
         let mut door = eq_client_core::doors::Door {
             id: 1,
@@ -892,21 +1221,30 @@ mod tests {
             parameter: 0,
             action: None,
         };
-        assert!(swings(&door));
+        assert!(swings(&door, GameDialect::Titanium));
         door.action = Some(2);
-        assert!(swings(&door), "open now, shut again later");
+        assert!(
+            swings(&door, GameDialect::Titanium),
+            "open now, shut again later"
+        );
         door.action = Some(3);
-        assert!(swings(&door));
+        assert!(swings(&door, GameDialect::Titanium));
         for open_type in [9, 15, 58, 255] {
-            assert!(!swings(&eq_client_core::doors::Door {
-                open_type,
-                ..door.clone()
-            }));
+            assert!(!swings(
+                &eq_client_core::doors::Door {
+                    open_type,
+                    ..door.clone()
+                },
+                GameDialect::Titanium
+            ));
         }
-        assert!(!swings(&eq_client_core::doors::Door {
-            incline: 90,
-            ..door
-        }));
+        assert!(!swings(
+            &eq_client_core::doors::Door {
+                incline: 90,
+                ..door
+            },
+            GameDialect::Titanium
+        ));
     }
 
     #[test]
@@ -924,25 +1262,31 @@ mod tests {
             panic!("spawn")
         };
         let door = &mut doors[0];
-        assert_eq!(hinge_target(door), Some(0.0));
+        assert_eq!(hinge_target(door, GameDialect::Titanium), Some(0.0));
         let shut_action = door.action;
         door.action = Some(2);
-        let swing = hinge_target(door).unwrap();
+        let swing = hinge_target(door, GameDialect::Titanium).unwrap();
         assert_eq!(swing, QUARTER_TURN);
         door.open_type = 5;
-        assert_eq!(hinge_target(door), Some(-swing));
+        assert_eq!(hinge_target(door, GameDialect::Titanium), Some(-swing));
         // A door first drawn while the server holds it open is drawn at its
         // open pose, so a walk reads its hinge as fully swung, whichever way
         // it turns; one drawn shut reads 0.
         for open_type in [0, 5] {
             door.open_type = open_type;
             let open = open_swing(door).unwrap();
-            assert_eq!(hinge_fraction(hinge_target(door).unwrap(), open), 1.0);
+            assert_eq!(
+                hinge_fraction(hinge_target(door, GameDialect::Titanium).unwrap(), open),
+                1.0
+            );
             let shut = eq_client_core::doors::Door {
                 action: shut_action,
                 ..door.clone()
             };
-            assert_eq!(hinge_fraction(hinge_target(&shut).unwrap(), open), 0.0);
+            assert_eq!(
+                hinge_fraction(hinge_target(&shut, GameDialect::Titanium).unwrap(), open),
+                0.0
+            );
         }
         door.open_type = 5;
         let partway = advance_hinge(0.0, swing, 0.1);
@@ -955,13 +1299,13 @@ mod tests {
         }
         assert_eq!(turned, swing);
         door.action = Some(255);
-        assert_eq!(hinge_target(door), None);
+        assert_eq!(hinge_target(door, GameDialect::Titanium), None);
         door.action = Some(2);
         door.open_type = 59;
-        assert_eq!(hinge_target(door), None);
+        assert_eq!(hinge_target(door, GameDialect::Titanium), None);
         door.open_type = 5;
         door.incline = 1;
-        assert_eq!(hinge_target(door), None);
+        assert_eq!(hinge_target(door, GameDialect::Titanium), None);
     }
 
     #[test]
@@ -1021,6 +1365,7 @@ mod tests {
                     [[-10.0, 0.5, -10.0], [10.0, 0.5, 10.0], [-10.0, 0.5, 10.0]],
                 ],
                 pick: Vec::new(),
+                radius: None,
             },
         );
         let mut app = App::new();

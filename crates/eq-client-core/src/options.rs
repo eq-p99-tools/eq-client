@@ -11,6 +11,7 @@ use crate::{
     no_drop::LootNoDrop,
     player_models::LuclinModels,
     qol::{self, Fix},
+    track_options::{TrackFilter, TrackPlayers, TrackSort},
 };
 
 /// The first line of an options file.
@@ -21,11 +22,19 @@ const SHOW_NAMES: &str = "show_names";
 
 /// The name a file keeps [`Options::loot_no_drop`] under.
 const LOOT_NO_DROP: &str = "loot_no_drop";
-/// The name a file keeps [`Options::luclin_models`] under.
+/// The name a file keeps the Luclin model keys set on under.
 const LUCLIN_MODELS: &str = "luclin_models";
+/// The name a file keeps the Luclin model keys set off under.
+const CLASSIC_MODELS: &str = "classic_models";
+/// The name a file keeps [`LuclinModels::all_off`] under.
+const ALL_LUCLIN_MODELS_OFF: &str = "all_luclin_models_off";
 
 /// The name a file keeps [`Options::attack_on_assist`] under.
 const ATTACK_ON_ASSIST: &str = "attack_on_assist";
+/// The names a file keeps the track window's options under.
+const TRACK_SORT: &str = "track_sort";
+const TRACK_FILTER: &str = "track_filter";
+const TRACK_PLAYERS: &str = "track_players";
 /// The name a file keeps [`Options::channel_autojoin`] under.
 const CHANNEL_AUTOJOIN: &str = "channel_autojoin";
 
@@ -197,8 +206,9 @@ pub enum Level {
     /// display (the Display page's Max. Frames Per Second).
     MaxFps,
     /// How fast the camera turns as the mouse drags it, from 0 to 100
-    /// across the program's sensitivity 1 to 8 (the Mouse page's Mouselook
-    /// Sensitivity; see [`Options::turn_per_pixel`]).
+    /// across the program's sensitivity 1 to 8, its eight steps (the Mouse
+    /// page's Mouselook Sensitivity; see [`mouse_step`] and
+    /// [`Options::turn_per_pixel`]).
     MouseSensitivity,
     /// How large this client's windows are drawn, as a percentage of the
     /// desktop's scaling (the Interface scale on the quality-of-life page); the installation's
@@ -343,11 +353,8 @@ impl Level {
     #[must_use]
     pub fn words(self, value: u16) -> String {
         match self {
-            Self::ClipPlane
-            | Self::MouseSensitivity
-            | Self::UiScale
-            | Self::SoundVolume
-            | Self::MusicVolume => {
+            Self::MouseSensitivity => mouse_step(value).to_string(),
+            Self::ClipPlane | Self::UiScale | Self::SoundVolume | Self::MusicVolume => {
                 format!("{value} %")
             }
             Self::MaxFps if value == 0 => "Display".to_owned(),
@@ -471,6 +478,16 @@ pub struct Options {
     /// default there is unread, so it starts off (inferred, checklist
     /// 6.490).
     pub attack_on_assist: bool,
+    /// How a Ranger's track list is ordered, as `/tracksort` sets it and
+    /// saves at once ([`crate::track_options`]).
+    pub track_sort: TrackSort,
+    /// The colours a Ranger's track list hides when the character starts
+    /// playing. `/trackfilter` changes the list for the session without
+    /// saving, as the program's does; the file sets it.
+    pub track_filter: TrackFilter,
+    /// Which players a track list shows, as `/trackplayers` sets it and
+    /// saves at once.
+    pub track_players: TrackPlayers,
     /// The chat server channels joined at each login, as `/autojoin` sets
     /// them (read R49-12 c, checklist 6.616). The official client writes
     /// `[ChatManager]` `ChannelAutoJoin` to the character's own ini; this
@@ -506,9 +523,11 @@ pub struct Options {
     pub user_colors: [Option<[u8; 3]>; USER_COLOR_KINDS],
     /// See [`Level::MusicVolume`].
     pub music_volume: u16,
-    /// Which player races and genders draw with the Luclin models, as the
-    /// official client's Options window chooses them (inferred, R49-44a);
-    /// none by default.
+    /// The Luclin model keys per race and gender, and the all-off key, as
+    /// the official client keeps them in `eqclient.ini` (read R49-44 a):
+    /// every key unset by default, so the server's mask decides
+    /// ([`crate::player_models::generation`]). A file's keys lie over the
+    /// ini's seed key by key.
     pub luclin_models: LuclinModels,
     /// The server filters, per character ([`crate::chat_filters`]).
     pub chat_filters: crate::chat_filters::ChatFilters,
@@ -557,10 +576,14 @@ impl Default for Options {
             show_names: ShowNames::Everything,
             loot_no_drop: LootNoDrop::Ask,
             attack_on_assist: false,
+            track_sort: TrackSort::Normal,
+            track_filter: TrackFilter(0),
+            track_players: TrackPlayers::On,
             channel_autojoin: None,
             clip_plane: 100,
             max_fps: if qol.on(Fix::FrameCap) { 60 } else { 0 },
-            mouse_sensitivity: 50,
+            // The program's default sensitivity, 4 (R49-24 d).
+            mouse_sensitivity: 43,
             ui_scale: 100,
             sound_volume: 100,
             chat_font_size: None,
@@ -571,6 +594,18 @@ impl Default for Options {
             chat_filters: crate::chat_filters::ChatFilters::default(),
         }
     }
+}
+
+/// The program's mouse-look sensitivity, a whole step from 1 to 8, for the
+/// setting's `share` from 0 to 100: the nearest step, with 50, this client's
+/// default before the steps, kept at the program's default 4 (R49-24 d).
+#[must_use]
+pub const fn mouse_step(share: u16) -> u16 {
+    if share == 50 {
+        return 4;
+    }
+    let share = if share > 100 { 100 } else { share };
+    (share * 7 + 50) / 100 + 1
 }
 
 impl Options {
@@ -707,16 +742,16 @@ impl Options {
     /// How far the camera turns, in radians, for each pixel the mouse drags
     /// it on a screen `width` pixels wide. The program turns
     /// (0.5 + 1.5 × (s − 1) / 7) × dx / width × 512 heading units, a whole
-    /// turn being 512, for its sensitivity s from 1 to 8 (Titanium
-    /// 0x4929dd). The setting's 0 to 100 spans s from 1 to 8 (inferred,
-    /// recording checklist 6.418), so a drag across the whole screen turns
+    /// turn being 512, for its sensitivity s, a whole step from 1 to 8
+    /// (Titanium 0x4929dd, read R49-24 d). The setting's 0 to 100 spans
+    /// those steps ([`mouse_step`]), so a drag across the whole screen turns
     /// from half a turn to two. A width that is no width turns nothing.
     #[must_use]
     pub fn turn_per_pixel(&self, width: f32) -> f32 {
         if !(width.is_finite() && width >= 1.0) {
             return 0.0;
         }
-        let share = f32::from(self.mouse_sensitivity.min(100)) / 100.0;
+        let share = f32::from(mouse_step(self.mouse_sensitivity) - 1) / 7.0;
         (0.5 + 1.5 * share) * std::f32::consts::TAU / width
     }
 
@@ -735,6 +770,8 @@ impl Options {
     #[must_use]
     pub fn read(text: &str, defaults: Self) -> Self {
         let mut options = defaults;
+        // The file's Luclin model keys, laid over the seed once read.
+        let mut file_models: Option<LuclinModels> = None;
         for line in text.lines() {
             let Some((key, value)) = line.split_once('=') else {
                 continue;
@@ -742,8 +779,15 @@ impl Options {
             if options.read_chat_setting(key.trim(), value.trim()) {
                 continue;
             }
-            if key.trim() == LUCLIN_MODELS {
-                options.luclin_models = LuclinModels::parse(value);
+            if key.trim() == LUCLIN_MODELS || key.trim() == CLASSIC_MODELS {
+                let keys = file_models.get_or_insert(LuclinModels::NONE);
+                keys.read(value, key.trim() == LUCLIN_MODELS);
+                continue;
+            }
+            if key.trim() == ALL_LUCLIN_MODELS_OFF {
+                if let Ok(off) = value.trim().parse() {
+                    options.luclin_models.all_off = off;
+                }
                 continue;
             }
             if key.trim() == SHOW_NAMES {
@@ -768,6 +812,9 @@ impl Options {
                 }
                 continue;
             }
+            if options.read_track_option(key.trim(), value.trim()) {
+                continue;
+            }
             if options.chat_filters.read(key.trim(), value) {
                 continue;
             }
@@ -789,7 +836,29 @@ impl Options {
                 options.set(toggle, on);
             }
         }
+        if let Some(keys) = file_models {
+            options.luclin_models = keys.over(options.luclin_models);
+        }
         options
+    }
+
+    /// Reads a track window option's line; whether the key was one of those.
+    fn read_track_option(&mut self, key: &str, value: &str) -> bool {
+        match key {
+            TRACK_SORT => {
+                if let Some(sort) = TrackSort::saved(value) {
+                    self.track_sort = sort;
+                }
+            }
+            TRACK_FILTER => {
+                if let Ok(mask) = value.parse() {
+                    self.track_filter = TrackFilter(mask);
+                }
+            }
+            TRACK_PLAYERS => self.track_players = TrackPlayers::saved(value),
+            _ => return false,
+        }
+        true
     }
 
     /// Reads a chat font size, pointer speed or colour line; whether the key
@@ -846,6 +915,9 @@ impl Options {
         for part in [ATTACK_ON_ASSIST, " = ", &attack_on_assist, "\n"] {
             text.push_str(part);
         }
+        let _ = writeln!(text, "{TRACK_SORT} = {}", self.track_sort.word());
+        let _ = writeln!(text, "{TRACK_FILTER} = {}", self.track_filter.0);
+        let _ = writeln!(text, "{TRACK_PLAYERS} = {}", self.track_players.word());
         if let Some(list) = &self.channel_autojoin {
             for part in [CHANNEL_AUTOJOIN, " = ", list.as_str(), "\n"] {
                 text.push_str(part);
@@ -867,9 +939,20 @@ impl Options {
                 let _ = writeln!(text, "{USER_COLOR}{kind} = {red} {green} {blue}");
             }
         }
-        for part in [LUCLIN_MODELS, " = ", &self.luclin_models.words(), "\n"] {
+        for part in [LUCLIN_MODELS, " = ", &self.luclin_models.words(true), "\n"] {
             text.push_str(part);
         }
+        let classic = self.luclin_models.words(false);
+        if !classic.is_empty() {
+            let _ = writeln!(text, "{CLASSIC_MODELS} = {classic}");
+        }
+        // Written either way, so a file's false keeps over an ini seed's
+        // true, as the per-key lines do.
+        let _ = writeln!(
+            text,
+            "{ALL_LUCLIN_MODELS_OFF} = {}",
+            self.luclin_models.all_off
+        );
         text.push_str(&self.chat_filters.text());
         text
     }
@@ -887,15 +970,30 @@ mod tests {
         options.set(Toggle::Qol(Fix::JesusMode), true);
         options.show_names = ShowNames::Last;
         options.loot_no_drop = LootNoDrop::AskUnusable;
-        options.luclin_models.set(6, 1, true);
+        options.luclin_models.set(6, 1, Some(true));
+        options.luclin_models.set(1, 0, Some(false));
+        options.luclin_models.all_off = true;
         options.chat_filters.set(
             eq_network_game::filters::FilterCategory::Auctions,
             eq_network_game::filters::FilterMode::Hide,
         );
         options.attack_on_assist = true;
+        options.track_sort = TrackSort::ReverseDistance;
+        options.track_filter = TrackFilter(0x21);
+        options.track_players = TrackPlayers::Group;
         options.channel_autojoin = AutoJoin::new(" general, trade:secret ");
         let text = options.text();
         assert!(text.contains("luclin_models = DAF\n"));
+        assert!(text.contains("classic_models = HUM\n"));
+        assert!(text.contains("all_luclin_models_off = true\n"));
+        // A file's false keeps over an ini seed's true, through a save.
+        let mut seed = Options::default();
+        seed.luclin_models.all_off = true;
+        let mut kept = Options::read("all_luclin_models_off = false\n", seed);
+        assert!(!kept.luclin_models.all_off);
+        kept = Options::read(&kept.text(), seed);
+        assert!(!kept.luclin_models.all_off);
+        assert!(kept.text().contains("all_luclin_models_off = false\n"));
         assert!(text.starts_with(HEADER));
         assert!(text.contains("invert_y = true\n"));
         assert!(text.contains("skip_modified_food = false\n"));
@@ -905,6 +1003,9 @@ mod tests {
         assert!(text.contains("loot_no_drop = 1\n"));
         assert!(text.contains("Channel04 = 0\n"));
         assert!(text.contains("attack_on_assist = true\n"));
+        assert!(text.contains("track_sort = RDISTANCE\n"));
+        assert!(text.contains("track_filter = 33\n"));
+        assert!(text.contains("track_players = GROUP\n"));
         assert!(text.contains("channel_autojoin = general, trade:secret\n"));
         assert_eq!(Options::read(&text, Options::default()), options);
         // Not set, it isn't written, and the installation's keys stay the
@@ -973,7 +1074,7 @@ mod tests {
             "clip_plane = 300\nmouse_sensitivity = x\n",
             Options::default(),
         );
-        assert_eq!((read.clip_plane, read.mouse_sensitivity), (100, 50));
+        assert_eq!((read.clip_plane, read.mouse_sensitivity), (100, 43));
         // The far right of Max FPS leaves the rate to the display.
         assert_eq!(Level::MaxFps.at(1.0), 0);
         assert_eq!(Level::MaxFps.at(0.0), 10);
@@ -983,19 +1084,28 @@ mod tests {
         assert_eq!(Level::ClipPlane.words(40), "40 %");
         assert_eq!(Options::default().frame_cap(), Some(60));
         assert_eq!(options.frame_cap(), None);
-        // The program's curve: a drag across the whole screen turns half a
-        // turn at sensitivity 1 (0) and two at 8 (100); 50 is s = 4.5.
+        // The program's curve, in its eight steps: a drag across the whole
+        // screen turns half a turn at sensitivity 1 (0) and two at 8 (100),
+        // and the default is its 4, 0.5 + 1.5 × 3/7 (R49-24 d).
         let mut quick = Options::default();
         let across = |options: &Options| options.turn_per_pixel(1_000.0) * 1_000.0;
         let turn = std::f32::consts::TAU;
-        assert!((across(&quick) - 1.25 * turn).abs() < 1e-4);
+        let at = |step: f32| (0.5 + 1.5 * (step - 1.0) / 7.0) * turn;
+        assert!((across(&quick) - at(4.0)).abs() < 1e-4);
+        assert_eq!(Level::MouseSensitivity.words(quick.mouse_sensitivity), "4");
         quick.set_level(Level::MouseSensitivity, 0);
         assert!((across(&quick) - 0.5 * turn).abs() < 1e-4);
         quick.set_level(Level::MouseSensitivity, 100);
         assert!((across(&quick) - 2.0 * turn).abs() < 1e-4);
-        // Program sensitivity 4 is 3/7 of the way: 0.5 + 1.5 × 3/7.
-        quick.set_level(Level::MouseSensitivity, 43);
-        assert!((across(&quick) - (0.5 + 1.5 * 0.43) * turn).abs() < 1e-4);
+        // A saved 50, the old default, is the program's default 4; other
+        // shares take the nearest step, and the ini's sevenths their own.
+        quick.set_level(Level::MouseSensitivity, 50);
+        assert!((across(&quick) - at(4.0)).abs() < 1e-4);
+        quick.set_level(Level::MouseSensitivity, 51);
+        assert!((across(&quick) - at(5.0)).abs() < 1e-4);
+        for step in 1..=8_u16 {
+            assert_eq!(mouse_step((step - 1) * 100 / 7), step);
+        }
         // The same drag on a screen twice as wide turns half as far.
         assert!((quick.turn_per_pixel(2_000.0) * 2.0 - quick.turn_per_pixel(1_000.0)).abs() < 1e-7);
         assert!(quick.turn_per_pixel(0.0).abs() < f32::EPSILON);

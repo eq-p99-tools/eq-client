@@ -133,6 +133,13 @@ pub struct ZoneModel {
     /// How many vertices the model's one mesh has, which a placement's
     /// colour track must match; None for a model built on a skeleton.
     pub vertex_count: Option<usize>,
+    /// The authored bounding radius of the model's WLD sprite: its one
+    /// mesh's radius field (fragment 0x36), or its skeleton's bounding
+    /// radius (fragment 0x10); None where the archive gives none, as an EQG
+    /// model doesn't. The program measures a lift's riders by its door
+    /// actor's definition radius (eqgame.exe 0x4368b3, reads R49-28 (b) and
+    /// R49-28c); that these fields are that radius is inferred.
+    pub radius: Option<f32>,
 }
 
 /// Authored sidedness of a placed-object draw call, independent of its alpha mode.
@@ -762,6 +769,7 @@ fn load_object_models(
             collision,
             no_hit_collision,
             vertex_count: Some(vertex_count),
+            radius: raw.and_then(|raw| authored_radius(Some(raw.max_distance))),
         });
     }
     // Objects built on a skeleton (trees, torches), stood in their rest
@@ -798,6 +806,7 @@ fn load_object_models(
             collision: posed.collision,
             no_hit_collision: posed.no_hit_collision,
             vertex_count: None,
+            radius: posed.radius,
         });
     }
 
@@ -883,6 +892,13 @@ struct PosedHierarchy {
     /// Skins left out because their vertices aren't each on one bone of
     /// the skeleton.
     skins_skipped: usize,
+    /// The skeleton's authored bounding radius ([`ZoneModel::radius`]).
+    radius: Option<f32>,
+}
+
+/// An authored radius the program can measure by: a positive number.
+fn authored_radius(radius: Option<f32>) -> Option<f32> {
+    radius.filter(|radius| radius.is_finite() && *radius > 0.0)
 }
 
 /// An object archive's meshes, found by the fragment a sprite names rather
@@ -1074,6 +1090,7 @@ fn pose_hierarchy(
         collision,
         no_hit_collision,
         skins_skipped,
+        radius: authored_radius(definition.bounding_radius),
     }
 }
 /// A drawable mesh primitive whose texture is named but not yet decoded, so
@@ -1762,7 +1779,11 @@ mod tests {
         let solid = objects.fragment(0x30, material_with_flags(w, 0x8000_0001, 0x2));
         let object_palette = objects.fragment(0x31, palette(p, solid));
         let tri = objects.name("TRI_DMSPRITEDEF");
-        let tri = objects.fragment(0x36, triangle(tri, object_palette, &coordinates, 1));
+        // Its authored radius, 7.5, after the name, flags, palette, three
+        // references, centre and three unknowns.
+        let mut tri_body = triangle(tri, object_palette, &coordinates, 1);
+        tri_body[48..52].copy_from_slice(&7.5_f32.to_le_bytes());
+        let tri = objects.fragment(0x36, tri_body);
         // The skin's first two vertices are on the root, the third on the arm.
         let skin = objects.name("SKIN_DMSPRITEDEF");
         let skin = objects.fragment(
@@ -1837,12 +1858,14 @@ mod tests {
                 words(&[track.cast_unsigned(), definition.cast_unsigned(), 0]),
             ));
         }
-        // The tree's skeleton: flags (with skins), two bones, no collision
-        // volume; root (its track, no mesh, the arm its child), arm (its
+        // The tree's skeleton: flags (with skins and a bounding radius), two
+        // bones, no collision volume, the radius; root (its track, no mesh, the arm its child), arm (its
         // track, the rigid mesh); one skin, updated with the root.
         let bone = objects.name("BONE_DAG");
         let tree = objects.name("TREE_HS_DEF");
-        let mut body = words(&[tree.cast_unsigned(), 0x200, 2, 0]);
+        let mut body = words(&[tree.cast_unsigned(), 0x202, 2, 0]);
+        // Its authored bounding radius (flag 0x2).
+        body.extend(12.5_f32.to_le_bytes());
         body.extend(words(&[
             bone.cast_unsigned(),
             0,
@@ -2004,6 +2027,24 @@ mod tests {
             .iter()
             .find(|object| zone.models[object.model].name == "OBJ_ACTORDEF");
         assert!(placed.is_some());
+    }
+
+    #[test]
+    fn a_model_takes_its_sprites_authored_radius() {
+        let zone = load_hierarchical_zone("authored-radius");
+        let radius = |name: &str| {
+            zone.models
+                .iter()
+                .find(|model| model.name == name)
+                .unwrap()
+                .radius
+        };
+        // One mesh: the 0x36 radius field, not its geometry's 1.
+        assert_eq!(radius("OBJ_ACTORDEF"), Some(7.5));
+        // A skeleton: the 0x10 bounding radius.
+        assert_eq!(radius("TREE_ACTORDEF"), Some(12.5));
+        // Neither authored: none, so a door measures its geometry.
+        assert_eq!(radius("WALL_ACTORDEF"), None);
     }
 
     #[test]

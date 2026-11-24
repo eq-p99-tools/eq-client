@@ -1150,7 +1150,11 @@ impl ClientWorld {
             // The machine's weekly account left for the world; the session
             // host keeps the date it went (the installed client's own
             // `LastSysInfoDate` stamp). Nothing about the world changed.
-            | WorldEvent::SystemInfoReported { .. }) => {
+            | WorldEvent::SystemInfoReported { .. }
+            // A bind spell's landing refused with the program's line (0x69
+            // or 0x103, 6.615 slice 2): the client half that says the line
+            // is a gap row.
+            | WorldEvent::BindRefused { .. }) => {
                 // Each still counts in the session's gap file, by kind.
                 news.unshown = crate::gaps::variant_name(unshown);
             }

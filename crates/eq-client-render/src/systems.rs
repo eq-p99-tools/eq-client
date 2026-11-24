@@ -154,6 +154,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::lighting::update,
                 character::lie,
                 doors::reconcile,
+                doors::report_radii,
                 crate::carriers::reconcile,
                 ground::reconcile,
                 projectiles::update,
@@ -394,7 +395,7 @@ pub(super) fn schedule(app: &mut App) {
                     (
                         training::window,
                         tracking::window,
-                        tracking::say_rangers_only,
+                        tracking::answer_option,
                         pet::say_pet_target,
                         crate::targeted::say,
                     ),
