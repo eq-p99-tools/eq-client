@@ -6875,11 +6875,12 @@ pub(super) mod tests {
         assert!(highest < 1.0, "origin rose to {highest}: {seen:?}");
     }
 
-    /// A ramp shaped like the one at Temple of Life's north deck: two
-    /// overlapping faces climbing out of a pool whose surface is at -2,
-    /// split at a crease, with a wall along their side and a floor at -16.
+    /// A made-up ramp out of a pool whose surface is at -2: 14 wide,
+    /// rising from 1 below the surface at its lip to 8 above it, in two
+    /// overlapping faces split at a crease, with a wall along one side and
+    /// a floor at -16.
     fn pool_ramp() -> CollisionWorld {
-        let (lip, crease, far) = (-6.25, -3.125, 21.75);
+        let (lip, crease, far) = (-6.0, -3.0, 22.0);
         let mut triangles = vec![
             [[0.0, 1.0, 0.0], [14.0, 8.0, far], [0.0, 8.0, far]],
             [[14.0, 8.0, far], [0.0, 1.0, 0.0], [0.0, 0.0, crease]],
