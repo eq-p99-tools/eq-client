@@ -142,8 +142,8 @@ second, where the original steps once a frame, so the sinking rate matches
 the original at 60 frames a second (recording checklist 6.483). On
 Titanium every liquid kind the original swims counts as water: plain
 water (`WT`), slime (`SL`), Velious water (`VW`) and the second and third
-waters (`W2`, `W3`), with their `A` forms (read R49-26). Slime and Velious
-water damp the stroke harder, as the original's slower set does, so a
+waters (`W2`, `W3`), with their `A` forms (read R49-26). Slime, lava and
+Velious water damp the stroke harder, as the original's slower set does, so a
 swimmer there goes about two thirds of water's speed; a swimmer crossing
 from one kind into another takes the new kind's set on the next frame. A
 swimmer
@@ -153,8 +153,14 @@ gaps still hold the stroke. A supported bank returns the swimmer to
 ordinary movement. At the surface, look up and swim forward toward a nearby
 bank to use Titanium's shoreline boost.
 The client checks that the capsule can reach a supported landing. Automated
-ground routes and EQMac-era sessions retain the deep-water guard. Ordinary
-movement guards against entering lava.
+ground routes and EQMac-era sessions retain the deep-water guard.
+
+On Titanium your own moves enter lava as the original's do: walking or
+falling into it, by your keys, autorun or a script's held keys, swims there
+with the slower set while the heat burns (read R49-26). `/follow` and a
+script's `walk` route keep this client's guard and stop at lava's edge, a
+safety of this client's, not the original's. On EQMac-era sessions every
+move still stops at lava.
 
 Group-member `/follow` keeps its horizontal input when entering water, including
 while typing in chat or the window is unfocused, and uses the ordinary swim rate

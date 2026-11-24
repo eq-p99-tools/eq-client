@@ -1637,10 +1637,17 @@ pub(super) fn input(
     if !water_enabled || !focused || controls.stun_active {
         controls.shoreline.reset();
     }
+    // The player's own moves meet lava as the Titanium program's do and
+    // swim it (R49-26; Adam's "always enter lava, as original"): held keys,
+    // a script's held keys and strokes, autorun, and the falls they make.
+    // Following and a script's route keep this client's guard against it,
+    // a labelled safety, not the program's rule (review K1).
+    let own_world = (controls.following.is_none() && !keys.script_routing())
+        .then(|| collision.0.as_ref().and_then(CollisionWorld::own_moves))
+        .flatten();
+    let moving_world = own_world.as_ref().or(collision.0.as_ref());
     let swimming = water_enabled
-        && collision
-            .0
-            .as_ref()
+        && moving_world
             .zip(players.single().ok())
             .zip(online.world().player())
             .is_some_and(|((world, (body, _)), player)| {
@@ -1809,7 +1816,7 @@ pub(super) fn input(
     let (Ok((body, _)), Ok((camera, _)), Some(world), Some(accepted)) = (
         players.single(),
         cameras.single(),
-        collision.0.as_ref(),
+        moving_world,
         online.world().player(),
     ) else {
         controls.held = Some(Held::NoBody);
@@ -6728,6 +6735,32 @@ pub(super) mod tests {
         (swim, pitch): (Option<eq_client_core::movement::SwimCalibration>, f32),
         samples: usize,
     ) -> Result<Vec<(MovementMode, Vec3, Duration)>, String> {
+        move_from(world, feet, heading, (swim, pitch), samples, Mover::Key)
+    }
+
+    /// What moves the player forward in [`move_from`].
+    #[derive(Clone, Copy, Debug)]
+    enum Mover {
+        /// The player holds the forward key.
+        Key,
+        /// A script holds forward, as its `press` steps do.
+        Script,
+        /// A script's `walk` steers by a route, holding forward.
+        ScriptRoute,
+        /// `/follow` toward a grouped player 60 ahead.
+        Follow,
+    }
+
+    /// As [`swim_from`], moved forward by `mover`.
+    #[allow(clippy::too_many_lines)]
+    fn move_from(
+        world: CollisionWorld,
+        feet: Vec3,
+        heading: f32,
+        (swim, pitch): (Option<eq_client_core::movement::SwimCalibration>, f32),
+        samples: usize,
+        mover: Mover,
+    ) -> Result<Vec<(MovementMode, Vec3, Duration)>, String> {
         let (mut app, receiver) = fixture();
         app.add_systems(Update, input);
         app.insert_resource(Collision(Some(world)));
@@ -6739,6 +6772,7 @@ pub(super) mod tests {
             .unwrap()
             .with_swimming(true)
             .with_falls(true)
+            .with_heading_snapshots(true)
             .with_jump(Some((44.55, 160.0)));
         let grant =
             eq_network_game::movement::titanium_speeds(&eq_network_game::movement::SpeedState {
@@ -6776,7 +6810,56 @@ pub(super) mod tests {
             controls.airborne = Some(AirborneController::default());
             let mut keys = world.resource_mut::<ButtonInput<KeyCode>>();
             keys.reset_all();
-            keys.press(KeyCode::KeyW);
+            if matches!(mover, Mover::Key) {
+                keys.press(KeyCode::KeyW);
+            }
+        }
+        let script =
+            || crate::script::Script::new(Vec::new()).holding_for_test(vec![Act::Forward], None);
+        match mover {
+            Mover::Key => (),
+            Mover::Script => {
+                app.insert_resource(script());
+            }
+            Mover::ScriptRoute => {
+                let goal = origin
+                    + Vec3::new(heading_ahead(heading).x, 0.0, heading_ahead(heading).z) * 60.0;
+                app.insert_resource(
+                    script().routing_for_test(eq_client_core::movement::Route::new(
+                        feet, goal, 1.0, 6.0,
+                    )),
+                );
+            }
+            Mover::Follow => {
+                use eq_client_core::{SpawnKind, SpawnState, WorldEvent, group::GroupUpdate};
+                let ahead = origin + heading_ahead(heading) * 60.0;
+                let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+                online::testing::spawn_entry(
+                    &mut online,
+                    5,
+                    SpawnState {
+                        body_type: None,
+                        name: "Friend".into(),
+                        kind: SpawnKind::Player,
+                        race: 1,
+                        size: 6.0,
+                        pet_owner: None,
+                        position: world_position(ahead.to_array(), 0.0),
+                        ..online::testing::pet(5, 0)
+                    },
+                );
+                online::testing::news(
+                    &mut online,
+                    [WorldEvent::Group(GroupUpdate::Members {
+                        leader: "Friend".into(),
+                        members: vec!["Friend".into()],
+                    })],
+                );
+                online.select_target(Some(5));
+                app.world_mut()
+                    .resource_mut::<crate::chat::ChatState>()
+                    .follow_asked = Some(FollowAsked);
+            }
         }
         let mut seen = Vec::new();
         for _ in 0..samples * 8 {
@@ -6880,14 +6963,99 @@ pub(super) mod tests {
     }
 
     /// A deep pool of one Titanium region kind, its surface at 0.
-    fn kind_pool(kind: eq_client_assets::regions::RegionKind) -> CollisionWorld {
-        CollisionWorld::new(flat_surface(-60.0))
+    /// The way an EQ heading faces, level, in render axes.
+    fn heading_ahead(heading: f32) -> Vec3 {
+        let radians = eq_client_core::render_heading(heading);
+        Vec3::new(radians.sin(), 0.0, radians.cos())
+    }
+
+    /// A zone of these triangles over a liquid of `kind` with its surface
+    /// at 0, its liquids as zone entry gives a Titanium player them: the
+    /// guarded ones, and the player's own, where lava swims.
+    fn kind_world(
+        triangles: impl IntoIterator<Item = [[f32; 3]; 3]>,
+        kind: eq_client_assets::regions::RegionKind,
+    ) -> CollisionWorld {
+        use eq_client_assets::regions::ZoneRegions;
+        CollisionWorld::new(triangles)
             .unwrap()
             .with_liquids(crate::scene_collision::ZoneLiquids(
-                eq_client_assets::regions::ZoneRegions::test_kind_surface(0.0, kind)
-                    .with_titanium_liquids(),
+                ZoneRegions::test_kind_surface(0.0, kind).with_titanium_liquids(),
+            ))
+            .with_own_liquids(crate::scene_collision::ZoneLiquids(
+                ZoneRegions::test_kind_surface(0.0, kind).with_titanium_own_liquids(),
             ))
             .with_swim_origin(3.75)
+    }
+
+    fn kind_pool(kind: eq_client_assets::regions::RegionKind) -> CollisionWorld {
+        kind_world(flat_surface(-60.0), kind)
+    }
+
+    /// A dry shelf at 0 running to x 2, over a liquid of `kind` up to 0
+    /// with a floor at -40: the follow fixture's shore.
+    fn kind_shore(kind: eq_client_assets::regions::RegionKind) -> CollisionWorld {
+        let shelf = [
+            [[-20.0, 0.0, -20.0], [2.0, 0.0, -20.0], [2.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+        ];
+        kind_world(shelf.into_iter().chain(flat_surface(-40.0)), kind)
+    }
+
+    #[test]
+    fn the_players_own_moves_enter_lava_and_swim_where_following_and_routes_stop() {
+        use eq_client_assets::regions::RegionKind;
+        // The Titanium program swims lava (kind 7, R33, R49-26), and Adam
+        // chose its way: the player's own walk off the shelf falls in and
+        // swims, by a held key or a script's (review K1). Following and a
+        // script's route keep this client's guard and stop at the edge.
+        let east = eq_client_core::world_heading(std::f32::consts::FRAC_PI_2);
+        let start = Vec3::new(-2.0, 0.0, 0.0);
+        for mover in [Mover::Key, Mover::Script, Mover::ScriptRoute, Mover::Follow] {
+            let seen = move_from(
+                kind_shore(RegionKind::LAVA),
+                start,
+                east,
+                (Some(WET_SWIMMER), 0.0),
+                40,
+                mover,
+            )
+            .unwrap_or_else(|error| panic!("{mover:?}: {error}"));
+            let swum = seen.iter().any(|(mode, ..)| *mode == MovementMode::Swim);
+            let farthest = seen.iter().map(|(_, at, _)| at.x).fold(start.x, f32::max);
+            let deepest = seen.iter().map(|(_, at, _)| at.y).fold(start.y, f32::min);
+            match mover {
+                Mover::Key | Mover::Script => {
+                    assert!(
+                        swum && farthest > 4.0 && deepest < -1.0,
+                        "{mover:?}: {seen:?}"
+                    );
+                }
+                Mover::ScriptRoute | Mover::Follow => {
+                    assert!(
+                        !swum && farthest < 2.6 && deepest > -0.01,
+                        "{mover:?}: {seen:?}"
+                    );
+                    assert!(farthest > start.x + 1.0, "{mover:?} never moved: {seen:?}");
+                }
+            }
+        }
+        // Water is entered by every one of them, as before.
+        for mover in [Mover::ScriptRoute, Mover::Follow] {
+            let seen = move_from(
+                kind_shore(RegionKind::WATER),
+                start,
+                east,
+                (Some(WET_SWIMMER), 0.0),
+                40,
+                mover,
+            )
+            .unwrap_or_else(|error| panic!("{mover:?}: {error}"));
+            assert!(
+                seen.iter().any(|(mode, ..)| *mode == MovementMode::Swim),
+                "{mover:?}: {seen:?}"
+            );
+        }
     }
 
     /// The level forward speed a swimmer settles at in a pool of `kind`,
@@ -6923,7 +7091,11 @@ pub(super) mod tests {
                 "{kind:?}: {speed} vs {water}"
             );
         }
-        for kind in [RegionKind::SLIME, RegionKind::VELIOUS_WATER] {
+        for kind in [
+            RegionKind::SLIME,
+            RegionKind::LAVA,
+            RegionKind::VELIOUS_WATER,
+        ] {
             let speed = settled_swim_speed(kind);
             let share = speed / water;
             assert!((0.6..0.73).contains(&share), "{kind:?}: {speed} vs {water}");

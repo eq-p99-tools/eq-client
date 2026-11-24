@@ -159,6 +159,22 @@ impl ZoneRegions {
         self
     }
 
+    /// Reuses the spatial tree with the liquids the Titanium program's own
+    /// moves meet: every kind of 5 or more swims (R33, R49-26), lava (7)
+    /// included, so lava moves as water here. The player's walks, falls
+    /// and strokes take these; routes this client chooses keep
+    /// [`Self::with_titanium_liquids`], which keeps lava apart.
+    #[must_use]
+    pub fn with_titanium_own_liquids(mut self) -> Self {
+        self.liquids = self
+            .kinds
+            .iter()
+            .filter(|(_, kind)| kind.is_liquid())
+            .map(|(&region, _)| (region, Liquid::Water))
+            .collect();
+        self
+    }
+
     /// Constructs a horizontal liquid surface for other crates' synthetic tests.
     #[cfg(feature = "testing")]
     #[must_use]
@@ -1121,6 +1137,16 @@ mod tests {
             let regions = ZoneRegions::test_kind_surface(0.0, kind).with_titanium_liquids();
             assert_eq!(regions.liquid_at([0.0, -1.0, 0.0]), liquid, "{tag}");
             assert_eq!(regions.liquid_at([0.0, 1.0, 0.0]), None, "{tag}");
+            // The player's own moves swim lava as water too.
+            let own = ZoneRegions::test_kind_surface(0.0, kind).with_titanium_own_liquids();
+            let swum = liquid.map(|_| Liquid::Water);
+            assert_eq!(own.liquid_at([0.0, -1.0, 0.0]), swum, "{tag}");
+            assert_eq!(own.liquid_at([0.0, 1.0, 0.0]), None, "{tag}");
+            assert_eq!(
+                own.kind_at([0.0, -1.0, 0.0]),
+                regions.kind_at([0.0, -1.0, 0.0]),
+                "{tag}"
+            );
         }
     }
 

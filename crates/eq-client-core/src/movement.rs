@@ -181,6 +181,11 @@ pub struct CollisionWorld {
     /// Actual model geometry of nearby received carrier spawns.
     spawn_obstacles: Vec<(u16, CollisionInstance)>,
     liquids: Option<Arc<dyn Liquids>>,
+    /// The zone's liquids as the player's own moves meet them, where they
+    /// differ: the Titanium program swims lava (R49-26), so its walks,
+    /// falls and strokes enter lava as water, while routes this client
+    /// chooses keep [`Self::liquids`] and refuse it.
+    own_liquids: Option<Arc<dyn Liquids>>,
     liquid_support: bool,
     swim_origin: Option<f32>,
 }
@@ -196,6 +201,7 @@ impl CollisionWorld {
             obstacles: Vec::new(),
             spawn_obstacles: Vec::new(),
             liquids: None,
+            own_liquids: None,
             liquid_support: false,
             swim_origin: None,
         })
@@ -267,6 +273,7 @@ impl CollisionWorld {
                 .collect(),
             spawn_obstacles: self.spawn_obstacles.clone(),
             liquids: self.liquids.clone(),
+            own_liquids: self.own_liquids.clone(),
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
         }
@@ -294,6 +301,7 @@ impl CollisionWorld {
                 .collect(),
             spawn_obstacles: self.spawn_obstacles.clone(),
             liquids: self.liquids.clone(),
+            own_liquids: self.own_liquids.clone(),
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
         }

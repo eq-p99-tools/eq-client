@@ -729,6 +729,12 @@ impl Keys<'_, '_> {
         self.script.as_ref().map_or(&[], |script| script.acts())
     }
 
+    /// Whether a running script's `walk` steers by a route this client
+    /// chose, whose moves keep the routes' guards.
+    pub(crate) fn script_routing(&self) -> bool {
+        self.script.as_ref().is_some_and(|script| script.routing())
+    }
+
     /// The heading a running script's `face` step turns the player to.
     pub(crate) fn scripted_facing(&self) -> Option<f32> {
         self.script.as_ref().and_then(|script| script.facing())

@@ -472,6 +472,13 @@ impl Script {
         &self.acts
     }
 
+    /// Whether a `walk` step steers by a route this client chose. Its moves
+    /// keep the routes' liquid guard, lava refused, where held keys and
+    /// strokes move as the player's own (review K1).
+    pub(crate) const fn routing(&self) -> bool {
+        self.route.is_some()
+    }
+
     /// The heading a `face` step turns the player to.
     pub(crate) const fn facing(&self) -> Option<f32> {
         self.facing
@@ -483,6 +490,14 @@ impl Script {
     pub(crate) fn holding_for_test(mut self, acts: Vec<Act>, facing: Option<f32>) -> Self {
         self.acts = acts;
         self.facing = facing;
+        self
+    }
+
+    /// The same script steering by `route`, as a `walk` step's, for tests
+    /// of the systems that read it.
+    #[cfg(test)]
+    pub(crate) fn routing_for_test(mut self, route: eq_client_core::movement::Route) -> Self {
+        self.route = Some(route);
         self
     }
 

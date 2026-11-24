@@ -514,6 +514,60 @@ mod tests {
     }
 
     #[test]
+    fn the_players_own_moves_fall_into_lava_and_swim_where_the_guarded_world_holds() {
+        // The same box is lava to the guarded world and swims as water to
+        // the player's own moves (R49-26).
+        let lava = (water().0, water().1, Liquid::Lava);
+        let world = CollisionWorld::new(flat(-12.0))
+            .unwrap()
+            .with_liquids(Boxes(vec![lava]))
+            .with_own_liquids(Boxes(vec![water()]));
+        let own = world.own_moves().unwrap();
+        assert!(own.own_moves().is_none());
+        assert!(
+            CollisionWorld::new(flat(-12.0))
+                .unwrap()
+                .own_moves()
+                .is_none()
+        );
+        let fall = |world: &CollisionWorld| {
+            let mut airborne = AirborneController::default();
+            let mut feet = Vec3::new(5.0, 4.0, 0.0);
+            for _ in 0..40 {
+                feet = airborne.step_into_water(
+                    world,
+                    feet,
+                    PROVISIONAL_PHYSICS,
+                    MotionStep {
+                        horizontal: Vec3::ZERO,
+                        height: HEIGHT,
+                        jump: false,
+                        seconds: 0.05,
+                    },
+                );
+                if world.swim_depth(feet, HEIGHT).is_some() {
+                    break;
+                }
+            }
+            feet
+        };
+        let swum = fall(&own);
+        assert_eq!(own.swim_depth(swum, HEIGHT), Some(SwimDepth::Surface));
+        assert!((-3.01..=-3.0).contains(&swum.y), "{swum:?}");
+        let deeper = own.swim_step(swum, Vec3::new(1.0, -1.0, 0.0), HEIGHT);
+        assert!(
+            deeper.x > swum.x + 0.9 && deeper.y < swum.y - 0.9,
+            "{deeper:?}"
+        );
+        // The guarded world never swims it: a fall the server started over
+        // it goes through to the floor, as before.
+        let fallen = fall(&world);
+        assert!(fallen.y < -11.9, "{fallen:?}");
+        assert!(!world.in_swimmable_water(swum, HEIGHT));
+        assert_eq!(world.liquid_contact(swum, HEIGHT), LiquidContact::Lava);
+    }
+
+    #[test]
     fn a_swimmer_can_leave_on_a_supported_bank_but_not_into_air() {
         let ramp = [
             [[-10.0, 2.0, -20.0], [10.0, -8.0, -20.0], [10.0, -8.0, 20.0]],
