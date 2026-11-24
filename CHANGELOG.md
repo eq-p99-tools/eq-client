@@ -8,6 +8,17 @@
   - One step is inferred: a placement with an LOD list is taken to reach the sweep as one without does.
   - Labelled departure: the engine's ray tests still see those meshes, but this client's camera shares the walking world, so it passes through them too (follow-up row).
 - **The Neriak bars stop a walker while shut** (eq-client #629, with eq-network #406's wall for open types 60-77). The engine makes five model names solid throughout, passable faces and all (EQGraphicsDX9.dll 0x10193510, read F4b): `LADDER*` and `IT66*` in any case, `SBDOOR103_*` as written, and exactly `HHCELL_DMSPRITEDEF` and `PORT1414_DMSPRITEDEF`. Before, every HHCELL face was flagged passable, so the bars stopped nothing. A click raises the linked pieces together, a walker passes under them, and a body a closing door overlaps is let out.
+- A knight's Lay on Hands or Harm Touch waits as the Titanium program's does
+  (read R49-29 b, checklist 6.626, slice B), with eq-network #433 in main's
+  pin. The session now waits the program's own gem-9 timer: 10 s from a
+  press, then the spell's recast
+  after the server refreshes the gem, saying the program's 0x2efd while it
+  runs. This client hands it the recast from the installed spell file
+  (field 15, the replayed table on P99 once ready). The server's long reuse
+  no longer holds the press: the button's hover shows it as "Server reuse
+  N s" (this client's label, "(estimated)" where the session estimated it)
+  and the button still dims while it runs, but the press goes after the
+  local wait and the server decides.
 - On Titanium, a right-click on a player inspects them, as the program's use
   routine ends (reads R49-16 and R49-16e, checklist 6.644).
   - The player is first considered, as before. Then, with Inspect Others
