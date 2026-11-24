@@ -87,6 +87,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<projectiles::Flights>()
         .init_resource::<outfit::Wardrobe>()
         .init_resource::<select_preview::Preview>()
+        .init_resource::<select_preview::History>()
         .init_resource::<windows::DragState>()
         .init_resource::<windows::Layouts>()
         .init_resource::<windows::Shown>()
@@ -140,6 +141,7 @@ pub(super) fn schedule(app: &mut App) {
                 crate::poison_wait::report,
                 login::watch,
                 online::tick,
+                select_preview::remember,
                 daylight::update,
                 spell_effects::load,
                 sounds::load,
