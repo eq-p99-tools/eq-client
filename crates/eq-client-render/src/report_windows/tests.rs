@@ -484,7 +484,11 @@ fn yes_sends_the_report_with_this_clients_line_and_the_deadline_sends_it_quietly
         )
     };
     assert!(history(&app).contains(NO_SYSTEM_INFO));
-    assert!(!app.world().resource::<Shown>().displayed(WindowId::BugReport));
+    assert!(
+        !app.world()
+            .resource::<Shown>()
+            .displayed(WindowId::BugReport)
+    );
 
     let (mut app, receiver) = asking();
     app.world_mut().resource_mut::<ReportWindows>().asking = Some(std::time::Duration::ZERO);

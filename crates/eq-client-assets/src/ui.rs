@@ -1171,8 +1171,12 @@ impl OfficialSettings for Titanium<'_> {
     /// `SendSystemInfo` in `[Defaults]` of `eqclient.ini`, set to 1.
     fn sends_system_info(&self) -> bool {
         std::fs::read(self.0.join("eqclient.ini")).is_ok_and(|bytes| {
-            ini_value(&String::from_utf8_lossy(&bytes), "Defaults", "SendSystemInfo")
-                .is_some_and(|value| value.trim() == "1")
+            ini_value(
+                &String::from_utf8_lossy(&bytes),
+                "Defaults",
+                "SendSystemInfo",
+            )
+            .is_some_and(|value| value.trim() == "1")
         })
     }
 
@@ -2303,9 +2307,11 @@ Log=maybe
         )
         .expect("ini");
         assert!(settings.sends_system_info());
-        assert!(!InstalledClient::Titanium
-            .settings(&root.join("missing"))
-            .sends_system_info());
+        assert!(
+            !InstalledClient::Titanium
+                .settings(&root.join("missing"))
+                .sends_system_info()
+        );
         // Ours is kept in our own folder, made where missing, and replaced
         // in place; the installed files are left exactly as they were.
         let official = std::fs::read(install.join("eqclient.ini")).expect("ini");

@@ -301,12 +301,22 @@ enum Outcome {
 /// shows (read R49-52c); dropped where the dialog lost it, or where the
 /// session it was asked in has ended.
 ///
-/// The program closes every question at once in a sweep (0x548256, called
-/// from 0x437bcd, which hides many windows), answering as No, so the
-/// report still goes. What calls that sweep is unread; this client takes
-/// the question back unanswered when its session ends (camping, a
-/// disconnect, or any new admission), so nothing goes to a later session
-/// (a departure, labelled; where the program's sweep runs is inferred).
+/// The program closes every question at once in a sweep (0x548256, from
+/// 0x437bcd), answering as No, so the report still goes (read R49-52d).
+/// The sweep runs on a UI reload, a change of screen size or display mode,
+/// and as the in-zone loop ends (0x4acf33):
+/// - after a camp, while the connection is still open, before the logout,
+///   so the program still sends the report there;
+/// - after a server drop or a `/quit`, with the connection already gone, so
+///   nothing can go;
+/// - on zoning, where the old connection's close against the sweep is
+///   unread.
+///
+/// This client takes the question back unanswered when the session it was
+/// asked in ends, by any of these, so nothing goes to a later session. For
+/// a drop or a quit that is the program's result. For a camp it is a
+/// departure, labelled: this client's camp ends inside the session, which
+/// logs out before the window can answer. For zoning it is inferred.
 fn outcome(
     deadline: std::time::Duration,
     now: std::time::Duration,
