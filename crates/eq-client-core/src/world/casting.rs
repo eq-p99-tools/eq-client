@@ -10,6 +10,9 @@ use std::{
     time::{Duration, Instant},
 };
 
+/// The Bard's class number.
+pub(super) const BARD: u32 = 8;
+
 /// How long a spell takes to come back, from the installed client's data.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub struct SpellTiming {
@@ -87,8 +90,9 @@ impl SpellCatalog for NoSpells {
 /// A notice waiting for the spells' timing, in the order it came.
 #[derive(Clone, Debug, PartialEq, Eq)]
 enum Pending {
-    /// A gem's refresh: spell, reduction, when.
-    Refresh(u32, u32, Instant),
+    /// A gem's refresh: spell, reduction, when, and whether it starts the
+    /// spell's recovery (a Titanium Bard's doesn't, 6.642).
+    Refresh(u32, u32, Instant, bool),
     /// A Bard's song stop, with the spells in the gems then.
     SongStop([Option<u32>; 8]),
 }
@@ -125,7 +129,17 @@ impl Cooldowns {
 
     /// Notes a gem's refresh, which the spell's timing turns into a timer.
     pub fn refresh(&mut self, spell: u32, reduction: u32, now: Instant) {
-        self.pending.push(Pending::Refresh(spell, reduction, now));
+        self.pending
+            .push(Pending::Refresh(spell, reduction, now, true));
+    }
+
+    /// Notes a refresh of a Bard's own gem under the Titanium program's
+    /// rule (0x458ed8 kind 3, read R49-21 c; 6.642): the spell's own timer
+    /// starts as any other's, but the wait before any spell is set to the
+    /// refresh's time rather than adding the spell's recovery.
+    pub fn refresh_without_recovery(&mut self, spell: u32, reduction: u32, now: Instant) {
+        self.pending
+            .push(Pending::Refresh(spell, reduction, now, false));
     }
 
     /// Notes a Bard's song stop (0x40f06d, read R49-21 c, 6.542): the
@@ -143,8 +157,10 @@ impl Cooldowns {
     pub fn resolve(&mut self, spells: &dyn SpellCatalog, now: Instant) {
         self.spells.retain(|_, end| *end > now);
         for pending in std::mem::take(&mut self.pending) {
-            let (spell, reduction, received) = match pending {
-                Pending::Refresh(spell, reduction, received) => (spell, reduction, received),
+            let (spell, reduction, received, recovers) = match pending {
+                Pending::Refresh(spell, reduction, received, recovers) => {
+                    (spell, reduction, received, recovers)
+                }
                 Pending::SongStop(gems) => {
                     self.recovery = None;
                     for spell in gems.into_iter().flatten() {
@@ -166,8 +182,8 @@ impl Cooldowns {
                             timing.recast_ms.saturating_sub(reduction),
                         )),
                 );
-                self.recovery =
-                    Some(received + Duration::from_millis(u64::from(timing.recovery_ms)));
+                let recovery_ms = if recovers { timing.recovery_ms } else { 0 };
+                self.recovery = Some(received + Duration::from_millis(u64::from(recovery_ms)));
             }
         }
     }
@@ -213,6 +229,10 @@ pub struct Casting {
     /// A Bard's `/melody` list (read R49-33 c); each admission starts with
     /// none.
     pub melody: super::Melody,
+    /// Whether the player's own refreshes follow the Titanium program's
+    /// rule for a Bard, starting no recovery (6.642): a Bard admitted where
+    /// the session offers `Capability::BardRefreshTimers`.
+    pub(super) bard_refresh: bool,
     /// The request associated with the active cast. TAKP can begin a Luclin
     /// port as spell 2935 and end it naming the requested port.
     requested: Option<u32>,
@@ -320,7 +340,12 @@ impl Casting {
             } if usize::try_from(slot).ok().and_then(|slot| gems.get(slot))
                 == Some(&Some(spell_id)) =>
             {
-                self.cooldowns.refresh(spell_id, reduction_ms, now);
+                if self.bard_refresh {
+                    self.cooldowns
+                        .refresh_without_recovery(spell_id, reduction_ms, now);
+                } else {
+                    self.cooldowns.refresh(spell_id, reduction_ms, now);
+                }
                 self.melody.refreshed();
                 if casting(spell_id) {
                     self.cast = None;
@@ -700,6 +725,26 @@ mod tests {
         // A stop with unknown timing still clears the shared recovery.
         timers.song_stopped(&[None; 8]);
         timers.resolve(&NoSpells, start);
+        assert_eq!(timers.remaining(73, start), Duration::ZERO);
+    }
+
+    #[test]
+    fn a_bards_refresh_starts_its_spells_timer_but_no_recovery() {
+        let start = Instant::now();
+        let mut timers = Cooldowns::default();
+        // Anyone else's refresh starts the recovery; a Bard's, under the
+        // Titanium program's rule, sets it to the refresh's time.
+        timers.refresh(73, 0, start);
+        timers.resolve(&Songs, start);
+        assert_eq!(timers.remaining(99, start), Duration::from_millis(1500));
+        timers.refresh_without_recovery(73, 0, start);
+        timers.resolve(&Songs, start);
+        assert_eq!(timers.remaining(99, start), Duration::ZERO);
+        assert_eq!(timers.remaining(73, start), Duration::ZERO);
+        // The spell's own recast still runs.
+        timers.refresh_without_recovery(42, 2000, start);
+        timers.resolve(&Songs, start);
+        assert_eq!(timers.remaining(42, start), Duration::from_secs(4));
         assert_eq!(timers.remaining(73, start), Duration::ZERO);
     }
 

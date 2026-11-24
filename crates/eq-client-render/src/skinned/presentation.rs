@@ -142,9 +142,6 @@ pub(crate) fn show(
                 },
                 None,
             ),
-            Shows::VitalPercent(kind) => {
-                (vital_sign(world, hud.resource_estimate, load, kind), None)
-            }
             Shows::RaidCount | Shows::RaidLevel => (raid_text(*shows, world), None),
             Shows::Partner => (
                 crate::give::partner(world),
@@ -420,22 +417,6 @@ pub(super) fn target_name(world: &eq_client_core::world::ClientWorld) -> String 
         .unwrap_or_default()
 }
 
-/// The sign after the player's own percent, which shows with the number
-/// before it: none while the estimate has no maximum, a state the program,
-/// which always knows its maximum, never shows (inferred, 6.529).
-pub(super) fn vital_sign(
-    world: &eq_client_core::world::ClientWorld,
-    estimate: Option<(u32, u32)>,
-    load: Option<(u16, Option<u32>)>,
-    kind: u32,
-) -> String {
-    if label_text(world, estimate, load, kind).is_empty() {
-        String::new()
-    } else {
-        "%".to_owned()
-    }
-}
-
 /// A label's text, by the official client's numbering: percentages of the
 /// player's hit points, mana and stamina, the target's name and hit points,
 /// each group member's, and the members' names.
@@ -488,8 +469,13 @@ pub(super) fn label_text(
         17 => number(world.hit_points().map(|(current, _)| current)),
         18 => number(world.hit_points().map(|(_, maximum)| maximum)),
         19 => percent(fraction(world, estimate, 1)),
-        20 => percent(fraction(world, estimate, 2)),
-        21 => percent(fraction(world, estimate, 3)),
+        // Mana and endurance as the program's label provider makes them
+        // (0x559fb3, read R49-37b): current x 100 / maximum in whole numbers,
+        // at most 100 (0x5593e8), "%d" with no sign, and 0 while the maximum
+        // is 0. Ours may not know a maximum yet, which also shows 0
+        // (inferred: the program always knows it).
+        20 => share(vitals.mana, estimate.map(|(mana, _)| mana)),
+        21 => share(vitals.endurance, estimate.map(|(_, endurance)| endurance)),
         // The target's name, in the skin's colour; whether the official
         // client tints it by consider colour, as the target gauge's text is
         // tinted, is inferred.
@@ -509,6 +495,18 @@ pub(super) fn label_text(
         127 => number(estimate.map(|(_, endurance)| endurance)),
         _ => String::new(),
     }
+}
+
+/// A whole percent of a maximum, cut toward zero and at most 100, or 0
+/// without a maximum above 0 or a current value (read R49-37b).
+fn share(current: Option<u32>, maximum: Option<u32>) -> String {
+    match (current, maximum) {
+        (Some(current), Some(maximum)) if maximum > 0 => {
+            (u64::from(current) * 100 / u64::from(maximum)).min(100)
+        }
+        _ => 0,
+    }
+    .to_string()
 }
 
 /// The target's health in percent, the player's own when they target

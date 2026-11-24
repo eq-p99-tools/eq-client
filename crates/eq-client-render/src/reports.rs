@@ -13,10 +13,10 @@
 //!   with no words it prints 0x3332 and sends nothing. `/guidehelp`
 //!   (0x46844e) is the same text form, with lines 0xde8 and 0xde3.
 //! - `/bugreport` and `/feedback` open the program's windows and ignore the
-//!   words. This client does not draw those windows yet, so the **Typed
-//!   Reports** setting (on until they are built) sends the words instead:
-//!   a bug report then prints 0x22ae, or 0x22b0 with no words, and feedback
-//!   prints nothing, as the program's windows do.
+//!   words ([`super::report_windows`]). The **Typed Reports** setting (off
+//!   by default) sends the words from the line instead, this client's own
+//!   way: a bug report then prints 0x22ae, or 0x22b0 with no words, and
+//!   feedback prints nothing, as the program's windows do.
 //!
 //! A bug report's first word may name its category with a colon
 //! ("pathing: the guard walks into the wall"); a word that names no
@@ -48,7 +48,7 @@ const BUG_SENT: u32 = 0x22ae;
 /// The Titanium program's line for its bug report window's empty box.
 const BUG_EMPTY: u32 = 0x22b0;
 /// The chat colour of the program's lines here; the petition echoes use 0.
-const PROGRAM_COLOUR: u32 = 0xf;
+pub(crate) const PROGRAM_COLOUR: u32 = 0xf;
 
 /// What a typed line asks for.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -173,6 +173,22 @@ pub(crate) enum Answer {
     Say(ReportLine),
     /// Does nothing, as the program's empty feedback window does.
     Nothing,
+    /// Opens the program's window for it, which ignores the words.
+    Open(super::report_windows::Report),
+}
+
+/// The bug report window's line for an empty box.
+pub(crate) const fn bug_empty() -> ReportLine {
+    ReportLine::new(
+        BUG_EMPTY,
+        PROGRAM_COLOUR,
+        "Say what the bug report is about.",
+    )
+}
+
+/// The bug report window's line once its report went.
+pub(crate) const fn bug_sent() -> ReportLine {
+    ReportLine::new(BUG_SENT, PROGRAM_COLOUR, "Your bug report was sent.")
 }
 
 /// A bug report's category and text from its words: a leading word and a
@@ -211,13 +227,21 @@ pub(crate) fn answer(
     if matches!(asked, Asked::GuideHelp(_)) && !program {
         return Err("This client does not take /guidehelp that way yet.".to_owned());
     }
-    if matches!(asked, Asked::Bug(_) | Asked::Feedback(_)) && !typed_reports {
-        // The program opens its window and ignores the words; this client
-        // has no window yet (6.511, C1b).
-        return Err(format!(
-            "This client has no /{} window yet. Turn on Typed Reports to send one from the line.",
-            asked.name()
-        ));
+    // The program opens its window and ignores the words (6.511, C1b);
+    // Typed Reports sends them from the line instead. The other programs
+    // are unread, so they keep the line whatever the setting says.
+    if program && !typed_reports {
+        match asked {
+            Asked::Bug(_) => {
+                offered(asked, world)?;
+                return Ok(Answer::Open(super::report_windows::Report::Bug));
+            }
+            Asked::Feedback(_) => {
+                offered(asked, world)?;
+                return Ok(Answer::Open(super::report_windows::Report::Feedback));
+            }
+            Asked::Petition(_) | Asked::GuideHelp(_) => {}
+        }
     }
     if let Asked::Petition(_) = asked {
         match world.petition_form() {
@@ -251,11 +275,7 @@ pub(crate) fn answer(
                 PROGRAM_COLOUR,
                 "Use /guidehelp with what to say.",
             )),
-            Asked::Bug(_) => Answer::Say(ReportLine::new(
-                BUG_EMPTY,
-                PROGRAM_COLOUR,
-                "Say what the bug report is about.",
-            )),
+            Asked::Bug(_) => Answer::Say(bug_empty()),
             Asked::Feedback(_) => Answer::Nothing,
         });
     }
@@ -270,7 +290,7 @@ fn echo(asked: &Asked) -> Option<ReportLine> {
         Asked::Petition(_) => (PETITION_SENT, 0, "Your petition was sent."),
         // The echo's colour is inferred to match the petition's.
         Asked::GuideHelp(_) => (GUIDE_SENT, 0, "Your request for a guide was sent."),
-        Asked::Bug(_) => (BUG_SENT, PROGRAM_COLOUR, "Your bug report was sent."),
+        Asked::Bug(_) => return Some(bug_sent()),
         Asked::Feedback(_) => return None,
     };
     let mut line = ReportLine::new(id, colour, fallback);
@@ -281,7 +301,7 @@ fn echo(asked: &Asked) -> Option<ReportLine> {
 }
 
 /// Where the player stands, when the client knows.
-fn place(world: &ClientWorld) -> Option<BugPlace> {
+pub(crate) fn place(world: &ClientWorld) -> Option<BugPlace> {
     world.player().map(|player| BugPlace {
         x: player.position.x,
         y: player.position.y,
@@ -320,6 +340,10 @@ fn command(asked: &Asked, world: &ClientWorld, stamp: crate::outbox::Stamp) -> C
                             name: spawn.state.name.clone(),
                         })
                     }),
+                    // The line has no check boxes.
+                    repeatable: false,
+                    crash: false,
+                    character_flags: false,
                 },
                 created: stamp.created,
             }
@@ -385,19 +409,27 @@ mod tests {
     }
 
     #[test]
-    fn with_typed_reports_off_a_bug_report_and_feedback_send_nothing() {
+    fn with_typed_reports_off_a_bug_report_and_feedback_open_their_windows() {
+        use crate::report_windows::Report;
         let (online, stamp) = admitted();
         let world = online.world();
         assert_eq!(world.generation(), GameDialect::Titanium);
-        for asked in [
-            Asked::Bug("the guard walks into the wall".into()),
-            Asked::Feedback("a note".into()),
+        for (asked, report) in [
+            (
+                Asked::Bug("the guard walks into the wall".into()),
+                Report::Bug,
+            ),
+            (Asked::Feedback("a note".into()), Report::Feedback),
+            // The program ignores the words, even none.
+            (Asked::Bug(String::new()), Report::Bug),
         ] {
-            let refused = answer(&asked, world, stamp, false).unwrap_err();
-            assert!(refused.contains("Typed Reports"), "{refused}");
+            assert!(matches!(
+                answer(&asked, world, stamp, false),
+                Ok(Answer::Open(opened)) if opened == report
+            ));
             assert!(matches!(
                 answer(&asked, world, stamp, true),
-                Ok(Answer::Send(..))
+                Ok(Answer::Send(..) | Answer::Say(_))
             ));
         }
         // A petition is the program's own text form either way.

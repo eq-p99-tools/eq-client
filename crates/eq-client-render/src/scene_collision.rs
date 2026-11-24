@@ -432,3 +432,7 @@ pub(super) fn triangle_height_at(
     }
     Some(first * vertex_a.y + second * vertex_b.y + third * vertex_c.y)
 }
+
+#[cfg(test)]
+#[path = "tree_walk_tests.rs"]
+mod tree_walk_tests;

@@ -28,9 +28,10 @@ outgoing requests; corrections replace the predicted position.
 
 A standing Titanium walk climbs onto an edge it runs into up to 1.25 above
 the body's origin, 5 units for a human of size 6, as the official client was
-seen to climb a pier rail and its posts. A ducking or wading walk climbs only
-what the floor sweep reaches, and so do feet that land, fall or are placed
-under a floor. The tallest edge the official client climbs is
+seen to climb a pier rail and its posts. A ducking walk, or one whose
+origin is in water or lava, climbs only what the floor sweep reaches, and so
+do feet that land, fall or are placed under a floor. Wading with the origin
+above the water climbs as on dry ground. The tallest edge the official client climbs is
 unmeasured, so a taller one stops here even where it might not there. The
 body's width is unchanged (recording checklist 6.482).
 
@@ -44,8 +45,25 @@ standing jump mounts a ledge up to its own rise plus that reach, about
 8.3 for a human. The program sweeps the air with the same raised body as
 the walk and has no test below it (read R42). Using the floor sweep's
 reach rather than the origin is the stricter reading (recording
-checklist 6.484). Ducking, wet feet and the Mac-era generation keep the
-old behaviour, where an edge at the body stops it.
+checklist 6.484). Ducking, an origin in water and the Mac-era generation
+keep the old behaviour, where an edge at the body stops it.
+
+A swimmer stroking forward with the view pitched up, with dry ground just
+ahead and a little below the origin, hops: at most once in 1500 ms the
+program adds three times the jump strength to the rise and half a unit a
+tick along the heading (0x48a793 and 0x48a026, read R33b). The wet step
+ends on the frame whose travel takes the origin out of the water, and
+the fall that follows carries the velocity it left with, so the hop
+lifts the swimmer clear. A fall whose origin has left the water, the
+feet still in it, passes over what the walk would climb (origin + 1.25),
+so a pool's rim up to about 3.3 above the water, as at Temple of Life in
+North Qeynos, lands the swimmer on it (recording checklists 6.483b and
+6.483c; the jump strength's value and the pitch the test reads are
+inferred). A body that falls back into the water keeps the speed it fell
+with, so a wall that stopped it doesn't stop the stroke. A swimmer that
+surfaces under a ramp or deck over the water, its head inside it, drops
+back into the water: a fall straight down is led by the lower body when
+the whole body's sweep is refused where it starts (ours).
 
 A local movement proposal completes when the worker returns a result for
 its admission and request stamp. That result describes the worker's
@@ -158,6 +176,22 @@ movement and a side-by-side check against the original client's sinking
 and swim speeds remain to be done. The Titanium air meter samples the character's
 model-dependent head reference separately. Drowning and lava reports are
 available on local-only EQEmu. See [settings](settings.md).
+
+On Titanium, Velious water (`VW` regions) at the body's origin is cold, as
+the program's liquid routine reads the origin's region kind: lava's heat
+and Velious water's cold share one once-a-second check, so a check reports
+at most one of them. The cold amount is 50 less a third of the cold
+resist, never under 10. The cold resist is the program's own total: the
+profile's base (a Barbarian's is 35, an Iksar's 10 lower), cold and
+all-resist effects, the Ranger and Beastlord bonus and worn items' cold.
+Rune absorbs aren't taken off any hazard's amount yet, so the server
+applies its own; that's a labelled departure. When the fire or cold
+resist total can't be worked out yet (a buff's or an item's resist isn't
+known), no lava or cold report goes out, where the program reports by its
+own total: another labelled departure, counted in the gap log each time it
+holds a report back (checklist 6.632). Water's other kinds,
+including slime, report nothing. Take Environmental Damage turns cold off
+with the other hazards.
 
 A received placement replaces the local movement projection. A worker can
 accept a movement sample and hold it for pacing. Server position and health
@@ -333,7 +367,20 @@ unconfirmed. When no cast is held, the client reports unconfirmed song state
 as soon as it submits the request. Song buffs and gem timers follow the
 server's updates. On P99 and Titanium EQEmu, when a song stops, the gems
 whose songs have no recast time are ready again at once, and so is the short
-wait before any spell, as in the official client.
+wait before any spell, as in the official client. There, a Bard's songs also
+leave no such wait after they are sung, so the next song can follow at once.
+There, when the server interrupts a Bard's song or cast, its line shows in the
+song colour and follows the Bard songs filter, like the song stop line.
+
+On P99 and Titanium EQEmu, a bash from a player, or a kick from a Warrior above
+level 54, can also stun you or interrupt your cast or song on your side alone,
+as the official client rolls it (read R49-50). Ogres and Oggok citizens are
+spared. Nothing is sent, so the server may still finish the cast or keep the
+song going. An interrupted song ends with the program's own line and resets the
+gems as any song stop does, and an interrupted cast drops the cast bar with no
+line. When a stun resist saves you instead, its line shows in the official
+client's colour. Your buffs' stun chances and resists count; worn items do not
+yet. There is no setting for this.
 
 On P99 and Titanium EQEmu, a Bard can type `/melody` followed by gem numbers,
 such as `/melody 1 3 2`, to play those songs in turn, as the official client
@@ -455,14 +502,57 @@ reported by the current admission.
 
 The P99 paths follow Titanium source and await attended checks.
 
-`/ttell message` sends a tell to the player you target, exactly as
-`/tell Name message` would, and `/whotarget` lists the target's name in the
-zone's `/who`. A tell goes only to another player whose name is letters
-alone. An NPC, a pet, a corpse or yourself gets this client's own refusal
-line and nothing is sent; `/whotarget` takes any target, since it sends
-nothing. Socials may run both; a script tells only with its own tell step.
-The forms, the refusal lines and the target kinds are inferred until the
-original client's handling is read (recording checklist 6.528).
+## Surname
+
+`/surname Name` asks the server for a surname, as the Titanium program
+asks (read R49-10). It runs these checks in order and sends nothing when
+one refuses:
+
+- Under level 20, a line says so.
+- `/surname` alone shows its usage. With a surname already set, the
+  program asks a different question whose answer hasn't been read yet, so
+  this client says that in its own words and sends nothing.
+- Words after the command 32 bytes or more long are refused as too long.
+  The whole argument is measured, not just the first word (inferred).
+- Otherwise the first word, with `'` or `"` quotes taken whole, is cut to
+  19 bytes and kept in its case. A question names that exact word for
+  10 seconds. Yes sends it and says the request went. No, the time running
+  out or the session ending sends nothing.
+
+The server's answer is always shown: a refusal, or the line naming your
+new full name. The name tag follows the zone's own last-name update.
+Scripts run the same command with `slash("surname Name")` and answer the
+question with the confirmation window's buttons, as a player does.
+
+The Mac-era client's `/surname` isn't read yet. Its servers' handlers say
+the client refuses under 20 and cuts to 19, as Titanium does, so the same
+flow runs there (inferred). Project 1999 doesn't offer it from this client
+yet. A quoted surname's spaces go as typed.
+
+`/ttell message` sends a tell to your target, as `/tell Name message`
+would, and `/whotarget` lists the target's name in the zone's `/who`. On
+Titanium servers both follow the original client (read R49-18, recording
+checklist 6.528):
+
+- **No words or no target:** `/ttell` says nothing and sends nothing.
+- **Which targets take a tell:** the name is the one the server sent. A
+  creature's corpse is taken whenever it has a name, as it stands, and the
+  server answers for it. Any other target is taken only when its name has
+  no `#` and no `_`, and is cut at its apostrophe, so a player's corpse's
+  tell goes to its owner. Any other target gets the original's refusal
+  line. Most creatures' names have a `_`, so they are refused.
+- **Yourself:** a tell that would go to you (your own spawn or your own
+  corpse) gets the original's line for that and is not sent.
+- **One difference, labelled:** the original counts a creature that dies
+  in view as a player's corpse and so refuses it; this client keeps it a
+  creature's corpse and sends the tell, which the server then answers.
+- **`/whotarget`** lists any target, you included, as a typed `/who` of its
+  name would, passing over any words after it. With no target it says
+  nothing.
+
+On Mac-era and RoF2 servers, whose clients are unread, a tell goes only to
+another player whose name is letters alone, and this client's own lines
+answer the rest. Socials and a script's `slash` step may run both.
 
 ## Petitions, bug reports and feedback
 
@@ -480,13 +570,53 @@ recording checklist 6.511), in the installation's own lines:
 - Where the world turns the petition window on, the official client shows
   its petition window instead and ignores the words. Which window that is
   is unread, so this client sends the words as above: a departure.
-- The official `/bugreport` and `/feedback` open a window and ignore the
-  words. This client has no such windows yet, so the **Typed Reports**
-  setting (on by default until the windows are built) sends the words
-  instead. A bug report then prints the official sent line, or its empty-box
-  line with no words; feedback prints nothing, as the official window does.
-  With the setting off, the words are ignored and a line says there is no
-  window yet.
+- `/bugreport` and `/feedback` open the installed skin's bug report and
+  feedback windows and ignore the words, as the official client does:
+  - Opening the bug report fills its three place labels with where you
+    stand, each cut to a whole number, and clears its four check boxes and
+    the target's name. The place and heading go with the report as shown.
+    This client clears it on every open (inferred).
+  - **Location** fills the place again. **Target**, checked with a target,
+    names it and sends it; with no target it stays unchecked. **Dup**,
+    **Crash** and **Flags** go with the report as the official bits.
+  - The drop-down picks the category. The official client names the
+    categories from its own table; this client lists them in its own
+    words, the names the servers use.
+  - Click the box to type in it; Enter or Escape gives the keyboard back.
+    The box takes up to 1024 bytes, as the official one.
+  - **Send** first asks the official question in the skin's confirmation
+    dialog, with Yes and No, and the window stays open behind it. Every
+    answer sends, and so does the question's own close after 60 seconds.
+    It is asked on every Send, unless the installation's `eqclient.ini`
+    has `SendSystemInfo=1` under `[Defaults]`; this client reads that
+    setting and never writes it.
+  - After the answer, an empty box prints the official empty-box line and
+    sends nothing. Otherwise it sends, clears the box and prints the
+    official sent line once the session says it went. The window closes
+    either way.
+  - Yes, or `SendSystemInfo=1`, has the official client add your
+    processor, video card and driver to the report. This client never
+    sends anything about your machine, so the report is the same for
+    either answer, and it prints a line of its own saying so (a
+    departure).
+  - **Cancel** prints the official cancelled line and closes the window;
+    the box keeps its words. A question already up stays up, and its
+    answer still sends what the box holds, as the official client does.
+  - A second Send while the question is up does nothing (a departure: the
+    official client would ask again in a second dialog).
+  - If you leave the world while the question is up (zoning, camping, a
+    disconnect, `/quit`), the question goes away and nothing is sent, as
+    with the official client. The official client then still clears the
+    box and prints its sent line; this client keeps the words and prints
+    no sent line for a report that never went (a departure).
+  - The feedback window's **Send** sends the words with your place and
+    heading, clears the box and closes, with no line; empty, it only
+    closes. Its **Cancel** clears the box and closes.
+  - The **Typed Reports** setting (off by default) sends the typed words
+    instead, as earlier versions of this client did: a bug report then
+    prints the official sent line, or its empty-box line with no words.
+  - If the installed skin has no such window, a line says so and points to
+    Typed Reports (a departure: the official client always has them).
 
 Elsewhere, or on any server:
 - A bug report's first word may name its category with a colon, such as
@@ -563,14 +693,27 @@ link to it when the world offers one, and these commands go to it:
 
 - `/join channel` joins a channel. Several can be given with commas, and a
   channel can take a password as `channel:password`.
-- `/leave channel` and `/leaveall` leave one channel or all of them.
+- `/leave channel` and `/leaveall` leave one channel or all of them. `/leave`
+  alone goes to the chat server as it is.
 - `/list` lists the channels you are on, and `/list channel` lists who is on
   a channel.
 - `/announce` (or `/announce on` and `/announce off`) asks to be told when
-  someone joins or leaves a channel.
+  someone joins or leaves a channel. It goes as typed (inferred: the official
+  client's handler for it is unread).
 - `/1` to `/10` followed by text say it on the channel in that slot. The
   first channel joined is `/1`.
-- `/chat words` sends the chat server's own channel words as typed: `join`,
+- `/autojoin channel` (with commas and passwords as for `/join`) keeps the
+  channels to join each time you log in, and sends nothing now. Each time the
+  chat server takes the login, the client says "Autojoining channels: ..."
+  and joins them. The list is the one you set here, kept with your character's
+  options; else your character's `ChannelAutoJoin` in the official client's
+  own file for them (`[ChatManager]`); else `eqclient.ini`'s `[Defaults]`
+  one. `NONE`, the official default, joins nothing. This client never writes
+  the official client's files. Its lines about the list show each channel's
+  name but never a password.
+- `/chat words` sends the chat server's own channel words, after a `/` as
+  the other commands go (inferred: what the official client sends here is
+  only partly read): `join`,
   `leave`, `leaveall`, `list`, `listall`, `announce`, and the owner and
   moderator words (`setowner`, `oplist`, `invite`, `grant`, `moderate`,
   `voice`, `kick`, `password`, `toggleinvites`), which are passed through
@@ -592,14 +735,25 @@ the chat server's own lines print as it sends them. The client remembers the
 joined list across zones, and forgets it when the link ends or you camp.
 
 When the server offers no chat server, or the link has not come up, a command
-says "You are not connected to the chat server." and nothing is sent. When
-the link ends, the chat says "The chat server link has ended." There is no
-reconnect: a new link only comes from the world's next offer. `/autojoin`,
-the list the official client joins at login, is not kept yet.
+says "You are not connected to the chat server." and nothing is sent. The
+official client says nothing then; the line is this client's, always on. The
+link ends after more than 30 seconds in which the chat server sent nothing,
+as the official client's does. When the link ends, the chat says "The chat
+server link has ended." There is no reconnect: a new link only comes from
+the world's next offer.
 
-These lines show in the System tab and are not a chat filter of their own. Every
-wording, colour and slot form above is this client's and is inferred; the
-official client's are pending read R49-12 (recording checklist 6.509).
+The commands go to the chat server as the Titanium program sends them (read
+R49-12, recording checklist 6.616): `/join`, `/leave`, `/leaveall` and
+`/list` as typed, slash and all, and `/N text` as `;N text`. The program
+checks nothing else first. Its usage lines are its own text, not its string
+table, so the usage lines here are this client's words, in the colour the
+program uses for its own. Which of the official client's files for a
+character keeps `[ChatManager]` is inferred.
+
+These lines show in the System tab and are not a chat filter of their own.
+How the official client prints channel lines, joins and leaves is still
+unread (R49-12 b), so those wordings, colours and slot forms are this
+client's and are inferred.
 Project 1999, Quarm and TAKP open no link: on P99, chat channels are withheld
 until there has been an attended session there.
 
