@@ -2,6 +2,58 @@
 
 ## Unreleased
 
+- Follow program reads R49-24 and R49-24b on Titanium for the per-frame steps (checklists 6.416, 6.418, 6.419).
+  - **Falls and jumps:** the air slows a body once a program frame, three frames each 50 ms step at the 60 frames a second taken (inferred), with gravity and the move in each frame's share. Falls now reach about a third of the old top speed, and a jump rises about 5.25 rather than 4.95, as the official client does at 60 frames a second. The program has no frame cap by default, so the official client on a present-day PC falls no faster than this. A fall's damage follows the slower landing. The first fall on P99 or Quarm with this build is attended.
+  - **Turn keys:** the ramp's cap is a race rule: 12 steps (240 heading units a second) for most races, 8 for races 216 and 472, and 3 for race 141. Walking no longer lowers it to 8.
+  - **Mouse look:** sensitivity takes the program's eight steps, shown 1 to 8 on the slider. The default is its 4 (s = 1.143), and a saved 50, the old default, reads as 4. Races 216 and 472 turn at most 8 heading units a step by mouse, and race 141 3. The program's dead zone waits on a read, so a straight up-and-down drag still looks fully up and down.
+- The track window's options, as the Titanium program keeps them (read
+  R49-30 e, checklist 6.638):
+  - **`/tracksort`** (Rangers): N, D, C, RD or RC by their first letters,
+    with lines 0x335d-0x3361, or 0x3362 for any other word. Distance and
+    reverse distance order the list by the server's distances; normal,
+    consider and reverse consider keep the server's order, as the program's
+    sort does. Saved at once.
+  - **`/trackfilter`** (Rangers): a colour word (the installation's words
+    for green, blue, white, yellow, red and light blue) toggles hiding NPCs
+    of that colour, with line 0x336c or 0x336b. For the session only, as
+    the program's; the character's saved mask applies when they start
+    playing. A word for no colour says nothing (the program's answer is
+    unread).
+  - **`/trackplayers`** (anyone): on, off or group, with lines
+    0x3354-0x3357. Off hides players; group lists only your group's. Saved
+    at once.
+  - Another class's sort or filter still gets the Rangers-only line 0x3363,
+    and another class's list keeps the server's order with no colour
+    filter.
+  - Kept with each character's options, seeded once from an installed
+    `eqclient.ini` (`TrackSortType`, `TrackFilterType`, `TrackPlayers` in
+    `[Defaults]`); labelled departure: the program keeps them per
+    installation. The skin's controls for them (its sort and players
+    combo boxes and six colour checkboxes) stay greyed for now; wiring
+    them is a follow-up.
+- Follow program reads R49-25 and R49-25b on Titanium for the walk's edge climb (checklist 6.482). The lift over the origin is now worked out per body: at least 1.9, half the stand height for barbarians, trolls and ogres, and none while ducking or in posture 120. The climb is the sphere's bottom, S + L − r. Until the models' radii are read from their files, no body climbs more than the 1.25 over its origin a human was seen to climb, so races 2, 9 and 10 gain nothing yet, and a taller body of another race climbs a little less (a Vah Shir of size 7: 5.52). The walk stops climbing only when its origin is in water or lava, not when its feet are, so wading out over a pool's rim climbs as on dry ground.
+- Guild invitations follow the Titanium program further (read R49-33 d, checklist 6.633). An offer of a lower rank in your own guild is taken at once with that rank and no dialog, as the program does; only an offer of a member's rank prints its line. Before, a lower offer other than a member's went unanswered. And the invitation dialog's 10-second wait now answers as No does (response 5), where it used to send nothing; that the program's wait reaches that answer is inferred. Scripts answer the dialog with `click("answer", "yes")` or `"no"`, as before.
+- The track window draws light blue as the Titanium program does (read
+  R49-30 d, checklist 6.637): a green entry near the green edge is light
+  blue instead, when e = their level less the green threshold, less 1 for
+  each of your level under 55, under 41 and under 31, is above -6 and your
+  level is above 7. Those entries were drawn green. The green threshold's
+  rounding (down) and its strict edge are now read, no longer inferred.
+- Ride boats as the Titanium client does (read R49-27, checklist 6.611).
+  - **A jump on a moving boat comes down on its deck.** The link to the boat was the floor within 0.05 under the feet, so a jump on a moving ferry let go of it and the boat sailed out from under you. Now, as the program's floor sweep does, the first floor under the feet links you however far down it is: a body in the air over the deck stays with the boat, and one over the water or a dock doesn't. The link still ends 600 from the boat's origin, the session guard's bound (6.469), which is ours.
+  - **Other riders move with the boat between their reports.** Another player or NPC standing on a moving ferry was left standing in the water until its next report, then jumped on. Now a spawn whose report puts it over a boat's deck is carried with the boat, by its own motion across the deck. This is only in zones with a boat.
+  - **Jumps and falls of other spawns.** A spawn moving only up or down plays its jump (L04, L03 for race 49) or, faster than 45 a second down, its fall (L05), as the program's picker does, where it used to stand. Moving is now a speed of 2 a second in any direction.
+  - **A passing ship no longer takes a rider's link.** With two ships alongside, part of a rider's footprint could meet the other ship's side and the link went to that ship, which carried the rider along its own deck. The ship a rider is linked to now stays its link while any part of the footprint is over its deck, for your own character and for others drawn aboard. The program's choice between two ships is unread: this is inferred, the stricter side (6.611).
+  - Our own sender still reports no vertical speed on a jump or fall; that is a separate row.
+- **Luclin player models follow the viewer's eqclient.ini keys, a set key on every server** (read R49-44 a, checklist 6.554):
+  - **The keys are read now, not recalled.** `[Defaults] UseLuclin<Race>Male` / `Female` counts as on when its value starts with T, t or 1, and off otherwise. The race words are the program's: Human, Barbarian, Erudite, WoodElf, HighElf, DarkElf, HalfElf, Dwarf, Troll, Ogre, Halfling, Gnome, Iksar and VahShir.
+  - **A key that isn't set follows the server's expansion mask,** as the program's default does: on where it has Luclin or Planes of Power (bit 0x4 or 0x8), classic where it hasn't or no mask came. So on P99 (Kunark and Velious) a missing key is classic. The program also writes `TRUE` back to its ini where it counts a key on; this client never writes the official ini.
+  - **A set key decides on every server, a stated departure.** The program draws classic whatever the keys say where the mask lacks those bits. This client follows a set key everywhere, P99 included.
+  - **`[Defaults] AllLuclinPcModelsOff`** turns every race classic but Vah Shir.
+  - **Fallbacks:** when a race's own key is off, Human also takes Erudite's, and Wood Elf takes Dark Elf's, then Half Elf's, then High Elf's. A missing fallback key counts by the same mask rule.
+  - **Vah Shir** follows its own key alone, past the all-off key, and is on when unset whatever the mask.
+  - **Froglok stays classic,** since the program's loader doesn't walk it.
+  - **The options file** keeps the keys set on as `luclin_models = ...`, the keys set off as `classic_models = ...`, and `all_luclin_models_off`. A code in both lines is off. A file's keys lie over eqclient.ini's, key by key.
 - **A Titanium door spawned away from its rest opens and goes back as the program's mover does** (eqgame.exe 0x4368b3, read R49-28b; checklist 6.423). Repinned eq-network to 6d62512 (#450).
   - **Spawn poses:** the renderer takes Titanium's new `titanium::endpoint` (RoF2 too, inferred; EQMac unchanged). A door spawned in state 1 or 2 heads open from its base: a lift rises at its opening rate instead of standing at full travel, and a hinged door swings open. One spawned in state 0 or 3 stands at its base. The mover's skipped types (50-52, 54-58, 153-155) stand at their base.
   - **Returns:** a door spawned away from its rest goes back its delay after spawn, even while still opening. With rest 1 it heads for the open end it already has, so nothing visible changes. A door spawned shut or in state 3 with rest 0 no longer goes back. Types 110-152 but 115 close as soon as a vertical one stands open.
