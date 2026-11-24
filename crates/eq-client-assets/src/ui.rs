@@ -643,6 +643,21 @@ impl InstalledClient {
         }
     }
 
+    /// Whether a right-click on a player inspects them (checklist 6.644):
+    /// the Titanium program's use routine 0x4a7356 ends, for a player or
+    /// the player's own spawn, with an inspect when `InspectOthers` is on
+    /// and nothing is on the cursor (reads R49-16 and R49-16e). The Mac-era
+    /// and `RoF2` programs are unread, so they keep this client's rule:
+    /// consider only.
+    #[must_use]
+    pub const fn right_click_inspects(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            // Not read for the Mac era or RoF2.
+            Self::EqMac | Self::Rof2 => false,
+        }
+    }
+
     /// How a typed `/target Name` picks among the spawns it matches.
     #[must_use]
     pub const fn target_by_name(self) -> TargetByName {
