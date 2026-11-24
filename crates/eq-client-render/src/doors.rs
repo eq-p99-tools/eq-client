@@ -304,54 +304,98 @@ fn rider_scale(door: &Door) -> f32 {
 }
 
 /// Each door's [`rider_radius`] where its model is loaded, by door ID, as
-/// the session's lift carry takes it (`DoorRadii`).
-fn radii(doors: &eq_client_core::doors::DoorTable, models: &Models) -> Vec<DoorRadius> {
-    doors
-        .entries()
-        .values()
-        .filter_map(|door| {
-            let model = models.0.get(&model_key(&door.model))?;
-            model.radius?;
-            Some(DoorRadius {
-                door_id: door.id,
-                model: door.model.clone(),
-                radius: rider_radius(Some(model), door),
-            })
-        })
-        .collect()
+/// the session's lift carry takes it (`DoorRadii`), borrowed so that an
+/// unchanged frame allocates nothing.
+fn radii<'a>(
+    doors: &'a eq_client_core::doors::DoorTable,
+    models: &'a Models,
+) -> impl Iterator<Item = (u8, &'a str, f32)> + 'a {
+    doors.entries().values().filter_map(|door| {
+        let model = models.0.get(&model_key(&door.model))?;
+        model.radius?;
+        Some((door.id, door.model.as_str(), rider_radius(Some(model), door)))
+    })
 }
+
+/// The radii last told to the session, by admission.
+pub(super) type Told = Option<(u64, Vec<DoorRadius>)>;
 
 /// Tells the session each door's rider radius, so that its lift carry and
 /// this client's agree on who rides: at each admission, and whenever the
 /// doors or their models change. A door the list leaves out keeps the
-/// program's no-actor reach on both sides.
+/// program's no-actor reach on both sides. `EQMac`'s session keeps no lifts,
+/// as this client doesn't ([`LiftReach`] is filled only for a door with a
+/// lift), so nothing is told there.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn report_radii(
     state: Res<super::online::OnlineState>,
     models: Option<Res<Models>>,
     outbox: Res<crate::outbox::Outbox>,
-    mut sent: Local<Option<(u64, Vec<DoorRadius>)>>,
+    mut told: Local<Told>,
 ) {
-    let (Some(session), Some(models)) = (state.world().session_id(), models) else {
+    if let Some(models) = models {
+        tell_radii(state.world(), &models, &mut told, |radii| {
+            outbox.try_post(state.world(), |stamp| ClientCommand::DoorRadii {
+                session_id: stamp.session_id,
+                radii,
+            })
+        });
+    }
+}
+
+/// [`report_radii`]'s work, with the post given: compares the current radii
+/// with those told for this admission without allocating, and posts only a
+/// list that differs. A refusal that can't clear within the admission (the
+/// session doesn't offer doors, or the player is dead or the session ended)
+/// counts the list as told, so it isn't tried again each frame; one that can
+/// (not admitted yet, between zones, the queue full) is tried next frame.
+pub(super) fn tell_radii(
+    world: &eq_client_core::world::ClientWorld,
+    models: &Models,
+    told: &mut Told,
+    post: impl FnOnce(Vec<DoorRadius>) -> Result<(), crate::outbox::Refusal>,
+) {
+    match world.generation() {
+        eq_client_core::GameDialect::Titanium | eq_client_core::GameDialect::Rof2 => {}
+        eq_client_core::GameDialect::EqMac => return,
+    }
+    let Some(session) = world.session_id() else {
         return;
     };
-    let current = radii(state.world().doors(), &models);
-    let told = sent
+    let last = told
         .as_ref()
         .filter(|(admission, _)| *admission == session)
-        .map_or(&[][..], |(_, told)| told.as_slice());
-    if current == told {
+        .map_or(&[][..], |(_, radii)| radii.as_slice());
+    let current = || radii(world.doors(), models);
+    if current().eq(last
+        .iter()
+        .map(|door| (door.door_id, door.model.as_str(), door.radius)))
+    {
         return;
     }
-    let radii = current.clone();
-    if outbox
-        .try_post(state.world(), |stamp| ClientCommand::DoorRadii {
-            session_id: stamp.session_id,
-            radii,
+    let list: Vec<DoorRadius> = current()
+        .map(|(door_id, model, radius)| DoorRadius {
+            door_id,
+            model: model.to_owned(),
+            radius,
         })
-        .is_ok()
-    {
-        *sent = Some((session, current));
+        .collect();
+    use crate::outbox::Refusal;
+    let settled = match post(list.clone()) {
+        Ok(()) => true,
+        Err(Refusal::Offline | Refusal::NotAdmitted | Refusal::Away | Refusal::Busy) => false,
+        Err(
+            Refusal::Unavailable(_)
+            | Refusal::Dead
+            | Refusal::Ended
+            | Refusal::SpellData
+            | Refusal::SpellSet
+            | Refusal::BookPending
+            | Refusal::BookUnconfirmed,
+        ) => true,
+    };
+    if settled {
+        *told = Some((session, list));
     }
 }
 
@@ -779,6 +823,63 @@ mod tests {
         assert_eq!(rider_radius(None, &door), 100.0);
         assert_eq!(rider_radius(Some(&model_with_radius(None)), &door), 100.0);
         assert_eq!(rider_reach(rider_radius(None, &door)), 310.0);
+    }
+
+    /// A world admitted in session 3 with one door of model TEST at size
+    /// 150, and that model at radius 8.
+    fn told_world(generation: GameDialect) -> (super::super::online::OnlineState, Models) {
+        let mut state = super::super::online::OnlineState::new(true);
+        crate::online::testing::generation(&mut state, generation);
+        crate::online::testing::enter(&mut state, 3, crate::online::testing::player(1), None);
+        let mut bytes = [0u8; 80];
+        bytes[..4].copy_from_slice(b"TEST");
+        bytes[52] = 150;
+        let update = eq_client_core::doors::decode(0x4c24, &bytes)
+            .unwrap()
+            .unwrap();
+        crate::online::testing::doors(&mut state, &update, std::time::Instant::now());
+        let mut models = Models::default();
+        models
+            .0
+            .insert("TEST".into(), model_with_radius(Some(8.0)));
+        (state, models)
+    }
+
+    #[test]
+    fn a_refusal_that_cannot_clear_is_tried_once_and_a_passing_one_again() {
+        use crate::outbox::Refusal;
+        let (state, models) = told_world(GameDialect::Titanium);
+        let frames = |refusal: Refusal| {
+            let mut told = None;
+            let mut posts = 0;
+            for _ in 0..3 {
+                tell_radii(state.world(), &models, &mut told, |_| {
+                    posts += 1;
+                    Err(refusal)
+                });
+            }
+            posts
+        };
+        let unavailable = Refusal::Unavailable(eq_client_core::Capability::Doors);
+        assert_eq!(frames(unavailable), 1);
+        assert_eq!(frames(Refusal::Ended), 1);
+        assert_eq!(frames(Refusal::NotAdmitted), 3);
+        assert_eq!(frames(Refusal::Busy), 3);
+        // A list told stays told: no post on the frames after it.
+        let mut told = None;
+        let mut posts = 0;
+        for _ in 0..3 {
+            tell_radii(state.world(), &models, &mut told, |_| {
+                posts += 1;
+                Ok(())
+            });
+        }
+        assert_eq!(posts, 1);
+        // EQMac's session keeps no lifts, so nothing is told there.
+        let (mac, models) = told_world(GameDialect::EqMac);
+        let mut told = None;
+        tell_radii(mac.world(), &models, &mut told, |_| panic!("told EQMac"));
+        assert_eq!(told, None);
     }
 
     #[test]
