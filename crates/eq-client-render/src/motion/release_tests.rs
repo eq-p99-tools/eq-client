@@ -126,9 +126,11 @@ fn action(app: &mut App, input: Input, frame: usize) {
 
 fn replay(input: Input, reply_delay: usize, base: Instant, catchup: bool) -> Replay {
     let (mut app, requests, news) = timing_app();
-    app.world_mut()
-        .resource_mut::<Controls>()
-        .suppress_release_catchup = !catchup;
+    {
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.suppress_release_catchup = !catchup;
+        controls.backward_speed = Some(4.0);
+    }
     crate::keys::testing::bind(
         &mut app,
         Act::Autorun,
@@ -221,6 +223,15 @@ fn release_catchup_preserves_the_complete_command_and_heading_timelines() {
         for delay in [0, 1, 2, 6] {
             let before = replay(input, delay, base, false);
             let after = replay(input, delay, base, true);
+            if !matches!(input, Input::Opposite) {
+                assert!(
+                    before
+                        .positions
+                        .iter()
+                        .any(|point| point.distance(before.positions[0]) > 0.001),
+                    "{input:?}: fixture did not exercise movement"
+                );
+            }
             assert_eq!(
                 before.commands, after.commands,
                 "{input:?}, delay{delay}: commands changed"
@@ -457,60 +468,97 @@ fn accepted_release_rollback_restores_translation_without_changing_the_rotation_
 #[test]
 fn a_timed_out_release_restores_authority_and_a_late_answer_is_not_replayed() {
     let base = Instant::now() + Duration::from_secs(60);
-    let (mut app, requests, news) = timing_app();
-    tick(&mut app, base, 0);
-    let original = shown(&mut app).0;
-    key(&mut app, KeyCode::KeyW, true);
-    tick(&mut app, base, 1);
-    let request = requests
-        .try_iter()
-        .find_map(|command| match command {
-            ClientCommand::Move(request) => Some(request),
-            _ => None,
-        })
+    let mut command_lists = Vec::new();
+    for enabled in [false, true] {
+        let (mut app, requests, news) = timing_app();
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .suppress_release_catchup = !enabled;
+        tick(&mut app, base, 0);
+        let original = shown(&mut app).0;
+        key(&mut app, KeyCode::KeyW, true);
+        tick(&mut app, base, 1);
+        let request = requests
+            .try_iter()
+            .find_map(|command| match command {
+                ClientCommand::Move(request) => Some(request),
+                _ => None,
+            })
+            .unwrap();
+        let endpoint = Vec3::from_array(eq_client_core::render_position(request.position));
+        key(&mut app, KeyCode::KeyW, false);
+        for frame in 2..=17 {
+            tick(&mut app, base, frame);
+        }
+        assert_eq!(shown(&mut app), (original, original));
+        assert!(
+            app.world().resource::<Controls>().waiting(),
+            "timeout did not retain ownership"
+        );
+        assert!(
+            !app.world()
+                .resource::<Controls>()
+                .has_translation_playhead()
+        );
+        assert!(
+            requests.try_recv().is_err(),
+            "release emitted an early stop"
+        );
+        news.send(eq_client_core::WorldUpdate::Game(
+            eq_client_core::WorldEvent::MotionSent {
+                session_id: request.session_id,
+                created: request.created,
+                position: request.position,
+                refused: None,
+            },
+        ))
         .unwrap();
-    let endpoint = Vec3::from_array(eq_client_core::render_position(request.position));
-    key(&mut app, KeyCode::KeyW, false);
-    for frame in 2..=17 {
-        tick(&mut app, base, frame);
+        let mut due: VecDeque<MovementRequest> = VecDeque::new();
+        let mut commands = Vec::new();
+        for frame in 18..=60 {
+            while let Some(reply) = due.pop_front() {
+                news.send(eq_client_core::WorldUpdate::Game(
+                    eq_client_core::WorldEvent::MotionSent {
+                        session_id: reply.session_id,
+                        created: reply.created,
+                        position: reply.position,
+                        refused: None,
+                    },
+                ))
+                .unwrap();
+            }
+            tick(&mut app, base, frame);
+            for command in requests.try_iter() {
+                commands.push(format!("{command:?}"));
+                if let ClientCommand::Move(next) = command {
+                    assert_eq!(
+                        Vec3::from_array(eq_client_core::render_position(next.position)),
+                        endpoint,
+                        "late answer duplicated translation"
+                    );
+                    due.push_back(next);
+                }
+            }
+        }
+        assert_eq!(shown(&mut app), (endpoint, endpoint));
+        command_lists.push(commands);
     }
-    assert_eq!(shown(&mut app), (original, original));
-    assert!(
-        app.world().resource::<Controls>().waiting(),
-        "timeout did not retain command ownership"
-    );
-    assert!(
-        !app.world()
-            .resource::<Controls>()
-            .has_translation_playhead()
-    );
-    assert!(
-        requests.try_recv().is_err(),
-        "release emitted an early stop"
-    );
-    news.send(eq_client_core::WorldUpdate::Game(
-        eq_client_core::WorldEvent::MotionSent {
-            session_id: request.session_id,
-            created: request.created,
-            position: request.position,
-            refused: None,
-        },
-    ))
-    .unwrap();
-    for frame in 18..=40 {
-        tick(&mut app, base, frame);
-    }
-    assert_eq!(shown(&mut app), (endpoint, endpoint));
-    assert!(
-        requests.try_recv().is_err(),
-        "late acceptance duplicated a move"
-    );
+    // A late answer may still need the existing heading/zero-input stop.
+    // T1 must preserve those commands, not demand an empty outbox.
+    assert_eq!(command_lists[0], command_lists[1]);
 }
 
 #[test]
 fn release_catchup_requires_owned_ground_input_without_a_lift_or_jump() {
     let base = Instant::now() + Duration::from_secs(60);
-    for interruption in ["blur", "lift", "jump"] {
+    for interruption in [
+        "blur",
+        "lift",
+        "jump",
+        "airborne",
+        "no_body",
+        "no_collision",
+    ] {
         let (mut app, requests, _news) = timing_app();
         tick(&mut app, base, 0);
         key(&mut app, KeyCode::KeyW, true);
@@ -532,6 +580,20 @@ fn release_catchup_requires_owned_ground_input_without_a_lift_or_jump() {
             }
             "lift" => app.world_mut().resource_mut::<Controls>().riding = Some((1, base, 3.0)),
             "jump" => app.world_mut().resource_mut::<Controls>().jump = Some(base),
+            "airborne" => {
+                let mut airborne = AirborneController::default();
+                airborne.carry_from_water(1.0, Vec3::X, 0.0);
+                app.world_mut().resource_mut::<Controls>().airborne = Some(airborne);
+            }
+            "no_body" => {
+                let world = app.world_mut();
+                let player = world
+                    .query_filtered::<Entity, With<Player>>()
+                    .single(world)
+                    .unwrap();
+                world.entity_mut(player).remove::<PlayerBody>();
+            }
+            "no_collision" => app.world_mut().resource_mut::<Collision>().0 = None,
             _ => unreachable!(),
         }
         tick(&mut app, base, 2);

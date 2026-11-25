@@ -2017,6 +2017,7 @@ pub(super) fn input(
     let release_safe = controls.visual.is_some()
         && controls.release_sample
         && focused
+        && !controls.stun_active
         && standing
         && !flying
         && !swimming
@@ -2051,6 +2052,20 @@ pub(super) fn input(
                     look.as_deref(),
                 );
                 intent.direction == Vec3::ZERO && intent.turn == 0.0
+            })
+        && moving_world
+            .zip(players.single().ok())
+            .zip(online.world().player())
+            .is_some_and(|((world, (body, _)), player)| {
+                let feet = Vec3::from_array(eq_client_core::render_position(player.position))
+                    - Vec3::Y * body.feet_offset;
+                // Unknown volume metadata keeps the existing ordinary-ground
+                // classification; known wading/water/lava keep their own path.
+                matches!(
+                    world.liquid_contact(feet, body.height),
+                    eq_client_core::movement::LiquidContact::Unmarked
+                        | eq_client_core::movement::LiquidContact::Unknown
+                )
             });
     if let Some(visual) = controls.visual.as_mut() {
         visual.release_translation(released);

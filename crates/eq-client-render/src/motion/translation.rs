@@ -71,7 +71,7 @@ impl Playhead {
                 return;
             }
             if self.released {
-                self.finish_left = Some(RELEASE_FINISH_SECONDS);
+                self.finish_left = Some(segment.span.min(RELEASE_FINISH_SECONDS));
             }
         }
         self.queue.push_back(Leg {
@@ -182,6 +182,14 @@ mod tests {
         visual.release_translation(true);
         visual.advance(0.011, &mut shown);
         assert_eq!(shown.translation, Vec3::X);
+        let playhead = visual.translation.as_mut().unwrap();
+        playhead.push(Segment {
+            to: Transform::from_xyz(2.0, 0.0, 0.0),
+            span: 0.005,
+            snap: false,
+            follow_heading: false,
+        });
+        assert_eq!(playhead.advance(0.006), Vec3::X * 2.0);
     }
 
     #[test]
