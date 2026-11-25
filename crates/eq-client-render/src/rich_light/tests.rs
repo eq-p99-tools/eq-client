@@ -104,6 +104,7 @@ fn zone(sky: u8) -> (App, Handle<Mesh>, Handle<StandardMaterial>) {
     ));
     let positions = vec![[0.0, 0.0, 0.0], [100.0, 0.0, 0.0], [0.0, 0.0, 100.0]];
     scene.meshes.push(lighting::LitMesh {
+        offset: 0,
         mesh: mesh.clone(),
         light: vec![[100, 50, 0, 0]; 3],
         placed_at: Some((positions, vec![[0.0, 1.0, 0.0]; 3])),
