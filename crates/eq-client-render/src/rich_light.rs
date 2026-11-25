@@ -209,6 +209,10 @@ pub(super) struct RichState {
     zone: String,
     lit: HashSet<AssetId<Mesh>>,
     materials: HashMap<AssetId<StandardMaterial>, Handle<RichMaterial>>,
+    /// An animated surface's rich material for each frame of its plain
+    /// one, made once: the surface takes the frame's material, and no
+    /// material changes while the zone animates.
+    frames: HashMap<(AssetId<StandardMaterial>, Option<AssetId<Image>>), Handle<RichMaterial>>,
     carried: Vec<PassLight>,
     /// The player's height, for the own light's shadow.
     own_height: f32,
@@ -431,6 +435,7 @@ pub(super) fn gather(
     if state.zone != zone {
         zone.clone_into(&mut state.zone);
         state.materials.clear();
+        state.frames.clear();
         state.lit = scene
             .iter()
             .flat_map(|scene| {
@@ -491,7 +496,7 @@ pub(super) fn swap(
     // Only when the zone or the tuning changes them, never with the sky.
     if state.limits != state.applied_limits {
         state.applied_limits = state.limits;
-        for handle in state.materials.values() {
+        for handle in state.materials.values().chain(state.frames.values()) {
             if let Some(mut material) = rich.get_mut(handle) {
                 material.extension.limits = state.limits;
             }
@@ -532,30 +537,49 @@ pub(super) fn swap(
     }
 }
 
-/// Keeps an animated surface's rich material on its plain material's
-/// current frame.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+/// Keeps an animated surface on its plain material's current frame by
+/// giving it that frame's rich material, made the first time the frame
+/// shows. Writing the frame into the material instead changes it on every
+/// step of the animation, and the renderer prepares every changed material
+/// again: hundreds of surfaces animate in a zone like Qeynos.
+#[allow(clippy::needless_pass_by_value, clippy::type_complexity)] // Bevy system parameters.
 pub(super) fn follow_frames(
+    mut commands: Commands,
+    mut state: ResMut<RichState>,
     surfaces: Query<
-        (&Parked, &MeshMaterial3d<RichMaterial>),
+        (Entity, &Parked, &MeshMaterial3d<RichMaterial>),
         With<crate::gpu_assets::TerrainAnimation>,
     >,
     standard: Res<Assets<StandardMaterial>>,
     mut rich: ResMut<Assets<RichMaterial>>,
 ) {
-    for (Parked(plain), drawn) in &surfaces {
+    let state = &mut *state;
+    for (entity, Parked(plain), drawn) in &surfaces {
         let Some(frame) = standard
             .get(plain)
             .map(|plain| plain.base_color_texture.clone())
         else {
             continue;
         };
-        if rich
-            .get(&drawn.0)
-            .is_some_and(|drawn| drawn.base.base_color_texture != frame)
-            && let Some(mut drawn) = rich.get_mut(&drawn.0)
-        {
-            drawn.base.base_color_texture = frame;
+        let key = (plain.id(), frame.as_ref().map(Handle::id));
+        let handle = if let Some(handle) = state.frames.get(&key) {
+            handle.clone()
+        } else {
+            let Some(current) = rich.get(&drawn.0) else {
+                continue;
+            };
+            let handle = if current.base.base_color_texture == frame {
+                drawn.0.clone()
+            } else {
+                let mut next = current.clone();
+                next.base.base_color_texture = frame;
+                rich.add(next)
+            };
+            state.frames.insert(key, handle.clone());
+            handle
+        };
+        if handle != drawn.0 {
+            commands.entity(entity).insert(MeshMaterial3d(handle));
         }
     }
 }

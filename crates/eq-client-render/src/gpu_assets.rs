@@ -27,6 +27,19 @@ pub(super) struct TerrainAnimation {
 }
 
 impl TerrainAnimation {
+    /// An animation through `frames`, a frame each second.
+    #[cfg(test)]
+    pub(super) fn testing(frames: Vec<Handle<Image>>) -> Self {
+        Self {
+            frames,
+            frame_millis: std::num::NonZeroU32::new(1000).unwrap(),
+            elapsed: std::time::Duration::ZERO,
+            next_frame_millis: 1000,
+            skip_frames: false,
+            frame: 0,
+        }
+    }
+
     fn advance(&mut self, delta: std::time::Duration) -> Option<Handle<Image>> {
         self.elapsed = self.elapsed.saturating_add(delta);
         let now = self.elapsed.as_millis();

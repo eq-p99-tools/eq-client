@@ -409,3 +409,77 @@ fn night_falling_outdoors_leaves_the_materials_alone() {
     app.update();
     assert_eq!(limits(&mut app), day);
 }
+
+#[test]
+fn an_animated_surface_takes_each_frames_material_without_changing_any() {
+    let (mut app, _, plain) = palace();
+    let mut images = Assets::<Image>::default();
+    let first = images.add(Image::default());
+    let second = images.add(Image::default());
+    let texture = |app: &mut App, image: &Handle<Image>| {
+        app.world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .get_mut(&plain)
+            .unwrap()
+            .base_color_texture = Some(image.clone());
+    };
+    texture(&mut app, &first);
+    let world = app.world_mut();
+    let surface = world
+        .query_filtered::<Entity, With<Mesh3d>>()
+        .single(world)
+        .unwrap();
+    world
+        .entity_mut(surface)
+        .insert(crate::gpu_assets::TerrainAnimation::testing(vec![
+            first.clone(),
+            second.clone(),
+        ]));
+    set(&mut app, true);
+    app.update();
+    app.update();
+    let drawn = |app: &mut App| {
+        let handle = app
+            .world()
+            .get::<MeshMaterial3d<RichMaterial>>(surface)
+            .unwrap()
+            .0
+            .clone();
+        let image = app
+            .world()
+            .resource::<Assets<RichMaterial>>()
+            .get(&handle)
+            .unwrap()
+            .base
+            .base_color_texture
+            .clone();
+        (handle, image)
+    };
+    let (on_first, image) = drawn(&mut app);
+    assert_eq!(image, Some(first.clone()));
+    // The next frame: a material of its own; the first frame's keeps its
+    // image, so no material changed.
+    texture(&mut app, &second);
+    app.update();
+    let (on_second, image) = drawn(&mut app);
+    assert_ne!(on_second, on_first);
+    assert_eq!(image, Some(second.clone()));
+    let first_image = app
+        .world()
+        .resource::<Assets<RichMaterial>>()
+        .get(&on_first)
+        .unwrap()
+        .base
+        .base_color_texture
+        .clone();
+    assert_eq!(first_image, Some(first.clone()));
+    // Round again: the frames' materials are reused, none is made.
+    let made = app.world().resource::<Assets<RichMaterial>>().len();
+    texture(&mut app, &first);
+    app.update();
+    assert_eq!(drawn(&mut app).0, on_first);
+    texture(&mut app, &second);
+    app.update();
+    assert_eq!(drawn(&mut app).0, on_second);
+    assert_eq!(app.world().resource::<Assets<RichMaterial>>().len(), made);
+}
