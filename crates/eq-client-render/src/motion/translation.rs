@@ -84,6 +84,13 @@ impl Playhead {
         self.queue.is_empty() && self.elapsed >= self.duration
     }
 
+    /// Only an observed release makes reaching the endpoint a standing pose.
+    /// A held path may briefly run out while the next sample is in flight;
+    /// restore also starts at an empty, unreleased cursor.
+    pub(super) fn rested(&self) -> bool {
+        self.released && self.finished()
+    }
+
     pub(super) fn map(&mut self, mut map: impl FnMut(Vec3) -> Vec3) {
         self.from = map(self.from);
         self.to = map(self.to);
@@ -159,6 +166,22 @@ mod tests {
                 pose: None,
             },
         )
+    }
+
+    #[test]
+    fn release_rest_requires_release_and_clears_on_repress_or_restore() {
+        let mut playhead = Playhead::from_visual(&visual());
+        assert!(!playhead.rested());
+        playhead.release(true);
+        assert!(!playhead.rested());
+        assert_eq!(playhead.advance(RELEASE_FINISH_SECONDS), Vec3::X);
+        assert!(playhead.rested());
+        playhead.release(false);
+        assert!(playhead.finished());
+        assert!(!playhead.rested());
+        let restored = Playhead::at(Vec3::X);
+        assert!(restored.finished());
+        assert!(!restored.rested());
     }
 
     #[test]
