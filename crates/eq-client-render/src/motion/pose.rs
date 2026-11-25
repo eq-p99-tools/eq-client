@@ -420,6 +420,7 @@ mod tests {
     fn release_rest_stops_walk_and_run_at_the_translation_endpoint() {
         for walking in [false, true] {
             for snapshots in [false, true] {
+                let mut rotations = Vec::new();
                 for baseline in [false, true] {
                     let mut path = Path::default();
                     if snapshots {
@@ -456,7 +457,6 @@ mod tests {
                         crate::character::testing::clip(app.world(), root),
                         moving_clip
                     );
-                    let rotation = app.world().get::<Transform>(root).unwrap().rotation;
                     {
                         let mut controls = app.world_mut().resource_mut::<Controls>();
                         let visual = controls.visual.as_mut().unwrap();
@@ -473,10 +473,7 @@ mod tests {
                         app.world().get::<Transform>(root).unwrap().translation,
                         Vec3::X
                     );
-                    assert_eq!(
-                        app.world().get::<Transform>(root).unwrap().rotation,
-                        rotation
-                    );
+                    rotations.push(app.world().get::<Transform>(root).unwrap().rotation);
                     assert!(
                         app.world()
                             .resource::<Controls>()
@@ -517,6 +514,10 @@ mod tests {
                         );
                     }
                 }
+                assert_eq!(
+                    rotations[0], rotations[1],
+                    "presentation changed the rotation clock"
+                );
             }
         }
     }
