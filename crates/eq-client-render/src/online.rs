@@ -1030,11 +1030,22 @@ pub(super) fn receive(
             }
             if let Some(pad) = changes.local_pad {
                 info!(entry = ?pad.entry, landing = ?pad.landing, "Crossed a local WLD pad");
-                panels.motion.same_zone_landed();
+                panels.motion.begin_pad(pad);
                 if let Some(sets) = panels.spell_sets.as_mut() {
                     sets.interrupt("The character crossed a pad.");
                 }
                 scene.place(&mut commands, super::zone::placement(pad.landing), None);
+            }
+            if let Some((revision, reason)) = changes.local_pad_refused.as_ref() {
+                panels.motion.pad_refused(*revision, reason);
+            }
+            if let Some(completed) = changes.local_pad_completed {
+                panels.motion.complete_pad(completed);
+                scene.place(
+                    &mut commands,
+                    super::zone::placement(completed.position),
+                    None,
+                );
             }
             if let WorldUpdate::Chat(line) = update {
                 chat.receive(line, &state);

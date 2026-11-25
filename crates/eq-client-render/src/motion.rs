@@ -8,6 +8,7 @@ mod boats;
 mod latency_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod pad;
 mod placement;
 pub(super) mod pose;
 mod shoreline;
@@ -91,6 +92,8 @@ pub(super) struct Controls {
     /// The world's count of the player's posture changes as last seen.
     posture_changes: u32,
     pending: Option<Pending>,
+    pad: Option<pad::PendingPad>,
+    pad_landing: Option<Landing>,
     pub last_accepted: Instant,
     moving: bool,
     /// Seconds of play the latest sample sent covers: the model shows it
@@ -280,6 +283,8 @@ impl Default for Controls {
             posture: None,
             posture_changes: 0,
             pending: None,
+            pad: None,
+            pad_landing: None,
             last_accepted: Instant::now(),
             moving: false,
             sent_span: 0.1,
@@ -808,6 +813,17 @@ impl Controls {
         self.placement = placement::Check::default();
     }
 
+    /// A local pad assigns the origin but leaves the actual velocities in
+    /// place (0x48aaa6, read6.654). Its first physics step, not this reset,
+    /// may clear vertical speed using the separately cached arrival floor.
+    pub(super) fn local_pad_landed(&mut self) {
+        let airborne = self.airborne.take();
+        let wet = self.wet;
+        self.same_zone_landed();
+        self.airborne = airborne;
+        self.wet = wet;
+    }
+
     /// A control transition never revokes calibrated speed or existing
     /// vertical momentum. Remember revisions so start/expiry in one frame
     /// still discard pending taps, facing and a crouched jump. Native input
@@ -982,9 +998,13 @@ impl Controls {
             .take()
             .filter(|airborne| airborne.peak().is_some());
         let unreported = self.unreported;
+        let pad = self.pad.take();
+        let pad_landing = self.pad_landing;
         // Following outlasts a change of speed, and a withdrawal while the
         // session places the player; a root ends it in `input`.
         self.reset(grant.units_per_second);
+        self.pad = pad;
+        self.pad_landing = pad_landing;
         self.autorun = autorun;
         self.set_speeds(grant);
         if grant.falls {
@@ -1668,6 +1688,40 @@ pub(super) fn input(
         controls.reset(None);
         controls.held = Some(Held::Withdrawn);
         return;
+    }
+    // The pad floor step precedes ordinary input/cadence gates and uses
+    // the unmodified collision world, even with no voluntary input.
+    if controls.pad.is_some() {
+        if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
+            controls.prepare_pad(world, body.feet_offset);
+            controls.submit_pad(&outbox, online.world());
+        }
+        if let Some(notice) = controls.take_pad_notice() {
+            chat.history.push(crate::chat::system_line(notice));
+        }
+        controls.held = Some(Held::Waiting);
+        return;
+    }
+    if let Some(fall) = controls.pad_landing.take()
+        && let (Some(world), Ok((body, _)), Some(player)) = (
+            collision.0.as_ref(),
+            players.single(),
+            online.world().player(),
+        )
+    {
+        let feet = Vec3::from_array(eq_client_core::render_position(player.position))
+            - Vec3::Y * body.feet_offset;
+        controls.unreported = observe_landing(
+            fall,
+            client,
+            world,
+            feet,
+            online.world(),
+            &outbox,
+            &options.options.qol,
+            &messages,
+            &mut chat,
+        );
     }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
     let session_id = online.world().session_id();
@@ -2987,33 +3041,17 @@ pub(super) fn input(
             .as_mut()
             .and_then(AirborneController::take_landing)
     {
-        let cost = landing_cost(
+        controls.unreported = observe_landing(
+            fall,
             client,
             world,
             position - Vec3::Y * body.feet_offset,
-            fall,
             online.world(),
+            &outbox,
+            &options.options.qol,
+            &messages,
+            &mut chat,
         );
-        let reports_damage = options.options.qol.on(Fix::TakeEnvironmentalDamage)
-            && online.world().can(Capability::EnvironmentalDamage);
-        if let Some(cost) = cost {
-            debug!(
-                fall_distance = fall.fall_distance,
-                impact_speed = fall.impact_speed,
-                carried_weight = ?online.world().fall_weight(),
-                damage = cost.damage,
-                safe_fall = cost.safe_fall,
-                "Landing"
-            );
-            if reports_damage {
-                say_fall(client, cost, online.world(), &messages, &mut chat);
-            }
-            controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
-        } else if reports_damage {
-            chat.history.push(crate::chat::system_line(
-                "Fall damage could not be reported because carried weight is unknown.",
-            ));
-        }
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
         || mouse_snapshot.is_none() && (heading - current_heading).abs() > f32::EPSILON;
@@ -3483,6 +3521,41 @@ fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -
         .jump_spacing()
         .zip(last)
         .is_some_and(|(spacing, last)| now.saturating_duration_since(last) <= spacing)
+}
+
+/// Use the same landing hooks for ordinary steps and the pad's first step.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the two landing paths share their existing report context"
+)]
+fn observe_landing(
+    fall: Landing,
+    client: InstalledClient,
+    collision: &CollisionWorld,
+    feet: Vec3,
+    world: &ClientWorld,
+    outbox: &crate::outbox::Outbox,
+    qol: &Settings,
+    messages: &crate::hud::messages::Messages,
+    chat: &mut crate::chat::ChatState,
+) -> Option<FallCost> {
+    let reports_damage =
+        qol.on(Fix::TakeEnvironmentalDamage) && world.can(Capability::EnvironmentalDamage);
+    if let Some(cost) = landing_cost(client, collision, feet, fall, world) {
+        debug!(fall_distance = fall.fall_distance, impact_speed = fall.impact_speed,
+            carried_weight = ?world.fall_weight(), damage = cost.damage, safe_fall = cost.safe_fall, "Landing");
+        if reports_damage {
+            say_fall(client, cost, world, messages, chat);
+        }
+        report_fall(outbox, world, qol, cost)
+    } else {
+        if reports_damage {
+            chat.history.push(crate::chat::system_line(
+                "Fall damage could not be reported because carried weight is unknown.",
+            ));
+        }
+        None
+    }
 }
 
 /// What a landing with the feet here costs the player: nothing in water or
@@ -6935,6 +7008,53 @@ pub(super) mod tests {
         assert!(controls.boundary.observe(destination).is_none());
         assert!(controls.boundary.observe(None).is_none());
         assert!(controls.boundary.observe(destination).is_some());
+    }
+
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "exactly retained or assigned physical state"
+    )]
+    fn local_pad_reset_keeps_momentum_and_input_but_releases_old_support() {
+        for velocity in [-12.0, 0.0, 8.0] {
+            let now = Instant::now();
+            let mut body = AirborneController::default();
+            body.carry_from_water(velocity, Vec3::new(3.0, 0.0, 4.0), 70.0);
+            let wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
+                [3.0, 4.0],
+                velocity,
+            );
+            let mut controls = Controls {
+                airborne: Some(body),
+                wet,
+                autorun: true,
+                riding: Some((80, now, 38.0)),
+                ..Controls::default()
+            };
+            assert!(controls.boundary.observe(None).is_none());
+            assert!(
+                controls
+                    .boundary
+                    .observe(Some(ZoneLine::Reference(7)))
+                    .is_some()
+            );
+            controls.wait_for(Some(5), now, PendingKind::Crossing);
+            controls.local_pad_landed();
+            let body = controls.airborne.as_ref().unwrap();
+            assert_eq!(body.velocity(), velocity);
+            assert_eq!(body.drift(), Vec3::new(3.0, 0.0, 4.0));
+            assert_eq!(body.peak(), Some(70.0));
+            assert_eq!(controls.wet, wet);
+            assert!(controls.autorun);
+            assert!(controls.pending.is_none());
+            assert!(controls.riding.is_none());
+            assert!(
+                controls
+                    .boundary
+                    .observe(Some(ZoneLine::Reference(8)))
+                    .is_none()
+            );
+        }
     }
 
     fn flat_surface(y: f32) -> [[[f32; 3]; 3]; 2] {
@@ -13318,6 +13438,216 @@ pub(super) mod tests {
             .qol
             .set(Fix::TakeEnvironmentalDamage, false);
         assert_eq!(reported(&mut app, &receiver), None);
+    }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one queued probe through busy, completion, and duplicate"
+    )]
+    fn pad_first_step_precedes_input_gate_and_retries_the_same_probe() {
+        let (mut app, _) = app();
+        let floor =
+            |height| CollisionWorld::new(flat_surface(height).map(|[a, b, c]| [a, c, b])).unwrap();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .try_send(ClientCommand::CrossZoneLine {
+                session_id: 11,
+                destination: eq_client_core::ZoneLineDestination::Reference(1),
+                position: eq_client_core::WorldPosition::default(),
+                created: Instant::now(),
+            })
+            .unwrap();
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+        let entry = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        let crossing = eq_client_core::LocalPadCrossing {
+            session_id: 11,
+            spawn_id: 7,
+            revision: 1,
+            entry,
+            landing: eq_client_core::WorldPosition { z: 38.0, ..entry },
+        };
+        online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::LocalPadCrossed(crossing)],
+        );
+        app.insert_resource(Collision(Some(floor(38.0))));
+        {
+            let mut query = app
+                .world_mut()
+                .query_filtered::<&mut PlayerBody, With<Player>>();
+            query.single_mut(app.world_mut()).unwrap().feet_offset = 3.75;
+        }
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            let mut airborne = AirborneController::default();
+            airborne.carry_from_water(-12.0, Vec3::new(3.0, 0.0, 4.0), 70.0);
+            controls.airborne = Some(airborne);
+            controls.begin_pad(crossing);
+            controls.last_accepted = Instant::now();
+        }
+        // A full queue leaves both authoritative origin and momentum alone.
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            crossing.landing
+        );
+        assert!(
+            (app.world()
+                .resource::<Controls>()
+                .airborne
+                .as_ref()
+                .unwrap()
+                .velocity()
+                + 12.0)
+                .abs()
+                < f32::EPSILON
+        );
+        receiver.try_recv().unwrap();
+        // A moving floor cannot replace the arrival observation on retry.
+        app.insert_resource(Collision(Some(floor(20.0))));
+        app.update();
+        let ClientCommand::FinishLocalPad {
+            session_id,
+            revision,
+            step,
+            created,
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("expected pad completion before ordinary input");
+        };
+        assert_eq!((session_id, revision), (11, 1));
+        assert!((step.floor.unwrap() - 38.001).abs() < 0.0001);
+        assert!((step.vertical_speed + 12.0).abs() < f32::EPSILON);
+        app.update();
+        assert!(receiver.try_recv().is_err(), "completion submitted twice");
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .pad_refused(2, "stale");
+        app.update();
+        assert!(
+            receiver.try_recv().is_err(),
+            "stale refusal retried current pad"
+        );
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .pad_refused(1, "retryable refusal");
+        app.update();
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            ClientCommand::FinishLocalPad {
+                session_id,
+                revision,
+                step,
+                created,
+            }
+        );
+        let completed = eq_client_core::LocalPadCompletion {
+            crossing,
+            position: eq_client_core::WorldPosition {
+                z: step.floor.unwrap() + step.stand_height,
+                ..crossing.landing
+            },
+        };
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        let stale = eq_client_core::LocalPadCompletion {
+            crossing: eq_client_core::LocalPadCrossing {
+                revision: 2,
+                ..crossing
+            },
+            ..completed
+        };
+        controls.complete_pad(stale);
+        assert!(controls.pad.is_some());
+        controls.complete_pad(completed);
+        assert!(controls.pad.is_none());
+        let airborne = controls.airborne.as_ref().unwrap();
+        assert!(airborne.velocity().abs() < f32::EPSILON);
+        assert_eq!(airborne.drift(), Vec3::new(3.0, 0.0, 4.0));
+        assert!(controls.pad_landing.is_some());
+        controls.complete_pad(completed);
+        assert!(controls.pad_landing.is_some());
+    }
+
+    #[test]
+    fn pad_closed_outbox_reports_reentry_and_stops_automatic_motion() {
+        let (mut app, _) = app();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+        let entry = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        let crossing = eq_client_core::LocalPadCrossing {
+            session_id: 11,
+            spawn_id: 7,
+            revision: 1,
+            entry,
+            landing: entry,
+        };
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.begin_pad(crossing);
+            controls.autorun = true;
+        }
+        app.insert_resource(Collision(Some(
+            CollisionWorld::new(flat_surface(0.0)).unwrap(),
+        )));
+        app.update();
+        let controls = app.world().resource::<Controls>();
+        assert!(!controls.autorun);
+        assert!(controls.refused.as_ref().unwrap().contains("Use /quit"));
+        assert!(
+            controls.pad.is_some(),
+            "failed submission released raw placement"
+        );
+        // Normal disconnect/re-entry invalidation ends the held revision.
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.reset(None);
+        assert!(controls.pad.is_none());
+        assert!(controls.refused.is_none());
+    }
+
+    #[test]
+    fn pad_trial_is_discarded_by_correction_and_reset() {
+        for reset in [false, true] {
+            let mut controls = Controls {
+                airborne: Some(AirborneController::default()),
+                ..Controls::default()
+            };
+            let crossing = eq_client_core::LocalPadCrossing {
+                session_id: 11,
+                spawn_id: 7,
+                revision: 1,
+                entry: eq_client_core::WorldPosition::default(),
+                landing: eq_client_core::WorldPosition {
+                    z: 38.0,
+                    ..Default::default()
+                },
+            };
+            controls.begin_pad(crossing);
+            controls.prepare_pad(&CollisionWorld::new(flat_surface(38.0)).unwrap(), 3.75);
+            if reset {
+                controls.reset(None);
+            } else {
+                controls.same_zone_landed();
+            }
+            assert!(controls.pad.is_none());
+        }
     }
 }
 

@@ -306,6 +306,13 @@ impl AirborneController {
         self.velocity = 0.0;
     }
 
+    /// The pad's first-step cached-floor snap uses the existing landing
+    /// observation before clearing vertical speed and fall start. This does
+    /// not broaden the ordinary floor/climb path (read6.654).
+    pub(super) fn pad_floor(&mut self, floor: f32) {
+        self.finish_landing(floor, (-self.velocity).max(0.0));
+    }
+
     /// Ends a fall the water and lava guard stopped short of them. It lands
     /// on nothing, so it leaves no landing: one in water or lava would do
     /// no harm ([`CollisionWorld::landing_damage`]).

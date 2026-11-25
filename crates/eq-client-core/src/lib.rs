@@ -103,7 +103,9 @@ pub use eq_network_game::training;
 pub use eq_network_game::zones;
 pub use eq_network_game::zoning::ZoneOffer;
 pub use eq_network_game::zoning::ZoneRejection;
-pub use eq_network_game::zoning::{LocalPadCrossing, SameZoneRelocation, ZoneLineDestination};
+pub use eq_network_game::zoning::{
+    LocalPadCompletion, LocalPadCrossing, PadArrivalStep, SameZoneRelocation, ZoneLineDestination,
+};
 pub use eq_network_game::{inspection, popups};
 
 pub use eq_network_game::buffs::{Buff, BuffUpdate, InvisibilityStep, SpellEffect};

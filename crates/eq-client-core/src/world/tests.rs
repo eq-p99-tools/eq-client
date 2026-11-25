@@ -136,6 +136,7 @@ fn a_local_pad_does_not_settle_a_wait_for_received_relocation() {
     let entry = world.player().unwrap().position;
     let landing = WorldPosition { x: 30.0, ..entry };
     let crossing = crate::LocalPadCrossing {
+        revision: 1,
         session_id: 1,
         spawn_id: 9,
         entry,
@@ -8189,4 +8190,99 @@ fn a_melody_sees_the_local_song_stop_as_it_sees_a_server_stop() {
     assert_eq!(step, None);
     assert!(gems[0].is_zero());
     assert_eq!(gems[1], std::time::Duration::from_secs(5));
+}
+
+#[test]
+fn local_pad_completion_cannot_replace_a_correction_or_new_admission() {
+    for cancelled in 0..3 {
+        let mut world = admitted();
+        let entry = world.player().unwrap().position;
+        let crossing = crate::LocalPadCrossing {
+            session_id: 1,
+            spawn_id: 9,
+            revision: 1,
+            entry,
+            landing: WorldPosition { z: 38.0, ..entry },
+        };
+        game(&mut world, WorldEvent::LocalPadCrossed(crossing));
+        let completed = crate::LocalPadCompletion {
+            crossing,
+            position: WorldPosition {
+                z: 41.75,
+                ..crossing.landing
+            },
+        };
+        if cancelled == 1 {
+            game(
+                &mut world,
+                WorldEvent::SameZoneRelocated(crate::SameZoneRelocation {
+                    session_id: 1,
+                    spawn_id: 9,
+                    position: entry,
+                }),
+            );
+        } else if cancelled == 2 {
+            game(&mut world, entered(2));
+        }
+        let refused = game(
+            &mut world,
+            WorldEvent::LocalPadRefused {
+                session_id: 1,
+                revision: 2,
+                reason: "stale".into(),
+            },
+        );
+        assert!(refused.ignored && refused.replies.is_empty());
+        let refused = game(
+            &mut world,
+            WorldEvent::LocalPadRefused {
+                session_id: 1,
+                revision: 1,
+                reason: "refused".into(),
+            },
+        );
+        assert_eq!(refused.ignored, cancelled != 0);
+        assert!(
+            refused.replies.is_empty(),
+            "a completion refusal must not settle a crossing"
+        );
+        let changes = game(&mut world, WorldEvent::LocalPadCompleted(completed));
+        assert_eq!(changes.ignored, cancelled != 0);
+        assert!(changes.placed.is_none());
+        if cancelled == 0 {
+            assert_eq!(changes.local_pad_completed, Some(completed));
+            assert_eq!(world.player().unwrap().position, completed.position);
+            assert!(game(&mut world, WorldEvent::LocalPadCompleted(completed)).ignored);
+        }
+    }
+}
+
+#[test]
+fn a_duplicate_pad_at_the_same_origin_does_not_restart_its_probe() {
+    let mut world = admitted();
+    let entry = world.player().unwrap().position;
+    let crossing = crate::LocalPadCrossing {
+        session_id: 1,
+        spawn_id: 9,
+        revision: 1,
+        entry,
+        landing: entry,
+    };
+    assert!(!game(&mut world, WorldEvent::LocalPadCrossed(crossing)).ignored);
+    assert!(game(&mut world, WorldEvent::LocalPadCrossed(crossing)).ignored);
+    let next = crate::LocalPadCrossing {
+        revision: 2,
+        ..crossing
+    };
+    assert!(!game(&mut world, WorldEvent::LocalPadCrossed(next)).ignored);
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::LocalPadCompleted(crate::LocalPadCompletion {
+                crossing,
+                position: entry
+            })
+        )
+        .ignored
+    );
 }

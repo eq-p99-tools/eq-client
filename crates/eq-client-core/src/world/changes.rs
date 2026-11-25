@@ -119,6 +119,10 @@ pub struct Changes {
     pub same_zone_relocation: bool,
     /// A local WLD pad moved the player inside this admission.
     pub local_pad: Option<crate::LocalPadCrossing>,
+    /// The movement owner completed this local pad first step.
+    pub local_pad_completed: Option<crate::LocalPadCompletion>,
+    /// A refusal for the exact pending local pad first step.
+    pub local_pad_refused: Option<(u64, String)>,
     /// The login server listed its worlds, or refused the one chosen.
     pub servers: bool,
     /// The world server offered characters to play.
