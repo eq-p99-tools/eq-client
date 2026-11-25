@@ -1386,6 +1386,75 @@ mod tests {
     }
 
     #[test]
+    fn file_progress_draws_on_both_login_screens_and_clears_when_the_session_stops() {
+        let install = installation("file-progress", &WHOLE);
+        let (mut app, heard) = launch(&install, vec![server("Example", "remembered")]);
+        std::fs::remove_dir_all(&install).unwrap();
+        app.world_mut().resource_mut::<FrontEnd>().request = Some(Request::Connect);
+        app.update();
+        app.world_mut().resource_mut::<OnlineState>().checking_files = Some((1, 3, 123));
+        app.update();
+        app.update();
+        assert!(
+            shown(&mut app).iter().any(|text| {
+                text == "Checking client files: 1/3 | 123 bytes read | Escape: stop"
+            })
+        );
+        // The installed world list uses the same progress and can still go back.
+        list(&mut app);
+        // Let the highlighted row settle before a press/release pair; a
+        // redrawn control correctly cancels a click begun on its old entity.
+        app.update();
+        assert!(
+            shown(&mut app).iter().any(|text| {
+                text == "Checking client files: 1/3 | 123 bytes read | Escape: back"
+            })
+        );
+        press(&mut app, &worlds::Action::Back);
+        app.update();
+        assert!(!app.world().resource::<FrontEnd>().running());
+        assert!(super::super::Worker::finished(
+            &heard.lock().unwrap().sessions[0].2
+        ));
+        assert!(
+            !shown(&mut app)
+                .iter()
+                .any(|text| text.contains("Checking client files"))
+        );
+        // New login resets the attached producer's progress, even if its old
+        // value remained when the previous worker was cancelled.
+        app.world_mut().resource_mut::<FrontEnd>().request = Some(Request::Connect);
+        app.update();
+        app.update();
+        assert!(app.world().resource::<FrontEnd>().running());
+        assert_eq!(app.world().resource::<OnlineState>().checking_files, None);
+        assert!(
+            !shown(&mut app)
+                .iter()
+                .any(|text| text.contains("Checking client files"))
+        );
+        // Completion clears progress without ending an otherwise active login.
+        app.world_mut().resource_mut::<OnlineState>().checking_files = Some((2, 3, 456));
+        app.update();
+        app.update();
+        app.world_mut().resource_mut::<OnlineState>().checking_files = None;
+        app.update();
+        app.update();
+        assert!(
+            shown(&mut app)
+                .iter()
+                .any(|text| text == "Logging in... | Escape: stop")
+        );
+        assert!(app.world().resource::<FrontEnd>().running());
+        assert_eq!(
+            app.world()
+                .resource::<FrontEnd>()
+                .screen(app.world().resource::<OnlineState>()),
+            Showing::Login
+        );
+    }
+
+    #[test]
     fn quick_connect_plays_on_the_remembered_world_once_the_list_shows_it() {
         let install = installation("quick", &WHOLE);
         let mut remembered = server("Example", "someone");

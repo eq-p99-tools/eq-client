@@ -5,9 +5,11 @@
 ## Choose an installation
 
 Use Titanium with P99 or EQEmu, and a TAKP installation with Quarm or TAKP.
-The installation supplies terrain, models, UI, strings and spell data. P99 also
-uses its patch-level files for validation checksums; Quarm does not run the P99
-checksum scan. Keep the installation patched for the server you use.
+The installation supplies terrain, models, UI, strings and spell data. Titanium
+servers' requested integrity files are measured when requested, after login-server
+selection. Public checks read current bytes; explicitly local EQEmu tests may
+reuse a size/mtime cache. Quarm does not use the Titanium integrity path. Keep the
+installation patched for the server you use.
 
 ```console
 cargo run -p eq-client --release --locked -- --eq-dir "/path/to/EverQuest"
