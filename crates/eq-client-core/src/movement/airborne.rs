@@ -306,6 +306,13 @@ impl AirborneController {
         self.velocity = 0.0;
     }
 
+    /// The pad's first-step cached-floor snap uses the existing landing
+    /// observation before clearing vertical speed and fall start. This does
+    /// not broaden the ordinary floor/climb path (read6.654).
+    pub(super) fn pad_floor(&mut self, floor: f32) {
+        self.finish_landing(floor, (-self.velocity).max(0.0));
+    }
+
     /// Ends a fall the water and lava guard stopped short of them. It lands
     /// on nothing, so it leaves no landing: one in water or lava would do
     /// no harm ([`CollisionWorld::landing_damage`]).
@@ -586,8 +593,8 @@ mod tests {
     use super::*;
     fn floor(y: f32) -> [[[f32; 3]; 3]; 2] {
         [
-            [[-20.0, y, -20.0], [20.0, y, -20.0], [20.0, y, 20.0]],
-            [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
+            [[-20.0, y, -20.0], [20.0, y, 20.0], [20.0, y, -20.0]],
+            [[-20.0, y, -20.0], [-20.0, y, 20.0], [20.0, y, 20.0]],
         ]
     }
     /// The provisional physics' numbers, which [`tick`] steps by.
@@ -667,10 +674,10 @@ mod tests {
         // and nothing turns its normal into a slide (Decompile R-s, 11-01).
         let rise = 60.0_f32.to_radians().tan() * 10.0;
         let world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [0.0, 0.0, -20.0], [0.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
-            [[0.0, 0.0, -20.0], [10.0, rise, -20.0], [10.0, rise, 20.0]],
-            [[0.0, 0.0, -20.0], [10.0, rise, 20.0], [0.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [0.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [0.0, 0.0, 20.0]],
+            [[0.0, 0.0, -20.0], [10.0, rise, 20.0], [10.0, rise, -20.0]],
+            [[0.0, 0.0, -20.0], [0.0, 0.0, 20.0], [10.0, rise, 20.0]],
         ])
         .unwrap();
         let mut state = AirborneController::default();
@@ -702,12 +709,12 @@ mod tests {
         // kills, and the walk is never refused.
         let foot = 40.0 / 55.0_f32.to_radians().tan();
         let world = CollisionWorld::new([
-            [[-20.0, 40.0, -20.0], [0.0, 40.0, -20.0], [0.0, 40.0, 20.0]],
-            [[-20.0, 40.0, -20.0], [0.0, 40.0, 20.0], [-20.0, 40.0, 20.0]],
-            [[0.0, 40.0, -20.0], [foot, 0.0, -20.0], [foot, 0.0, 20.0]],
-            [[0.0, 40.0, -20.0], [foot, 0.0, 20.0], [0.0, 40.0, 20.0]],
-            [[foot, 0.0, -20.0], [80.0, 0.0, -20.0], [80.0, 0.0, 20.0]],
-            [[foot, 0.0, -20.0], [80.0, 0.0, 20.0], [foot, 0.0, 20.0]],
+            [[-20.0, 40.0, -20.0], [0.0, 40.0, 20.0], [0.0, 40.0, -20.0]],
+            [[-20.0, 40.0, -20.0], [-20.0, 40.0, 20.0], [0.0, 40.0, 20.0]],
+            [[0.0, 40.0, -20.0], [foot, 0.0, 20.0], [foot, 0.0, -20.0]],
+            [[0.0, 40.0, -20.0], [0.0, 40.0, 20.0], [foot, 0.0, 20.0]],
+            [[foot, 0.0, -20.0], [80.0, 0.0, 20.0], [80.0, 0.0, -20.0]],
+            [[foot, 0.0, -20.0], [foot, 0.0, 20.0], [80.0, 0.0, 20.0]],
         ])
         .unwrap();
         let physics = VerticalPhysics {
@@ -779,25 +786,25 @@ mod tests {
         let world = CollisionWorld::new([
             [
                 [-20.0, height, -20.0],
-                [0.0, height, -20.0],
                 [0.0, height, 20.0],
+                [0.0, height, -20.0],
             ],
             [
                 [-20.0, height, -20.0],
-                [0.0, height, 20.0],
                 [-20.0, height, 20.0],
+                [0.0, height, 20.0],
             ],
-            [[0.0, height, -20.0], [foot, 0.0, -20.0], [foot, 0.0, 20.0]],
-            [[0.0, height, -20.0], [foot, 0.0, 20.0], [0.0, height, 20.0]],
+            [[0.0, height, -20.0], [foot, 0.0, 20.0], [foot, 0.0, -20.0]],
+            [[0.0, height, -20.0], [0.0, height, 20.0], [foot, 0.0, 20.0]],
             [
                 [foot, 0.0, -20.0],
+                [foot + 80.0, 0.0, 20.0],
                 [foot + 80.0, 0.0, -20.0],
-                [foot + 80.0, 0.0, 20.0],
             ],
             [
                 [foot, 0.0, -20.0],
-                [foot + 80.0, 0.0, 20.0],
                 [foot, 0.0, 20.0],
+                [foot + 80.0, 0.0, 20.0],
             ],
         ])
         .unwrap();
@@ -883,10 +890,10 @@ mod tests {
         // footprint takes in its top, stand on it at once, as the programs'
         // floor sweep from the origin meets it, rather than hang on its edge.
         let world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
-            [[0.0, 1.5, -20.0], [20.0, 1.5, -20.0], [20.0, 1.5, 20.0]],
-            [[0.0, 1.5, -20.0], [20.0, 1.5, 20.0], [0.0, 1.5, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
+            [[0.0, 1.5, -20.0], [20.0, 1.5, 20.0], [20.0, 1.5, -20.0]],
+            [[0.0, 1.5, -20.0], [0.0, 1.5, 20.0], [20.0, 1.5, 20.0]],
             [[0.0, 0.0, -20.0], [0.0, 1.5, -20.0], [0.0, 1.5, 20.0]],
             [[0.0, 0.0, -20.0], [0.0, 1.5, 20.0], [0.0, 0.0, 20.0]],
         ])
@@ -1123,17 +1130,17 @@ mod tests {
     fn a_drop_lands_at_the_read_steps_speed_and_costs_what_it_does() {
         for height in [50.0_f32, 100.0] {
             let world = CollisionWorld::new([
-                [[-20.0, 0.0, -20.0], [0.0, 0.0, -20.0], [0.0, 0.0, 20.0]],
-                [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+                [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [0.0, 0.0, -20.0]],
+                [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [0.0, 0.0, 20.0]],
                 [
                     [0.0, -height, -20.0],
-                    [80.0, -height, -20.0],
                     [80.0, -height, 20.0],
+                    [80.0, -height, -20.0],
                 ],
                 [
                     [0.0, -height, -20.0],
-                    [80.0, -height, 20.0],
                     [0.0, -height, 20.0],
+                    [80.0, -height, 20.0],
                 ],
             ])
             .unwrap();
@@ -1343,8 +1350,8 @@ mod tests {
     /// footprint have nothing under them but the deep floor.
     fn ledge(top: f32) -> CollisionWorld {
         CollisionWorld::new([
-            [[0.0, top, -20.0], [20.0, top, -20.0], [20.0, top, 20.0]],
-            [[0.0, top, -20.0], [20.0, top, 20.0], [0.0, top, 20.0]],
+            [[0.0, top, -20.0], [20.0, top, 20.0], [20.0, top, -20.0]],
+            [[0.0, top, -20.0], [0.0, top, 20.0], [20.0, top, 20.0]],
             [
                 [0.0, top - 10.0, -20.0],
                 [0.0, top, -20.0],
@@ -1357,13 +1364,13 @@ mod tests {
             ],
             [
                 [-20.0, -50.0, -20.0],
-                [20.0, -50.0, -20.0],
                 [20.0, -50.0, 20.0],
+                [20.0, -50.0, -20.0],
             ],
             [
                 [-20.0, -50.0, -20.0],
-                [20.0, -50.0, 20.0],
                 [-20.0, -50.0, 20.0],
+                [20.0, -50.0, 20.0],
             ],
         ])
         .unwrap()
@@ -1510,7 +1517,13 @@ mod tests {
         let mut state = AirborneController::default();
         let mut feet = Vec3::new(-1.0, height, 0.0);
         let mut ours = Vec::new();
+        let mut steps = 0;
         while feet.x < foot - 5.0 {
+            steps += 1;
+            assert!(
+                steps <= 200,
+                "the fixture's supported run stopped at {feet}"
+            );
             feet = state.step(
                 &world,
                 feet,

@@ -440,6 +440,20 @@ impl ClientWorld {
         self.player.as_ref()
     }
 
+    /// The own spawn's displayed level. On `EQMac` an appearance may lower
+    /// this without lowering `player().level`, the character level for gates
+    /// (Mac 0x4df52a, spawn +0xad versus character +0x90).
+    #[must_use]
+    pub fn displayed_level(&self) -> Option<u8> {
+        self.player.as_ref().map(|player| {
+            if super::character::separate_spawn_level(self.generation) {
+                self.displayed_level.unwrap_or(player.level)
+            } else {
+                player.level
+            }
+        })
+    }
+
     /// The spells memorized in the player's eight gems; none before admission.
     #[must_use]
     pub fn gems(&self) -> [Option<u32>; 8] {

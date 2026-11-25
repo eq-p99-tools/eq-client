@@ -123,13 +123,14 @@ pub(crate) fn form(
 /// it changes.
 pub(super) fn appearance(front: &FrontEnd) -> String {
     format!(
-        "{}:{}:{}:{}:{:?}:{}:{:?}",
+        "{}:{}:{}:{}:{:?}:{}:{:?}:{:?}",
         front.running(),
         front.chosen,
         front.account,
         front.password.chars().count(),
         front.field,
         front.status,
+        front.checking_files,
         front
             .servers
             .iter()
@@ -356,6 +357,11 @@ fn field(
 /// The line under the buttons: what is happening, why the last login
 /// ended, what Connect does on this login server, or how to use the window.
 pub(super) fn guidance(front: &FrontEnd) -> String {
+    if let Some((completed, total, bytes)) = front.checking_files {
+        return format!(
+            "Checking client files: {completed}/{total} | {bytes} bytes read | Escape: stop"
+        );
+    }
     if front.running() {
         return "Logging in... | Escape: stop".to_owned();
     }

@@ -572,7 +572,7 @@ pub(crate) fn open(
             Report::Feedback => "feedback",
         };
         chat.history.push(crate::chat::system_line(format!(
-            "The installed skin has no /{name} window. Turn on Typed Reports to send one from the line."
+            "The installed skin has no /{name} window. Type the report text after /{name} to send it from the line."
         )));
     }
 }

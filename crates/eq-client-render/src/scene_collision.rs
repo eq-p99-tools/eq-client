@@ -452,3 +452,7 @@ pub(super) fn triangle_height_at(
 #[cfg(test)]
 #[path = "tree_walk_tests.rs"]
 mod tree_walk_tests;
+
+#[cfg(test)]
+#[path = "scene_floor_support_tests.rs"]
+mod floor_support_tests;

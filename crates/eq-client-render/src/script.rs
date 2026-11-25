@@ -3407,9 +3407,10 @@ fn find(target: ClickTarget, buttons: &Buttons, layout: &Layout) -> Option<Entit
             ClickTarget::Store => store,
             ClickTarget::Destroy => destroy == Some(&super::inventory::destruction::Action::Select),
             ClickTarget::Drop => drop,
-            ClickTarget::Spawn { .. } | ClickTarget::Object { .. } | ClickTarget::Door { .. } => {
-                false
-            }
+            ClickTarget::World { .. }
+            | ClickTarget::Spawn { .. }
+            | ClickTarget::Object { .. }
+            | ClickTarget::Door { .. } => false,
             ClickTarget::BookRow(_)
             | ClickTarget::BookPlace(_)
             | ClickTarget::BookPage(_)
@@ -3795,6 +3796,7 @@ fn scene_thing(
 ) -> Option<Result<crate::target::Thing, &'static str>> {
     use crate::target::Thing;
     let (admission, thing, known) = match target {
+        ClickTarget::World { admission, x, y } => (admission, Thing::World(x, y), true),
         ClickTarget::Spawn {
             admission,
             id,
@@ -3825,6 +3827,7 @@ fn scene_thing(
             Ok(thing)
         } else {
             Err(match thing {
+                Thing::World(..) => "that world point is unavailable",
                 Thing::Spawn(_) => "that spawn is gone or has changed",
                 Thing::Object(_) => "that object is not in this zone's list",
                 Thing::Door(_) => "that door is not in this zone's list",
@@ -5755,6 +5758,16 @@ mod tests {
 
     #[test]
     fn scripted_drop_click_uses_the_inventory_button_and_ordinary_confirmation() {
+        drop_script(false);
+    }
+
+    #[test]
+    fn script_world_click_runs_the_scene_release_and_default_confirmation() {
+        drop_script(true);
+    }
+
+    #[allow(clippy::too_many_lines)] // Run both initiators through the same complete UI fixture.
+    fn drop_script(world_gesture: bool) {
         use crate::{
             confirm::{AnswerButton, Asked, Question},
             inventory::ground_drop::{DropButton, input},
@@ -5764,7 +5777,15 @@ mod tests {
         use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
 
         let (mut app, _) = background(vec![
-            Step::Click(ClickTarget::Drop),
+            Step::Click(if world_gesture {
+                ClickTarget::World {
+                    admission: 7,
+                    x: 400,
+                    y: 300,
+                }
+            } else {
+                ClickTarget::Drop
+            }),
             Step::Wait(Duration::from_millis(100)),
             Step::Click(ClickTarget::Answer(true)),
         ]);
@@ -5785,14 +5806,44 @@ mod tests {
                 Update,
                 (crate::confirm::buttons, input, crate::confirm::window).chain(),
             );
-        app.world_mut()
-            .resource_mut::<Shown>()
-            .open(WindowId::Inventory);
-        app.world_mut().spawn((
-            Button,
-            DropButton,
-            laid_out(Vec2::new(240.0, 360.0), 40.0, 1),
-        ));
+        if world_gesture {
+            app.init_resource::<crate::entities::NearbyEntities>()
+                .add_systems(
+                    Update,
+                    (crate::target::input, crate::target::aim)
+                        .chain()
+                        .before(input),
+                );
+            let mut camera = Camera::default();
+            camera.computed.clip_from_view =
+                Mat4::perspective_infinite_reverse_rh(std::f32::consts::FRAC_PI_4, 4.0 / 3.0, 0.1);
+            camera.computed.target_info = Some(bevy::camera::RenderTargetInfo {
+                physical_size: UVec2::new(800, 600),
+                scale_factor: 1.0,
+            });
+            app.world_mut().spawn((
+                camera,
+                GlobalTransform::from_translation(Vec3::new(0.0, 0.0, 10.0)),
+                crate::OrbitCamera {
+                    focus: Vec3::ZERO,
+                    radius: 10.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    pulled: None,
+                    view: default(),
+                    look: 0.0,
+                },
+            ));
+        } else {
+            app.world_mut()
+                .resource_mut::<Shown>()
+                .open(WindowId::Inventory);
+            app.world_mut().spawn((
+                Button,
+                DropButton,
+                laid_out(Vec2::new(240.0, 360.0), 40.0, 1),
+            ));
+        }
         let dialog = app.world_mut().spawn(Node::default()).id();
         app.world_mut().spawn((
             Button,

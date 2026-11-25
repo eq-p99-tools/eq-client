@@ -186,9 +186,9 @@ mod tests {
     fn walled(gap: bool) -> CollisionWorld {
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec();
         let end = if gap { 10.0 } else { 30.0 };

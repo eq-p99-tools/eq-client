@@ -267,6 +267,20 @@ impl ChatHistory {
     pub const fn revision(&self) -> u64 {
         self.revision
     }
+
+    /// Withdraws one identified local line after its queue publication failed.
+    /// Other arrivals and monotonic redraw/arrival identities are preserved.
+    #[must_use]
+    pub fn withdraw(&mut self, id: u64) -> bool {
+        for entries in self.messages.values_mut() {
+            if let Some(index) = entries.iter().position(|(arrival, ..)| *arrival == id) {
+                entries.remove(index);
+                self.revision += 1;
+                return true;
+            }
+        }
+        false
+    }
     /// Counts unread retained messages without allocating or sorting.
     pub fn unread(&self, tab: ChatTab, seen: u64) -> usize {
         self.messages

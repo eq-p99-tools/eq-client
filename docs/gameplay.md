@@ -26,6 +26,11 @@ steps. The display interpolates accepted movement instead of waiting for each
 remote position update. Speed, elapsed time and admission checks constrain the
 outgoing requests; corrections replace the predicted position.
 
+For ordinary movement on flat, dry ground, releasing the controls uses a 50 ms
+display finish window while preserving the remaining path. Facing and movement
+requests keep their usual timing. A quick re-press can still wait for the next
+movement sample.
+
 A standing Titanium walk climbs onto an edge it runs into. The official
 client sweeps the body as a sphere lifted over its origin, so an edge under the
 sphere's bottom passes beneath it (program reads R49-25 and R49-25b). The lift
@@ -333,11 +338,15 @@ says the cursor holds more than one kind, the others stay shown there, as the
 server still holds them; the program would hide them (checklist 6.512c).
 Scripts use the same control and dialog.
 
-On local-only Titanium EQEmu, **Drop cursor item** in Inventory asks before dropping one
+On local-only Titanium EQEmu, release a short left click on the world view
+with an ordinary eligible item on the cursor to ask before dropping it.
+Visible UI and spawns take precedence. The fallback **Drop cursor item**
+button uses the same confirmation. It asks before dropping one
 ordinary, verified droppable item or whole stack. The server chooses the
 location. An item moved onto the cursor only by local prediction needs a
-received cursor update before it can be dropped. The last received item stays
-visible while custody is unresolved. A nearby object appearing does not
+received cursor update before it can be dropped. The cursor attachment clears
+after enqueue, while the received item stays in the custody model.
+A nearby object appearing does not
 identify the item that left the cursor. Use ordinary ground pickup with a
 known empty cursor. After submitting a drop, re-enter the world for a fresh
 inventory snapshot. A drop requires current item and carried coin information.
@@ -345,16 +354,13 @@ The hold pauses conflicting inventory actions. Movement
 can continue after the worker accepts a conservative carried-weight report.
 Falls use the retained weight bound when available. If a landing needs
 weight and the bound becomes unknown, the client shows that in chat.
-Choose **No**, press Escape or close Inventory to cancel before submitting.
-Typing `/fastdrop` turns the question off, so **Drop cursor item** drops at
-once through the same checks and the same one-at-a-time hold; typing it
-again brings the question back, and each says which way it now is. It is off
-at start, is not saved, and turns off at a world entry, a camp, a return to
-login or a lost link; a zone change keeps it. Only the item
-drop's question is skipped: destroying still asks. A social, a hotbutton or
-a script's `slash` turns it over as typing does (6.584). The program's handler (0x4685ba) is
-unread, so this behaviour and its lines are inferred (checklist 6.536,
-pending R49-6n).
+Choose **No**, press Escape or let the 20-second question expire to cancel.
+Closing Inventory also cancels a question started by its fallback button.
+Typing `/fastdrop on` turns the question off, so the world gesture drops at
+once through the same checks and the same one-at-a-time hold.
+`/fastdrop off` restores the question, and `/fastdrop never` refuses drops.
+The saved original option is `NoSafeDrop`, default 0 for the question,
+1 for fast drops, and -1 for refusal. Destroy still asks.
 
 Where the inventory policy supports it, **Destroy cursor item** asks before
 destroying the whole cursor item or stack. **No**, Escape, closing inventory,
@@ -617,16 +623,18 @@ it, whoever types it: the keyboard, a social's line or a script's `slash()`
 step, each with the same checks and pace. A button's game command answers
 that the client does not take the command that way yet.
 
-On Titanium servers these follow the official client (read R49-23,
-recording checklist 6.511), in the installation's own lines:
+On Titanium, the petition behavior and report windows follow read R49-23
+(recording checklist 6.511), using the installation's own lines. Typed
+bug/feedback routing is this client's own rule:
 - `/petition` sends its words and echoes them in the official line. With no
   words it prints the official line for that and sends nothing.
   `/guidehelp` is the same, with its own two lines.
 - Where the world turns the petition window on, the official client shows
   its petition window instead and ignores the words. Which window that is
   is unread, so this client sends the words as above: a departure.
-- `/bugreport` and `/feedback` open the installed skin's bug report and
-  feedback windows and ignore the words, as the official client does:
+- Bare or whitespace-only `/bugreport` and `/feedback` open the installed
+  skin's bug report and feedback windows. Nonblank text submits a report
+  directly; the original client opens the windows and ignores those words:
   - Opening the bug report fills its three place labels with where you
     stand, each cut to a whole number, and clears its four check boxes and
     the target's name. The place and heading go with the report as shown.
@@ -667,20 +675,19 @@ recording checklist 6.511), in the installation's own lines:
   - The feedback window's **Send** sends the words with your place and
     heading, clears the box and closes, with no line; empty, it only
     closes. Its **Cancel** clears the box and closes.
-  - The **Typed Reports** setting (off by default) sends the typed words
-    instead, as earlier versions of this client did: a bug report then
-    prints the official sent line, or its empty-box line with no words.
   - If the installed skin has no such window, a line says so and points to
-    Typed Reports (a departure: the official client always has them).
+    typing the report after the command (the original client always has its windows).
 
-Elsewhere, or on any server:
+On every server that offers the report:
 - A bug report's first word may name its category with a colon, such as
   `/bug pathing: the guard walks into the wall`. A word that names no
-  category, or one without its colon, leaves the whole line as the text,
-  under Other. Bug reports and feedback carry the player's place and
+  category, one without its colon, or a category with no following body,
+  leaves the whole line as the text under Other. For example,
+  `/bugreport pathing:` sends `pathing:` as Other. Only a blank literal
+  command tail opens the window. Bug reports and feedback carry the player's place and
   heading, and a bug report the selected entity where there is one.
-- On Mac-era servers, whose official client is unread, a line with nothing
-  to say sends nothing and answers `Use /petition with what to say.`, and
+- On Mac-era servers, whose official client is unread, an empty `/petition`
+  sends nothing and answers `Use /petition with what to say.`, and
   this client says `Your petition was sent.` or `Your bug report was sent.`
   in its own words.
 - One report of a kind is sent at a time: another of the same kind within
@@ -1015,6 +1022,14 @@ ownership conflict invalidates the old snapshot for that ID.
 Camp uses timed preparation and acknowledgement where offered. The local
 `--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).
+
+Your own jump's pose follows local velocity at the point being drawn. A
+moving jump briefly uses its moving-rise clip, returns to the walk/run near
+the apex, and uses the fall clip on a sufficiently fast descent. A jump
+from still uses a different rise clip and thresholds. This changes only
+presentation; movement, jump requests and endurance actions are unchanged.
+The Titanium selector is read; EqMac and RoF2 follow it provisionally. See
+[own jump animation](own-jump-animation.md) for the rules and remaining reads.
 
 A boat carries whoever stands or jumps over its deck. As in the Titanium
 program, the floor under the feet links the player to the boat however far

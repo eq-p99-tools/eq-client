@@ -160,10 +160,11 @@ pub(super) fn appearance(
     front: &FrontEnd,
 ) -> String {
     format!(
-        "{:?}:{:?}:{}:{:?}",
+        "{:?}:{:?}:{}:{:?}:{:?}",
         list.map(|list| (list.selection_id, &list.servers, list.asked, &list.refused)),
         front.highlighted,
         front.status,
+        front.checking_files,
         front.remembered_world(),
     )
 }
@@ -351,6 +352,11 @@ pub(super) fn guidance(
     front: &FrontEnd,
     strings: Option<&eq_client_assets::strings::StringTable>,
 ) -> String {
+    if let Some((completed, total, bytes)) = front.checking_files {
+        return format!(
+            "Checking client files: {completed}/{total} | {bytes} bytes read | Escape: back"
+        );
+    }
     if let Some(index) = list.asked {
         let name = list
             .servers

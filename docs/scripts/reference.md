@@ -63,6 +63,10 @@ Run a script from the workbench while logged in to act on your current character
 
   A run that stops mid-click lets the keys go.
 - `hover(target...)`: rest the synthetic pointer over a control.
+- `click("world", admission, x, y)` points at logical window coordinates
+  through normal scene input. Visible UI, the 3D viewport and current
+  admission still gate it. An ordinary cursor drop uses the existing
+  confirmation and saved drop preference.
 - `click("spawn", admission, id, revision)`, `click("object", admission, drop_id)` and `click("door", admission, id)`, with `right_click` and `click_with` for a spawn: click a thing in the world, by the ids a fresh `report()` gives. The click obeys what is on screen: it acts only where the scene's own pick names that thing right now, so a thing a person couldn't click from here refuses the step and nothing is sent. A door takes a person's two clicks. See [World](targets.md#world).
 - `hold_click(milliseconds, target...)`: hold the left button on a control.
 - `drag(window, x, y)`: move a named window to logical screen pixels.
@@ -115,7 +119,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 
 ## Camera and movement
 
-- `camera(heading, pitch[, distance])`: position the camera; pitch is -89 (straight down) to 89 (straight up) degrees, which the chase view holds within its own range: with the Free Chase Tilt setting off it stays between eye level and 30 units above the eyes, so it never looks up. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
+- `camera(heading, pitch[, distance])`: position the camera; pitch is -89 (straight down) to 89 (straight up) degrees in the chase view. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
 - `face()`: turn the camera toward the target.
 - `face(heading)`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
   The turn keys' rate is at most 240 heading units a second, after a short ramp, so a half turn takes over a second and a near-full turn over two. An autorunning character keeps running along the arc meanwhile. For a quick turn, use `look("world", x, 0, milliseconds)`, as a mouse turn would, or stop first.

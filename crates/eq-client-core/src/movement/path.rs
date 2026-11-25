@@ -576,9 +576,9 @@ mod tests {
     fn floor() -> Vec<[[f32; 3]; 3]> {
         quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec()
     }
@@ -597,7 +597,7 @@ mod tests {
             .windows(2)
             .flat_map(|pair| {
                 let ((x0, y0), (x1, y1)) = (pair[0], pair[1]);
-                quad([x0, y0, -5.0], [x1, y1, -5.0], [x1, y1, 5.0], [x0, y0, 5.0])
+                quad([x0, y0, -5.0], [x0, y0, 5.0], [x1, y1, 5.0], [x1, y1, -5.0])
             })
             .collect();
         CollisionWorld::new(triangles).unwrap()
@@ -743,16 +743,16 @@ mod tests {
         // A platform five units above the floor, ending in a wall at x = 0.
         let mut triangles = quad(
             [-30.0, 5.0, -30.0],
-            [0.0, 5.0, -30.0],
-            [0.0, 5.0, 30.0],
             [-30.0, 5.0, 30.0],
+            [0.0, 5.0, 30.0],
+            [0.0, 5.0, -30.0],
         )
         .to_vec();
         triangles.extend(quad(
             [0.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [0.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         ));
         triangles.extend(quad(
             [0.0, 0.0, -30.0],
@@ -891,9 +891,9 @@ mod tests {
     fn paths_walk_around_walls_and_fail_when_enclosed() {
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec();
         // A wall across z = 0 that leaves a gap for x > 10.

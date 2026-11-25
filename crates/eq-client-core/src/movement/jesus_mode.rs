@@ -70,8 +70,8 @@ mod tests {
 
     fn floor(left: f32, right: f32, y: f32) -> [[[f32; 3]; 3]; 2] {
         [
-            [[left, y, -8.0], [right, y, -8.0], [right, y, 8.0]],
-            [[left, y, -8.0], [right, y, 8.0], [left, y, 8.0]],
+            [[left, y, -8.0], [right, y, 8.0], [right, y, -8.0]],
+            [[left, y, -8.0], [left, y, 8.0], [right, y, 8.0]],
         ]
     }
 

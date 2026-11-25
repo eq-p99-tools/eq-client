@@ -183,6 +183,7 @@ pub(crate) struct FrontEnd {
     /// What the login screen says: why the last session ended, or why one
     /// could not start.
     pub(crate) status: String,
+    pub(crate) checking_files: Option<(usize, usize, u64)>,
     /// The world highlighted on the login server's list, by its place.
     pub(crate) highlighted: Option<usize>,
     /// What a script asked of the screen showing, which it does as a press
@@ -450,6 +451,7 @@ impl FrontEnd {
         });
         self.highlighted = None;
         self.status.clear();
+        self.checking_files = None;
     }
 
     /// Ends the session: it stops, the world hears nothing more from it,
@@ -462,6 +464,7 @@ impl FrontEnd {
             running.worker.stop();
             self.closing.push(running.worker);
         }
+        self.checking_files = None;
         link.attach(None, None);
         link.bind_spells(eq_client_core::spell_tables::Binding::new(
             eq_client_core::spell_tables::Policy::Installed,
@@ -563,6 +566,7 @@ impl Link<'_> {
 /// threads end.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(super) fn watch(mut front: ResMut<FrontEnd>, online: Res<OnlineState>, mut link: Link) {
+    front.checking_files = front.running().then_some(online.checking_files).flatten();
     front.closing.retain(|worker| !worker.finished());
     let world = online.world();
     let front = &mut *front;

@@ -118,6 +118,7 @@ mod report_windows;
 mod reports;
 mod resources;
 mod resurrection;
+mod rich_light;
 pub mod script;
 mod script_workbench;
 mod select_preview;
@@ -437,6 +438,9 @@ fn seed_official_options(
         if let Some(on) = official.attack_on_assist {
             option_defaults.attack_on_assist = on;
         }
+        if let Some(value) = official.no_safe_drop {
+            option_defaults.no_safe_drop = eq_client_core::options::NoSafeDrop::from_saved(value);
+        }
         if let Some(sort) = official
             .track_sort
             .and_then(eq_client_core::track_options::TrackSort::saved)
@@ -624,7 +628,11 @@ pub(crate) mod testing {
                 .disable::<bevy::audio::AudioPlugin>(),
         )
         .insert_resource(bevy::winit::WinitSettings::continuous());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(
+                std::env::var("EQ_PROBE_DEADLINE")
+                    .map_or(20, |seconds| seconds.parse().unwrap_or(20)),
+            );
         app.add_systems(Update, move |mut exit: MessageWriter<AppExit>| {
             if std::time::Instant::now() >= deadline {
                 error!("Hidden graphics probe timed out");
@@ -982,6 +990,7 @@ fn spawn_static_zone(
 
     let mut door_models = doors::Models::default();
     let mut drawn_models = Vec::with_capacity(zone.models.len());
+    let mut object_animations = Vec::new();
     let models: Vec<_> = zone
         .models
         .into_iter()
@@ -993,17 +1002,15 @@ fn spawn_static_zone(
                 .cloned()
                 .collect();
             let pick = doors::PickMesh::from_model(&model);
-            let primitives = create_render_primitives(
+            let object_render = gpu_assets::create_zone_object_primitives(
                 model.primitives,
                 &model.materials,
                 &texture_images,
                 meshes,
                 materials,
-                true,
-                // Kept in the main world too, where the zone light colours
-                // their vertices.
-                RenderAssetUsages::default(),
             );
+            let primitives = object_render.primitives;
+            object_animations.extend(object_render.animations);
             // A model's meshes are shared by its doors and the placements
             // drawn apart without a light of their own: the base pass alone.
             for ((mesh, _), source) in primitives.iter().zip(&drawn) {
@@ -1059,6 +1066,8 @@ fn spawn_static_zone(
                         placed_at,
                         additive: false,
                     });
+                } else {
+                    lights.plain.push(mesh.id());
                 }
                 (SceneEntity, Mesh3d(mesh), MeshMaterial3d(material))
             })
@@ -1122,6 +1131,10 @@ fn spawn_static_zone(
             })
             .collect::<Vec<_>>(),
     );
+    for mut animation in object_animations {
+        animation.include_mirrored(&mirrored_materials);
+        commands.spawn((SceneEntity, animation));
+    }
     commands.insert_resource(lights);
 }
 
@@ -2127,22 +2140,21 @@ mod tests {
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
         // With wheel zoom disabled, pitching keeps the camera's distance
-        // along its sightline (Free Chase Tilt, on by default).
+        // along its sightline.
         assert!((state.radius - previous.2).abs() < 1e-3);
         let previous = (state.pitch, state.radius);
-        // With Free Chase Tilt off, it keeps the distance behind the player
-        // and moves only the camera's height, as the program's does.
-        app.world_mut()
-            .resource_mut::<options::OptionsState>()
-            .options
-            .qol
-            .set(eq_client_core::qol::Fix::FreeChaseTilt, false);
+        // A retired setting in an old file cannot restore the height cap.
+        {
+            let mut state = app.world_mut().resource_mut::<options::OptionsState>();
+            let previous = std::mem::take(&mut state.options);
+            state.options =
+                eq_client_core::options::Options::read("free_chase_tilt = false", previous);
+        }
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.0);
-        let behind = |pitch: f32, radius: f32| radius * pitch.cos();
-        assert!((behind(state.pitch, state.radius) - behind(previous.0, previous.1)).abs() < 1e-3);
+        assert!((state.radius - previous.1).abs() < 1e-3);
     }
 
     #[test]
@@ -2153,8 +2165,8 @@ mod tests {
     fn offline_falling_pauses_for_character_selection_and_online_players() {
         use super::*;
         let geometry = [
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ];
         let mut app = App::new();
         crate::keys::testing::install(&mut app);

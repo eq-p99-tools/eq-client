@@ -3,6 +3,9 @@ use super::{Shows, Step, gem_name};
 use crate::theme;
 use bevy::prelude::*;
 
+#[cfg(test)]
+mod level_tests;
+
 /// Whether a piece that shows only at times shows now; None for one that
 /// always shows.
 pub(super) fn shown_now(
@@ -441,7 +444,7 @@ pub(super) fn label_text(
     let vitals = world.vitals();
     match kind {
         1 => player.map_or_else(String::new, |player| player.name.clone()),
-        2 => player.map_or_else(String::new, |player| player.level.to_string()),
+        2 => number(world.displayed_level().map(u32::from)),
         3 => player
             .and_then(|player| player.class)
             .and_then(eq_client_core::classes::class_name)

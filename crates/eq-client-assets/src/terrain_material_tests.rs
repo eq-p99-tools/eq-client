@@ -1,4 +1,5 @@
 //! Synthetic archives exercise the same terrain material path as installed zones.
+mod objects;
 use crate::test_world::{Coordinates, OLD_FORMAT, WorldFile, palette, triangle, write_archive};
 use crate::{BlendOpacity, MaterialMode, ZoneAsset, load_zone, load_zone_collision};
 use std::io::Cursor;

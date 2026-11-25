@@ -170,6 +170,7 @@ impl ClientWorld {
         // the Titanium program's rule applies (read R49-21 c, 6.642).
         self.casting.bard_refresh = player.class == Some(super::casting::BARD)
             && self.can(crate::Capability::BardRefreshTimers);
+        self.displayed_level = Some(player.level);
         self.player = Some(player.clone());
         changes
     }
@@ -287,6 +288,12 @@ impl ClientWorld {
             changes.ignored = true;
             return;
         }
+        if self.last_local_pad.is_some_and(|last| {
+            last.session_id == crossing.session_id && last.revision >= crossing.revision
+        }) {
+            changes.ignored = true;
+            return;
+        }
         let Some(player) = self.player.as_mut().filter(|player| {
             player.spawn_id == crossing.spawn_id && player.position == crossing.entry
         }) else {
@@ -297,7 +304,36 @@ impl ClientWorld {
         self.zone
             .moved(crossing.spawn_id, (crossing.landing, [0.0; 3], 0.0), now);
         self.last_local_pad = Some(crossing);
+        self.pending_local_pad = Some(crossing);
         changes.local_pad = Some(crossing);
+    }
+
+    /// Completes only the exact locally pending pad, never a server placement.
+    pub(super) fn local_pad_completed(
+        &mut self,
+        completed: crate::LocalPadCompletion,
+        now: Instant,
+        changes: &mut Changes,
+    ) {
+        let crossing = completed.crossing;
+        if self.session_id != Some(crossing.session_id)
+            || !self.in_world()
+            || self.pending_local_pad != Some(crossing)
+        {
+            changes.ignored = true;
+            return;
+        }
+        let Some(player) = self.player.as_mut().filter(|player| {
+            player.spawn_id == crossing.spawn_id && player.position == crossing.landing
+        }) else {
+            changes.ignored = true;
+            return;
+        };
+        player.position = completed.position;
+        self.zone
+            .moved(crossing.spawn_id, (completed.position, [0.0; 3], 0.0), now);
+        self.pending_local_pad = None;
+        changes.local_pad_completed = Some(completed);
     }
 
     /// A zone line could not be crossed.

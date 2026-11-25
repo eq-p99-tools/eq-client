@@ -40,6 +40,7 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
+    pub(super) checking_files: Option<(usize, usize, u64)>,
     /// Established backend policy for the currently attached producer.
     pub(super) chat_link_expansion: Option<eq_client_core::chat::LinkExpansion>,
     /// Changes when a new worker replaces the current connection.
@@ -253,6 +254,7 @@ impl OnlineState {
         self.connection_revision = self.connection_revision.wrapping_add(1);
         self.deletion.ended();
         self.chat_link_expansion = None;
+        self.checking_files = None;
         self.world.restart();
         self.selection = None;
         self.loading.clear();
@@ -442,6 +444,7 @@ impl OnlineState {
             deletion: default(),
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
+            checking_files: None,
             chat_link_expansion: None,
             connection_revision: 0,
             server_placement: None,
@@ -660,13 +663,19 @@ impl Panels<'_> {
             "Current-admission movement worker result; no server acknowledgment implied"
         );
 
+        let previewed = self.motion.reconcile_preview(
+            admission_id,
+            moved.created,
+            moved.position,
+            moved.refused.is_some(),
+        );
         if self.motion.moved(admission_id, moved.created) {
             self.motion
                 .resolve_carrier(moved.created, moved.refused.is_some());
             self.motion.resolve_water_entry(moved.refused.is_some());
             self.motion.refused.clone_from(&moved.refused);
         }
-        if let Some(transform) = drawn {
+        if !previewed && let Some(transform) = drawn {
             self.motion
                 .display_carrier_sample(transform, moved.position, carriers);
         }
@@ -768,7 +777,6 @@ impl Panels<'_> {
         match reason {
             Reset::Lost { ended, .. } => {
                 self.inventory.cancel_actions();
-                self.inventory.fast_drop = false;
                 self.motion.reset(None);
                 if ended {
                     state.selection = None;
@@ -910,6 +918,10 @@ pub(super) fn receive(
         // Provider facts precede the admission/loading gate. The producer binding
         // is retained verbatim, including for old queued Connecting notifications.
         .filter(|update| {
+            if let WorldUpdate::CheckingFiles(progress) = update {
+                state.checking_files = *progress;
+                return false;
+            }
             if let WorldUpdate::SpellTable(fact) = update {
                 if spell_names
                     .as_deref_mut()
@@ -1017,11 +1029,22 @@ pub(super) fn receive(
             }
             if let Some(pad) = changes.local_pad {
                 info!(entry = ?pad.entry, landing = ?pad.landing, "Crossed a local WLD pad");
-                panels.motion.same_zone_landed();
+                panels.motion.begin_pad(pad);
                 if let Some(sets) = panels.spell_sets.as_mut() {
                     sets.interrupt("The character crossed a pad.");
                 }
                 scene.place(&mut commands, super::zone::placement(pad.landing), None);
+            }
+            if let Some((revision, reason)) = changes.local_pad_refused.as_ref() {
+                panels.motion.pad_refused(*revision, reason);
+            }
+            if let Some(completed) = changes.local_pad_completed {
+                panels.motion.complete_pad(completed);
+                scene.place(
+                    &mut commands,
+                    super::zone::placement(completed.position),
+                    None,
+                );
             }
             if let WorldUpdate::Chat(line) = update {
                 chat.receive(line, &state);
@@ -1693,7 +1716,7 @@ mod tests {
         let stamp = outbox.stamp(online.world()).unwrap();
         let asked = crate::reports::Asked::Petition("I am stuck".into());
         let Ok(crate::reports::Answer::Send(_, echo)) =
-            crate::reports::answer(&asked, online.world(), stamp, true)
+            crate::reports::answer(&asked, online.world(), stamp)
         else {
             panic!("a petition sends");
         };

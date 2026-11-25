@@ -70,16 +70,6 @@ pub enum Fix {
     /// off, the camera keeps to the program's limit. Its height above the
     /// player stays the program's either way. Adam's choice (11-01).
     LongChaseCamera,
-    /// Lets mouse look tilt the chase camera around the player's eyes as
-    /// far as straight up or straight down, at any zoom; turned off, the
-    /// camera keeps the Titanium program's height model, from eye level to
-    /// 30 units above the eyes, which never looks up and, zoomed out, barely
-    /// looks down (program read N2 of 11-01). In the program mouse look Y
-    /// only zooms that camera, or moves its height; only its orbit cameras
-    /// (modes 5 and 6) tilt, from about 45 degrees up to 84 down, and first
-    /// person looks straight up or down (read of 11-23, checklists 6.348,
-    /// 6.422). Adam's choice (11-23): straight up or down in every view.
-    FreeChaseTilt,
     /// Offers the free camera: a user-assigned key detaches the camera from
     /// the character to fly it anywhere, through walls and terrain, until the
     /// key returns it; the character never moves and nothing is sent. The
@@ -90,6 +80,16 @@ pub enum Fix {
     /// stays off the view, and any rain or snow stays out of sight.
     /// Nothing the world sees changes.
     ClearView,
+    /// Lights every zone by this client's own look rather than the original
+    /// engine's: lamps and carried lights shine per pixel with a soft
+    /// falloff and a flame's flicker, the player's light and the nearest
+    /// lamps cast shadows, surfaces take a soft highlight and the camera a
+    /// soft glow. Without a sky, each room keeps its lamps' colours as a
+    /// smooth wash and a tone curve takes the place of clipped colours;
+    /// with one, the day is unchanged and the lamps and torches show by
+    /// night. Experimental (Adam's request of 11-24); off, every zone draws
+    /// as before.
+    RichLighting,
     /// Draws water and lava surfaces with a richer look than the official
     /// client's flat flipbook: smooth flowing motion, see-through surfaces
     /// that reflect the sky at a glance and glint in the sun, depth tint,
@@ -155,13 +155,6 @@ pub enum Fix {
     /// view and uses only what it hits: the first spawn, else a door (read
     /// R49-19). Off by default; the reach checks are the same either way.
     UsePicksNearest,
-    /// Sends `/bugreport` and `/feedback` from the words typed after them.
-    /// The Titanium program ignores those words and opens its bug report or
-    /// feedback window (read R49-23), which this client does not draw yet.
-    /// A departure: on by default until those windows are built, so a bug
-    /// report can still be filed, then off. Off, the words are ignored as
-    /// the program ignores them.
-    TypedReports,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
@@ -200,7 +193,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 37] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -208,9 +201,9 @@ impl Fix {
         Self::FlashOnTells,
         Self::CorpsesAlongGround,
         Self::LongChaseCamera,
-        Self::FreeChaseTilt,
         Self::FreeCamera,
         Self::ClearView,
+        Self::RichLighting,
         Self::BetterWater,
         Self::WalkWhileWinded,
         Self::MoveWhileFeigned,
@@ -229,7 +222,6 @@ impl Fix {
         Self::ZoneAnywhere,
         Self::DuelAnswerCard,
         Self::UsePicksNearest,
-        Self::TypedReports,
         Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
@@ -257,9 +249,9 @@ impl Fix {
             Self::GillsForDays => "gills_for_days",
             Self::CorpsesAlongGround => "corpses_along_ground",
             Self::LongChaseCamera => "long_chase_camera",
-            Self::FreeChaseTilt => "free_chase_tilt",
             Self::FreeCamera => "free_camera",
             Self::ClearView => "clear_view",
+            Self::RichLighting => "rich_lighting",
             Self::BetterWater => "better_water",
             Self::WalkWhileWinded => "walk_while_winded",
             Self::MoveWhileFeigned => "move_while_feigned",
@@ -276,7 +268,6 @@ impl Fix {
             Self::ZoneAnywhere => "zone_anywhere",
             Self::DuelAnswerCard => "duel_answer_card",
             Self::UsePicksNearest => "use_picks_nearest",
-            Self::TypedReports => "typed_reports",
             Self::FrameCap => "frame_cap",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
@@ -308,9 +299,9 @@ impl Fix {
             Self::GillsForDays => "Gills for Days",
             Self::CorpsesAlongGround => "Corpses Lie Along the Ground",
             Self::LongChaseCamera => "Long Chase Camera",
-            Self::FreeChaseTilt => "Free Chase Tilt",
             Self::FreeCamera => "Free Camera",
             Self::ClearView => "See the World Clearly",
+            Self::RichLighting => "Rich Lighting",
             Self::BetterWater => "Better Water",
             Self::WalkWhileWinded => "Walk While Winded",
             Self::MoveWhileFeigned => "Move While Feigned",
@@ -327,7 +318,6 @@ impl Fix {
             Self::ZoneAnywhere => "Zone Anywhere",
             Self::DuelAnswerCard => "Duel Answer Card",
             Self::UsePicksNearest => "Use Picks Nearest",
-            Self::TypedReports => "Typed Reports",
             Self::FrameCap => "Cap Frames at 60",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
@@ -377,14 +367,14 @@ impl Fix {
             Self::LongChaseCamera => {
                 "Let the mouse wheel zoom the chase camera out far past the 200 units the Titanium client allows. Turn it off to keep the Titanium client's limit."
             }
-            Self::FreeChaseTilt => {
-                "Let mouse look tilt the chase camera around your character as far as straight up or straight down, at any zoom. Turn it off to keep the Titanium client's chase camera, which stays between your eye level and 30 units above it."
-            }
             Self::FreeCamera => {
                 "Let the Toggle Free Camera key detach the camera from your character and fly it anywhere until the key returns it. Your character never moves. Turn it off to keep the camera on your character."
             }
             Self::ClearView => {
                 "Light the night as if it were noon, brighten supported dark interiors, and hide distance fog, rain and snow in your view."
+            }
+            Self::RichLighting => {
+                "Light every zone with soft, flickering lamp and torch light, shadows from your own light and a gentle glow; outdoors the lamps show at night. Experimental: departs from the original client's look."
             }
             Self::BetterWater => {
                 "Draw water and lava with flowing motion, sky reflections, sun glints, depth tint and shoreline foam, and haze the view under the surface. Turn it off to keep the original client's flat water."
@@ -431,9 +421,6 @@ impl Fix {
             Self::UsePicksNearest => {
                 "Let the Use key use the nearest door, item on the ground or world container within reach, wherever you face. The original client uses only what lies at the centre of your view; turn this off to play it that way."
             }
-            Self::TypedReports => {
-                "Send /bugreport and /feedback from the words typed after them, instead of opening the report windows as the original client does. Off by default, as the original behaves. On EqMac and RoF2 servers this changes nothing: there the typed words are always sent."
-            }
             Self::AnswerListPolls => {
                 "Answer supported P99 list presence polls after a local delay. This does not join a list or answer numeric challenges."
             }
@@ -478,18 +465,16 @@ impl Fix {
             | Self::JesusMode
             | Self::GillsForDays
             | Self::ExitAtOnce
-            | Self::ZoneAnywhere
-            // The program sends a report only from its window.
-            | Self::TypedReports => Kind::Acts,
+            | Self::ZoneAnywhere => Kind::Acts,
             Self::HiddenWindows
             | Self::MapEverywhere
             | Self::ShowTimesInChat
             | Self::FlashOnTells
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
-            | Self::FreeChaseTilt
             | Self::FreeCamera
             | Self::ClearView
+            | Self::RichLighting
             | Self::BetterWater
             | Self::ReadWhileStanding
             | Self::ShowInvisible
@@ -537,16 +522,15 @@ impl Fix {
             Self::AnswerListPolls => Some(Capability::AnsweringListPolls),
             Self::ExitAtOnce => Some(Capability::Camping),
             Self::DuelAnswerCard => Some(Capability::Dueling),
-            Self::TypedReports => Some(Capability::ReportingBugs),
             Self::ReadWhileStanding => Some(Capability::Spellbook),
             Self::HiddenWindows
             | Self::MapEverywhere
             | Self::ShowTimesInChat
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
-            | Self::FreeChaseTilt
             | Self::FreeCamera
             | Self::ClearView
+            | Self::RichLighting
             | Self::BetterWater
             | Self::ShowInvisible
             | Self::FloatingCombatText
@@ -567,8 +551,8 @@ impl Fix {
     /// chat lines read as the official client's do until the player asks
     /// for their times; the world's damage is taken until the player turns
     /// it off, as Adam chose; corpses lie along the ground until the player
-    /// turns it off, as Adam chose; the chase camera goes far, and tilts as far as
-    /// straight up or down, until the player turns it off, as Adam asked; windows open apart, as Adam asked; and what
+    /// turns it off, as Adam chose; the chase camera zooms far until the player
+    /// turns it off, as Adam asked; windows open apart, as Adam asked; and what
     /// only adds what the player could work out, or stops a plain mistake,
     /// is always on.
     #[must_use]
@@ -580,19 +564,17 @@ impl Fix {
             | Self::TakeEnvironmentalDamage
             | Self::CorpsesAlongGround
             | Self::LongChaseCamera
-            | Self::FreeChaseTilt
             | Self::FreeCamera
             // The original client stands a sitter when hit (read R19 b).
             | Self::StandWhenHit
             // Adam's choice (11-23): the card, on by default.
             | Self::DuelAnswerCard => Availability::Setting { default: true },
             // A comfort the player has to ask for starts as the official
-            // client behaves: off. With it off, the report windows open as
-            // the program's do (6.511, C1b).
-            Self::TypedReports
-            | Self::HiddenWindows
+            // client behaves: off.
+            Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::ClearView
+            | Self::RichLighting
             | Self::BetterWater
             | Self::WalkWhileWinded
             | Self::MoveWhileFeigned
@@ -748,9 +730,9 @@ mod tests {
                 Fix::FlashOnTells,
                 Fix::CorpsesAlongGround,
                 Fix::LongChaseCamera,
-                Fix::FreeChaseTilt,
                 Fix::FreeCamera,
                 Fix::ClearView,
+                Fix::RichLighting,
                 Fix::BetterWater,
                 Fix::WalkWhileWinded,
                 Fix::MoveWhileFeigned,
@@ -769,7 +751,6 @@ mod tests {
                 Fix::ZoneAnywhere,
                 Fix::DuelAnswerCard,
                 Fix::UsePicksNearest,
-                Fix::TypedReports,
             ]
         );
         // A fix that is always on stays on whatever is asked.
@@ -784,6 +765,7 @@ mod tests {
         let settings = Settings::default();
         for fix in [
             Fix::ClearView,
+            Fix::RichLighting,
             Fix::BetterWater,
             Fix::WalkWhileWinded,
             Fix::MoveWhileFeigned,
@@ -815,10 +797,6 @@ mod tests {
         assert!(settings.on(Fix::DuelAnswerCard));
         assert_eq!(Fix::DuelAnswerCard.needs(), Some(Capability::Dueling));
         assert!(!Fix::DuelAnswerCard.is_unsafe());
-        // The report windows open as the program's do (6.511, C1b).
-        assert!(!settings.on(Fix::TypedReports));
-        assert_eq!(Fix::TypedReports.needs(), Some(Capability::ReportingBugs));
-        assert!(!Fix::TypedReports.is_unsafe());
     }
 
     #[test]

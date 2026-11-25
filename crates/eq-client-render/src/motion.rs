@@ -4,10 +4,21 @@ mod belongings_tests;
 #[cfg(test)]
 mod boat_pace_tests;
 mod boats;
+#[cfg(test)]
+mod latency_tests;
+#[cfg(test)]
+mod release_animation_tests;
+#[cfg(test)]
+mod release_tests;
+#[cfg(test)]
+mod rider_animation_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod pad;
 mod placement;
+pub(super) mod pose;
 mod shoreline;
+mod translation;
 
 use super::{
     Collision, OrbitCamera, Player, PlayerBody,
@@ -88,6 +99,8 @@ pub(super) struct Controls {
     /// The world's count of the player's posture changes as last seen.
     posture_changes: u32,
     pending: Option<Pending>,
+    pad: Option<pad::PendingPad>,
+    pad_landing: Option<Landing>,
     pub last_accepted: Instant,
     moving: bool,
     /// Seconds of play the latest sample sent covers: the model shows it
@@ -107,6 +120,34 @@ pub(super) struct Controls {
     placement: placement::Check,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
+    /// Display-only history waiting for this sample's presentation segment.
+    sample_pose: Option<pose::Path>,
+    drawn_pose: Option<pose::Snapshot>,
+    /// A submitted, collision-checked dry-ground endpoint may be shown before
+    /// its local worker result. It never changes the observed world position.
+    preview: Option<Preview>,
+    /// A withdrawn preview must return to the current observed placement.
+    restore_preview: bool,
+    /// Accepted catch-up restores translation alone on interruption. Rotation
+    /// keeps the existing playback and authority rules.
+    restore_translation: bool,
+    /// World-space placement prepared before input, applied when a root exists.
+    restored_translation: Option<Vec3>,
+    /// The latest submitted sample is an ordinary own ground step. Display
+    /// catch-up never grants movement or changes the sample's timing.
+    release_sample: bool,
+    /// Private timing probes compare the unchanged accepted-only path in the
+    /// same binary. This switch is absent from production builds.
+    #[cfg(test)]
+    suppress_submitted_preview: bool,
+    /// Deterministic elapsed time for command-equivalence fixtures only.
+    #[cfg(test)]
+    test_span: Option<f32>,
+    #[cfg(test)]
+    suppress_release_catchup: bool,
+    /// Deterministic frame clock for the command-parity fixture only.
+    #[cfg(test)]
+    test_now: Option<Instant>,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
@@ -190,6 +231,13 @@ struct Pending {
     kind: PendingKind,
 }
 
+#[derive(Clone, Copy)]
+struct Preview {
+    session_id: u64,
+    created: Instant,
+    position: eq_client_core::WorldPosition,
+}
+
 /// Whether local liquid checks have a worker position on which to base a sample.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum LiquidBasis {
@@ -255,6 +303,8 @@ impl Default for Controls {
             posture: None,
             posture_changes: 0,
             pending: None,
+            pad: None,
+            pad_landing: None,
             last_accepted: Instant::now(),
             moving: false,
             sent_span: 0.1,
@@ -267,6 +317,21 @@ impl Default for Controls {
             placement: placement::Check::default(),
             taps: TapBuffer::default(),
             visual: None,
+            sample_pose: None,
+            drawn_pose: None,
+            preview: None,
+            restore_preview: false,
+            restore_translation: false,
+            restored_translation: None,
+            release_sample: false,
+            #[cfg(test)]
+            suppress_submitted_preview: false,
+            #[cfg(test)]
+            test_span: None,
+            #[cfg(test)]
+            suppress_release_catchup: false,
+            #[cfg(test)]
+            test_now: None,
             airborne: None,
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
@@ -378,12 +443,154 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
-    /// Shows a locally accepted sample without changing the simulation
-    /// position: the model plays the accepted samples back in order, each
-    /// over the time of play it covers, so it passes at the pace sent and
-    /// never ahead of the newest accepted position. A sample accepted while
-    /// the last still plays waits its turn; when none is left the model
-    /// stands at the newest until the next is accepted. Display only;
+    #[cfg_attr(
+        not(test),
+        allow(
+            clippy::unused_self,
+            reason = "the injected test clock is per controller"
+        )
+    )]
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.test_now {
+            return now;
+        }
+        Instant::now()
+    }
+
+    fn has_translation_playhead(&self) -> bool {
+        self.visual
+            .as_ref()
+            .is_some_and(|visual| visual.translation.is_some())
+    }
+
+    /// Starts only the exact endpoint already accepted by the local command
+    /// queue and collision sweep. The worker remains authoritative for the
+    /// simulation, permission checks and the next movement sample's basis.
+    fn preview_sample(
+        &mut self,
+        session_id: Option<u64>,
+        created: Instant,
+        from: Transform,
+        position: eq_client_core::WorldPosition,
+    ) {
+        #[cfg(test)]
+        if self.suppress_submitted_preview {
+            return;
+        }
+        let Some(session_id) = session_id else { return };
+        // Only a matching worker result can retire the immediately shown
+        // mouse heading. Doing so while queuing a preview restores old yaw.
+        let mouse_heading = self.mouse_heading;
+        let pose = self.sample_pose.take();
+        self.display_in_frame(from, position, self.facing, pose);
+        self.mouse_heading = mouse_heading;
+        self.preview = Some(Preview {
+            session_id,
+            created,
+            position,
+        });
+    }
+
+    /// A matching result settles the preview once. Acceptance cannot replay
+    /// its distance; a refusal or changed endpoint replaces it with the
+    /// worker's observed placement, never a second provisional segment.
+    pub(super) fn reconcile_preview(
+        &mut self,
+        session_id: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: bool,
+    ) -> bool {
+        let Some(preview) = self
+            .preview
+            .filter(|preview| Some(preview.session_id) == session_id && preview.created == created)
+        else {
+            return false;
+        };
+        self.preview = None;
+        if refused
+            || self
+                .mouse_heading
+                .is_some_and(|heading| arc(heading, position.heading) == 0.0)
+        {
+            self.mouse_heading = None;
+        }
+        if refused || preview.position != position {
+            self.visual = Some(VisualMotion::at(position));
+            self.drawn_pose = None;
+            self.sample_pose = None;
+        }
+        true
+    }
+
+    fn restore_observed_preview(&mut self, world: &ClientWorld) {
+        if std::mem::take(&mut self.restore_preview) {
+            self.preview = None;
+            self.visual = world
+                .player()
+                .map(|player| VisualMotion::at(player.position));
+        }
+    }
+
+    fn translation_basis(&self, position: Vec3) -> Vec3 {
+        self.visual_boat.map_or(position, |frame| {
+            if let Some(riding) = self.boat.filter(|riding| {
+                riding.sample.spawn_id == frame.sample.spawn_id
+                    && riding.sample.incarnation == frame.sample.incarnation
+            }) {
+                Vec3::from_array(eq_client_core::render_position(
+                    eq_client_core::movement::carrier_local(riding.pose, riding.position),
+                ))
+            } else {
+                boats::to_local(frame.pose, Transform::from_translation(position)).translation
+            }
+        })
+    }
+
+    fn prepare_translation_restore(&mut self, world: &ClientWorld) {
+        if self.restore_translation
+            && let Some(player) = world.player()
+        {
+            let position = Vec3::from_array(eq_client_core::render_position(player.position));
+            let basis = self.translation_basis(position);
+            self.restore_translation = false;
+            self.restored_translation = Some(position);
+            if let Some(visual) = self.visual.as_mut() {
+                // Clear the interrupted path before input can append a fresh
+                // legal step. Present must not discard that step a second time.
+                visual.translation = Some(translation::Playhead::at(basis));
+            }
+        }
+    }
+
+    fn apply_translation_restore(&mut self, transform: &mut Transform) {
+        if let Some(position) = self.restored_translation.take() {
+            transform.translation = position;
+        }
+    }
+
+    fn advance_display(&mut self, seconds: f32, transform: &mut Transform) -> bool {
+        let Some(visual) = self.visual.as_mut() else {
+            return false;
+        };
+        visual.advance(seconds, transform);
+        let follow_heading = visual.follow_heading;
+        let pose = visual.drawn_pose();
+        if visual.finished() {
+            self.visual = None;
+        }
+        self.drawn_pose = pose;
+        follow_heading
+    }
+
+    /// Queues a locally accepted sample without changing the simulation
+    /// position. Samples play in order over their own spans. A dry-ground
+    /// submission may already be playing through `preview_sample`; its exact
+    /// result is settled by `reconcile_preview` rather than queued twice.
+    /// No playback advances beyond its submitted, collision-checked endpoint.
+    /// A sample accepted while the last still plays waits its turn; when
+    /// none is left the model stands at the newest endpoint. Display only;
     /// inferred, recording checklist 6.340 (the official client moves its
     /// own player every frame).
     ///
@@ -392,7 +599,8 @@ impl Controls {
     /// turn in the sample's span is the player facing a new way at once, so
     /// it shows at once while the positions still play.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
-        self.display_in_frame(from, position, self.facing);
+        let pose = self.sample_pose.take().filter(|_| self.refused.is_none());
+        self.display_in_frame(from, position, self.facing, pose);
     }
 
     /// Plays accepted rider motion in the boat frame; carry is applied only
@@ -425,7 +633,15 @@ impl Controls {
             {
                 visual.map(|transform| boats::to_local(carried.pose, transform));
             }
-            let from = boats::to_local(carried.pose, from);
+            let drawn_pose = self.visual_boat.map_or(carried.pose, |frame| frame.pose);
+            let from = Transform {
+                // The drawn root still belongs to the last displayed frame.
+                // Converting its position with the newer sample's pose invents
+                // deck travel whenever an idle display queue is restarted.
+                // Rotation retains the existing sample clock and basis.
+                translation: boats::to_local(drawn_pose, from).translation,
+                ..boats::to_local(carried.pose, from)
+            };
             let local = eq_client_core::movement::carrier_local(riding.pose, position);
             let facing = self
                 .facing
@@ -434,7 +650,7 @@ impl Controls {
                 sample: carried.sample,
                 pose: carried.pose,
             });
-            self.display_in_frame(from, local, facing);
+            self.display_in_frame(from, local, facing, None);
         } else {
             self.display_sample(from, position);
         }
@@ -442,10 +658,14 @@ impl Controls {
 
     fn display_in_frame(
         &mut self,
-        from: Transform,
+        mut from: Transform,
         position: eq_client_core::WorldPosition,
         facing: Option<f32>,
+        pose: Option<pose::Path>,
     ) {
+        if let Some(position) = self.restored_translation {
+            from.translation = self.translation_basis(position);
+        }
         if self.refused.is_some()
             || self
                 .mouse_heading
@@ -481,6 +701,7 @@ impl Controls {
             span,
             snap,
             follow_heading: self.sent_yaw != SentYaw::Ordinary,
+            pose,
         };
         match self.visual.as_mut().filter(|visual| !visual.finished()) {
             Some(visual) => {
@@ -488,6 +709,9 @@ impl Controls {
                 // still playing their positions.
                 if snap {
                     visual.face(rotation);
+                }
+                if let Some(playhead) = visual.translation.as_mut() {
+                    playhead.push(&segment);
                 }
                 visual.queue.push_back(segment);
             }
@@ -669,8 +893,14 @@ impl Controls {
     /// it around the call.
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
+        let restore_preview = self.restore_preview || self.preview.is_some();
+        let restore_translation = self.restore_translation
+            || self.restored_translation.is_some()
+            || self.has_translation_playhead();
         *self = Self {
             speed,
+            restore_preview,
+            restore_translation,
             last_sent: self.last_sent,
             last_answer: self.last_answer,
             last_jump: self.last_jump,
@@ -687,6 +917,12 @@ impl Controls {
             pending: self
                 .pending
                 .filter(|pending| pending.kind == PendingKind::Move),
+            #[cfg(test)]
+            suppress_release_catchup: self.suppress_release_catchup,
+            #[cfg(test)]
+            test_now: self.test_now,
+            #[cfg(test)]
+            last_accepted: self.now(),
             ..Self::default()
         };
     }
@@ -698,6 +934,17 @@ impl Controls {
         self.rebase();
         self.pending = None;
         self.placement = placement::Check::default();
+    }
+
+    /// A local pad assigns the origin but leaves the actual velocities in
+    /// place (0x48aaa6, read6.654). Its first physics step, not this reset,
+    /// may clear vertical speed using the separately cached arrival floor.
+    pub(super) fn local_pad_landed(&mut self) {
+        let airborne = self.airborne.take();
+        let wet = self.wet;
+        self.same_zone_landed();
+        self.airborne = airborne;
+        self.wet = wet;
     }
 
     /// A control transition never revokes calibrated speed or existing
@@ -725,6 +972,8 @@ impl Controls {
         }
         if changed && revision.is_some() {
             self.moving = false;
+            self.restore_translation |= self.has_translation_playhead();
+            self.restore_preview |= self.preview.take().is_some();
         }
         self.stunned
     }
@@ -735,12 +984,15 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
+        self.restore_translation |= self.has_translation_playhead();
+        self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         if previous.fly != options.fly {
             self.airborne = self
                 .airborne
                 .as_ref()
                 .map(|_| AirborneController::default());
+            self.clear_poses();
         }
         self.taps = TapBuffer::default();
         self.jump = None;
@@ -753,15 +1005,18 @@ impl Controls {
         self.moving = false;
         // The session schedules its paced stop when the permission changes.
         // Resume with a fresh local sample window.
-        self.last_accepted = Instant::now();
+        self.last_accepted = self.now();
     }
 
     /// Stops prediction without revoking the session's calibration. A pending
     /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
+        self.restore_translation |= self.has_translation_playhead();
+        self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         self.moving = false;
         self.visual = None;
+        self.clear_poses();
         self.taps = TapBuffer::default();
         self.jump = None;
         self.mouse_turn = 0.0;
@@ -770,7 +1025,7 @@ impl Controls {
         if self.crouch == Some(Crouch::Over) {
             self.crouch = None;
         }
-        self.last_accepted = Instant::now();
+        self.last_accepted = self.now();
     }
 
     /// A full queue sent nothing and can be retried with a fresh bounded sample.
@@ -787,6 +1042,10 @@ impl Controls {
     /// admits; a fresh start covers at most 0.1 s so an idle gap never
     /// becomes a jump.
     fn span(&self, elapsed: Duration) -> f32 {
+        #[cfg(test)]
+        if let Some(span) = self.test_span {
+            return span;
+        }
         elapsed.as_secs_f32().min(self.span_limit().as_secs_f32())
     }
 
@@ -865,9 +1124,13 @@ impl Controls {
             .take()
             .filter(|airborne| airborne.peak().is_some());
         let unreported = self.unreported;
+        let pad = self.pad.take();
+        let pad_landing = self.pad_landing;
         // Following outlasts a change of speed, and a withdrawal while the
         // session places the player; a root ends it in `input`.
         self.reset(grant.units_per_second);
+        self.pad = pad;
+        self.pad_landing = pad_landing;
         self.autorun = autorun;
         self.set_speeds(grant);
         if grant.falls {
@@ -1021,7 +1284,7 @@ impl Controls {
     }
 
     fn finish(&mut self) {
-        let now = Instant::now();
+        let now = self.now();
         self.pending = None;
         self.last_accepted = now;
         self.last_answer = Some(now);
@@ -1104,6 +1367,7 @@ impl Controls {
 
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
         if self.is_pending_move(session_id, created) {
+            self.restore_preview |= self.preview.take().is_some();
             self.resolve_carrier(created, true);
             self.finish();
             self.resolve_water_entry(true);
@@ -1153,6 +1417,33 @@ impl Controls {
             }
             Some(_) => LiquidBasis::Pending,
         }
+    }
+
+    /// Velocity at the point currently drawn, never the newest simulated
+    /// endpoint. A carrier or lift retains its own presentation precedence.
+    pub(crate) fn drawn_pose(&self) -> Option<pose::Snapshot> {
+        (!self.movement_options.fly
+            && self.boat.is_none()
+            && self.visual_boat.is_none()
+            && self.riding.is_none())
+        .then_some(self.drawn_pose)
+        .flatten()
+    }
+
+    fn clear_poses(&mut self) {
+        self.sample_pose = None;
+        self.drawn_pose = None;
+        if let Some(visual) = self.visual.as_mut() {
+            visual.pose = None;
+            for segment in &mut visual.queue {
+                segment.pose = None;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_pose(&mut self, pose: Option<pose::Snapshot>) {
+        self.drawn_pose = pose;
     }
 }
 
@@ -1524,6 +1815,40 @@ pub(super) fn input(
         controls.held = Some(Held::Withdrawn);
         return;
     }
+    // The pad floor step precedes ordinary input/cadence gates and uses
+    // the unmodified collision world, even with no voluntary input.
+    if controls.pad.is_some() {
+        if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
+            controls.prepare_pad(world, body.feet_offset);
+            controls.submit_pad(&outbox, online.world());
+        }
+        if let Some(notice) = controls.take_pad_notice() {
+            chat.history.push(crate::chat::system_line(notice));
+        }
+        controls.held = Some(Held::Waiting);
+        return;
+    }
+    if let Some(fall) = controls.pad_landing.take()
+        && let (Some(world), Ok((body, _)), Some(player)) = (
+            collision.0.as_ref(),
+            players.single(),
+            online.world().player(),
+        )
+    {
+        let feet = Vec3::from_array(eq_client_core::render_position(player.position))
+            - Vec3::Y * body.feet_offset;
+        controls.unreported = observe_landing(
+            fall,
+            client,
+            world,
+            feet,
+            online.world(),
+            &outbox,
+            &options.options.qol,
+            &messages,
+            &mut chat,
+        );
+    }
     let detached = cameras.single().is_ok_and(|(_, free)| free);
     let session_id = online.world().session_id();
     controls.pending = controls
@@ -1599,16 +1924,22 @@ pub(super) fn input(
         .filter(|_| mouse_allowed);
     if !heading_snapshots || !mouse_allowed {
         controls.mouse_heading = None;
-    } else if let Some(yaw) = mouse_aim.filter(|yaw| *yaw != 0.0)
-        && let Ok((_, player)) = players.single()
-    {
-        // Start from the current drawn actor, then apply every owned delta
-        // while the next movement sample waits for its normal opportunity.
-        let drawn_yaw = controls.mouse_heading.map_or_else(
-            || player.rotation.to_euler(EulerRot::YXZ).0,
-            eq_client_core::render_heading,
+    } else if let Some(heading) = aim.as_ref().and_then(|aim| aim.heading) {
+        // Acquiring a look turns the actor to the existing camera even with
+        // no drag. Each later frame keeps that view as its turn baseline.
+        // Preserve the exact prior value within a heading round trip's f32
+        // resolution; an aligned view must not invent a tiny new sample.
+        let prior = controls.mouse_heading.or_else(|| {
+            online
+                .world()
+                .player()
+                .map(|player| player.position.heading)
+        });
+        controls.mouse_heading = Some(
+            prior
+                .filter(|prior| arc(*prior, heading).abs() <= 512.0 * f32::EPSILON)
+                .unwrap_or(heading),
         );
-        controls.mouse_heading = Some(eq_client_core::world_heading(drawn_yaw + yaw));
     }
     if let Some(yaw) = mouse_aim.filter(|_| !heading_snapshots) {
         let limit = MOUSE_WIRE_RATE * MAX_CYCLE;
@@ -1661,7 +1992,7 @@ pub(super) fn input(
     if !(standing || lying || moves_ducked) {
         controls.autorun = false;
     }
-    let now = Instant::now();
+    let now = controls.now();
     controls.settle(now);
     let water_enabled = match client {
         InstalledClient::Titanium => true,
@@ -1813,6 +2144,68 @@ pub(super) fn input(
         );
         controls.shoreline.observe(now, stroke, forward_up);
     }
+    // Read held intent before the pending/sample gates. This only selects a
+    // display clock: it does not consume taps, end `moving`, or send a stop.
+    controls.prepare_translation_restore(online.world());
+    let release_safe = controls.visual.is_some()
+        && controls.release_sample
+        && focused
+        && !controls.stun_active
+        && standing
+        && !flying
+        && !swimming
+        && !shoreline_active
+        && controls.following.is_none()
+        && !keys.script_routing()
+        && controls.riding.is_none()
+        && controls.boat.is_none()
+        && controls.visual_boat.is_none()
+        && controls.jump.is_none()
+        && controls.crouch.is_none()
+        && scripted_facing.is_none()
+        && mouse_aim.is_none_or(|yaw| yaw == 0.0)
+        && !aim.as_ref().is_some_and(|aim| aim.acquired)
+        && controls
+            .airborne
+            .as_ref()
+            .is_none_or(|airborne| airborne.velocity() == 0.0 && airborne.peak().is_none());
+    #[cfg(test)]
+    let release_safe = release_safe && !controls.suppress_release_catchup;
+    let released = release_safe
+        && controls.mouse_turn == 0.0
+        && controls.released_turn == 0.0
+        && online
+            .world()
+            .player()
+            .zip(cameras.single().ok())
+            .is_some_and(|(player, (camera, _))| {
+                let intent = controls.intent(
+                    &keyboard,
+                    map,
+                    scripted,
+                    focused,
+                    (camera.yaw, player.position.heading),
+                    look.as_deref(),
+                );
+                intent.direction == Vec3::ZERO && intent.turn == 0.0
+            })
+        && moving_world
+            .zip(players.single().ok())
+            .zip(online.world().player())
+            .is_some_and(|((world, (body, _)), player)| {
+                let feet = Vec3::from_array(eq_client_core::render_position(player.position))
+                    - Vec3::Y * body.feet_offset;
+                // Unknown volume metadata keeps the existing ordinary-ground
+                // classification; known wading/water/lava keep their own path.
+                matches!(
+                    world.liquid_contact(feet, body.height),
+                    eq_client_core::movement::LiquidContact::Unmarked
+                        | eq_client_core::movement::LiquidContact::Unknown
+                )
+            });
+    if let Some(visual) = controls.visual.as_mut() {
+        visual.release_translation(released);
+    }
     let mut movement_keys = map.movement_keys();
     if flying {
         movement_keys.extend(
@@ -1846,7 +2239,7 @@ pub(super) fn input(
             return;
         }
     }
-    let (Ok((body, _)), Ok((camera, _)), Some(world), Some(accepted)) = (
+    let (Ok((body, drawn)), Ok((camera, _)), Some(world), Some(accepted)) = (
         players.single(),
         cameras.single(),
         moving_world,
@@ -2574,6 +2967,7 @@ pub(super) fn input(
                 ))
             .then_some((landing, trial, intent.request, displacement))
         });
+    let mut poses = pose::Path::default();
     let (landing, mut mode, jumped) = if placement_blocked {
         (feet, MovementMode::Forward, false)
     } else if let Some(plan) = &shore {
@@ -2603,7 +2997,7 @@ pub(super) fn input(
                 // Consume only this frame's grounded launch. Its arc may
                 // hit a ceiling immediately and have no upward speed left.
                 let _ = airborne.take_jump();
-                let landing = fall_step_with_water(
+                let landing = fall_step_observed(
                     airborne,
                     world,
                     physics,
@@ -2614,6 +3008,7 @@ pub(super) fn input(
                     body.height,
                     jump,
                     water_enabled,
+                    Some(&mut poses),
                 );
                 let falling = airborne.velocity() < 0.0
                     || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
@@ -2749,6 +3144,7 @@ pub(super) fn input(
         controls.held = Some(Held::Refused);
         return;
     }
+    let dry_pose = shore.is_none();
     controls.shoreline.sent(mode, shore, created);
     if entering {
         controls.water_entry_rollback = previous_airborne;
@@ -2798,6 +3194,14 @@ pub(super) fn input(
     // request's stamp to this one's, so the next span runs from the stamp.
     controls.last_sent = Some(created);
     controls.sent_span = span;
+    controls.sample_pose = (!placement_blocked
+        && !flying
+        && !swimming
+        && !entering
+        && dry_pose
+        && boat_sample.is_none()
+        && support.is_none())
+    .then_some(poses);
     controls.riding = under.map(|door| (door, created, position.y));
     controls.boat_pending = Some((
         created,
@@ -2825,39 +3229,48 @@ pub(super) fn input(
             .as_mut()
             .and_then(AirborneController::take_landing)
     {
-        let cost = landing_cost(
+        controls.unreported = observe_landing(
+            fall,
             client,
             world,
             position - Vec3::Y * body.feet_offset,
-            fall,
             online.world(),
+            &outbox,
+            &options.options.qol,
+            &messages,
+            &mut chat,
         );
-        let reports_damage = options.options.qol.on(Fix::TakeEnvironmentalDamage)
-            && online.world().can(Capability::EnvironmentalDamage);
-        if let Some(cost) = cost {
-            debug!(
-                fall_distance = fall.fall_distance,
-                impact_speed = fall.impact_speed,
-                carried_weight = ?online.world().fall_weight(),
-                damage = cost.damage,
-                safe_fall = cost.safe_fall,
-                "Landing"
-            );
-            if reports_damage {
-                say_fall(client, cost, online.world(), &messages, &mut chat);
-            }
-            controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
-        } else if reports_damage {
-            chat.history.push(crate::chat::system_line(
-                "Fall damage could not be reported because carried weight is unknown.",
-            ));
-        }
     }
     controls.moving = position.distance_squared(origin) > 0.000_001
         || mouse_snapshot.is_none() && (heading - current_heading).abs() > f32::EPSILON;
     // Until the heading sent reaches the facing, the model shows the facing.
     controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
     controls.wait_for(session_id, created, PendingKind::Move);
+    // First-frame feedback uses the same resolved endpoint as the queued
+    // request. Keep special transport/support frames on their existing
+    // accepted-only path; none of their custody or physics is predicted here.
+    let preview_eligible = !placement_blocked
+        && !swimming
+        && !entering
+        && !flying
+        && boat_sample.is_none()
+        && support.is_none()
+        && controls.visual_boat.is_none()
+        && controls.boat.is_none()
+        && controls.riding.is_none()
+        && matches!(
+            mode,
+            MovementMode::Forward
+                | MovementMode::Backward
+                | MovementMode::Walk
+                | MovementMode::Strafe(_)
+                | MovementMode::GroundedDiagonal(_)
+        );
+    controls.release_sample =
+        preview_eligible && follow_heading.is_none() && !keys.script_routing();
+    if preview_eligible {
+        controls.preview_sample(session_id, created, *drawn, position_sent);
+    }
 }
 
 /// How the lift the last sample stood on moved the feet since that sample.
@@ -3022,6 +3435,36 @@ pub(super) fn fall_step_with_water(
     jump: bool,
     water_enabled: bool,
 ) -> Vec3 {
+    fall_step_observed(
+        airborne,
+        world,
+        physics,
+        climb,
+        feet,
+        delta,
+        span,
+        height,
+        jump,
+        water_enabled,
+        None,
+    )
+}
+
+/// Observes the same accepted slices without changing their physics or commands.
+#[allow(clippy::too_many_arguments)]
+fn fall_step_observed(
+    airborne: &mut AirborneController,
+    world: &CollisionWorld,
+    physics: VerticalPhysics,
+    climb: Option<f32>,
+    feet: Vec3,
+    delta: Vec3,
+    span: f32,
+    height: f32,
+    jump: bool,
+    water_enabled: bool,
+    mut poses: Option<&mut pose::Path>,
+) -> Vec3 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // At most five slices.
     let slices = (span / 0.05).ceil().clamp(1.0, 5.0) as u8;
     let slice = f32::from(slices);
@@ -3057,6 +3500,31 @@ pub(super) fn fall_step_with_water(
         let allowed = reach + jump_rise(rising, physics.gravity, elapsed);
         if next.y - feet.y > allowed {
             break;
+        }
+        if let Some(poses) = poses.as_deref_mut() {
+            let horizontal = Vec2::new(next.x - position.x, next.z - position.z)
+                / step.seconds.max(f32::EPSILON);
+            // Observe the launch speed before this slice's gravity. Reading
+            // only trial.velocity() can miss L03 in a long movement sample.
+            let vertical = if step.jump && airborne.can_launch(world, position, physics, height) {
+                physics.jump_speed
+            } else {
+                airborne.velocity()
+            };
+            poses.push(
+                elapsed - step.seconds,
+                pose::Snapshot {
+                    horizontal,
+                    vertical,
+                },
+            );
+            poses.push(
+                elapsed,
+                pose::Snapshot {
+                    horizontal,
+                    vertical: trial.velocity(),
+                },
+            );
         }
         *airborne = trial;
         position = next;
@@ -3245,6 +3713,41 @@ fn jump_too_soon(client: InstalledClient, last: Option<Instant>, now: Instant) -
         .is_some_and(|(spacing, last)| now.saturating_duration_since(last) <= spacing)
 }
 
+/// Use the same landing hooks for ordinary steps and the pad's first step.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "the two landing paths share their existing report context"
+)]
+fn observe_landing(
+    fall: Landing,
+    client: InstalledClient,
+    collision: &CollisionWorld,
+    feet: Vec3,
+    world: &ClientWorld,
+    outbox: &crate::outbox::Outbox,
+    qol: &Settings,
+    messages: &crate::hud::messages::Messages,
+    chat: &mut crate::chat::ChatState,
+) -> Option<FallCost> {
+    let reports_damage =
+        qol.on(Fix::TakeEnvironmentalDamage) && world.can(Capability::EnvironmentalDamage);
+    if let Some(cost) = landing_cost(client, collision, feet, fall, world) {
+        debug!(fall_distance = fall.fall_distance, impact_speed = fall.impact_speed,
+            carried_weight = ?world.fall_weight(), damage = cost.damage, safe_fall = cost.safe_fall, "Landing");
+        if reports_damage {
+            say_fall(client, cost, world, messages, chat);
+        }
+        report_fall(outbox, world, qol, cost)
+    } else {
+        if reports_damage {
+            chat.history.push(crate::chat::system_line(
+                "Fall damage could not be reported because carried weight is unknown.",
+            ));
+        }
+        None
+    }
+}
+
 /// What a landing with the feet here costs the player: nothing in water or
 /// lava (`EQEmu` ignores a fall reported there, `Client::Handle_OP_EnvDamage`,
 /// and the Mac-era program's liquids slow a fall to nothing), else the
@@ -3375,27 +3878,52 @@ fn safe_fall(world: &ClientWorld) -> u32 {
 
 /// One accepted sample waiting to play: where it ends, how many seconds of
 /// play it covers, and whether its facing shows at once.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Segment {
     to: Transform,
     span: f32,
     snap: bool,
     follow_heading: bool,
+    pose: Option<pose::Path>,
 }
 
-/// The accepted samples the model plays back, one after another, each over
-/// its own span; never past the newest accepted position.
+/// Local samples played in order over their own spans. A marked dry-ground
+/// submission may play before its worker result, never beyond its exact
+/// collision-checked endpoint; acceptance does not queue it again.
 struct VisualMotion {
     from: Transform,
     to: Transform,
     elapsed: f32,
     duration: f32,
     follow_heading: bool,
+    pose: Option<pose::Path>,
     /// Samples accepted while an earlier one still plays, oldest first.
     queue: std::collections::VecDeque<Segment>,
+    /// Only translation may drain faster after a qualified release. The
+    /// ordinary fields above remain the rotation/input timeline.
+    translation: Option<translation::Playhead>,
 }
 
 impl VisualMotion {
+    fn at(position: eq_client_core::WorldPosition) -> Self {
+        let transform = Transform::from_translation(Vec3::from_array(
+            eq_client_core::render_position(position),
+        ))
+        .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
+            position.heading,
+        )));
+        Self::start(
+            transform,
+            Segment {
+                to: transform,
+                span: 0.0,
+                snap: false,
+                follow_heading: false,
+                pose: None,
+            },
+        )
+    }
+
     /// Plays `segment` from where the model is shown now.
     fn start(from: Transform, segment: Segment) -> Self {
         Self {
@@ -3408,7 +3936,9 @@ impl VisualMotion {
             elapsed: 0.0,
             duration: segment.span,
             follow_heading: segment.follow_heading,
+            pose: segment.pose,
             queue: std::collections::VecDeque::new(),
+            translation: None,
         }
     }
 
@@ -3430,6 +3960,30 @@ impl VisualMotion {
         for segment in &mut self.queue {
             segment.to = map(segment.to);
         }
+        if let Some(playhead) = self.translation.as_mut() {
+            playhead.map(|point| map(Transform::from_translation(point)).translation);
+        }
+    }
+
+    fn release_translation(&mut self, released: bool) {
+        let flat = |from: Transform, to: Transform| {
+            (from.translation.y - to.translation.y).abs() < 0.000_1
+                && (from.rotation * Vec3::Z).distance_squared(to.rotation * Vec3::Z) < 1e-8
+        };
+        let mut prior = self.to;
+        let compatible = flat(self.from, self.to)
+            && self.queue.iter().all(|segment| {
+                let same = flat(prior, segment.to);
+                prior = segment.to;
+                same
+            });
+        let released = released && compatible;
+        if released && self.translation.is_none() && !self.finished() {
+            self.translation = Some(translation::Playhead::from_visual(self));
+        }
+        if let Some(playhead) = self.translation.as_mut() {
+            playhead.release(released);
+        }
     }
 
     /// Where the newest accepted sample ends.
@@ -3439,7 +3993,26 @@ impl VisualMotion {
 
     /// Whether everything accepted has played.
     fn finished(&self) -> bool {
-        self.queue.is_empty() && self.elapsed >= self.duration
+        self.queue.is_empty()
+            && self.elapsed >= self.duration
+            && self
+                .translation
+                .as_ref()
+                .is_none_or(translation::Playhead::finished)
+    }
+
+    fn drawn_pose(&self) -> Option<pose::Snapshot> {
+        if self
+            .translation
+            .as_ref()
+            .is_some_and(translation::Playhead::rested)
+        {
+            // The orientation timeline can still be playing after the feet
+            // reach the release endpoint. Only a genuine release overrides
+            // its velocity: held input or restore can also exhaust a cursor.
+            return Some(pose::Snapshot::default());
+        }
+        self.pose.as_ref().and_then(|pose| pose.at(self.elapsed))
     }
 
     /// Plays on `seconds`, moving to the next accepted sample as each ends,
@@ -3458,14 +4031,18 @@ impl VisualMotion {
             self.to = next.to;
             self.duration = next.span;
             self.follow_heading = next.follow_heading;
+            self.pose = next.pose;
         }
         let fraction = (self.elapsed / self.duration.max(0.01)).clamp(0.0, 1.0);
         transform.translation = self.from.translation.lerp(self.to.translation, fraction);
         transform.rotation = self.from.rotation.slerp(self.to.rotation, fraction);
+        if let Some(playhead) = self.translation.as_mut() {
+            transform.translation = playhead.advance(seconds);
+        }
     }
 }
 
-/// Advances the player and follow camera every rendered frame between network
+/// Advances the player and follow camera every rendered frame between movement
 /// samples. With `eq_client_render::motion::pace` logging at debug, each
 /// frame says how fast the model was shown moving, for a sitting's numbers.
 #[allow(clippy::needless_pass_by_value)]
@@ -3477,6 +4054,8 @@ pub(super) fn interpolate(
     mut cameras: Query<(&mut OrbitCamera, Has<crate::camera::FreeCamera>)>,
     mut displayed_mouse: Local<Option<Entity>>,
 ) {
+    controls.restore_observed_preview(online.world());
+    controls.prepare_translation_restore(online.world());
     let preview = controls.mouse_heading;
     if controls.visual.is_none()
         && preview.is_none()
@@ -3484,6 +4063,7 @@ pub(super) fn interpolate(
         && controls.riding.is_none()
         && controls.boat.is_none()
         && controls.visual_boat.is_none()
+        && controls.restored_translation.is_none()
     {
         return;
     }
@@ -3492,19 +4072,13 @@ pub(super) fn interpolate(
         return;
     };
     let had_preview = displayed_mouse.take() == Some(entity);
-    let mut follow_heading = false;
+    controls.apply_translation_restore(&mut transform);
     let pace = controls
         .visual
         .as_ref()
         .map(|_| (time.delta_secs(), transform.translation));
     let advanced_in_boat = controls.visual.is_some() && controls.visual_boat.is_some();
-    if let Some(visual) = controls.visual.as_mut() {
-        visual.advance(time.delta_secs(), &mut transform);
-        follow_heading = visual.follow_heading;
-        if visual.finished() {
-            controls.visual = None;
-        }
-    }
+    let follow_heading = controls.advance_display(time.delta_secs(), &mut transform);
     // A rising lift carries the drawn model on its floor between samples,
     // as the program draws its rider; the samples sent are unchanged.
     if let Some((door, at, sent)) = controls.riding {
@@ -3545,8 +4119,7 @@ pub(super) fn interpolate(
         }
     }
     if let Some(heading) = preview {
-        // Position still plays only accepted samples. An older queued pose
-        // never overwrites the latest local mouse orientation.
+        // An older queued pose never overwrites the latest local mouse orientation.
         transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
         *displayed_mouse = Some(entity);
     } else if had_preview && let Some(player) = online.world().player() {
@@ -3756,8 +4329,8 @@ pub(super) mod tests {
         doors.apply(&DoorUpdate::Spawn(vec![lift]), start);
         doors.apply(&DoorUpdate::Move { id: 4, action: 2 }, start);
         let world = CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
         ])
         .unwrap();
         let mut reach = crate::doors::LiftReach::default();
@@ -3824,15 +4397,15 @@ pub(super) mod tests {
         let deck = |y: f32| {
             Arc::new(
                 CollisionMesh::new([
-                    [[-5.0, y, -5.0], [5.0, y, -5.0], [5.0, y, 5.0]],
-                    [[-5.0, y, -5.0], [5.0, y, 5.0], [-5.0, y, 5.0]],
+                    [[-5.0, y, -5.0], [5.0, y, 5.0], [5.0, y, -5.0]],
+                    [[-5.0, y, -5.0], [-5.0, y, 5.0], [5.0, y, 5.0]],
                 ])
                 .unwrap(),
             )
         };
         let mut world = CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
         ])
         .unwrap();
         let solid = eq_client_core::doors::Solidity::BOTH;
@@ -3858,10 +4431,10 @@ pub(super) mod tests {
         // floor: the program tests nothing above the rider (read R1d).
         lifts.0.insert(4, (Vec3::ZERO, 310.0));
         let mut capped = CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
-            [[-5.0, 4.0, -5.0], [5.0, 4.0, -5.0], [5.0, 4.0, 5.0]],
-            [[-5.0, 4.0, -5.0], [5.0, 4.0, 5.0], [-5.0, 4.0, 5.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
+            [[-5.0, 4.0, -5.0], [5.0, 4.0, 5.0], [5.0, 4.0, -5.0]],
+            [[-5.0, 4.0, -5.0], [-5.0, 4.0, 5.0], [5.0, 4.0, 5.0]],
         ])
         .unwrap();
         capped.set_door_obstacles_with(vec![(4, deck(0.5), solid)]);
@@ -3886,8 +4459,8 @@ pub(super) mod tests {
         let deck = |y: f32| {
             Arc::new(
                 CollisionMesh::new([
-                    [[-5.0, y, -5.0], [5.0, y, -5.0], [5.0, y, 5.0]],
-                    [[-5.0, y, -5.0], [5.0, y, 5.0], [-5.0, y, 5.0]],
+                    [[-5.0, y, -5.0], [5.0, y, 5.0], [5.0, y, -5.0]],
+                    [[-5.0, y, -5.0], [-5.0, y, 5.0], [5.0, y, 5.0]],
                 ])
                 .unwrap(),
             )
@@ -3915,8 +4488,8 @@ pub(super) mod tests {
         // The zone has a surface over the shaft that the risen lift's floor
         // ends 2.5 below, inside a standing body, as at the Kelethin lift.
         let mut world = CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
             [[-5.0, 92.5, -5.0], [5.0, 92.5, -5.0], [5.0, 92.5, 5.0]],
             [[-5.0, 92.5, -5.0], [5.0, 92.5, 5.0], [-5.0, 92.5, 5.0]],
         ])
@@ -3953,8 +4526,8 @@ pub(super) mod tests {
         // rerun, 6.648) is past that and falls; 0.3 over stays. A client
         // with no read physics keeps the grounded step's 2.
         let world = eq_client_core::movement::CollisionWorld::new([
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, -50.0], [50.0, 0.0, 50.0]],
-            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [-50.0, 0.0, 50.0]],
+            [[-50.0, 0.0, -50.0], [50.0, 0.0, 50.0], [50.0, 0.0, -50.0]],
+            [[-50.0, 0.0, -50.0], [-50.0, 0.0, 50.0], [50.0, 0.0, 50.0]],
         ])
         .unwrap();
         let titanium = physics(InstalledClient::Titanium, None).ground_tolerance;
@@ -3999,8 +4572,8 @@ pub(super) mod tests {
         );
         let quad = |x0: f32, x1: f32, y0: f32, y1: f32| {
             [
-                [[x0, y0, -10.0], [x1, y1, -10.0], [x1, y1, 10.0]],
-                [[x0, y0, -10.0], [x1, y1, 10.0], [x0, y0, 10.0]],
+                [[x0, y0, -10.0], [x1, y1, 10.0], [x1, y1, -10.0]],
+                [[x0, y0, -10.0], [x0, y0, 10.0], [x1, y1, 10.0]],
             ]
         };
         // Ten treads 1 deep and 0.75 high, up to a landing, with risers.
@@ -4623,6 +5196,7 @@ pub(super) mod tests {
                 span: 0.1,
                 snap: false,
                 follow_heading: false,
+                pose: None,
             },
         );
         let mut transform = bevy::prelude::Transform::from_scale(bevy::prelude::Vec3::splat(2.0));
@@ -4771,15 +5345,15 @@ pub(super) mod tests {
         use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
         // Steep stairs: each slice of a fast sample can climb a whole step.
         let mut triangles = vec![
-            [[-20.0, 0.0, -10.0], [0.0, 0.0, -10.0], [0.0, 0.0, 10.0]],
-            [[-20.0, 0.0, -10.0], [0.0, 0.0, 10.0], [-20.0, 0.0, 10.0]],
+            [[-20.0, 0.0, -10.0], [0.0, 0.0, 10.0], [0.0, 0.0, -10.0]],
+            [[-20.0, 0.0, -10.0], [-20.0, 0.0, 10.0], [0.0, 0.0, 10.0]],
         ];
         for step in 0..10_u8 {
             let (x0, x1) = (f32::from(step) * 0.6, f32::from(step + 1) * 0.6);
             let (low, top) = (f32::from(step) * 1.5, f32::from(step + 1) * 1.5);
             triangles.extend([
-                [[x0, top, -10.0], [x1, top, -10.0], [x1, top, 10.0]],
-                [[x0, top, -10.0], [x1, top, 10.0], [x0, top, 10.0]],
+                [[x0, top, -10.0], [x1, top, 10.0], [x1, top, -10.0]],
+                [[x0, top, -10.0], [x0, top, 10.0], [x1, top, 10.0]],
                 [[x0, low, -10.0], [x0, top, -10.0], [x0, top, 10.0]],
                 [[x0, low, -10.0], [x0, top, 10.0], [x0, low, 10.0]],
             ]);
@@ -4821,8 +5395,8 @@ pub(super) mod tests {
     fn a_jump_starts_in_the_first_slice_and_keeps_its_arc_across_samples() {
         use eq_client_core::movement::{AirborneController, CollisionWorld};
         let world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let mut airborne = AirborneController::default();
@@ -4879,8 +5453,8 @@ pub(super) mod tests {
         // rises, then falls, then lands; a walk off a ledge falls.
         use eq_client_core::movement::{AirborneController, CollisionWorld};
         let world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let titanium = physics(InstalledClient::Titanium, None);
@@ -5649,8 +6223,8 @@ pub(super) mod tests {
     fn a_titanium_jump_rises_at_its_own_speed_within_the_guards_allowance() {
         use eq_client_core::movement::{AirborneController, CollisionWorld, MAX_GROUNDED_STEP};
         let world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let titanium = climbing(
@@ -6193,7 +6767,7 @@ pub(super) mod tests {
 
     /// The app of [`app`] for this installed client, the player standing
     /// still on its floor where the session takes jumps, holding Jump.
-    fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
+    pub(super) fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
         let (mut app, _) = app();
         let (sender, receiver) = mpsc::sync_channel(16);
         app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
@@ -6408,8 +6982,8 @@ pub(super) mod tests {
         for (height, _, _) in expected {
             let ledge = |x0: f32, x1: f32, y: f32| {
                 [
-                    [[x0, y, -20.0], [x1, y, -20.0], [x1, y, 20.0]],
-                    [[x0, y, -20.0], [x1, y, 20.0], [x0, y, 20.0]],
+                    [[x0, y, -20.0], [x1, y, 20.0], [x1, y, -20.0]],
+                    [[x0, y, -20.0], [x0, y, 20.0], [x1, y, 20.0]],
                 ]
             };
             let [a, b] = ledge(-40.0, 0.0, height);
@@ -6465,8 +7039,8 @@ pub(super) mod tests {
     #[test]
     fn a_landing_costs_what_the_installed_clients_rule_says() {
         let floor = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let world = ClientWorld::default();
@@ -6666,10 +7240,57 @@ pub(super) mod tests {
         assert!(controls.boundary.observe(destination).is_some());
     }
 
+    #[test]
+    #[allow(
+        clippy::float_cmp,
+        reason = "exactly retained or assigned physical state"
+    )]
+    fn local_pad_reset_keeps_momentum_and_input_but_releases_old_support() {
+        for velocity in [-12.0, 0.0, 8.0] {
+            let now = Instant::now();
+            let mut body = AirborneController::default();
+            body.carry_from_water(velocity, Vec3::new(3.0, 0.0, 4.0), 70.0);
+            let wet = eq_client_core::movement::water::WetVelocity::from_units_per_second(
+                [3.0, 4.0],
+                velocity,
+            );
+            let mut controls = Controls {
+                airborne: Some(body),
+                wet,
+                autorun: true,
+                riding: Some((80, now, 38.0)),
+                ..Controls::default()
+            };
+            assert!(controls.boundary.observe(None).is_none());
+            assert!(
+                controls
+                    .boundary
+                    .observe(Some(ZoneLine::Reference(7)))
+                    .is_some()
+            );
+            controls.wait_for(Some(5), now, PendingKind::Crossing);
+            controls.local_pad_landed();
+            let body = controls.airborne.as_ref().unwrap();
+            assert_eq!(body.velocity(), velocity);
+            assert_eq!(body.drift(), Vec3::new(3.0, 0.0, 4.0));
+            assert_eq!(body.peak(), Some(70.0));
+            assert_eq!(controls.wet, wet);
+            assert!(controls.autorun);
+            assert!(controls.pending.is_none());
+            assert!(controls.riding.is_none());
+            assert!(
+                controls
+                    .boundary
+                    .observe(Some(ZoneLine::Reference(8)))
+                    .is_none()
+            );
+        }
+    }
+
     fn flat_surface(y: f32) -> [[[f32; 3]; 3]; 2] {
         [
-            [[-20.0, y, -20.0], [20.0, y, -20.0], [20.0, y, 20.0]],
-            [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
+            [[-20.0, y, -20.0], [20.0, y, 20.0], [20.0, y, -20.0]],
+            [[-20.0, y, -20.0], [-20.0, y, 20.0], [20.0, y, 20.0]],
         ]
     }
 
@@ -7285,15 +7906,15 @@ pub(super) mod tests {
         let quad = |a, b, c, d| [[a, b, c], [a, c, d]];
         let mut triangles = Vec::from(quad(
             [-20.0, -8.0, -10.0],
-            [0.0, -8.0, -10.0],
-            [0.0, -8.0, 10.0],
             [-20.0, -8.0, 10.0],
+            [0.0, -8.0, 10.0],
+            [0.0, -8.0, -10.0],
         ));
         triangles.extend(quad(
             [0.0, rim, -10.0],
-            [200.0, rim, -10.0],
-            [200.0, rim, 10.0],
             [0.0, rim, 10.0],
+            [200.0, rim, 10.0],
+            [200.0, rim, -10.0],
         ));
         triangles.extend(quad(
             [0.0, -8.0, -10.0],
@@ -7509,8 +8130,12 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
+        let previewed =
+            controls.reconcile_preview(Some(request.session_id), created, request.position, false);
         assert!(controls.moved(Some(request.session_id), created));
-        controls.display_sample(drawn, request.position);
+        if !previewed {
+            controls.display_sample(drawn, request.position);
+        }
         controls.resolve_water_entry(false);
     }
 
@@ -7597,8 +8222,8 @@ pub(super) mod tests {
     /// with a floor at -40: the follow fixture's shore.
     fn kind_shore(kind: eq_client_assets::regions::RegionKind) -> CollisionWorld {
         let shelf = [
-            [[-20.0, 0.0, -20.0], [2.0, 0.0, -20.0], [2.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [2.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [2.0, 0.0, 20.0]],
         ];
         kind_world(shelf.into_iter().chain(flat_surface(-40.0)), kind)
     }
@@ -7836,16 +8461,16 @@ pub(super) mod tests {
     fn pool_ramp() -> CollisionWorld {
         let (lip, crease, far) = (-6.0, -3.0, 22.0);
         let mut triangles = vec![
-            [[0.0, 1.0, 0.0], [14.0, 8.0, far], [0.0, 8.0, far]],
-            [[14.0, 8.0, far], [0.0, 1.0, 0.0], [0.0, 0.0, crease]],
-            [[14.0, 1.0, 0.0], [0.0, 0.0, crease], [14.0, 0.0, crease]],
-            [[0.0, 0.0, crease], [14.0, 1.0, 0.0], [14.0, 8.0, far]],
+            [[0.0, 1.0, 0.0], [0.0, 8.0, far], [14.0, 8.0, far]],
+            [[14.0, 8.0, far], [0.0, 0.0, crease], [0.0, 1.0, 0.0]],
+            [[14.0, 1.0, 0.0], [14.0, 0.0, crease], [0.0, 0.0, crease]],
+            [[0.0, 0.0, crease], [14.0, 8.0, far], [14.0, 1.0, 0.0]],
             [[0.0, 1.0, 0.0], [0.0, 10.0, far], [0.0, 1.0, lip]],
             [[0.0, 10.0, far], [0.0, 1.0, 0.0], [0.0, 8.0, far]],
             [[0.0, 1.0, 0.0], [0.0, 0.0, lip], [0.0, 0.0, crease]],
             [[0.0, 0.0, lip], [0.0, 1.0, 0.0], [0.0, 1.0, lip]],
-            [[14.0, -1.0, lip], [0.0, 0.0, crease], [0.0, -1.0, lip]],
-            [[0.0, 0.0, crease], [14.0, -1.0, lip], [14.0, 0.0, crease]],
+            [[14.0, -1.0, lip], [0.0, -1.0, lip], [0.0, 0.0, crease]],
+            [[0.0, 0.0, crease], [14.0, 0.0, crease], [14.0, -1.0, lip]],
             [[0.0, 0.0, crease], [0.0, 0.0, lip], [0.0, -1.0, lip]],
         ];
         triangles.extend(flat_surface(-16.0));
@@ -8086,8 +8711,8 @@ pub(super) mod tests {
         // A short dry shelf ends above a deep pool. Follow must walk off,
         // fall into the mapped water, and retain its horizontal input.
         let shelf = [
-            [[-20.0, 0.0, -20.0], [2.0, 0.0, -20.0], [2.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [2.0, 0.0, 20.0], [2.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [2.0, 0.0, 20.0]],
         ];
         app.insert_resource(Collision(Some(
             CollisionWorld::new(shelf.into_iter().chain(flat_surface(-12.0)))
@@ -8916,8 +9541,8 @@ pub(super) mod tests {
         // The new zone has a floor but no mapped water at the old surface.
         let dry = CollisionWorld::new([[
             [-20.0, -12.0, -20.0],
-            [20.0, -12.0, -20.0],
             [0.0, -12.0, 20.0],
+            [20.0, -12.0, -20.0],
         ]])
         .unwrap();
         app.insert_resource(Collision(Some(dry)));
@@ -9425,7 +10050,9 @@ pub(super) mod tests {
                 elapsed: 0.0,
                 duration: 0.1,
                 follow_heading: false,
+                pose: None,
                 queue: std::collections::VecDeque::new(),
+                translation: None,
             }),
             ..Default::default()
         };
@@ -9941,8 +10568,12 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
+        let previewed =
+            controls.reconcile_preview(Some(request.session_id), created, request.position, false);
         assert!(controls.moved(Some(request.session_id), created));
-        controls.display_sample(drawn, request.position);
+        if !previewed {
+            controls.display_sample(drawn, request.position);
+        }
         controls.last_accepted = Instant::now()
             .checked_sub(Duration::from_millis(100))
             .unwrap();
@@ -10227,8 +10858,8 @@ pub(super) mod tests {
     fn a_diagonal_trial_that_leaves_support_uses_the_ordinary_ledge_path() {
         let (mut app, receiver) = app();
         let edge = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [0.0, 0.0, -20.0], [0.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [0.0, 0.0, 20.0], [0.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [0.0, 0.0, 20.0]],
         ])
         .unwrap();
         app.insert_resource(Collision(Some(edge)))
@@ -10376,7 +11007,8 @@ pub(super) mod tests {
     }
 
     fn mouse_look_app() -> (App, mpsc::Receiver<ClientCommand>, Entity, Entity) {
-        let (mut app, receiver) = app();
+        let (mut app, receiver) = fixture();
+        crate::systems::configure_stages(&mut app);
         crate::camera::testing::install_look(&mut app);
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_millis(250));
@@ -10384,12 +11016,17 @@ pub(super) mod tests {
             .init_resource::<crate::items::ItemState>()
             .init_resource::<crate::inventory::InventoryState>()
             .init_resource::<crate::windows::pointer::Wheel>()
-            .add_systems(Update, crate::camera::turn.before(input))
+            .add_systems(
+                Update,
+                (crate::camera::turn, input, spend_endurance)
+                    .chain()
+                    .in_set(crate::systems::Stage::Input),
+            )
             .add_systems(
                 Update,
                 (interpolate, crate::camera::orbit_camera)
                     .chain()
-                    .after(input),
+                    .in_set(crate::systems::Stage::Present),
             );
         let world = app.world_mut();
         world.resource_mut::<ButtonInput<KeyCode>>().reset_all();
@@ -10398,6 +11035,9 @@ pub(super) mod tests {
             .single(world)
             .unwrap();
         world.entity_mut(camera).insert(Transform::default());
+        world.get_mut::<OrbitCamera>(camera).unwrap().yaw =
+            crate::camera::behind(eq_client_core::render_heading(0.0));
+        world.get_mut::<OrbitCamera>(camera).unwrap().focus = Vec3::new(0.0, 3.0, 0.0);
         let player = world
             .query_filtered::<Entity, With<Player>>()
             .single(world)
@@ -10420,6 +11060,286 @@ pub(super) mod tests {
         let view_forward = world.get::<Transform>(camera).unwrap().forward();
         assert!(actor_forward.abs_diff_eq(turned_to(heading) * Vec3::Z, 0.001));
         assert!(actor_forward.abs_diff_eq(view_forward.with_y(0.0).normalize(), 0.001));
+    }
+
+    #[test]
+    fn aligned_right_press_does_not_enqueue_a_roundoff_turn() {
+        let (mut app, receiver, camera, player) = mouse_look_app();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        for _ in 0..16 {
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            assert_attached_heading(&app, camera, player, 0.0);
+        }
+    }
+
+    #[test]
+    fn right_press_faces_the_existing_view_without_drag_or_camera_snap() {
+        for (first_person, pitch) in [(false, -0.3), (true, 0.0), (true, 1.55)] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            {
+                let mut orbit = app.world_mut().get_mut::<OrbitCamera>(camera).unwrap();
+                orbit.yaw = 0.83;
+                orbit.pitch = pitch;
+                if first_person {
+                    orbit.look_first_person_for_test();
+                    orbit.look = pitch;
+                }
+            }
+            // Warm the actual Present stage before the press. The actor and
+            // camera deliberately disagree; no MouseMotion message is sent.
+            app.update();
+            let rotation = app.world().get::<Transform>(camera).unwrap().rotation;
+            let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+            let (yaw, pitch) = (orbit.yaw, orbit.view_pitch());
+            let forward = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
+            let heading = eq_client_core::world_heading(forward.x.atan2(forward.z));
+            assert!((turned_to(0.0) * Vec3::Z).distance(forward) > 0.5);
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            for _ in 0..3 {
+                app.update();
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "the normal sample gate stays closed"
+                );
+                assert_attached_heading(&app, camera, player, heading);
+                let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+                assert!(
+                    Quat::from_rotation_y(orbit.yaw).angle_between(Quat::from_rotation_y(yaw))
+                        < 0.001
+                );
+                assert!((orbit.view_pitch() - pitch).abs() < 0.0001);
+                assert!(
+                    app.world()
+                        .get::<Transform>(camera)
+                        .unwrap()
+                        .rotation
+                        .angle_between(rotation)
+                        < 0.001
+                );
+            }
+            // One absolute turn waits for the normal opportunity. Acceptance
+            // and subsequent zero-delta held frames retain the same view.
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+            app.update();
+            let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+                panic!("expected one stationary heading snapshot");
+            };
+            assert_eq!(request.heading, HeadingUpdate::Snapshot);
+            assert!(arc(heading, request.position.heading).abs() < 0.001);
+            assert_eq!(
+                Vec3::from_array(eq_client_core::render_position(request.position)),
+                Vec3::new(0.0, 3.0, 0.0)
+            );
+            accept(&mut app, &request);
+            for _ in 0..12 {
+                app.update();
+                assert!(receiver.try_recv().is_err());
+                assert_attached_heading(&app, camera, player, heading);
+                assert!(
+                    app.world()
+                        .get::<Transform>(camera)
+                        .unwrap()
+                        .rotation
+                        .angle_between(rotation)
+                        < 0.001
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn right_press_applies_same_frame_drag_once_from_the_existing_camera() {
+        let (mut app, receiver, camera, player) = mouse_look_app();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+        app.update();
+        let yaw = app.world().get::<OrbitCamera>(camera).unwrap().yaw;
+        let turn = app
+            .world()
+            .resource::<crate::options::OptionsState>()
+            .options
+            .turn_per_pixel(crate::camera::screen_width(None));
+        let expected = Quat::from_rotation_y(yaw - 73.0 * turn) * Vec3::NEG_Z;
+        let heading = eq_client_core::world_heading(expected.x.atan2(expected.z));
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        mouse_drag(&mut app, 73.0, 0.0);
+        app.update();
+        assert_attached_heading(&app, camera, player, heading);
+        app.update();
+        assert_attached_heading(&app, camera, player, heading);
+        assert!(receiver.try_recv().is_err());
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected one dragged heading snapshot");
+        };
+        assert_eq!(request.heading, HeadingUpdate::Snapshot);
+        assert!(arc(heading, request.position.heading).abs() < 0.001);
+        assert_eq!(
+            Vec3::from_array(eq_client_core::render_position(request.position)),
+            Vec3::new(0.0, 3.0, 0.0)
+        );
+        accept(&mut app, &request);
+        for _ in 0..12 {
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            assert_attached_heading(&app, camera, player, request.position.heading);
+        }
+    }
+
+    #[test]
+    fn right_press_with_held_w_moves_along_the_existing_camera_and_repress_recaptures_it() {
+        let (mut app, receiver, camera, player) = keyboard_mouse_look_app();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+        app.update();
+        let forward = Quat::from_rotation_y(0.83) * Vec3::NEG_Z;
+        native_movement_key(&mut app, KeyCode::KeyW, true);
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward sample");
+        };
+        assert_eq!(request.heading, HeadingUpdate::Snapshot);
+        let delta = Vec3::from_array(eq_client_core::render_position(request.position))
+            - Vec3::new(0.0, 3.0, 0.0);
+        assert!(delta.normalize().abs_diff_eq(forward, 0.001));
+        assert!(
+            (delta.length() - 6.0 * app.world().resource::<Controls>().sent_span).abs() < 0.001
+        );
+        assert_attached_heading(&app, camera, player, request.position.heading);
+        accept(&mut app, &request);
+        native_movement_key(&mut app, KeyCode::KeyW, false);
+        crate::camera::testing::button(&mut app, MouseButton::Right, false);
+        app.update();
+        let ClientCommand::Move(stop) = receiver.try_recv().unwrap() else {
+            panic!("expected the ordinary zero-input stop");
+        };
+        assert_eq!(stop.mode, MovementMode::Forward);
+        assert_eq!(stop.heading, HeadingUpdate::Rate);
+        assert_eq!(stop.position, request.position);
+        accept(&mut app, &stop);
+        app.update();
+        app.update();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 2.4;
+        app.update();
+        let before = app.world().get::<Transform>(camera).unwrap().rotation;
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        let forward = Quat::from_rotation_y(2.4) * Vec3::NEG_Z;
+        let heading = eq_client_core::world_heading(forward.x.atan2(forward.z));
+        assert_attached_heading(&app, camera, player, heading);
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .rotation
+                .angle_between(before)
+                < 0.001
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn idle_right_press_over_ui_or_without_focus_owns_no_facing() {
+        for over_ui in [true, false] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+            if over_ui {
+                app.world_mut()
+                    .resource_mut::<crate::chat::ChatState>()
+                    .hovered = true;
+            } else {
+                let world = app.world_mut();
+                world
+                    .query_filtered::<&mut Window, With<bevy::window::PrimaryWindow>>()
+                    .single_mut(world)
+                    .unwrap()
+                    .focused = false;
+            }
+            app.update();
+            let before = app.world().get::<Transform>(camera).unwrap().rotation;
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            app.update();
+            assert!(app.world().resource::<MouseAim>().heading.is_none());
+            assert!(app.world().resource::<Controls>().mouse_heading.is_none());
+            assert!(
+                app.world()
+                    .get::<Transform>(player)
+                    .unwrap()
+                    .rotation
+                    .angle_between(turned_to(0.0))
+                    < 0.001
+            );
+            assert!(
+                app.world()
+                    .get::<Transform>(camera)
+                    .unwrap()
+                    .rotation
+                    .angle_between(before)
+                    < 0.001
+            );
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn right_press_preserves_detached_and_offline_orbit_ownership() {
+        for detached in [false, true] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+            if detached {
+                app.add_systems(
+                    Update,
+                    crate::camera::toggle_free
+                        .before(crate::camera::turn)
+                        .in_set(crate::systems::Stage::Input),
+                );
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::F9);
+                app.update();
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .reset(KeyCode::F9);
+                assert!(
+                    app.world()
+                        .entity(camera)
+                        .contains::<crate::camera::FreeCamera>()
+                );
+            } else {
+                app.world_mut()
+                    .resource_mut::<online::OnlineState>()
+                    .enabled = false;
+                app.update();
+            }
+            let before = app.world().get::<Transform>(camera).unwrap().rotation;
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            mouse_drag(&mut app, 73.0, 0.0);
+            app.update();
+            assert!(app.world().resource::<MouseAim>().heading.is_none());
+            assert!(
+                app.world()
+                    .get::<Transform>(player)
+                    .unwrap()
+                    .rotation
+                    .angle_between(turned_to(0.0))
+                    < 0.001
+            );
+            let after = app.world().get::<Transform>(camera).unwrap().rotation;
+            if detached {
+                assert!(after.angle_between(before) < 0.001);
+            } else {
+                assert!(after.angle_between(before) > 0.1);
+            }
+            assert!(receiver.try_recv().is_err());
+        }
     }
 
     #[test]
@@ -10522,22 +11442,44 @@ pub(super) mod tests {
         assert!(receiver.try_recv().is_err(), "another sample is in flight");
         assert_eq!(
             app.world().get::<Transform>(player).unwrap().translation,
-            Vec3::new(0.0, 3.0, 0.0)
+            Vec3::from_array(eq_client_core::render_position(old.position))
+        );
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            world_position([0.0, 3.0, 0.0], 0.0),
+            "a drawn preview must not advance the observed position",
         );
         accept(&mut app, &old);
         app.update();
         assert_attached_heading(&app, camera, player, 256.0);
         let old_point = Vec3::from_array(eq_client_core::render_position(old.position));
+        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward step after reversing");
+        };
         assert!(
             app.world()
                 .get::<Transform>(player)
                 .unwrap()
                 .translation
-                .abs_diff_eq(old_point, 0.001)
+                .abs_diff_eq(
+                    Vec3::from_array(eq_client_core::render_position(reversed.position)),
+                    0.001
+                )
         );
-        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
-            panic!("expected a forward step after reversing");
-        };
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            old.position
+        );
         assert_eq!(reversed.heading, HeadingUpdate::Snapshot);
         let displacement =
             Vec3::from_array(eq_client_core::render_position(reversed.position)) - old_point;
@@ -10581,6 +11523,15 @@ pub(super) mod tests {
             app.update();
             assert!(receiver.try_recv().is_err());
             assert_attached_heading(&app, camera, player, expected);
+            if corrected {
+                app.world_mut().resource_mut::<Controls>().speed = Some(6.0);
+                app.update();
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "restoring a grant cannot revive the old press"
+                );
+                assert_attached_heading(&app, camera, player, expected);
+            }
         }
     }
 
@@ -10787,13 +11738,13 @@ pub(super) mod tests {
             CollisionWorld::new([
                 [
                     [-1000.0, 0.0, -1000.0],
-                    [1000.0, 0.0, -1000.0],
                     [1000.0, 0.0, 1000.0],
+                    [1000.0, 0.0, -1000.0],
                 ],
                 [
                     [-1000.0, 0.0, -1000.0],
-                    [1000.0, 0.0, 1000.0],
                     [-1000.0, 0.0, 1000.0],
+                    [1000.0, 0.0, 1000.0],
                 ],
             ])
             .unwrap(),
@@ -10915,13 +11866,13 @@ pub(super) mod tests {
             CollisionMesh::new([
                 [
                     [-200.0, 0.0, -200.0],
-                    [200.0, 0.0, -200.0],
                     [200.0, 0.0, 200.0],
+                    [200.0, 0.0, -200.0],
                 ],
                 [
                     [-200.0, 0.0, -200.0],
-                    [200.0, 0.0, 200.0],
                     [-200.0, 0.0, 200.0],
+                    [200.0, 0.0, 200.0],
                 ],
             ])
             .unwrap(),
@@ -10929,13 +11880,13 @@ pub(super) mod tests {
         let water_floor = [
             [
                 [-2000.0, -30.0, -2000.0],
-                [2000.0, -30.0, -2000.0],
                 [2000.0, -30.0, 2000.0],
+                [2000.0, -30.0, -2000.0],
             ],
             [
                 [-2000.0, -30.0, -2000.0],
-                [2000.0, -30.0, 2000.0],
                 [-2000.0, -30.0, 2000.0],
+                [2000.0, -30.0, 2000.0],
             ],
         ];
         // The boat reaches `pose`, and its collision is placed there.
@@ -11079,7 +12030,7 @@ pub(super) mod tests {
                         .unwrap()
                         .translation
                         .abs_diff_eq(
-                            Vec3::from_array(eq_client_core::render_position(chord.position)),
+                            Vec3::from_array(eq_client_core::render_position(released.position)),
                             0.001,
                         )
                 );
@@ -12153,13 +13104,16 @@ pub(super) mod tests {
     ) -> (App, mpsc::Receiver<ClientCommand>) {
         use eq_client_core::movement::{CollisionWorld, MotionStep};
         let floor = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         let mut airborne = AirborneController::default();
         let mut feet = Vec3::Y * 100.0;
+        let mut steps = 0;
         loop {
+            steps += 1;
+            assert!(steps <= 200, "the fixture's fall never landed: {feet}");
             let mut next = airborne.clone();
             let below = next.step(
                 &floor,
@@ -12719,6 +13673,215 @@ pub(super) mod tests {
             .set(Fix::TakeEnvironmentalDamage, false);
         assert_eq!(reported(&mut app, &receiver), None);
     }
+    #[test]
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one queued probe through busy, completion, and duplicate"
+    )]
+    fn pad_first_step_precedes_input_gate_and_retries_the_same_probe() {
+        let (mut app, _) = app();
+        let floor = |height| CollisionWorld::new(flat_surface(height)).unwrap();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        sender
+            .try_send(ClientCommand::CrossZoneLine {
+                session_id: 11,
+                destination: eq_client_core::ZoneLineDestination::Reference(1),
+                position: eq_client_core::WorldPosition::default(),
+                created: Instant::now(),
+            })
+            .unwrap();
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+        let entry = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        let crossing = eq_client_core::LocalPadCrossing {
+            session_id: 11,
+            spawn_id: 7,
+            revision: 1,
+            entry,
+            landing: eq_client_core::WorldPosition { z: 38.0, ..entry },
+        };
+        online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::LocalPadCrossed(crossing)],
+        );
+        app.insert_resource(Collision(Some(floor(38.0))));
+        {
+            let mut query = app
+                .world_mut()
+                .query_filtered::<&mut PlayerBody, With<Player>>();
+            query.single_mut(app.world_mut()).unwrap().feet_offset = 3.75;
+        }
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            let mut airborne = AirborneController::default();
+            airborne.carry_from_water(-12.0, Vec3::new(3.0, 0.0, 4.0), 70.0);
+            controls.airborne = Some(airborne);
+            controls.begin_pad(crossing);
+            controls.last_accepted = Instant::now();
+        }
+        // A full queue leaves both authoritative origin and momentum alone.
+        app.update();
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            crossing.landing
+        );
+        assert!(
+            (app.world()
+                .resource::<Controls>()
+                .airborne
+                .as_ref()
+                .unwrap()
+                .velocity()
+                + 12.0)
+                .abs()
+                < f32::EPSILON
+        );
+        receiver.try_recv().unwrap();
+        // A moving floor cannot replace the arrival observation on retry.
+        app.insert_resource(Collision(Some(floor(20.0))));
+        app.update();
+        let ClientCommand::FinishLocalPad {
+            session_id,
+            revision,
+            step,
+            created,
+        } = receiver.try_recv().unwrap()
+        else {
+            panic!("expected pad completion before ordinary input");
+        };
+        assert_eq!((session_id, revision), (11, 1));
+        assert!((step.floor.unwrap() - 38.001).abs() < 0.0001);
+        assert!((step.vertical_speed + 12.0).abs() < f32::EPSILON);
+        app.update();
+        assert!(receiver.try_recv().is_err(), "completion submitted twice");
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .pad_refused(2, "stale");
+        app.update();
+        assert!(
+            receiver.try_recv().is_err(),
+            "stale refusal retried current pad"
+        );
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .pad_refused(1, "retryable refusal");
+        app.update();
+        assert_eq!(
+            receiver.try_recv().unwrap(),
+            ClientCommand::FinishLocalPad {
+                session_id,
+                revision,
+                step,
+                created,
+            }
+        );
+        let completed = eq_client_core::LocalPadCompletion {
+            crossing,
+            position: eq_client_core::WorldPosition {
+                z: step.floor.unwrap() + step.stand_height,
+                ..crossing.landing
+            },
+        };
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        let stale = eq_client_core::LocalPadCompletion {
+            crossing: eq_client_core::LocalPadCrossing {
+                revision: 2,
+                ..crossing
+            },
+            ..completed
+        };
+        controls.complete_pad(stale);
+        assert!(controls.pad.is_some());
+        controls.complete_pad(completed);
+        assert!(controls.pad.is_none());
+        let airborne = controls.airborne.as_ref().unwrap();
+        assert!(airborne.velocity().abs() < f32::EPSILON);
+        assert_eq!(airborne.drift(), Vec3::new(3.0, 0.0, 4.0));
+        assert!(controls.pad_landing.is_some());
+        controls.complete_pad(completed);
+        assert!(controls.pad_landing.is_some());
+    }
+
+    #[test]
+    fn pad_closed_outbox_reports_reentry_and_stops_automatic_motion() {
+        let (mut app, _) = app();
+        let (sender, receiver) = mpsc::sync_channel(1);
+        drop(receiver);
+        app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+        let entry = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        let crossing = eq_client_core::LocalPadCrossing {
+            session_id: 11,
+            spawn_id: 7,
+            revision: 1,
+            entry,
+            landing: entry,
+        };
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.begin_pad(crossing);
+            controls.autorun = true;
+        }
+        app.insert_resource(Collision(Some(
+            CollisionWorld::new(flat_surface(0.0)).unwrap(),
+        )));
+        app.update();
+        let controls = app.world().resource::<Controls>();
+        assert!(!controls.autorun);
+        assert!(controls.refused.as_ref().unwrap().contains("Use /quit"));
+        assert!(
+            controls.pad.is_some(),
+            "failed submission released raw placement"
+        );
+        // Normal disconnect/re-entry invalidation ends the held revision.
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.reset(None);
+        assert!(controls.pad.is_none());
+        assert!(controls.refused.is_none());
+    }
+
+    #[test]
+    fn pad_trial_is_discarded_by_correction_and_reset() {
+        for reset in [false, true] {
+            let mut controls = Controls {
+                airborne: Some(AirborneController::default()),
+                ..Controls::default()
+            };
+            let crossing = eq_client_core::LocalPadCrossing {
+                session_id: 11,
+                spawn_id: 7,
+                revision: 1,
+                entry: eq_client_core::WorldPosition::default(),
+                landing: eq_client_core::WorldPosition {
+                    z: 38.0,
+                    ..Default::default()
+                },
+            };
+            controls.begin_pad(crossing);
+            controls.prepare_pad(&CollisionWorld::new(flat_surface(38.0)).unwrap(), 3.75);
+            if reset {
+                controls.reset(None);
+            } else {
+                controls.same_zone_landed();
+            }
+            assert!(controls.pad.is_none());
+        }
+    }
 }
 
 /// The host's liquid test for an ability press, the one the session's
@@ -12777,8 +13940,8 @@ mod liquid_tests {
     fn a_press_in_water_finds_the_water_without_a_movement_pass() {
         let pool = CollisionWorld::new([[
             [-20.0, -20.0, -20.0],
-            [20.0, -20.0, -20.0],
             [0.0, -20.0, 20.0],
+            [20.0, -20.0, -20.0],
         ]])
         .unwrap()
         .with_liquids(crate::scene_collision::ZoneLiquids(
