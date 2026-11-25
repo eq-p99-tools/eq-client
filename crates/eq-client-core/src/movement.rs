@@ -1,6 +1,8 @@
 //! Conservative ground locomotion and continuous collision queries.
 
 mod airborne;
+#[cfg(test)]
+mod carrier_walls;
 mod choices;
 mod falls;
 mod flight;
@@ -220,6 +222,7 @@ pub struct CollisionWorld {
     /// A per-move shape override; liquid probes still receive their original
     /// body height and origin. Never part of the static navigation world.
     collision_height: Option<f32>,
+    titanium_walking: bool,
 }
 
 impl CollisionWorld {
@@ -237,6 +240,7 @@ impl CollisionWorld {
             liquid_support: false,
             swim_origin: None,
             collision_height: None,
+            titanium_walking: false,
         })
     }
 
@@ -246,6 +250,14 @@ impl CollisionWorld {
     #[must_use]
     pub fn with_collision_height(mut self, height: f32) -> Self {
         self.collision_height = (height.is_finite() && height >= 1.0).then_some(height);
+        self
+    }
+
+    /// Uses Titanium's ordinary walking object filter for lateral strides.
+    /// The caller keeps this view local to its dry walking move.
+    #[must_use]
+    pub fn with_titanium_walking(mut self) -> Self {
+        self.titanium_walking = true;
         self
     }
 
@@ -319,6 +331,7 @@ impl CollisionWorld {
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
             collision_height: self.collision_height,
+            titanium_walking: self.titanium_walking,
         }
     }
 
@@ -348,6 +361,7 @@ impl CollisionWorld {
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
             collision_height: self.collision_height,
+            titanium_walking: self.titanium_walking,
         }
     }
 
