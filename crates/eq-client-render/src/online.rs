@@ -777,7 +777,6 @@ impl Panels<'_> {
         match reason {
             Reset::Lost { ended, .. } => {
                 self.inventory.cancel_actions();
-                self.inventory.fast_drop = false;
                 self.motion.reset(None);
                 if ended {
                     state.selection = None;

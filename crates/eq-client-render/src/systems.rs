@@ -229,7 +229,11 @@ pub(super) fn schedule(app: &mut App) {
             (coins::input, coins::change),
             inventory::colors::input,
             interact::input,
-            (target::input, target::aim).chain(),
+            (
+                target::input.before(inventory::ground_drop::input),
+                target::aim,
+            )
+                .chain(),
             (
                 who::zone_list,
                 whereabouts::answers,
@@ -242,7 +246,7 @@ pub(super) fn schedule(app: &mut App) {
                     crate::report_windows::show,
                 )
                     .chain(),
-                crate::fastdrop::answers,
+                crate::fastdrop::answers.before(inventory::ground_drop::input),
                 crate::slash::answers,
                 crate::slash::assist_named,
                 crate::shield::answer,

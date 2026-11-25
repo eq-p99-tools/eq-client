@@ -120,6 +120,13 @@ merchant action.
 
 ## World
 
+- `world admission x y` names logical window coordinates for a normal
+  scene press and release. The point must be in the 3D viewport and outside
+  visible UI. With an eligible cursor item, `click("world", admission, x, y)`
+  uses the same ground-drop controller as a physical click. Default mode
+  requires a separate ordinary Yes/No answer. The click alone establishes
+  no submission or inventory outcome.
+
 These click things in the scene, as a person clicks them where they show. Take the ids from a fresh `report()`: the "Script surroundings" line gives `admission`, the nearest spawns as `spawn_clicks` (admission, id, revision), the ground objects and stations by drop id, and the doors by id.
 
 - `spawn admission id revision`: a spawn. `click` targets it, and offers it the item on the cursor if it is an NPC, as a person's click does. `right_click` uses it without changing the target: loot a corpse, open a merchant or banker, take a boat, or consider. `click_with` holds keys as for any click.

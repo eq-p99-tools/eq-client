@@ -1411,6 +1411,8 @@ pub struct OfficialOptions {
     /// Whether an assist's answer starts auto attack: `AttackOnAssist` in
     /// `[Defaults]` (Titanium setup 0x4a3341, read R49-8 d).
     pub attack_on_assist: Option<bool>,
+    /// `[Options] NoSafeDrop`, default zero in Titanium.
+    pub no_safe_drop: Option<i8>,
     /// How a Ranger's track list is ordered: `TrackSortType` in
     /// `[Defaults]` (read R49-30 e), a word such as NORMAL.
     pub track_sort: Option<&'static str>,
@@ -1499,6 +1501,8 @@ fn options_from_ini(text: &str) -> OfficialOptions {
         }),
         all_luclin_models_off: flag("Defaults", "AllLuclinPcModelsOff"),
         attack_on_assist: flag("Defaults", "AttackOnAssist"),
+        no_safe_drop: ini_value(text, "Options", "NoSafeDrop")
+            .and_then(|text| text.trim().parse().ok()),
         track_sort: ini_value(text, "Defaults", "TrackSortType").and_then(|word| {
             ["NORMAL", "DISTANCE", "CONSIDER", "RDISTANCE", "RCONSIDER"]
                 .into_iter()
@@ -2467,6 +2471,7 @@ LookSpring=1
                 luclin_models: [None; 28],
                 all_luclin_models_off: None,
                 attack_on_assist: None,
+                no_safe_drop: None,
                 track_sort: None,
                 track_filter: None,
                 track_players: None,

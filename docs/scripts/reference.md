@@ -63,6 +63,10 @@ Run a script from the workbench while logged in to act on your current character
 
   A run that stops mid-click lets the keys go.
 - `hover(target...)`: rest the synthetic pointer over a control.
+- `click("world", admission, x, y)` points at logical window coordinates
+  through normal scene input. Visible UI, the 3D viewport and current
+  admission still gate it. An ordinary cursor drop uses the existing
+  confirmation and saved drop preference.
 - `click("spawn", admission, id, revision)`, `click("object", admission, drop_id)` and `click("door", admission, id)`, with `right_click` and `click_with` for a spawn: click a thing in the world, by the ids a fresh `report()` gives. The click obeys what is on screen: it acts only where the scene's own pick names that thing right now, so a thing a person couldn't click from here refuses the step and nothing is sent. A door takes a person's two clicks. See [World](targets.md#world).
 - `hold_click(milliseconds, target...)`: hold the left button on a control.
 - `drag(window, x, y)`: move a named window to logical screen pixels.

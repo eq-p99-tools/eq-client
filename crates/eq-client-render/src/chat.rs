@@ -2487,8 +2487,8 @@ pub(super) fn client_request_in_scope(
         state.follow_asked = Some(super::motion::FollowAsked);
         return Some(Ok(()));
     }
-    if super::fastdrop::typed(input) {
-        state.fastdrop_asked = Some(super::fastdrop::Asked);
+    if let Some(asked) = super::fastdrop::Asked::typed(input) {
+        state.fastdrop_asked = Some(asked);
         return Some(Ok(()));
     }
     if super::motd::typed(input) {

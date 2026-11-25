@@ -7,6 +7,12 @@ client stores its own files. By default it uses `eq-client` under the per-user
 settings directory. The installation's configuration is read as input; these
 preferences are written to the separate settings directory.
 
+`NoSafeDrop` in the options file stores the original Titanium ground-drop
+preference per character. Its values are 0 to ask, 1 to drop immediately, and
+-1 to refuse drops. Missing values use the installation's `[Options]`
+preference or default 0. Invalid saved values safely restore the question.
+`/fastdrop on|off|never` changes this same saved option.
+
 Settings such as windows, options, hotbar, key bindings and map watches are kept
 per world/character. Shared files seed characters that have no saved settings.
 For example, `keys.txt` seeds `keys-<world>-<character>.txt`; file-name components
