@@ -22,6 +22,41 @@ const SHOW_NAMES: &str = "show_names";
 
 /// The name a file keeps [`Options::loot_no_drop`] under.
 const LOOT_NO_DROP: &str = "loot_no_drop";
+const NO_SAFE_DROP: &str = "NoSafeDrop";
+
+/// The original Titanium `[Options] NoSafeDrop` preference.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NoSafeDrop {
+    /// Ask before an ordinary cursor drop.
+    #[default]
+    Ask,
+    /// Submit an ordinary cursor drop immediately.
+    Fast,
+    /// Refuse an ordinary cursor drop.
+    Never,
+}
+
+impl NoSafeDrop {
+    /// Reads the original numeric setting. Invalid values safely ask.
+    #[must_use]
+    pub const fn from_saved(value: i8) -> Self {
+        match value {
+            1 => Self::Fast,
+            -1 => Self::Never,
+            _ => Self::Ask,
+        }
+    }
+
+    /// The original numeric representation.
+    #[must_use]
+    pub const fn saved(self) -> i8 {
+        match self {
+            Self::Ask => 0,
+            Self::Fast => 1,
+            Self::Never => -1,
+        }
+    }
+}
 /// The name a file keeps the Luclin model keys set on under.
 const LUCLIN_MODELS: &str = "luclin_models";
 /// The name a file keeps the Luclin model keys set off under.
@@ -471,6 +506,8 @@ pub struct Options {
     /// sets it; the official client keeps it in `eqclient.ini`, this client
     /// per character.
     pub loot_no_drop: LootNoDrop,
+    /// Original ground-drop preference, persisted per character.
+    pub no_safe_drop: NoSafeDrop,
     /// Whether the answer to an assist starts auto attack as it targets, as
     /// `/assist on` and `/assist off` set it (Titanium 0x45f40a, read
     /// R49-8 d). The official client keeps it in `eqclient.ini`
@@ -575,6 +612,7 @@ impl Default for Options {
             qol,
             show_names: ShowNames::Everything,
             loot_no_drop: LootNoDrop::Ask,
+            no_safe_drop: NoSafeDrop::Ask,
             attack_on_assist: false,
             track_sort: TrackSort::Normal,
             track_filter: TrackFilter(0),
@@ -802,6 +840,13 @@ impl Options {
                 }
                 continue;
             }
+            if key.trim() == NO_SAFE_DROP {
+                options.no_safe_drop = value
+                    .trim()
+                    .parse::<i8>()
+                    .map_or(NoSafeDrop::Ask, NoSafeDrop::from_saved);
+                continue;
+            }
             if key.trim() == CHANNEL_AUTOJOIN {
                 options.channel_autojoin = AutoJoin::new(value);
                 continue;
@@ -908,6 +953,7 @@ impl Options {
             text.push_str(part);
         }
         let loot_no_drop = self.loot_no_drop.level().to_string();
+        let _ = writeln!(text, "{NO_SAFE_DROP} = {}", self.no_safe_drop.saved());
         for part in [LOOT_NO_DROP, " = ", &loot_no_drop, "\n"] {
             text.push_str(part);
         }
@@ -961,6 +1007,27 @@ impl Options {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn fixed_qol_retired_settings_preserve_the_rest_of_an_old_file() {
+        let options = Options::read(
+            "free_chase_tilt = false\ntyped_reports = false\ninvert_y = true\nclip_plane = 42\nlong_chase_camera = false\nfree_camera = false\nclear_view = true\nuse_picks_nearest = true\n",
+            Options::default(),
+        );
+        assert!(options.invert_y);
+        assert_eq!(options.clip_plane, 42);
+        assert!(!options.qol.on(Fix::LongChaseCamera));
+        assert!(!options.qol.on(Fix::FreeCamera));
+        assert!(options.qol.on(Fix::ClearView));
+        assert!(options.qol.on(Fix::UsePicksNearest));
+        let text = options.text();
+        for retired in ["free_chase_tilt", "typed_reports"] {
+            assert!(!text.contains(retired));
+            assert!(!Toggle::all().any(|toggle| toggle.key() == retired));
+            assert_eq!(Fix::from_key(retired), None);
+        }
+        assert_eq!(Options::read(&text, Options::default()), options);
+    }
 
     #[test]
     fn options_keep_to_their_file_and_old_files_still_read() {

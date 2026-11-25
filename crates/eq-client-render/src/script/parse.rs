@@ -298,6 +298,15 @@ impl MoveCommand {
 /// UI controls a script may click.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClickTarget {
+    /// A normal scene press/release at logical window coordinates.
+    World {
+        /// The admission whose world the script clicked.
+        admission: u64,
+        /// Horizontal logical window coordinate.
+        x: u16,
+        /// Vertical logical window coordinate.
+        y: u16,
+    },
     /// An inventory slot button by server slot number.
     Slot(i32),
     /// The spellbook's scribe-cursor-scroll button.
@@ -956,7 +965,10 @@ fn right_clicked(target: ClickTarget) -> Result<ClickTarget, String> {
 fn window_control(target: ClickTarget) -> Result<ClickTarget, String> {
     if matches!(
         target,
-        ClickTarget::Spawn { .. } | ClickTarget::Object { .. } | ClickTarget::Door { .. }
+        ClickTarget::World { .. }
+            | ClickTarget::Spawn { .. }
+            | ClickTarget::Object { .. }
+            | ClickTarget::Door { .. }
     ) {
         Err("a spawn, object or door takes click, right_click or click_with".into())
     } else {
@@ -1075,7 +1087,7 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
         ),
         ["book_page", way @ ("next" | "back")] => ClickTarget::BookPage(*way == "next"),
         ["book_edit", action] => ClickTarget::BookEdit(book_edit(action)?),
-        ["spawn" | "object" | "door", ..] => world_target(words)?,
+        ["world" | "spawn" | "object" | "door", ..] => world_target(words)?,
         _ => return Err("unknown or malformed step".into()),
     })
 }
@@ -1084,6 +1096,11 @@ fn parse_click(words: &[&str]) -> Result<ClickTarget, String> {
 fn world_target(words: &[&str]) -> Result<ClickTarget, String> {
     let admission = |word: &str| word.parse().map_err(|_| "expected an admission ID");
     Ok(match words {
+        ["world", reported, x, y] => ClickTarget::World {
+            admission: admission(reported)?,
+            x: x.parse().map_err(|_| "expected logical window x")?,
+            y: y.parse().map_err(|_| "expected logical window y")?,
+        },
         ["spawn", reported, id, revision] => ClickTarget::Spawn {
             admission: admission(reported)?,
             id: id.parse().map_err(|_| "expected a spawn ID")?,

@@ -23,13 +23,27 @@ pub(super) fn skill_value(player: &crate::PlayerState, skill_id: u32) -> Option<
 /// The sound the Titanium program plays for a level gained (read R49-6c).
 const LEVEL_GAIN_SOUND: u16 = 0x8b;
 
+/// Whether the own spawn level is distinct from the character's gate level.
+pub(super) const fn separate_spawn_level(dialect: crate::GameDialect) -> bool {
+    match dialect {
+        crate::GameDialect::EqMac => true,
+        crate::GameDialect::Titanium | crate::GameDialect::Rof2 => false,
+    }
+}
+
 impl ClientWorld {
     /// The player's level and experience; what items give can depend on
     /// the level.
     pub(super) fn level_news(&mut self, current: u8, experience: u32, changes: &mut Changes) {
         let program = super::prints_r49_6_lines(self.generation);
+        let separate = separate_spawn_level(self.generation);
         match self.player.as_mut() {
             Some(player) if self.connected => {
+                // Mac 0x4e06ef only raises character +0x90. A lower/equal
+                // update changes neither its experience nor its shown level.
+                if separate && current <= player.level {
+                    return;
+                }
                 if player.level != current {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
                 }
@@ -48,6 +62,10 @@ impl ClientWorld {
                         .push(crate::effects::Cue::Number(LEVEL_GAIN_SOUND));
                 }
                 player.level = current;
+                self.displayed_level = Some(current);
+                if separate && let Some(spawn) = self.zone.spawns.get_mut(&player.spawn_id) {
+                    spawn.state.level = current;
+                }
                 self.vitals.experience = Some(experience);
                 self.refresh_item_hp();
             }

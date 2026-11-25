@@ -123,7 +123,12 @@ pub(super) fn init_presentation(app: &mut App) {
 pub(super) fn schedule(app: &mut App) {
     app.add_systems(
         Update,
-        crate::gpu_assets::animate_terrain.in_set(Stage::Present),
+        (
+            crate::gpu_assets::animate_terrain,
+            crate::gpu_assets::animate_objects,
+        )
+            .chain()
+            .in_set(Stage::Present),
     );
     app.add_systems(
         PreUpdate,
@@ -229,7 +234,11 @@ pub(super) fn schedule(app: &mut App) {
             (coins::input, coins::change),
             inventory::colors::input,
             interact::input,
-            (target::input, target::aim).chain(),
+            (
+                target::input.before(inventory::ground_drop::input),
+                target::aim,
+            )
+                .chain(),
             (
                 who::zone_list,
                 whereabouts::answers,
@@ -242,7 +251,7 @@ pub(super) fn schedule(app: &mut App) {
                     crate::report_windows::show,
                 )
                     .chain(),
-                crate::fastdrop::answers,
+                crate::fastdrop::answers.before(inventory::ground_drop::input),
                 crate::slash::answers,
                 crate::slash::assist_named,
                 crate::shield::answer,

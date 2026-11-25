@@ -170,6 +170,7 @@ impl ClientWorld {
         // the Titanium program's rule applies (read R49-21 c, 6.642).
         self.casting.bard_refresh = player.class == Some(super::casting::BARD)
             && self.can(crate::Capability::BardRefreshTimers);
+        self.displayed_level = Some(player.level);
         self.player = Some(player.clone());
         changes
     }

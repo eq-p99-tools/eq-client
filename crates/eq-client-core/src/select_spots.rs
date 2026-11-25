@@ -546,7 +546,7 @@ mod tests {
     }
 
     /// A square of floor `half` across each way at height zero, as two
-    /// triangles each side up.
+    /// upward-facing triangles.
     fn floor(half: f32, height: f32) -> Vec<[[f32; 3]; 3]> {
         let (a, b, c, d) = (
             [-half, height, -half],
@@ -554,7 +554,7 @@ mod tests {
             [half, height, half],
             [-half, height, half],
         );
-        vec![[a, b, c], [a, c, d]]
+        vec![[a, c, b], [a, d, c]]
     }
 
     /// An upright wall from `from` to `to` across the floor, `high` tall.
@@ -581,7 +581,7 @@ mod tests {
             [80.0, 0.0, 60.0],
             [-80.0, 0.0, 60.0],
         );
-        let mut triangles = vec![[a, b, c], [a, c, d]];
+        let mut triangles = vec![[a, c, b], [a, d, c]];
         triangles.extend(wall([-80.0, 60.0], [80.0, 60.0], 40.0));
         triangles.extend(wall([-80.0, -200.0], [-80.0, 60.0], 40.0));
         triangles.extend(wall([80.0, -200.0], [80.0, 60.0], 40.0));

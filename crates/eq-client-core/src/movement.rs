@@ -70,7 +70,7 @@ pub use eq_network_game::movement::{
 use glam::Vec3;
 use parry3d::{
     math::{Pose, Vector},
-    query::{Ray, RayCast, ShapeCastOptions, cast_shapes, contact, intersection_test},
+    query::{Ray, ShapeCastOptions, cast_shapes, contact, intersection_test},
     shape::{Capsule, TriMesh},
 };
 use std::sync::Arc;
@@ -538,13 +538,13 @@ impl CollisionWorld {
         let origin = Vector::from_array((position + Vec3::Y * (step_up + EDGE)).to_array());
         let ray = Ray::new(origin, -Vector::Y);
         let reach = step_up + drop + 2.0 * EDGE;
-        let terrain = self.terrain.mesh.cast_local_ray(&ray, reach, false);
+        let terrain = Surface::identity(&self.terrain).cast_floor(&ray, reach);
         let (door, time) = self
             .obstacles
             .iter()
             .filter(|(door, _, solidity)| door.is_some() && solidity.floor)
             .filter_map(|(door, mesh, _)| {
-                Some(((*door)?, mesh.mesh.cast_local_ray(&ray, reach, false)?))
+                Some(((*door)?, Surface::identity(mesh).cast_floor(&ray, reach)?))
             })
             .min_by(|a, b| a.1.total_cmp(&b.1))?;
         terrain.is_none_or(|ground| time <= ground).then_some(door)
@@ -567,10 +567,9 @@ impl CollisionWorld {
             let sample = position + Vec3::new(x, step_up + EDGE, z);
             let ray = Ray::new(Vector::from_array(sample.to_array()), -Vector::Y);
             for (id, instance) in self.spawn_obstacles.iter() {
-                if let Some(time) =
-                    instance
-                        .surface()
-                        .cast_ray(&ray, step_up + drop + 2.0 * EDGE, false)
+                if let Some(time) = instance
+                    .surface()
+                    .cast_floor(&ray, step_up + drop + 2.0 * EDGE)
                     && (sample.y - time - supported).abs() <= EDGE
                 {
                     return Some((*id, supported));
@@ -606,10 +605,10 @@ impl CollisionWorld {
                     let sample = position + Vec3::new(x, step_up + EDGE, z);
                     let ray = Ray::new(Vector::from_array(sample.to_array()), -Vector::Y);
                     let reach = step_up + drop + 2.0 * EDGE;
-                    let time = instance.surface().cast_ray(&ray, reach, false)?;
+                    let time = instance.surface().cast_floor(&ray, reach)?;
                     let first = self
                         .floor_meshes()
-                        .filter_map(|mesh| mesh.cast_ray(&ray, reach, false))
+                        .filter_map(|mesh| mesh.cast_floor(&ray, reach))
                         .min_by(f32::total_cmp)?;
                     (time <= first + EDGE).then_some(sample.y - time)
                 })
@@ -641,10 +640,12 @@ impl CollisionWorld {
     /// Finds nearby ground, never a roof above the permitted step height: the
     /// first surface straight down from `step_up` above `position`, down to
     /// `drop` below it, at any angle. Both generations' programs find a floor
-    /// so and discard the surface's normal, and their on-ground test compares
+    /// so and their on-ground test compares
     /// heights only (Titanium 0x48a0fc and 0x48a2f4, `EQMac` 0x4b3a84 and
     /// 0x50ba07; read, Decompile R-s, 11-01), so a face too steep to have
-    /// been floor before is floor at its height. They sweep a sphere down
+    /// been floor before is floor at its height. The Titanium floor query
+    /// skips downward-facing faces (read 0x10185790 / 0x10192400, 6.651);
+    /// the same eligibility on Mac is inferred. They sweep a sphere down
     /// where this casts a ray (checklist 6.336).
     pub fn ground(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
         self.solid_ground(position, step_up, drop)
@@ -662,11 +663,7 @@ impl CollisionWorld {
         let time = self
             .floor_meshes()
             .filter_map(|mesh| {
-                mesh.cast_ray(
-                    &Ray::new(origin, -Vector::Y),
-                    step_up + drop + 2.0 * EDGE,
-                    false,
-                )
+                mesh.cast_floor(&Ray::new(origin, -Vector::Y), step_up + drop + 2.0 * EDGE)
             })
             .min_by(f32::total_cmp)?;
         let floor = origin.y - time;
@@ -695,7 +692,7 @@ impl CollisionWorld {
             let Some(time) = self
                 .floor_meshes()
                 .filter_map(|mesh| {
-                    mesh.cast_ray(&Ray::new(origin, -Vector::Y), from - bottom + EDGE, false)
+                    mesh.cast_floor(&Ray::new(origin, -Vector::Y), from - bottom + EDGE)
                 })
                 .min_by(f32::total_cmp)
             else {
@@ -795,7 +792,7 @@ impl CollisionWorld {
         for (x, z) in SUPPORT_OFFSETS {
             let sample = probe + Vec3::new(x, 0.0, z);
             let ray = Ray::new(Vector::from_array(sample.to_array()), Vector::Y);
-            let height = sample.y + self.terrain.mesh.cast_local_ray(&ray, range, false)?;
+            let height = sample.y + Surface::identity(&self.terrain).cast_floor(&ray, range)?;
             // A lower floor can be a tunnel or the landing of an ordinary fall.
             if self.ground(sample, 0.0, drop).is_some() {
                 return None;
@@ -1187,6 +1184,9 @@ pub fn displacement(direction: Vec3, speed: f32, seconds: f32) -> Vec3 {
 }
 
 #[cfg(test)]
+mod floor_support_tests;
+
+#[cfg(test)]
 mod tests {
     use super::*;
 
@@ -1280,8 +1280,8 @@ mod tests {
 
     fn floor(y: f32) -> Vec<[[f32; 3]; 3]> {
         vec![
-            [[-20.0, y, -20.0], [20.0, y, -20.0], [20.0, y, 20.0]],
-            [[-20.0, y, -20.0], [20.0, y, 20.0], [-20.0, y, 20.0]],
+            [[-20.0, y, -20.0], [20.0, y, 20.0], [20.0, y, -20.0]],
+            [[-20.0, y, -20.0], [-20.0, y, 20.0], [20.0, y, 20.0]],
         ]
     }
     /// A wall across x = `x`, two units thick, from the floor up.
@@ -1686,8 +1686,8 @@ mod tests {
         for degrees in [30.0_f32, 55.0, 80.0] {
             let rise = degrees.to_radians().tan() * 10.0;
             let world = CollisionWorld::new([
-                [[0.0, 0.0, -20.0], [10.0, rise, -20.0], [10.0, rise, 20.0]],
-                [[0.0, 0.0, -20.0], [10.0, rise, 20.0], [0.0, 0.0, 20.0]],
+                [[0.0, 0.0, -20.0], [10.0, rise, 20.0], [10.0, rise, -20.0]],
+                [[0.0, 0.0, -20.0], [0.0, 0.0, 20.0], [10.0, rise, 20.0]],
             ])
             .unwrap();
             let at = Vec3::new(5.0, rise * 0.5, 0.0);
@@ -1713,8 +1713,8 @@ mod tests {
     #[test]
     fn one_unit_stair_can_be_climbed_but_not_through_a_low_ceiling() {
         let stair = [
-            [[0.0, 1.0, -10.0], [10.0, 1.0, -10.0], [10.0, 1.0, 10.0]],
-            [[0.0, 1.0, -10.0], [10.0, 1.0, 10.0], [0.0, 1.0, 10.0]],
+            [[0.0, 1.0, -10.0], [10.0, 1.0, 10.0], [10.0, 1.0, -10.0]],
+            [[0.0, 1.0, -10.0], [0.0, 1.0, 10.0], [10.0, 1.0, 10.0]],
             [[0.0, 0.0, -10.0], [0.0, 1.0, -10.0], [0.0, 1.0, 10.0]],
             [[0.0, 0.0, -10.0], [0.0, 1.0, 10.0], [0.0, 0.0, 10.0]],
         ];
@@ -1874,9 +1874,9 @@ mod tests {
     fn stairs(rise: f32, tread: f32, steps: u8) -> CollisionWorld {
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [0.0, 0.0, -30.0],
-            [0.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [0.0, 0.0, 30.0],
+            [0.0, 0.0, -30.0],
         )
         .to_vec();
         for step in 0..steps {
@@ -1891,9 +1891,9 @@ mod tests {
             ));
             triangles.extend(quad(
                 [x, high, -30.0],
-                [end, high, -30.0],
-                [end, high, 30.0],
                 [x, high, 30.0],
+                [end, high, 30.0],
+                [end, high, -30.0],
             ));
         }
         CollisionWorld::new(triangles).unwrap()
@@ -1930,9 +1930,9 @@ mod tests {
             let mut triangles = floor(0.0);
             triangles.extend(quad(
                 [-20.0, riser, -10.0],
-                [0.0, riser, -10.0],
-                [0.0, riser, 10.0],
                 [-20.0, riser, 10.0],
+                [0.0, riser, 10.0],
+                [0.0, riser, -10.0],
             ));
             triangles.extend(quad(
                 [0.0, 0.0, -10.0],

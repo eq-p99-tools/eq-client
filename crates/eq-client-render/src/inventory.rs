@@ -40,13 +40,6 @@ pub(super) struct InventoryState {
     actions: interaction::Actions,
     destruction: destruction::Destruction,
     ground_drop: ground_drop::State,
-    /// Whether the Drop button puts an item on the ground without asking
-    /// (`/fastdrop`, checklist 6.536, inferred, pending R49-6n). Off at
-    /// start and never saved; a zone change keeps it, and a world entry, a
-    /// camp, a return to login or a lost link turns it off (the same forget
-    /// path as the rest of the admission's inventory), so it never carries
-    /// to another character.
-    pub(crate) fast_drop: bool,
     /// Refusals of the player's actions, on their way to the chat.
     refused: Vec<String>,
     /// What the player's actions said besides, such as a buff's fade, on
@@ -173,7 +166,6 @@ impl InventoryState {
         self.cancel_actions();
         self.destruction = destruction::Destruction::default();
         self.ground_drop = ground_drop::State::default();
-        self.fast_drop = false;
         self.demo_news.clear();
         self.demo = false;
         self.bank_open = false;

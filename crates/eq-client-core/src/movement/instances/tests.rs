@@ -3,8 +3,8 @@ use crate::movement::CollisionWorld;
 
 fn room() -> Vec<[[f32; 3]; 3]> {
     vec![
-        [[-10.0, 0.0, -10.0], [10.0, 0.0, -10.0], [10.0, 0.0, 10.0]],
-        [[-10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [-10.0, 0.0, 10.0]],
+        [[-10.0, 0.0, -10.0], [10.0, 0.0, 10.0], [10.0, 0.0, -10.0]],
+        [[-10.0, 0.0, -10.0], [-10.0, 0.0, 10.0], [10.0, 0.0, 10.0]],
         [[4.0, 0.0, -10.0], [4.0, 8.0, -10.0], [4.0, 8.0, 10.0]],
         [[4.0, 0.0, -10.0], [4.0, 8.0, 10.0], [4.0, 0.0, 10.0]],
     ]
@@ -13,8 +13,8 @@ fn room() -> Vec<[[f32; 3]; 3]> {
 fn world() -> CollisionWorld {
     CollisionWorld::new([[
         [-1000.0, -100.0, -1000.0],
-        [1000.0, -100.0, -1000.0],
         [0.0, -100.0, 1000.0],
+        [1000.0, -100.0, -1000.0],
     ]])
     .unwrap()
 }
@@ -127,8 +127,8 @@ fn moving_instances_share_geometry_and_snapshots_keep_their_old_pose() {
 #[test]
 fn posed_footprint_edges_keep_floor_identity_and_reject_invalid_poses() {
     let deck = vec![
-        [[-5.0, 0.0, -5.0], [0.0, 0.0, -5.0], [0.0, 0.0, 5.0]],
-        [[-5.0, 0.0, -5.0], [0.0, 0.0, 5.0], [-5.0, 0.0, 5.0]],
+        [[-5.0, 0.0, -5.0], [0.0, 0.0, 5.0], [0.0, 0.0, -5.0]],
+        [[-5.0, 0.0, -5.0], [-5.0, 0.0, 5.0], [0.0, 0.0, 5.0]],
     ];
     let mesh = Arc::new(CollisionMesh::new(deck).unwrap());
     assert!(CollisionInstance::new(Arc::clone(&mesh), Vec3::NAN, Quat::IDENTITY).is_err());
@@ -154,7 +154,7 @@ fn posed_footprint_edges_keep_floor_identity_and_reject_invalid_poses() {
 
 #[test]
 fn tilted_placement_extent_uses_real_vertices_instead_of_empty_aabb_corners() {
-    let triangles = [[[0.0, 0.0, 0.0], [10.0, 10.0, 0.0], [10.0, 0.0, 1.0]]];
+    let triangles = [[[0.0, 0.0, 0.0], [10.0, 0.0, 1.0], [10.0, 10.0, 0.0]]];
     let rotation = Quat::from_rotation_z(-0.5);
     let translation = Vec3::new(0.0, 5.0, 0.0);
     let baked = CollisionMesh::new(triangles.iter().map(|triangle| {
@@ -181,13 +181,13 @@ fn a_ship_passing_alongside_never_takes_the_link_off_the_deck_still_underfoot() 
             CollisionMesh::new([
                 [
                     [from, height, -10.0],
-                    [to, height, -10.0],
                     [to, height, 10.0],
+                    [to, height, -10.0],
                 ],
                 [
                     [from, height, -10.0],
-                    [to, height, 10.0],
                     [from, height, 10.0],
+                    [to, height, 10.0],
                 ],
             ])
             .unwrap(),

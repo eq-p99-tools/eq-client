@@ -956,8 +956,8 @@ mod tests {
             radius: None,
         };
         let mut world = CollisionWorld::new([
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ])
         .unwrap();
         // Include translation and scale: collision must match the mesh, not just its raw vertices.
@@ -993,7 +993,10 @@ mod tests {
                 material_mode: eq_client_assets::MaterialMode::Opaque,
                 light: Vec::new(),
             }],
-            materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
+            materials: vec![eq_client_assets::ObjectMaterial {
+                double_sided: true,
+                animation: None,
+            }],
             collision: Vec::new(),
             no_hit_collision: Vec::new(),
             vertex_count: None,
@@ -1113,7 +1116,7 @@ mod tests {
             },
         )]));
         let terrain =
-            CollisionWorld::new([[[0.0, 0.0, 0.0], [5.0, 0.0, 0.0], [0.0, 0.0, 5.0]]]).unwrap();
+            CollisionWorld::new([[[0.0, 0.0, 0.0], [0.0, 0.0, 5.0], [5.0, 0.0, 0.0]]]).unwrap();
         let mut app = App::new();
         app.insert_resource(state)
             .insert_resource(models)
@@ -1361,8 +1364,8 @@ mod tests {
             Model {
                 primitives: vec![(Handle::default(), Handle::default())],
                 collision: vec![
-                    [[-10.0, 0.5, -10.0], [10.0, 0.5, -10.0], [10.0, 0.5, 10.0]],
-                    [[-10.0, 0.5, -10.0], [10.0, 0.5, 10.0], [-10.0, 0.5, 10.0]],
+                    [[-10.0, 0.5, -10.0], [10.0, 0.5, 10.0], [10.0, 0.5, -10.0]],
+                    [[-10.0, 0.5, -10.0], [-10.0, 0.5, 10.0], [10.0, 0.5, 10.0]],
                 ],
                 pick: Vec::new(),
                 radius: None,
@@ -1373,8 +1376,8 @@ mod tests {
         app.init_resource::<Time>();
         app.insert_resource(super::super::Collision(Some(
             eq_client_core::movement::CollisionWorld::new([
-                [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-                [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+                [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+                [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
             ])
             .unwrap(),
         )));

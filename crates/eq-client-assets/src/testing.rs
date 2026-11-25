@@ -1,12 +1,45 @@
 //! Small installed zones written byte by byte, for other crates' tests that
 //! need the real loader's output.
 
-use std::path::Path;
-
 use crate::test_world::{
     OLD_FORMAT, WorldFile, material, material_with_flags, mesh, mesh_with_flags, palette,
     write_archive,
 };
+use std::path::Path;
+
+/// Writes two solid WLD faces: the clockwise face at x0 faces up, and
+/// the counter-clockwise face at x10 faces down. Coordinates are WLD's.
+pub fn write_floor_winding(install: &Path) {
+    let mut zone = WorldFile::new(OLD_FORMAT);
+    let material_name = zone.name("FLOOR_MDF");
+    let material = zone.fragment(0x30, material(material_name, 0x8000_0001));
+    let palette_name = zone.name("FLOOR_MP");
+    let palette = zone.fragment(0x31, palette(palette_name, material));
+    let mesh_name = zone.name("FLOOR_DMSPRITEDEF");
+    zone.fragment(
+        0x36,
+        mesh(
+            mesh_name,
+            palette,
+            &[
+                [0, 0, 0],
+                [0, 4, 0],
+                [4, 0, 0],
+                [10, 0, 0],
+                [14, 0, 0],
+                [10, 4, 0],
+            ],
+            &[[0, 1, 2], [3, 4, 5]],
+            &[(2, 0)],
+            &[],
+        ),
+    );
+    write_archive(
+        install,
+        "floor_winding.s3d",
+        &[("floor_winding.wld", zone.bytes())],
+    );
+}
 
 fn words(words: &[u32]) -> Vec<u8> {
     words.iter().flat_map(|word| word.to_le_bytes()).collect()

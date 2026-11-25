@@ -846,10 +846,15 @@ mod tests {
         let online = online();
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let outbox = Outbox::new(Some(tx));
-        let mut state = InventoryState {
-            fast_drop: true,
-            ..InventoryState::default()
-        };
+        let mut state = InventoryState::default();
+        let options = crate::options::OptionsState::new(&eq_client_core::options::Options {
+            no_safe_drop: eq_client_core::options::NoSafeDrop::Fast,
+            ..Default::default()
+        });
+        assert_eq!(
+            options.options.no_safe_drop,
+            eq_client_core::options::NoSafeDrop::Fast
+        );
         let mut asked = Asked::default();
         state
             .destroy_action(Action::Select, &online, &outbox, &mut asked)

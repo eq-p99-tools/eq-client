@@ -2,6 +2,33 @@ use super::*;
 use crate::{clicks::testing as clicks, online::testing as session};
 use eq_client_core::{SpawnState, WorldEvent};
 
+#[test]
+fn eqmac_level_map_details_use_the_shown_level_without_changing_character_gates() {
+    let mut online = OnlineState::new(true);
+    let mut world = ClientWorld::default();
+    world.carry_as(eq_client_core::GameDialect::EqMac);
+    session::set_world(&mut online, world);
+    let mut player = session::player(1);
+    player.level = 55;
+    session::admit(&mut online, 1, player);
+    session::news(
+        &mut online,
+        [WorldEvent::Listing {
+            spawn_id: 1,
+            change: eq_client_core::listing::ListingChange::Level(1),
+        }],
+    );
+    assert_eq!(online.world().player().unwrap().level, 55);
+    assert_eq!(entity(online.world(), 1).unwrap().level, 1);
+    assert_eq!(
+        known(online.world())
+            .find(|entity| entity.own)
+            .unwrap()
+            .level,
+        1
+    );
+}
+
 fn spawn(id: u16, x: f32, kind: SpawnKind) -> SpawnState {
     let mut spawn = session::pet(id, 1);
     spawn.name = format!("Example_entity_{id}");

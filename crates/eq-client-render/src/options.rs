@@ -403,6 +403,55 @@ mod tests {
     }
 
     #[test]
+    fn fastdrop_modes_survive_the_saved_character_options_and_restart() {
+        use eq_client_core::options::NoSafeDrop;
+        let directory = std::env::temp_dir().join(format!(
+            "eq-client-fastdrop-restart-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        assert!(!directory.exists());
+        let mut app = app(&directory);
+        app.add_systems(Update, crate::fastdrop::answers.before(persist));
+        enter(&mut app, 1, "Example");
+        app.update();
+        for (command, mode) in [
+            ("/fastdrop on", NoSafeDrop::Fast),
+            ("/fastdrop never", NoSafeDrop::Never),
+            ("/fastdrop off", NoSafeDrop::Ask),
+        ] {
+            assert_eq!(
+                crate::chat::client_request_in_scope(
+                    command,
+                    &mut app.world_mut().resource_mut::<crate::chat::ChatState>(),
+                    None,
+                ),
+                Some(Ok(()))
+            );
+            app.update();
+            let saved = std::fs::read_to_string(directory.join("options-ExampleWorld-Example.txt"))
+                .unwrap();
+            assert!(saved.contains(&format!("NoSafeDrop = {}\n", mode.saved())));
+            let mut restarted = self::app(&directory);
+            enter(&mut restarted, 2, "Example");
+            restarted.update();
+            assert_eq!(
+                restarted
+                    .world()
+                    .resource::<OptionsState>()
+                    .options
+                    .no_safe_drop,
+                mode
+            );
+        }
+        std::fs::remove_file(directory.join("options-ExampleWorld-Example.txt")).unwrap();
+        std::fs::remove_dir(directory).unwrap();
+    }
+
+    #[test]
     fn each_character_keeps_their_own_options() {
         use eq_client_core::options::Level;
 

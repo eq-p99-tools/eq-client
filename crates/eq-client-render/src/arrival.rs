@@ -167,8 +167,8 @@ mod tests {
         };
         let mut collision = CollisionWorld::new([[
             corner(-500.0, -500.0, -200.0),
-            corner(500.0, -500.0, -200.0),
             corner(0.0, 500.0, -200.0),
+            corner(500.0, -500.0, -200.0),
         ]])
         .unwrap();
         collision.set_spawn_obstacles(vec![(
@@ -176,8 +176,8 @@ mod tests {
             Arc::new(
                 CollisionMesh::new([[
                     corner(-20.0, -20.0, deck),
-                    corner(20.0, -20.0, deck),
                     corner(0.0, 20.0, deck),
+                    corner(20.0, -20.0, deck),
                 ]])
                 .unwrap(),
             ),

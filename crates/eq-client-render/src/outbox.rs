@@ -7,6 +7,8 @@
 //! what the session does not offer from the same answer, the world's
 //! capability report.
 mod book;
+mod cursor_drop;
+pub(crate) use cursor_drop::{DropPublication, DropReceipt};
 
 pub(crate) use self::book::{BOOK_TIMEOUT, BookEditReceipt};
 use self::book::{BookQueue, Expected};
@@ -54,6 +56,8 @@ pub(crate) enum Refusal {
     Busy,
     /// The session has ended.
     Ended,
+    /// The locally queued drop still owns cursor custody.
+    CursorDropPending,
 }
 
 impl Refusal {
@@ -73,6 +77,7 @@ impl Refusal {
             }
             Self::Busy => "Too many requests at once; try again",
             Self::Ended => "The connection has ended",
+            Self::CursorDropPending => "Wait for the cursor drop result and received inventory",
         }
     }
 }
@@ -109,6 +114,7 @@ pub(crate) struct Outbox {
     spell_ready: Arc<AtomicBool>,
     refused: Arc<Mutex<Vec<Refusal>>>,
     book: Arc<Mutex<BookQueue>>,
+    cursor_drop: Arc<Mutex<cursor_drop::Pending>>,
     /// Present only on a short-lived facade passed by an identified script
     /// dispatch. The shared outbox never stores a script's context.
     chat_admission: Option<u64>,
@@ -121,6 +127,8 @@ pub(crate) struct Outbox {
     /// the step's.
     sent_chat: Arc<AtomicBool>,
     posture: Arc<Mutex<Option<crate::posture::Context>>>,
+    #[cfg(test)]
+    test_now: Option<Instant>,
 }
 
 /// Whether a command goes as chat, which the session paces (6.523). An emote
@@ -148,16 +156,36 @@ fn interrupts_apply(command: &ClientCommand) -> bool {
 }
 
 impl Outbox {
+    #[cfg(test)]
+    pub(crate) fn set_test_time(&mut self, now: Instant) {
+        self.test_now = Some(now);
+    }
+
+    #[cfg_attr(
+        not(test),
+        allow(clippy::unused_self, reason = "the injected test clock is per outbox")
+    )]
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.test_now {
+            return now;
+        }
+        Instant::now()
+    }
+
     pub(crate) fn new(queue: Option<SyncSender<ClientCommand>>) -> Self {
         Self {
             queue,
             spell_ready: Arc::new(AtomicBool::new(true)),
             refused: Arc::new(Mutex::new(Vec::new())),
             book: Arc::default(),
+            cursor_drop: Arc::default(),
             chat_admission: None,
             language: Arc::default(),
             sent_chat: Arc::default(),
             posture: Arc::default(),
+            #[cfg(test)]
+            test_now: None,
         }
     }
 
@@ -169,10 +197,13 @@ impl Outbox {
             spell_ready: self.spell_ready.clone(),
             refused: self.refused.clone(),
             book: self.book.clone(),
+            cursor_drop: self.cursor_drop.clone(),
             chat_admission,
             language: self.language.clone(),
             sent_chat: Arc::default(),
             posture: self.posture.clone(),
+            #[cfg(test)]
+            test_now: self.test_now,
         }
     }
 
@@ -313,7 +344,7 @@ impl Outbox {
         let session_id = world.session_id().ok_or(Refusal::NotAdmitted)?;
         Ok(Stamp {
             session_id,
-            created: Instant::now(),
+            created: self.now(),
         })
     }
 
@@ -324,7 +355,7 @@ impl Outbox {
         world.in_world().then_some(())?;
         Some(Stamp {
             session_id: world.session_id()?,
-            created: Instant::now(),
+            created: self.now(),
         })
     }
 
@@ -522,6 +553,16 @@ impl Outbox {
             {
                 return Err(Refusal::SpellData);
             }
+        }
+        if cursor_drop::consumes_cursor(command)
+            && (world.worker_inventory().ground_drop_pending()
+                || self
+                    .cursor_drop
+                    .lock()
+                    .map_err(|_| Refusal::Busy)?
+                    .in_admission(world.session_id()))
+        {
+            return Err(Refusal::CursorDropPending);
         }
         Ok(queue)
     }

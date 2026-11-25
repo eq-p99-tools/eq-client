@@ -123,6 +123,7 @@ fn read(eq_directory: &Path, short_name: &str) -> Result<ZoneAsset, LoadError> {
                         .iter()
                         .map(|_| ObjectMaterial {
                             double_sided: false,
+                            animation: None,
                         })
                         .collect(),
                     primitives: staged.primitives,
