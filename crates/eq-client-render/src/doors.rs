@@ -993,7 +993,10 @@ mod tests {
                 material_mode: eq_client_assets::MaterialMode::Opaque,
                 light: Vec::new(),
             }],
-            materials: vec![eq_client_assets::ObjectMaterial { double_sided: true }],
+            materials: vec![eq_client_assets::ObjectMaterial {
+                double_sided: true,
+                animation: None,
+            }],
             collision: Vec::new(),
             no_hit_collision: Vec::new(),
             vertex_count: None,

@@ -1,4 +1,5 @@
 //! Synthetic objects exercise production zone spawning, batching and material selection.
+mod animation;
 use super::*;
 use bevy::ecs::world::CommandQueue;
 use bevy::render::render_resource::Face;
@@ -52,8 +53,12 @@ fn placed_object_sidedness_survives_filtering_batching_and_reflection() {
                 materials: vec![
                     ObjectMaterial {
                         double_sided: !double_sided,
+                        animation: None,
                     },
-                    ObjectMaterial { double_sided },
+                    ObjectMaterial {
+                        double_sided,
+                        animation: None,
+                    },
                 ],
                 collision: Vec::new(),
                 no_hit_collision: Vec::new(),
@@ -168,6 +173,7 @@ fn reflected_material_variants_are_shared_without_changing_the_source() {
         vec![triangle(MaterialMode::Blended(BlendOpacity::Quarter))],
         &[ObjectMaterial {
             double_sided: false,
+            animation: None,
         }],
         &[],
         &mut meshes,

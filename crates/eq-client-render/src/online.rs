@@ -40,6 +40,7 @@ pub(super) struct OnlineState {
     /// The current zone's regions, from its assets.
     pub regions: eq_client_assets::regions::ZoneRegions,
     pub enabled: bool,
+    pub(super) checking_files: Option<(usize, usize, u64)>,
     /// Established backend policy for the currently attached producer.
     pub(super) chat_link_expansion: Option<eq_client_core::chat::LinkExpansion>,
     /// Changes when a new worker replaces the current connection.
@@ -253,6 +254,7 @@ impl OnlineState {
         self.connection_revision = self.connection_revision.wrapping_add(1);
         self.deletion.ended();
         self.chat_link_expansion = None;
+        self.checking_files = None;
         self.world.restart();
         self.selection = None;
         self.loading.clear();
@@ -442,6 +444,7 @@ impl OnlineState {
             deletion: default(),
             regions: eq_client_assets::regions::ZoneRegions::default(),
             enabled,
+            checking_files: None,
             chat_link_expansion: None,
             connection_revision: 0,
             server_placement: None,
@@ -916,6 +919,10 @@ pub(super) fn receive(
         // Provider facts precede the admission/loading gate. The producer binding
         // is retained verbatim, including for old queued Connecting notifications.
         .filter(|update| {
+            if let WorldUpdate::CheckingFiles(progress) = update {
+                state.checking_files = *progress;
+                return false;
+            }
             if let WorldUpdate::SpellTable(fact) = update {
                 if spell_names
                     .as_deref_mut()
