@@ -3784,7 +3784,7 @@ fn landing_cost(
                 zone,
             };
             let mut cost = falls.landing_cost(landing);
-            if cost.safe_fall && world.worker_inventory().ground_drop_pending() {
+            if cost.safe_fall && world.worker_inventory().ground_drop_projected() {
                 // Extra mass can make an otherwise harmless landing eligible
                 // for Safe Fall. Award the notice only when even zero weight
                 // would have used the skill and the upper bound still uses it.
@@ -13311,8 +13311,7 @@ pub(super) mod tests {
         online::testing::generation(online, eq_client_core::GameDialect::Titanium);
         online::testing::empty_carried_coins(online);
         let item = drop_item(weight_tenths, 17);
-        let serial = item.rules.ground_drop_serial.unwrap();
-        online::testing::inventory(online, InventoryUpdate::Snapshot(vec![item]));
+        online::testing::inventory(online, InventoryUpdate::Snapshot(vec![item.clone()]));
         let revision = online.world().worker_inventory().revision();
         online::testing::news(
             online,
@@ -13320,14 +13319,19 @@ pub(super) mod tests {
                 session_id: 11,
                 revision,
                 sequence: None,
-                update: Some(InventoryUpdate::GroundDropPending(serial)),
+                update: Some(InventoryUpdate::GroundDropProjected(
+                    eq_client_core::inventory::InventoryDropProjection {
+                        revision,
+                        item: Box::new(item),
+                    },
+                )),
                 error: None,
             }],
         );
         for update in updates {
             online::testing::inventory(online, update);
         }
-        assert!(online.world().worker_inventory().ground_drop_pending());
+        assert!(online.world().worker_inventory().ground_drop_projected());
     }
 
     #[test]
@@ -13364,6 +13368,11 @@ pub(super) mod tests {
         assert!(receiver.try_recv().is_err());
 
         online::testing::inventory(&mut online, InventoryUpdate::Invalidated);
+        assert!(online.world().fall_weight().is_none());
+        // A received record can cover that instance without repairing the
+        // unread inventory. Retiring its shadow must not enable the generic
+        // lighter fall estimate while the rest remains unknown.
+        online::testing::inventory(&mut online, InventoryUpdate::Set(vec![drop_item(500, 17)]));
         assert!(online.world().fall_weight().is_none());
         let cost = |impact| {
             landing_cost(

@@ -377,6 +377,148 @@ fn destroy_submission_result_applies_once_and_cannot_remove_a_newer_cursor() {
 }
 
 #[test]
+fn drop_projection_removes_once_and_preserves_newer_received_cursor_identity() {
+    for covering in [None, Some(false), Some(true)] {
+        let mut world = setup();
+        let mut item = world.inventory().items()[&InventorySlot(22)].clone();
+        item.slot = InventorySlot::CURSOR;
+        item.bag_slots = 0;
+        item.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
+        game(
+            &mut world,
+            WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![item.clone()])),
+        );
+        let revision = world.inventory().revision();
+        let projection = crate::inventory::InventoryDropProjection {
+            revision,
+            item: Box::new(item.clone()),
+        };
+        let mut received = item.clone();
+        match covering {
+            None => received.slot = InventorySlot(24),
+            Some(false) => received.rules.ground_drop_serial = std::num::NonZeroU32::new(18),
+            Some(true) => (), // An exact same-instance received refusal is newer too.
+        }
+        game(
+            &mut world,
+            WorldEvent::Inventory(InventoryUpdate::Set(vec![received.clone()])),
+        );
+        let submitted = WorldEvent::InventoryAction {
+            session_id: world.session_id().unwrap(),
+            revision,
+            sequence: None,
+            update: Some(InventoryUpdate::GroundDropProjected(projection)),
+            error: None,
+        };
+        game(&mut world, submitted.clone());
+        assert_eq!(
+            world.inventory().items().get(&InventorySlot::CURSOR),
+            covering.map(|_| &received)
+        );
+        assert_eq!(
+            world.inventory().ground_drop_projected(),
+            covering.is_none()
+        );
+        let after = world.inventory().clone();
+        game(&mut world, submitted);
+        assert_eq!(world.inventory(), &after);
+    }
+}
+
+#[test]
+fn uncertain_drop_result_keeps_cursor_removed_and_inventory_unready_after_settlement() {
+    let mut world = setup();
+    let mut item = world.inventory().items()[&InventorySlot(22)].clone();
+    item.slot = InventorySlot::CURSOR;
+    item.bag_slots = 0;
+    item.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
+    game(
+        &mut world,
+        WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![item.clone()])),
+    );
+    let revision = world.inventory().revision();
+    let session_id = world.session_id().unwrap();
+    game(
+        &mut world,
+        WorldEvent::InventoryAction {
+            session_id,
+            revision,
+            sequence: None,
+            update: Some(InventoryUpdate::GroundDropUncertain(
+                crate::inventory::InventoryDropProjection {
+                    revision,
+                    item: Box::new(item),
+                },
+            )),
+            error: None,
+        },
+    );
+    game(&mut world, WorldEvent::Inventory(InventoryUpdate::Settled));
+    assert!(world.inventory().ground_drop_projected() && world.inventory().stale());
+    assert!(
+        !world
+            .inventory()
+            .items()
+            .contains_key(&InventorySlot::CURSOR)
+    );
+    assert!(!world.inventory().projected_cursor_empty());
+    assert!(world.prepare_cursor_destruction().is_err());
+}
+
+#[test]
+fn loss_before_or_after_drop_result_preserves_absence_and_requires_received_recovery() {
+    for late in [false, true] {
+        let mut world = setup();
+        let mut item = world.inventory().items()[&InventorySlot(22)].clone();
+        item.slot = InventorySlot::CURSOR;
+        item.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
+        game(
+            &mut world,
+            WorldEvent::Inventory(InventoryUpdate::Snapshot(vec![item.clone()])),
+        );
+        let revision = world.inventory().revision();
+        let submitted = WorldEvent::InventoryAction {
+            session_id: world.session_id().unwrap(),
+            revision,
+            sequence: None,
+            update: Some(InventoryUpdate::GroundDropProjected(
+                crate::inventory::InventoryDropProjection {
+                    revision,
+                    item: Box::new(item),
+                },
+            )),
+            error: None,
+        };
+        if late {
+            connection(&mut world, false, false);
+        }
+        assert!(!game(&mut world, submitted.clone()).ignored);
+        if !late {
+            connection(&mut world, false, false);
+        }
+        assert!(world.inventory().stale() && world.inventory().ground_drop_projected());
+        assert!(
+            !world
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
+        );
+        connection(&mut world, true, false);
+        assert!(world.inventory().stale());
+        assert!(!world.inventory().projected_cursor_empty());
+        connection(&mut world, false, true);
+        assert!(world.ended() && !world.inventory().received());
+        assert!(game(&mut world, submitted).ignored);
+        assert!(
+            !world
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
+        );
+    }
+}
+
+#[test]
 fn successive_moves_project_before_replies_and_results_never_apply_twice() {
     let mut world = setup();
     let mut worker = world.inventory().clone();
