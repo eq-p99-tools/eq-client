@@ -754,7 +754,7 @@ pub(super) fn lamps(
                 if light.shadow_maps_enabled != *shadows {
                     light.shadow_maps_enabled = *shadows;
                 }
-                if light.shadow_map_near_z != own_near {
+                if (light.shadow_map_near_z - own_near).abs() > 1e-3 {
                     light.shadow_map_near_z = own_near;
                 }
             }
