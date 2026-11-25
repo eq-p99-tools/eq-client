@@ -401,6 +401,14 @@ mod tests {
         });
     }
 
+    fn resume_translation(app: &mut App, root: Entity) {
+        let from = *app.world().get::<Transform>(root).unwrap();
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.sent_span = 0.1;
+        controls.visual.as_mut().unwrap().release_translation(false);
+        controls.display_sample(from, crate::world_position((Vec3::X * 2.0).to_array(), 0.0));
+    }
+
     #[test]
     fn release_rest_stops_walk_and_run_at_the_translation_endpoint() {
         for walking in [false, true] {
@@ -498,15 +506,7 @@ mod tests {
                         assert_eq!(crate::character::testing::clip(app.world(), root), "P01");
                         // New submitted deck-free travel resumes animation;
                         // the standing snapshot cannot stick over a fresh leg.
-                        let from = *app.world().get::<Transform>(root).unwrap();
-                        let mut controls = app.world_mut().resource_mut::<Controls>();
-                        controls.sent_span = 0.1;
-                        controls.visual.as_mut().unwrap().release_translation(false);
-                        controls.display_sample(
-                            from,
-                            crate::world_position((Vec3::X * 2.0).to_array(), 0.0),
-                        );
-                        drop(controls);
+                        resume_translation(&mut app, root);
                         for _ in 0..2 {
                             tick(&mut app);
                         }
