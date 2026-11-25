@@ -82,14 +82,19 @@ pub enum Fix {
     ClearView,
     /// Lights every zone by this client's own look rather than the original
     /// engine's: lamps and carried lights shine per pixel with a soft
-    /// falloff and a flame's flicker, the player's light and the nearest
-    /// lamps cast shadows, surfaces take a soft highlight and the camera a
+    /// falloff and a flame's flicker, the player's light casts shadows
+    /// when [`Fix::TorchShadows`] asks for them, surfaces take a soft highlight and the camera a
     /// soft glow. Without a sky, each room keeps its lamps' colours as a
     /// smooth wash and a tone curve takes the place of clipped colours;
     /// with one, the day is unchanged and the lamps and torches show by
     /// night. Experimental (Adam's request of 11-24); off, every zone draws
     /// as before.
     RichLighting,
+    /// With Rich Lighting, the player's own carried light casts shadows all
+    /// around it. Drawing them costs six shadow views a frame, the largest
+    /// part of Rich Lighting's cost at night, so they are off unless asked
+    /// for (Adam's frame-rate round, 11-25).
+    TorchShadows,
     /// Draws water and lava surfaces with a richer look than the official
     /// client's flat flipbook: smooth flowing motion, see-through surfaces
     /// that reflect the sky at a glance and glint in the sun, depth tint,
@@ -193,7 +198,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 37] = [
+    pub const ALL: [Self; 38] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -204,6 +209,7 @@ impl Fix {
         Self::FreeCamera,
         Self::ClearView,
         Self::RichLighting,
+        Self::TorchShadows,
         Self::BetterWater,
         Self::WalkWhileWinded,
         Self::MoveWhileFeigned,
@@ -252,6 +258,7 @@ impl Fix {
             Self::FreeCamera => "free_camera",
             Self::ClearView => "clear_view",
             Self::RichLighting => "rich_lighting",
+            Self::TorchShadows => "torch_shadows",
             Self::BetterWater => "better_water",
             Self::WalkWhileWinded => "walk_while_winded",
             Self::MoveWhileFeigned => "move_while_feigned",
@@ -302,6 +309,7 @@ impl Fix {
             Self::FreeCamera => "Free Camera",
             Self::ClearView => "See the World Clearly",
             Self::RichLighting => "Rich Lighting",
+            Self::TorchShadows => "Torch Shadows",
             Self::BetterWater => "Better Water",
             Self::WalkWhileWinded => "Walk While Winded",
             Self::MoveWhileFeigned => "Move While Feigned",
@@ -374,7 +382,10 @@ impl Fix {
                 "Light the night as if it were noon, brighten supported dark interiors, and hide distance fog, rain and snow in your view."
             }
             Self::RichLighting => {
-                "Light every zone with soft, flickering lamp and torch light, shadows from your own light and a gentle glow; outdoors the lamps show at night. Experimental: departs from the original client's look."
+                "Light every zone with soft, flickering lamp and torch light and a gentle glow; outdoors the lamps show at night. Torch Shadows adds shadows from your own light. Experimental: departs from the original client's look."
+            }
+            Self::TorchShadows => {
+                "With Rich Lighting, let your own torch or light cast shadows all around you. Costs frame rate at night."
             }
             Self::BetterWater => {
                 "Draw water and lava with flowing motion, sky reflections, sun glints, depth tint and shoreline foam, and haze the view under the surface. Turn it off to keep the original client's flat water."
@@ -475,6 +486,7 @@ impl Fix {
             | Self::FreeCamera
             | Self::ClearView
             | Self::RichLighting
+            | Self::TorchShadows
             | Self::BetterWater
             | Self::ReadWhileStanding
             | Self::ShowInvisible
@@ -531,6 +543,7 @@ impl Fix {
             | Self::FreeCamera
             | Self::ClearView
             | Self::RichLighting
+            | Self::TorchShadows
             | Self::BetterWater
             | Self::ShowInvisible
             | Self::FloatingCombatText
@@ -575,6 +588,7 @@ impl Fix {
             | Self::ShowTimesInChat
             | Self::ClearView
             | Self::RichLighting
+            | Self::TorchShadows
             | Self::BetterWater
             | Self::WalkWhileWinded
             | Self::MoveWhileFeigned
@@ -733,6 +747,7 @@ mod tests {
                 Fix::FreeCamera,
                 Fix::ClearView,
                 Fix::RichLighting,
+                Fix::TorchShadows,
                 Fix::BetterWater,
                 Fix::WalkWhileWinded,
                 Fix::MoveWhileFeigned,
@@ -766,6 +781,7 @@ mod tests {
         for fix in [
             Fix::ClearView,
             Fix::RichLighting,
+            Fix::TorchShadows,
             Fix::BetterWater,
             Fix::WalkWhileWinded,
             Fix::MoveWhileFeigned,
