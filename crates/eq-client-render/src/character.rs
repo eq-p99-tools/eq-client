@@ -629,6 +629,15 @@ pub(super) fn animate(
                 None
             }
         });
+        let own_pose = own
+            .then(|| {
+                controls
+                    .as_deref()
+                    .and_then(super::motion::Controls::drawn_pose)
+            })
+            .flatten();
+        let stopped = own_pose == Some(super::motion::pose::Snapshot::default())
+            && matches!(character.clip.0, "L01" | "L02");
         let pose_due = character.since_pose >= 1.0 / 30.0;
         let gesture = if (pose_due || new_gesture || character.showing_gesture)
             && lying.is_none()
@@ -645,7 +654,7 @@ pub(super) fn animate(
         let showing_gesture = gesture.is_some();
         let gesture_changed =
             showing_gesture != character.showing_gesture || (showing_gesture && new_gesture);
-        if !pose_due && !gesture_changed {
+        if !pose_due && !gesture_changed && !stopped {
             continue;
         }
         character.showing_gesture = showing_gesture;
@@ -680,14 +689,11 @@ pub(super) fn animate(
             selected
         };
         let selected = if own && pinned.is_none() && water == Water::Dry {
-            controls
-                .as_deref()
-                .and_then(super::motion::Controls::drawn_pose)
-                .map_or(selected, |pose| {
-                    own_air_clip(selected, pose, |clip| {
-                        character.asset.clip_seconds(clip).is_some()
-                    })
+            own_pose.map_or(selected, |pose| {
+                own_air_clip(selected, pose, |clip| {
+                    character.asset.clip_seconds(clip).is_some()
                 })
+            })
         } else {
             selected
         };

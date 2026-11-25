@@ -3990,6 +3990,16 @@ impl VisualMotion {
     }
 
     fn drawn_pose(&self) -> Option<pose::Snapshot> {
+        if self
+            .translation
+            .as_ref()
+            .is_some_and(translation::Playhead::finished)
+        {
+            // The orientation timeline can still be playing after the feet
+            // reach the release endpoint. Its old velocity must not keep the
+            // model walking or running in place.
+            return Some(pose::Snapshot::default());
+        }
         self.pose.as_ref().and_then(|pose| pose.at(self.elapsed))
     }
 
