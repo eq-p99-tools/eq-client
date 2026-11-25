@@ -155,6 +155,10 @@ impl Outbox {
         self.test_now = Some(now);
     }
 
+    #[cfg_attr(
+        not(test),
+        allow(clippy::unused_self, reason = "the injected test clock is per outbox")
+    )]
     fn now(&self) -> Instant {
         #[cfg(test)]
         if let Some(now) = self.test_now {

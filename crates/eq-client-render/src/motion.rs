@@ -434,6 +434,13 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
+    #[cfg_attr(
+        not(test),
+        allow(
+            clippy::unused_self,
+            reason = "the injected test clock is per controller"
+        )
+    )]
     fn now(&self) -> Instant {
         #[cfg(test)]
         if let Some(now) = self.test_now {
@@ -545,6 +552,12 @@ impl Controls {
                 // legal step. Present must not discard that step a second time.
                 visual.translation = Some(translation::Playhead::at(basis));
             }
+        }
+    }
+
+    fn apply_translation_restore(&mut self, transform: &mut Transform) {
+        if let Some(position) = self.restored_translation.take() {
+            transform.translation = position;
         }
     }
 
@@ -3950,9 +3963,7 @@ pub(super) fn interpolate(
         return;
     };
     let had_preview = displayed_mouse.take() == Some(entity);
-    if let Some(position) = controls.restored_translation.take() {
-        transform.translation = position;
-    }
+    controls.apply_translation_restore(&mut transform);
     let mut follow_heading = false;
     let pace = controls
         .visual

@@ -342,6 +342,54 @@ fn a_delayed_refusal_rolls_back_a_finished_release_to_the_observed_pose() {
     );
 }
 
+fn interrupt_accepted_release(
+    app: &mut App,
+    news: &std::sync::mpsc::Sender<eq_client_core::WorldUpdate>,
+    interruption: &str,
+) {
+    match interruption {
+        "stun" => {
+            news.send(eq_client_core::WorldUpdate::Game(
+                eq_client_core::WorldEvent::OwnStun {
+                    session_id: 11,
+                    revision: 1,
+                    state: eq_client_core::control::StunState::Stunned,
+                },
+            ))
+            .unwrap();
+        }
+        "withdrawal" => app.world_mut().resource_mut::<Controls>().reset(None),
+        "placement" => {
+            news.send(eq_client_core::WorldUpdate::Game(
+                eq_client_core::WorldEvent::Position {
+                    spawn_id: 7,
+                    position: eq_client_core::world_position([4.0, 3.0, -2.0], 64.0),
+                    velocity: [0.0; 3],
+                    forward: 0.0,
+                },
+            ))
+            .unwrap();
+        }
+        "admission" => {
+            let mut player = app
+                .world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .clone();
+            player.position = eq_client_core::world_position([7.0, 3.0, 5.0], 0.0);
+            crate::online::testing::admit(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                12,
+                player,
+            );
+            app.world_mut().resource_mut::<Controls>().reset(None);
+        }
+        _ => unreachable!(),
+    }
+}
+
 #[test]
 fn accepted_release_rollback_restores_translation_without_changing_the_rotation_clock() {
     let base = Instant::now() + Duration::from_secs(60);
@@ -392,47 +440,7 @@ fn accepted_release_rollback_restores_translation_without_changing_the_rotation_
                 enabled
             );
             clock(&mut app, base + Duration::from_micros(4 * 16_667));
-            match interruption {
-                "stun" => {
-                    news.send(eq_client_core::WorldUpdate::Game(
-                        eq_client_core::WorldEvent::OwnStun {
-                            session_id: 11,
-                            revision: 1,
-                            state: eq_client_core::control::StunState::Stunned,
-                        },
-                    ))
-                    .unwrap();
-                }
-                "withdrawal" => app.world_mut().resource_mut::<Controls>().reset(None),
-                "placement" => {
-                    news.send(eq_client_core::WorldUpdate::Game(
-                        eq_client_core::WorldEvent::Position {
-                            spawn_id: 7,
-                            position: eq_client_core::world_position([4.0, 3.0, -2.0], 64.0),
-                            velocity: [0.0; 3],
-                            forward: 0.0,
-                        },
-                    ))
-                    .unwrap();
-                }
-                "admission" => {
-                    let mut player = app
-                        .world()
-                        .resource::<online::OnlineState>()
-                        .world()
-                        .player()
-                        .unwrap()
-                        .clone();
-                    player.position = eq_client_core::world_position([7.0, 3.0, 5.0], 0.0);
-                    crate::online::testing::admit(
-                        &mut app.world_mut().resource_mut::<online::OnlineState>(),
-                        12,
-                        player,
-                    );
-                    app.world_mut().resource_mut::<Controls>().reset(None);
-                }
-                _ => unreachable!(),
-            }
+            interrupt_accepted_release(&mut app, &news, interruption);
             app.world_mut()
                 .resource_mut::<Time>()
                 .advance_by(Duration::from_micros(16_667));
@@ -719,7 +727,7 @@ fn release_playhead_timing_probe() {
                 let idle = shown(&mut app);
                 std::thread::sleep(Duration::from_micros(16_667));
                 let start = Instant::now();
-                let mut prior = start - Duration::from_micros(16_667);
+                let mut prior = start.checked_sub(Duration::from_micros(16_667)).unwrap();
                 let mut replies: Vec<(Instant, MovementRequest)> = Vec::new();
                 let mut rows = Vec::new();
                 let mut commands = Vec::new();

@@ -245,7 +245,11 @@ mod tests {
             let point = playhead.advance(0.01);
             assert!(point.x >= previous.x && point.z >= previous.z);
             assert!(point.y == 0.0 && point.x <= 2.0 && point.z <= 1.0);
-            assert!(point.z == 0.0 || point.x == 1.0 || point.z == 1.0);
+            assert!(
+                point.z == 0.0
+                    || (point.x - 1.0).abs() < f32::EPSILON
+                    || (point.z - 1.0).abs() < f32::EPSILON
+            );
             previous = point;
         }
         assert_eq!(previous, Vec3::new(2.0, 0.0, 1.0));
