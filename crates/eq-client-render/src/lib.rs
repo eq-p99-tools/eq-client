@@ -988,15 +988,15 @@ fn spawn_static_zone(
                 .cloned()
                 .collect();
             let pick = doors::PickMesh::from_model(&model);
-            let draws = gpu_assets::create_zone_object_primitives(
+            let object_render = gpu_assets::create_zone_object_primitives(
                 model.primitives,
                 &model.materials,
                 &texture_images,
                 meshes,
                 materials,
             );
-            let primitives = draws.primitives;
-            object_animations.extend(draws.animations);
+            let primitives = object_render.primitives;
+            object_animations.extend(object_render.animations);
             // A model's meshes are shared by its doors and the placements
             // drawn apart without a light of their own: the base pass alone.
             for ((mesh, _), source) in primitives.iter().zip(&drawn) {
