@@ -90,6 +90,10 @@ pub(super) struct Tuning {
     pub shadow_strength: f32,
     /// Whether the first carried light casts shadows at all.
     pub own_shadow: bool,
+    /// Nothing nearer the player's own light than this, in the player's
+    /// heights, casts its shadow: the light sits inside the body, which
+    /// would otherwise shadow the room around it.
+    pub own_shadow_near: f32,
     /// Whether the camera glows (bloom, on a high dynamic range target).
     pub bloom: bool,
     /// The glow's strength (Bevy's natural bloom is 0.15).
@@ -119,6 +123,7 @@ impl Default for Tuning {
             light_cap: 1.5,
             shadow_strength: 0.6,
             own_shadow: true,
+            own_shadow_near: 0.7,
             bloom: true,
             tone: Tonemapping::ReinhardLuminance,
         }
@@ -194,6 +199,8 @@ pub(super) struct RichState {
     lit: HashSet<AssetId<Mesh>>,
     materials: HashMap<AssetId<StandardMaterial>, Handle<RichMaterial>>,
     carried: Vec<PassLight>,
+    /// The player's height, for the own light's shadow.
+    own_height: f32,
     /// The lights' soft ceiling now, and as the materials were last given
     /// it: outdoors it rises as the night's grading darkens the frame, so
     /// the ceiling holds once graded.
@@ -238,6 +245,7 @@ impl Tuning {
                 "cap" => number.map(|value| self.light_cap = value),
                 "shadow" => number.map(|value| self.shadow_strength = value),
                 "own_shadow" => flag.map(|value| self.own_shadow = value),
+                "own_near" => number.map(|value| self.own_shadow_near = value),
                 "bloom" => flag.map(|value| self.bloom = value),
                 "tone" => match value {
                     "none" => Some(Tonemapping::None),
@@ -476,6 +484,7 @@ pub(super) fn gather(
     }
     state.carried = match (state.active, player.single()) {
         (true, Ok((own, body))) => {
+            state.own_height = body.height;
             let eye = eye
                 .single()
                 .map_or(own.translation, |camera| camera.translation);
@@ -721,6 +730,9 @@ pub(super) fn lamps(
             slots.push((pass, index, 1.0, false));
         }
     }
+    // The bearer's own body stays out of the shadow: the light sits inside
+    // it, at chest height (Bevy's default is 0.1).
+    let own_near = (state.own_height * tuning.own_shadow_near).max(0.1);
     for (slot, (pass, index, part, shadows)) in slots.iter().enumerate() {
         #[allow(clippy::cast_precision_loss)] // A phase.
         let wander = if warm(pass.rgb) {
@@ -742,6 +754,9 @@ pub(super) fn lamps(
                 if light.shadow_maps_enabled != *shadows {
                     light.shadow_maps_enabled = *shadows;
                 }
+                if light.shadow_map_near_z != own_near {
+                    light.shadow_map_near_z = own_near;
+                }
             }
             None => {
                 commands.spawn((
@@ -753,6 +768,7 @@ pub(super) fn lamps(
                         range: pass.radius * tuning.reach,
                         radius: 0.3,
                         shadow_maps_enabled: *shadows,
+                        shadow_map_near_z: own_near,
                         ..default()
                     },
                 ));

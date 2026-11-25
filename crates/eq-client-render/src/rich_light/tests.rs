@@ -230,6 +230,19 @@ fn rich_lighting_swaps_the_zone_in_and_out_whole() {
             .collect::<Vec<_>>(),
         [(0, true), (1, false)]
     );
+    // The player's own body casts no shadow from the light inside it.
+    let own_near = world
+        .query::<(&Carried, &PointLight)>()
+        .iter(world)
+        .find(|(carried, _)| carried.0 == 0)
+        .map(|(_, light)| light.shadow_map_near_z)
+        .unwrap();
+    let height = world
+        .query_filtered::<&PlayerBody, With<Player>>()
+        .single(world)
+        .unwrap()
+        .height;
+    assert!((own_near - height * Tuning::default().own_shadow_near).abs() < 1e-4 && own_near > 1.0);
     let strength = Tuning::default().shadow_strength;
     assert!((torch[0].2 * (1.0 - strength) - torch[1].2 * strength).abs() < 1e-2 * torch[0].2);
     let (tone, glow) = world
