@@ -533,6 +533,7 @@ impl super::ClientWorld {
             .filter(|player| player.spawn_id == spawn_id)
         {
             player.position = position;
+            self.pending_local_pad = None;
             changes.placed = Some(position);
         }
     }

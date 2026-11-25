@@ -356,6 +356,7 @@ pub struct ClientWorld {
     pending_transfer: Option<ZoneOffer>,
     same_zone_relocation: Option<(u64, crate::SameZoneRelocation)>,
     last_local_pad: Option<crate::LocalPadCrossing>,
+    pending_local_pad: Option<crate::LocalPadCrossing>,
     /// The resurrection offered and not yet answered.
     resurrection: Option<ConsentOffer<ResurrectionOffer>>,
     /// The translocate offered and not yet answered.
@@ -973,6 +974,17 @@ impl ClientWorld {
             }
             WorldEvent::LocalPadCrossed(crossing) => {
                 self.local_pad_crossed(*crossing, now, news);
+            }
+            WorldEvent::LocalPadCompleted(completed) => {
+                self.local_pad_completed(*completed, now, news);
+            }
+            WorldEvent::LocalPadRefused { session_id, revision, reason } => {
+                if self.pending_local_pad.is_some_and(|pad| pad.session_id == *session_id && pad.revision == *revision) {
+                    news.local_pad_refused = Some((*revision, reason.clone()));
+                    news.notices.push(Notice::ZoneLineRefused(reason.clone()));
+                } else {
+                    news.ignored = true;
+                }
             }
             WorldEvent::Camp(status) => return self.camp_news(status, now),
             // A sound the server names, for the front end to play.
@@ -2553,6 +2565,7 @@ impl ClientWorld {
         self.pending_transfer = None;
         self.same_zone_relocation = None;
         self.last_local_pad = None;
+        self.pending_local_pad = None;
         self.reading = None;
         self.popup_serial = 0;
         self.combining = None;
