@@ -1694,16 +1694,22 @@ pub(super) fn input(
         .filter(|_| mouse_allowed);
     if !heading_snapshots || !mouse_allowed {
         controls.mouse_heading = None;
-    } else if let Some(yaw) = mouse_aim.filter(|yaw| *yaw != 0.0)
-        && let Ok((_, player)) = players.single()
-    {
-        // Start from the current drawn actor, then apply every owned delta
-        // while the next movement sample waits for its normal opportunity.
-        let drawn_yaw = controls.mouse_heading.map_or_else(
-            || player.rotation.to_euler(EulerRot::YXZ).0,
-            eq_client_core::render_heading,
+    } else if let Some(heading) = aim.as_ref().and_then(|aim| aim.heading) {
+        // Acquiring a look turns the actor to the existing camera even with
+        // no drag. Each later frame keeps that view as its turn baseline.
+        // Preserve the exact prior value within a heading round trip's f32
+        // resolution; an aligned view must not invent a tiny new sample.
+        let prior = controls.mouse_heading.or_else(|| {
+            online
+                .world()
+                .player()
+                .map(|player| player.position.heading)
+        });
+        controls.mouse_heading = Some(
+            prior
+                .filter(|prior| arc(*prior, heading).abs() <= 512.0 * f32::EPSILON)
+                .unwrap_or(heading),
         );
-        controls.mouse_heading = Some(eq_client_core::world_heading(drawn_yaw + yaw));
     }
     if let Some(yaw) = mouse_aim.filter(|_| !heading_snapshots) {
         let limit = MOUSE_WIRE_RATE * MAX_CYCLE;
@@ -3683,8 +3689,7 @@ pub(super) fn interpolate(
         }
     }
     if let Some(heading) = preview {
-        // Position still plays only accepted samples. An older queued pose
-        // never overwrites the latest local mouse orientation.
+        // An older queued pose never overwrites the latest local mouse orientation.
         transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
         *displayed_mouse = Some(entity);
     } else if had_preview && let Some(player) = online.world().player() {
@@ -10522,7 +10527,8 @@ pub(super) mod tests {
     }
 
     fn mouse_look_app() -> (App, mpsc::Receiver<ClientCommand>, Entity, Entity) {
-        let (mut app, receiver) = app();
+        let (mut app, receiver) = fixture();
+        crate::systems::configure_stages(&mut app);
         crate::camera::testing::install_look(&mut app);
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_millis(250));
@@ -10530,12 +10536,17 @@ pub(super) mod tests {
             .init_resource::<crate::items::ItemState>()
             .init_resource::<crate::inventory::InventoryState>()
             .init_resource::<crate::windows::pointer::Wheel>()
-            .add_systems(Update, crate::camera::turn.before(input))
+            .add_systems(
+                Update,
+                (crate::camera::turn, input, spend_endurance)
+                    .chain()
+                    .in_set(crate::systems::Stage::Input),
+            )
             .add_systems(
                 Update,
                 (interpolate, crate::camera::orbit_camera)
                     .chain()
-                    .after(input),
+                    .in_set(crate::systems::Stage::Present),
             );
         let world = app.world_mut();
         world.resource_mut::<ButtonInput<KeyCode>>().reset_all();
@@ -10544,6 +10555,9 @@ pub(super) mod tests {
             .single(world)
             .unwrap();
         world.entity_mut(camera).insert(Transform::default());
+        world.get_mut::<OrbitCamera>(camera).unwrap().yaw =
+            crate::camera::behind(eq_client_core::render_heading(0.0));
+        world.get_mut::<OrbitCamera>(camera).unwrap().focus = Vec3::new(0.0, 3.0, 0.0);
         let player = world
             .query_filtered::<Entity, With<Player>>()
             .single(world)
@@ -10566,6 +10580,286 @@ pub(super) mod tests {
         let view_forward = world.get::<Transform>(camera).unwrap().forward();
         assert!(actor_forward.abs_diff_eq(turned_to(heading) * Vec3::Z, 0.001));
         assert!(actor_forward.abs_diff_eq(view_forward.with_y(0.0).normalize(), 0.001));
+    }
+
+    #[test]
+    fn aligned_right_press_does_not_enqueue_a_roundoff_turn() {
+        let (mut app, receiver, camera, player) = mouse_look_app();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        for _ in 0..16 {
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            assert_attached_heading(&app, camera, player, 0.0);
+        }
+    }
+
+    #[test]
+    fn right_press_faces_the_existing_view_without_drag_or_camera_snap() {
+        for (first_person, pitch) in [(false, -0.3), (true, 0.0), (true, 1.55)] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            {
+                let mut orbit = app.world_mut().get_mut::<OrbitCamera>(camera).unwrap();
+                orbit.yaw = 0.83;
+                orbit.pitch = pitch;
+                if first_person {
+                    orbit.look_first_person_for_test();
+                    orbit.look = pitch;
+                }
+            }
+            // Warm the actual Present stage before the press. The actor and
+            // camera deliberately disagree; no MouseMotion message is sent.
+            app.update();
+            let rotation = app.world().get::<Transform>(camera).unwrap().rotation;
+            let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+            let (yaw, pitch) = (orbit.yaw, orbit.view_pitch());
+            let forward = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
+            let heading = eq_client_core::world_heading(forward.x.atan2(forward.z));
+            assert!((turned_to(0.0) * Vec3::Z).distance(forward) > 0.5);
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            for _ in 0..3 {
+                app.update();
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "the normal sample gate stays closed"
+                );
+                assert_attached_heading(&app, camera, player, heading);
+                let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+                assert!(
+                    Quat::from_rotation_y(orbit.yaw).angle_between(Quat::from_rotation_y(yaw))
+                        < 0.001
+                );
+                assert!((orbit.view_pitch() - pitch).abs() < 0.0001);
+                assert!(
+                    app.world()
+                        .get::<Transform>(camera)
+                        .unwrap()
+                        .rotation
+                        .angle_between(rotation)
+                        < 0.001
+                );
+            }
+            // One absolute turn waits for the normal opportunity. Acceptance
+            // and subsequent zero-delta held frames retain the same view.
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+            app.update();
+            let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+                panic!("expected one stationary heading snapshot");
+            };
+            assert_eq!(request.heading, HeadingUpdate::Snapshot);
+            assert!(arc(heading, request.position.heading).abs() < 0.001);
+            assert_eq!(
+                Vec3::from_array(eq_client_core::render_position(request.position)),
+                Vec3::new(0.0, 3.0, 0.0)
+            );
+            accept(&mut app, &request);
+            for _ in 0..12 {
+                app.update();
+                assert!(receiver.try_recv().is_err());
+                assert_attached_heading(&app, camera, player, heading);
+                assert!(
+                    app.world()
+                        .get::<Transform>(camera)
+                        .unwrap()
+                        .rotation
+                        .angle_between(rotation)
+                        < 0.001
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn right_press_applies_same_frame_drag_once_from_the_existing_camera() {
+        let (mut app, receiver, camera, player) = mouse_look_app();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+        app.update();
+        let yaw = app.world().get::<OrbitCamera>(camera).unwrap().yaw;
+        let turn = app
+            .world()
+            .resource::<crate::options::OptionsState>()
+            .options
+            .turn_per_pixel(crate::camera::screen_width(None));
+        let expected = Quat::from_rotation_y(yaw - 73.0 * turn) * Vec3::NEG_Z;
+        let heading = eq_client_core::world_heading(expected.x.atan2(expected.z));
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        mouse_drag(&mut app, 73.0, 0.0);
+        app.update();
+        assert_attached_heading(&app, camera, player, heading);
+        app.update();
+        assert_attached_heading(&app, camera, player, heading);
+        assert!(receiver.try_recv().is_err());
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected one dragged heading snapshot");
+        };
+        assert_eq!(request.heading, HeadingUpdate::Snapshot);
+        assert!(arc(heading, request.position.heading).abs() < 0.001);
+        assert_eq!(
+            Vec3::from_array(eq_client_core::render_position(request.position)),
+            Vec3::new(0.0, 3.0, 0.0)
+        );
+        accept(&mut app, &request);
+        for _ in 0..12 {
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            assert_attached_heading(&app, camera, player, request.position.heading);
+        }
+    }
+
+    #[test]
+    fn right_press_with_held_w_moves_along_the_existing_camera_and_repress_recaptures_it() {
+        let (mut app, receiver, camera, player) = keyboard_mouse_look_app();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+        app.update();
+        let forward = Quat::from_rotation_y(0.83) * Vec3::NEG_Z;
+        native_movement_key(&mut app, KeyCode::KeyW, true);
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward sample");
+        };
+        assert_eq!(request.heading, HeadingUpdate::Snapshot);
+        let delta = Vec3::from_array(eq_client_core::render_position(request.position))
+            - Vec3::new(0.0, 3.0, 0.0);
+        assert!(delta.normalize().abs_diff_eq(forward, 0.001));
+        assert!(
+            (delta.length() - 6.0 * app.world().resource::<Controls>().sent_span).abs() < 0.001
+        );
+        assert_attached_heading(&app, camera, player, request.position.heading);
+        accept(&mut app, &request);
+        native_movement_key(&mut app, KeyCode::KeyW, false);
+        crate::camera::testing::button(&mut app, MouseButton::Right, false);
+        app.update();
+        let ClientCommand::Move(stop) = receiver.try_recv().unwrap() else {
+            panic!("expected the ordinary zero-input stop");
+        };
+        assert_eq!(stop.mode, MovementMode::Forward);
+        assert_eq!(stop.heading, HeadingUpdate::Rate);
+        assert_eq!(stop.position, request.position);
+        accept(&mut app, &stop);
+        app.update();
+        app.update();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 2.4;
+        app.update();
+        let before = app.world().get::<Transform>(camera).unwrap().rotation;
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        let forward = Quat::from_rotation_y(2.4) * Vec3::NEG_Z;
+        let heading = eq_client_core::world_heading(forward.x.atan2(forward.z));
+        assert_attached_heading(&app, camera, player, heading);
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .rotation
+                .angle_between(before)
+                < 0.001
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn idle_right_press_over_ui_or_without_focus_owns_no_facing() {
+        for over_ui in [true, false] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+            if over_ui {
+                app.world_mut()
+                    .resource_mut::<crate::chat::ChatState>()
+                    .hovered = true;
+            } else {
+                let world = app.world_mut();
+                world
+                    .query_filtered::<&mut Window, With<bevy::window::PrimaryWindow>>()
+                    .single_mut(world)
+                    .unwrap()
+                    .focused = false;
+            }
+            app.update();
+            let before = app.world().get::<Transform>(camera).unwrap().rotation;
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            app.update();
+            assert!(app.world().resource::<MouseAim>().heading.is_none());
+            assert!(app.world().resource::<Controls>().mouse_heading.is_none());
+            assert!(
+                app.world()
+                    .get::<Transform>(player)
+                    .unwrap()
+                    .rotation
+                    .angle_between(turned_to(0.0))
+                    < 0.001
+            );
+            assert!(
+                app.world()
+                    .get::<Transform>(camera)
+                    .unwrap()
+                    .rotation
+                    .angle_between(before)
+                    < 0.001
+            );
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn right_press_preserves_detached_and_offline_orbit_ownership() {
+        for detached in [false, true] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+            if detached {
+                app.add_systems(
+                    Update,
+                    crate::camera::toggle_free
+                        .before(crate::camera::turn)
+                        .in_set(crate::systems::Stage::Input),
+                );
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::F9);
+                app.update();
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .reset(KeyCode::F9);
+                assert!(
+                    app.world()
+                        .entity(camera)
+                        .contains::<crate::camera::FreeCamera>()
+                );
+            } else {
+                app.world_mut()
+                    .resource_mut::<online::OnlineState>()
+                    .enabled = false;
+                app.update();
+            }
+            let before = app.world().get::<Transform>(camera).unwrap().rotation;
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            mouse_drag(&mut app, 73.0, 0.0);
+            app.update();
+            assert!(app.world().resource::<MouseAim>().heading.is_none());
+            assert!(
+                app.world()
+                    .get::<Transform>(player)
+                    .unwrap()
+                    .rotation
+                    .angle_between(turned_to(0.0))
+                    < 0.001
+            );
+            let after = app.world().get::<Transform>(camera).unwrap().rotation;
+            if detached {
+                assert!(after.angle_between(before) < 0.001);
+            } else {
+                assert!(after.angle_between(before) > 0.1);
+            }
+            assert!(receiver.try_recv().is_err());
+        }
     }
 
     #[test]
@@ -10749,6 +11043,15 @@ pub(super) mod tests {
             app.update();
             assert!(receiver.try_recv().is_err());
             assert_attached_heading(&app, camera, player, expected);
+            if corrected {
+                app.world_mut().resource_mut::<Controls>().speed = Some(6.0);
+                app.update();
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "restoring a grant cannot revive the old press"
+                );
+                assert_attached_heading(&app, camera, player, expected);
+            }
         }
     }
 

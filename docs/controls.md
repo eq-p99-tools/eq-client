@@ -115,8 +115,14 @@ comes from your installed skin; a text button is used if it is unavailable.
 The button is semi-transparent and stays behind movable windows, so a window
 dragged over it receives the pointer instead. Its popup opens above the windows.
 
-Right-drag changes the view without changing the character's heading. The
-wheel zooms along the current sightline unless a UI surface owns the wheel.
+In an attached Titanium or RoF2 session, pressing the right button over the
+world faces the character along the camera's existing horizontal sightline,
+even without a drag; dragging then turns both together. The view keeps its
+pitch, and the completed turn uses the ordinary movement sample opportunity.
+This acquisition rule is inferred [I], following the requested control behavior.
+EqMac keeps its existing rate-based turning. Offline, right-drag rotates the
+orbit without changing the character's heading. The wheel zooms along the
+current sightline unless a UI surface owns the wheel.
 Zooming close enters first person and hides the local body and gear. Zooming out
 returns to the chase view. Death, zone/session changes and character previews
 restore third person. The chase camera can look almost straight up or down
