@@ -22,6 +22,15 @@ details use it. Lifecycle reports retain `level` for character level and add
 `displayed_level` explicitly. Other actors' appearance levels still update
 their spawn records. Other client generations keep their existing projection.
 
+| Consumer | Level used on EqMac |
+| --- | --- |
+| Inventory and other skinned level labels (EQType 2) | Displayed spawn level |
+| Local Who results and the map's own-player details | Displayed spawn level |
+| Alternate Advancement controls and the session's AA gate | Character level |
+| Spellbook/spell-gem eligibility, skill training, abilities and item usability | Character level |
+| Resource, speed and breath calculations; script `player.level` | Character level |
+| Lifecycle report `level` / `displayed_level` | Character / displayed spawn level |
+
 On EqMac, a qualifying level rise adds five practice points once when the
 packet's prior high-water level is lower than the new level. It is not five
 per level crossed. A fresh profile replaces that balance. The networking
