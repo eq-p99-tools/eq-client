@@ -1,0 +1,1 @@
+- Hide your own name in attached first-person view, including when looking straight down. Third-person and detached views and other characters' labels keep their existing behavior. This display rule is inferred; it changes no server state (checklist 6.662).
