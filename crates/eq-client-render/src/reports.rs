@@ -6,21 +6,20 @@
 //! session does not offer the report, the line answers "This client does
 //! not take /petition that way yet." The session paces each kind.
 //!
-//! On Titanium each command follows the program (read R49-23):
+//! Titanium's petition behavior and report-window lines follow read R49-23;
+//! the typed bug/feedback routing is this client's own rule:
 //! - `/petition` (0x4683af) takes the form the world sets
 //!   ([`eq_client_core::world::ClientWorld::petition_form`]). In its text
 //!   form it sends the words and echoes them in the installed line 0x3025;
 //!   with no words it prints 0x3332 and sends nothing. `/guidehelp`
 //!   (0x46844e) is the same text form, with lines 0xde8 and 0xde3.
-//! - `/bugreport` and `/feedback` open the program's windows and ignore the
-//!   words ([`super::report_windows`]). The **Typed Reports** setting (off
-//!   by default) sends the words from the line instead, this client's own
-//!   way: a bug report then prints 0x22ae, or 0x22b0 with no words, and
-//!   feedback prints nothing, as the program's windows do.
+//! - This client submits `/bugreport` and `/feedback` when the command has
+//!   words, and opens the matching window for a bare/blank command. This
+//!   is its own rule; Titanium opens those windows and ignores the words.
 //!
 //! A bug report's first word may name its category with a colon
 //! ("pathing: the guard walks into the wall"); a word that names no
-//! category leaves the whole line as the text, under Other. Bug reports and
+//! category, or a category without a body, leaves the whole line as text under Other. Bug reports and
 //! feedback carry the player's place and heading, and a bug report the
 //! target where there is one. The `EQMac` and `RoF2` programs are unread, so
 //! they keep this client's own words.
@@ -216,31 +215,27 @@ fn offered(asked: &Asked, world: &ClientWorld) -> Result<(), String> {
 }
 
 /// What a typed report does in this world, or the line that answers it
-/// instead. `typed_reports` is the Typed Reports setting.
+/// instead. A blank bug/feedback command opens its report window.
 pub(crate) fn answer(
     asked: &Asked,
     world: &ClientWorld,
     stamp: crate::outbox::Stamp,
-    typed_reports: bool,
 ) -> Result<Answer, String> {
     let program = reads_r49_23(world.generation());
     if matches!(asked, Asked::GuideHelp(_)) && !program {
         return Err("This client does not take /guidehelp that way yet.".to_owned());
     }
-    // The program opens its window and ignores the words (6.511, C1b);
-    // Typed Reports sends them from the line instead. The other programs
-    // are unread, so they keep the line whatever the setting says.
-    if program && !typed_reports {
-        match asked {
-            Asked::Bug(_) => {
-                offered(asked, world)?;
-                return Ok(Answer::Open(super::report_windows::Report::Bug));
-            }
-            Asked::Feedback(_) => {
-                offered(asked, world)?;
-                return Ok(Answer::Open(super::report_windows::Report::Feedback));
-            }
-            Asked::Petition(_) | Asked::GuideHelp(_) => {}
+    // Only an empty literal tail requests a window. Category-only text is
+    // still text: the command below preserves it as an Other report.
+    if asked.words().trim().is_empty() {
+        let report = match asked {
+            Asked::Bug(_) => Some(super::report_windows::Report::Bug),
+            Asked::Feedback(_) => Some(super::report_windows::Report::Feedback),
+            Asked::Petition(_) | Asked::GuideHelp(_) => None,
+        };
+        if let Some(report) = report {
+            offered(asked, world)?;
+            return Ok(Answer::Open(report));
         }
     }
     if let Asked::Petition(_) = asked {
@@ -255,10 +250,7 @@ pub(crate) fn answer(
             ),
         }
     }
-    let empty = match asked {
-        Asked::Bug(words) => category(words).1.is_empty(),
-        _ => asked.words().is_empty(),
-    };
+    let empty = asked.words().is_empty();
     if empty {
         if !program {
             // This client's own words; that program's lines are unread.
@@ -326,6 +318,11 @@ fn command(asked: &Asked, world: &ClientWorld, stamp: crate::outbox::Stamp) -> C
         },
         Asked::Bug(words) => {
             let (category, text) = category(words);
+            let (category, text) = if text.is_empty() {
+                (BugCategory::Other, words.as_str())
+            } else {
+                (category, text)
+            };
             ClientCommand::ReportBug {
                 session_id: stamp.session_id,
                 report: BugReport {
@@ -409,41 +406,62 @@ mod tests {
     }
 
     #[test]
-    fn with_typed_reports_off_a_bug_report_and_feedback_open_their_windows() {
+    fn fixed_qol_reports_route_blank_tails_and_preserve_nonblank_words_on_each_generation() {
         use crate::report_windows::Report;
-        let (online, stamp) = admitted();
-        let world = online.world();
-        assert_eq!(world.generation(), GameDialect::Titanium);
-        for (asked, report) in [
-            (
-                Asked::Bug("the guard walks into the wall".into()),
-                Report::Bug,
-            ),
-            (Asked::Feedback("a note".into()), Report::Feedback),
-            // The program ignores the words, even none.
-            (Asked::Bug(String::new()), Report::Bug),
-        ] {
-            assert!(matches!(
-                answer(&asked, world, stamp, false),
-                Ok(Answer::Open(opened)) if opened == report
-            ));
-            assert!(matches!(
-                answer(&asked, world, stamp, true),
-                Ok(Answer::Send(..) | Answer::Say(_))
-            ));
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            let (mut online, stamp) = admitted();
+            crate::online::testing::generation(&mut online, generation);
+            let world = online.world();
+            for (asked, report) in [
+                (Asked::Bug(String::new()), Report::Bug),
+                (Asked::Bug("  \t ".into()), Report::Bug),
+                (Asked::Feedback(String::new()), Report::Feedback),
+                (Asked::Feedback("  \t ".into()), Report::Feedback),
+            ] {
+                assert!(
+                    matches!(answer(&asked, world, stamp),
+                    Ok(Answer::Open(opened)) if opened == report),
+                    "{generation:?}: {asked:?}"
+                );
+            }
+            for (words, expected_category, expected_text) in [
+                ("pathing: blocked", BugCategory::Pathing, "blocked"),
+                ("pathing:", BugCategory::Other, "pathing:"),
+                ("pathing:   ", BugCategory::Other, "pathing:   "),
+                ("unknown: blocked", BugCategory::Other, "unknown: blocked"),
+            ] {
+                let Answer::Send(command, _) =
+                    answer(&Asked::Bug(words.into()), world, stamp).unwrap()
+                else {
+                    panic!("expected a nonblank report: {generation:?}: {words}");
+                };
+                let ClientCommand::ReportBug {
+                    session_id,
+                    report,
+                    created,
+                } = *command
+                else {
+                    panic!("expected a bug report");
+                };
+                assert_eq!(session_id, stamp.session_id);
+                assert_eq!(created, stamp.created);
+                assert_eq!(report.category, expected_category);
+                assert_eq!(report.text, expected_text);
+                assert!(report.place.is_some());
+            }
+            assert!(
+                matches!(answer(&Asked::Feedback("a note".into()), world, stamp),
+                Ok(Answer::Send(command, _)) if matches!(*command,
+                    ClientCommand::SendFeedback { ref text, .. } if text == "a note"))
+            );
         }
-        // A petition is the program's own text form either way.
-        assert!(matches!(
-            answer(&Asked::Petition("I am stuck".into()), world, stamp, false),
-            Ok(Answer::Send(..))
-        ));
     }
 
     #[test]
     fn a_sent_report_carries_the_programs_echo_by_its_id() {
         let (online, stamp) = admitted();
         let world = online.world();
-        let echo = |asked: Asked| match answer(&asked, world, stamp, true) {
+        let echo = |asked: Asked| match answer(&asked, world, stamp) {
             Ok(Answer::Send(_, echo)) => echo,
             other => panic!("{other:?}"),
         };

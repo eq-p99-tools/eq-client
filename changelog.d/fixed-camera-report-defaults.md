@@ -1,0 +1,1 @@
+Chase mouse look always permits full vertical tilt. Nonblank `/bugreport` and `/feedback` text always uses the normal submission path; only bare or whitespace-only tails open their report windows. A category-only bug tail is preserved literally as Other. The two former QoL switches are removed; old settings files still load and keep unrelated choices.

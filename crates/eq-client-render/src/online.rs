@@ -1706,7 +1706,7 @@ mod tests {
         let stamp = outbox.stamp(online.world()).unwrap();
         let asked = crate::reports::Asked::Petition("I am stuck".into());
         let Ok(crate::reports::Answer::Send(_, echo)) =
-            crate::reports::answer(&asked, online.world(), stamp, true)
+            crate::reports::answer(&asked, online.world(), stamp)
         else {
             panic!("a petition sends");
         };
