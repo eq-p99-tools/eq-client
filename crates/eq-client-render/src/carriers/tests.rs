@@ -563,7 +563,7 @@ fn carrier_walls_registration_keeps_received_kind() {
             .as_ref()
             .unwrap()
             .clone()
-            .with_titanium_walking();
+            .with_titanium_walking(1.5 * drawn.scale);
         assert!(world.has_spawn(8));
         let start = origin - rotation * Vec3::X * (20.0 * drawn.scale);
         let end = world.step(

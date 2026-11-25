@@ -224,7 +224,7 @@ pub struct CollisionWorld {
     /// A per-move shape override; liquid probes still receive their original
     /// body height and origin. Never part of the static navigation world.
     collision_height: Option<f32>,
-    titanium_walking: bool,
+    titanium_walking_origin: Option<f32>,
 }
 
 impl CollisionWorld {
@@ -242,7 +242,7 @@ impl CollisionWorld {
             liquid_support: false,
             swim_origin: None,
             collision_height: None,
-            titanium_walking: false,
+            titanium_walking_origin: None,
         })
     }
 
@@ -256,10 +256,13 @@ impl CollisionWorld {
     }
 
     /// Uses Titanium's ordinary walking object filter for lateral strides.
-    /// The caller keeps this view local to its dry walking move.
+    /// The caller keeps this view local to its dry walking move and supplies
+    /// the actor origin above its feet for the separate ceiling query.
+    /// An invalid offset keeps NPC carrier walls enabled.
     #[must_use]
-    pub fn with_titanium_walking(mut self) -> Self {
-        self.titanium_walking = true;
+    pub fn with_titanium_walking(mut self, feet_offset: f32) -> Self {
+        self.titanium_walking_origin =
+            (feet_offset.is_finite() && feet_offset >= 0.0).then_some(feet_offset);
         self
     }
 
@@ -333,7 +336,7 @@ impl CollisionWorld {
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
             collision_height: self.collision_height,
-            titanium_walking: self.titanium_walking,
+            titanium_walking_origin: self.titanium_walking_origin,
         }
     }
 
@@ -363,7 +366,7 @@ impl CollisionWorld {
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
             collision_height: self.collision_height,
-            titanium_walking: self.titanium_walking,
+            titanium_walking_origin: self.titanium_walking_origin,
         }
     }
 

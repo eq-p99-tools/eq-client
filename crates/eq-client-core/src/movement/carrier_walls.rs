@@ -39,7 +39,7 @@ fn carrier_walls_npc_walk_crosses_still_and_moved_partition_with_deck_support() 
         (Vec3::ZERO, Quat::IDENTITY),
         (Vec3::new(30.0, 5.0, -20.0), Quat::from_rotation_y(0.7)),
     ] {
-        let world = carrier(Some(SpawnKind::Npc), origin, rotation).with_titanium_walking();
+        let world = carrier(Some(SpawnKind::Npc), origin, rotation).with_titanium_walking(1.5);
         let start = origin + rotation * Vec3::new(-3.0, 0.0, 0.0);
         let end = world.step(start, rotation * Vec3::X * 6.0, 3.0);
         let local = rotation.inverse() * (end - origin);
@@ -59,13 +59,13 @@ fn carrier_walls_npc_walk_crosses_still_and_moved_partition_with_deck_support() 
 #[test]
 fn carrier_walls_preserve_player_unknown_unclassified_and_default_queries() {
     for kind in [Some(SpawnKind::Player), Some(SpawnKind::Unknown(9)), None] {
-        let world = carrier(kind, Vec3::ZERO, Quat::IDENTITY).with_titanium_walking();
+        let world = carrier(kind, Vec3::ZERO, Quat::IDENTITY).with_titanium_walking(1.5);
         let stopped = world.step(-Vec3::X * 3.0, Vec3::X * 6.0, 3.0);
         assert!(stopped.x < 0.0, "{kind:?} changed: {stopped:?}");
     }
     let world = carrier(Some(SpawnKind::Npc), Vec3::ZERO, Quat::IDENTITY);
     assert!(world.step(-Vec3::X * 3.0, Vec3::X * 6.0, 3.0).x < 0.0);
-    let walking = world.with_titanium_walking();
+    let walking = world.with_titanium_walking(1.5);
     assert!(
         walking
             .flight_sweep(-Vec3::X * 3.0, Vec3::X * 6.0, 3.0)
@@ -105,7 +105,7 @@ fn carrier_walls_keep_boom_headroom_and_vertical_landing() {
     world.set_spawn_instances(vec![(8, instance)]);
     let baseline = world.step(-Vec3::X * 3.0, Vec3::X * 6.0, 3.0);
     assert!(baseline.x < 0.0);
-    let world = world.with_titanium_walking();
+    let world = world.with_titanium_walking(1.5);
     assert!(world.step(-Vec3::X * 3.0, Vec3::X * 6.0, 3.0).x < 0.0);
     let under = Vec3::new(4.0, 0.0, 0.0);
     assert!(world.fall_sweep(under, 4.0, 1.0).unwrap().is_some());
@@ -115,6 +115,55 @@ fn carrier_walls_keep_boom_headroom_and_vertical_landing() {
         world.ground_spawn(Vec3::new(-4.0, 0.0, 0.0), 0.01, 0.05),
         Some(8)
     );
+}
+
+#[test]
+fn carrier_walls_ceiling_starts_at_actor_origin_and_keeps_the_boom_above_it() {
+    for (origin, rotation) in [
+        (Vec3::ZERO, Quat::IDENTITY),
+        (Vec3::new(30.0, 5.0, -20.0), Quat::from_rotation_y(0.7)),
+    ] {
+        for (ceiling, blocked) in [(2.5, false), (6.5, true), (9.0, false)] {
+            let mut triangles = deck(0.0);
+            triangles.extend([
+                [
+                    [0.0, ceiling, -8.0],
+                    [8.0, ceiling, -8.0],
+                    [8.0, ceiling, 8.0],
+                ],
+                [
+                    [0.0, ceiling, -8.0],
+                    [8.0, ceiling, 8.0],
+                    [0.0, ceiling, 8.0],
+                ],
+            ]);
+            let mut world = CollisionWorld::new(deck(-100.0)).unwrap();
+            world.set_spawn_instances(vec![(
+                8,
+                CollisionInstance::new(
+                    Arc::new(CollisionMesh::new(triangles).unwrap()),
+                    origin,
+                    rotation,
+                )
+                .unwrap()
+                .with_spawn_kind(SpawnKind::Npc),
+            )]);
+            let start = origin - rotation * Vec3::X * 3.0;
+            let delta = rotation * Vec3::X * 6.0;
+            let baseline = rotation.inverse() * (world.step(start, delta, 6.677_319_5) - origin);
+            assert_eq!(baseline.x < 0.0, ceiling < 9.0, "{baseline:?}");
+            // S is the actor origin above its feet. At S=3.75 the upward
+            // sphere starts wholly above the low face at 2.5 (0x43a0a0).
+            let world = world.with_titanium_walking(3.75);
+            let end = world.step(start, delta, 6.677_319_5);
+            let local = rotation.inverse() * (end - origin);
+            assert_eq!(local.x < 0.0, blocked, "ceiling={ceiling}: {local:?}");
+            if !blocked {
+                assert!(local.abs_diff_eq(Vec3::X * 3.0, 0.001), "{local:?}");
+            }
+            assert_eq!(world.ground_spawn(end, 0.01, 0.05), Some(8));
+        }
+    }
 }
 
 #[test]
@@ -139,7 +188,7 @@ fn carrier_walls_headroom_keeps_approaching_edges_and_authored_facing() {
     ] {
         let mut world = CollisionWorld::new(deck(-100.0))
             .unwrap()
-            .with_titanium_walking();
+            .with_titanium_walking(1.5);
         let mesh = CollisionMesh::new(deck(0.0).into_iter().chain(overhead)).unwrap();
         world.set_spawn_instances(vec![(
             8,
@@ -173,7 +222,7 @@ fn carrier_walls_keep_zone_placement_and_door_walls() {
         let start = -Vec3::X * 3.0;
         let baseline = world.step(start, Vec3::X * 6.0, 3.0);
         let changed = world
-            .with_titanium_walking()
+            .with_titanium_walking(1.5)
             .step(start, Vec3::X * 6.0, 3.0);
         assert!(baseline.x < 0.0);
         assert!(baseline.abs_diff_eq(changed, 0.0001));
@@ -182,7 +231,8 @@ fn carrier_walls_keep_zone_placement_and_door_walls() {
 
 #[test]
 fn carrier_walls_do_not_contain_a_walker_at_the_deck_edge() {
-    let world = carrier(Some(SpawnKind::Npc), Vec3::ZERO, Quat::IDENTITY).with_titanium_walking();
+    let world =
+        carrier(Some(SpawnKind::Npc), Vec3::ZERO, Quat::IDENTITY).with_titanium_walking(1.5);
     let end = world.walk(
         -Vec3::X * 3.0,
         Vec3::X * 16.0,
@@ -217,7 +267,7 @@ fn carrier_walls_diagonal_step_keeps_floor_reach_without_reinstating_the_partiti
     .unwrap()
     .with_spawn_kind(SpawnKind::Npc);
     world.set_spawn_instances(vec![(8, instance)]);
-    let end = world.with_titanium_walking().walk(
+    let end = world.with_titanium_walking(1.5).walk(
         -Vec3::X * 3.0,
         Vec3::X * 6.0,
         3.0,
@@ -270,7 +320,7 @@ fn carrier_walls_wide_translated_partitions_do_not_pin_their_centre_line() {
             .with_spawn_kind(SpawnKind::Npc);
         let mut world = CollisionWorld::new(deck(-100.0))
             .unwrap()
-            .with_titanium_walking();
+            .with_titanium_walking(1.5 * scale);
         world.set_spawn_instances(vec![(8, instance)]);
         let start = origin - rotation * Vec3::X * (20.0 * scale);
         let end = world.step(

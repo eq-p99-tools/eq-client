@@ -29,7 +29,7 @@ fn carrier_walls_are_filtered_only_for_titanium_dry_walking() {
         InstalledClient::Rof2,
     ] {
         for (flying, swimming) in [(false, false), (true, false), (false, true)] {
-            let view = carrier_walking_world(&world, client, flying, swimming);
+            let view = carrier_walking_world(&world, client, 1.5, flying, swimming);
             let next = view
                 .as_ref()
                 .unwrap_or(&world)

@@ -25,8 +25,10 @@ rays and other movement modes retain the geometry. Doors and placements
 are unchanged. Player and unknown-kind carriers retain their prior body
 collision; their qualification is a separate gap below.
 
-[I] The separate upward headroom query retains the client's body dimensions
-and authored facing; its shape remains an approximation. The collider and
+[R] The separate upward ceiling query starts at the actor origin, so low
+rigging below that origin does not become a wall again. [I] Its radius and
+top retain the client's body estimates and authored facing; the shape
+remains an approximation. The collider and
 drawing share the current rest pose and rigid carrier transform. Native
 membership of every authored face, and animated rigging
 floor poses, remain unconfirmed. Rope or sail support still depends on

@@ -24,32 +24,37 @@ impl CollisionWorld {
         // [R] eqgame.exe 0x48acef uses 0x42cf6e for walking, also aboard
         // a ship: +0x158 is the boat link, not the +0x160 mount/rider link.
         // Preserve player/unknown/unclassified carriers (separate gap 6.665).
-        !(self.titanium_walking
+        !(self.titanium_walking_origin.is_some()
             && matches!(purpose, SweepPurpose::Walking)
             && instance.spawn_kind == Some(SpawnKind::Npc))
     }
 
     pub(super) fn carrier_headroom(&self, feet: Vec3, height: f32) -> bool {
-        if !self.titanium_walking {
+        let Some(feet_offset) = self.titanium_walking_origin else {
             return true;
-        }
+        };
         // [R] The NPC remains in the floor query (0x42d05f) and in the
         // distinct ceiling query (0x43a0a0: 0x42d123 / 0x42cf5c).
-        // [I] Sweep the capsule's radius upward through its existing height:
-        // the same body volume, approached vertically instead of sideways.
-        // A mast is not made a wall again by a stationary overlap test.
+        // [R] The upward ceiling query starts at the actor origin, not at
+        // the foot-level wall sphere (0x43a0a0). A low rope already below
+        // that origin must not be turned back into a wall by this query.
+        // [I] Retain this client's capsule radius and top as its shape estimate.
         let height = self.collision_height.unwrap_or(height);
         self.spawn_obstacles
             .iter()
             .filter(|(_, instance)| instance.spawn_kind == Some(SpawnKind::Npc))
-            .all(|(_, instance)| headroom(instance.surface(), feet, height))
+            .all(|(_, instance)| headroom(instance.surface(), feet, height, feet_offset))
     }
 }
 
-fn headroom(surface: Surface<'_>, feet: Vec3, height: f32) -> bool {
-    let start = Vector::from_array((feet + Vec3::Y * (LIFT + CAPSULE_RADIUS)).to_array());
+fn headroom(surface: Surface<'_>, feet: Vec3, height: f32, feet_offset: f32) -> bool {
+    let reach = height + LIFT - CAPSULE_RADIUS - feet_offset;
+    if reach <= 0.0 {
+        return true;
+    }
+    let start = Vector::from_array((feet + Vec3::Y * feet_offset).to_array());
     let begin = surface.pose.inverse_transform_point(start);
-    let rise = surface.pose.rotation.inverse() * Vector::Y * (height - 2.0 * CAPSULE_RADIUS);
+    let rise = surface.pose.rotation.inverse() * Vector::Y * reach;
     let end = begin + rise;
     let margin = Vector::splat(CAPSULE_RADIUS + SKIN);
     let bounds = Aabb::new(begin.min(end) - margin, begin.max(end) + margin);
