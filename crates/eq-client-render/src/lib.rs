@@ -904,6 +904,9 @@ fn spawn_static_zone(
     let texture_images = create_texture_images(zone.textures, images);
     // Which drawn terrain is the top of water or lava, for Better Water.
     let solid = water::solid_centroids(&zone.collision);
+    // A water or lava surface keeps a mesh of its own, which Better Water
+    // dresses alone.
+    let mut apart = vec![false; zone.primitives.len()];
     let surfaces: Vec<_> = zone
         .primitives
         .iter()
@@ -911,6 +914,7 @@ fn spawn_static_zone(
         .filter(|(_, primitive)| gpu_assets::drawn(primitive))
         .map(|(index, primitive)| {
             water::surface_liquid(primitive, &zone.regions, &solid).map(|liquid| {
+                apart[index] = true;
                 let (frames, frame_millis) = gpu_assets::opaque_frames(
                     primitive.texture,
                     zone.terrain_materials.get(index),
@@ -946,23 +950,29 @@ fn spawn_static_zone(
             )
         })
         .collect();
-    let terrain = gpu_assets::create_terrain_primitives(
+    let terrain = gpu_assets::create_merged_terrain(
         zone.primitives,
         &zone.terrain_materials,
+        (&apart, Some(gpu_assets::TERRAIN_CELL)),
         &texture_images,
-        meshes,
-        materials,
+        (meshes, materials),
     );
     for ((draw, (light, positions, normals, additive)), surface) in
         terrain.into_iter().zip(lit_terrain).zip(surfaces)
     {
         let placed_at = (normals.len() == positions.len()).then_some((positions, normals));
+        // Each surface keeps its own light, written into its part of a
+        // merged mesh.
         lights.meshes.push(lighting::LitMesh {
             mesh: draw.mesh.clone(),
+            offset: draw.offset,
             light,
             placed_at,
             additive,
         });
+        if !draw.spawn {
+            continue;
+        }
         let mut entity = commands.spawn((
             SceneEntity,
             Mesh3d(draw.mesh),
@@ -1009,6 +1019,7 @@ fn spawn_static_zone(
             // drawn apart without a light of their own: the base pass alone.
             for ((mesh, _), source) in primitives.iter().zip(&drawn) {
                 lights.meshes.push(lighting::LitMesh {
+                    offset: 0,
                     mesh: mesh.clone(),
                     light: if source.light.len() == source.positions.len() {
                         source.light.clone()
@@ -1055,6 +1066,7 @@ fn spawn_static_zone(
                 .then_some((positions, normals));
                 if placed_at.is_some() {
                     lights.meshes.push(lighting::LitMesh {
+                        offset: 0,
                         mesh: mesh.clone(),
                         light,
                         placed_at,
@@ -1104,6 +1116,7 @@ fn spawn_static_zone(
                         RenderAssetUsages::default(),
                     ));
                     lights.meshes.push(lighting::LitMesh {
+                        offset: 0,
                         mesh: mesh.clone(),
                         light: static_batch::placement_light(object, source),
                         placed_at: (normals.len() == source.positions.len())

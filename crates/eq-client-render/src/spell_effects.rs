@@ -193,6 +193,12 @@ pub(super) fn update(
                 .map_or(0, |spawn| u16::from(spawn.state.level))
         };
         let heard = running.follow(world, (id, level), (&effects, &spells), now);
+        // Most bodies have nothing going: finding where their hands and
+        // head are walks the whole model, so a body with no spray and no
+        // sound is left alone.
+        if heard.is_empty() && running.sprays.is_empty() {
+            continue;
+        }
         let Ok(model) = places.get(character.model) else {
             continue;
         };

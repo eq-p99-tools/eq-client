@@ -119,6 +119,10 @@ struct Changes {
 struct Log {
     span: Span,
     spikes: u32,
+    /// Mesh and plain material events over the span, which the renderer
+    /// uploads again.
+    meshes: usize,
+    plain: usize,
     last: Changes,
 }
 
@@ -190,6 +194,8 @@ fn frame_log(
         );
     }
     log.last = changes;
+    log.meshes += changes.meshes;
+    log.plain += changes.plain_modified;
     log.span.add(delta);
     if log.span.spent < 5.0 {
         return;
@@ -204,13 +210,15 @@ fn frame_log(
         .count();
     let mean = log.span.mean();
     info!(
-        "frame log: {} frames, {:.1} fps, mean {:.2} ms, worst {:.2} ms, {} over 33 ms, {} over 50 ms; rich {} interior {}, lamps {shown}/{}, carried {} ({shadowed} shadowed), rich surfaces {}, rich materials {}, drawn twice {}, point lights {} ({} in view), entities {}",
+        "frame log: {} frames, {:.1} fps, mean {:.2} ms, worst {:.2} ms, {} over 33 ms, {} over 50 ms; mesh events {}, plain material changes {}; rich {} interior {}, lamps {shown}/{}, carried {} ({shadowed} shadowed), rich surfaces {}, rich materials {}, drawn twice {}, point lights {} ({} in view), entities {}",
         log.span.frames,
         1.0 / mean,
         mean * 1000.0,
         log.span.worst * 1000.0,
         log.span.hitches,
         log.spikes,
+        log.meshes,
+        log.plain,
         state.active,
         state.interior,
         lamps.iter().count(),
@@ -224,4 +232,6 @@ fn frame_log(
     );
     log.span = Span::default();
     log.spikes = 0;
+    log.meshes = 0;
+    log.plain = 0;
 }

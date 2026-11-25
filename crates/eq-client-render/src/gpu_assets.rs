@@ -19,6 +19,12 @@ pub(super) struct TextureImages {
 #[derive(Component)]
 pub(super) struct TerrainAnimation {
     frames: Vec<Handle<Image>>,
+    /// A terrain surface's material for each frame, made with the zone: the
+    /// surface swaps between them, and none of them changes. The renderer
+    /// prepares a changed material again, and hundreds of surfaces animate
+    /// in a zone like Qeynos. Empty for an object, whose shared material
+    /// takes each frame's image instead.
+    materials: Vec<Handle<StandardMaterial>>,
     frame_millis: std::num::NonZeroU32,
     elapsed: std::time::Duration,
     next_frame_millis: u128,
@@ -32,6 +38,7 @@ impl TerrainAnimation {
     pub(super) fn testing(frames: Vec<Handle<Image>>) -> Self {
         Self {
             frames,
+            materials: Vec::new(),
             frame_millis: std::num::NonZeroU32::new(1000).unwrap(),
             elapsed: std::time::Duration::ZERO,
             next_frame_millis: 1000,
@@ -40,7 +47,8 @@ impl TerrainAnimation {
         }
     }
 
-    fn advance(&mut self, delta: std::time::Duration) -> Option<Handle<Image>> {
+    /// Steps the clock, giving the frame it moves to.
+    fn advance(&mut self, delta: std::time::Duration) -> Option<usize> {
         self.elapsed = self.elapsed.saturating_add(delta);
         let now = self.elapsed.as_millis();
         if now <= self.next_frame_millis {
@@ -69,7 +77,7 @@ impl TerrainAnimation {
             return None;
         }
         self.frame = frame;
-        self.frames.get(frame).cloned()
+        Some(frame)
     }
 }
 
@@ -100,16 +108,39 @@ pub(super) struct ObjectDraws {
     pub animations: Vec<ObjectAnimation>,
 }
 
-/// One terrain draw call with the authored material and optional animation.
+/// One terrain primitive's draw: the authored material and optional
+/// animation, and the mesh it is drawn in, which surfaces merged with it
+/// share.
 pub(super) struct TerrainDraw {
     pub mesh: Handle<Mesh>,
     pub material: Handle<StandardMaterial>,
     pub animation: Option<TerrainAnimation>,
+    /// Where its vertices start in the mesh: 0 for a mesh of its own.
+    pub offset: usize,
+    /// Whether it spawns the mesh's entity: the first of a merged mesh's
+    /// surfaces does, the rest are drawn by it.
+    pub spawn: bool,
 }
+
+/// The side of a square cell on the ground in which still terrain surfaces
+/// of one material merge into one mesh, in world units. Each merged mesh is
+/// one entity the renderer culls, prepares and draws, instead of one per
+/// surface; a smaller cell keeps the mesh a carried light rewrites small.
+pub(super) const TERRAIN_CELL: f32 = 256.0;
+
+/// The surfaces a merged mesh holds: one material in one cell.
+type Group = (AssetId<StandardMaterial>, i32, i32);
+
+/// Terrain materials by what makes one: the blend, the texture and, when
+/// authored, the sides. Surfaces alike share a material, as do the frames
+/// of animated surfaces alike.
+type TerrainMaterials =
+    HashMap<(MaterialMode, Option<usize>, Option<bool>), Handle<StandardMaterial>>;
 
 /// Builds terrain using the material's own sidedness. Opposite-wound faces
 /// may occupy the same plane: each is visible only from its authored side.
 /// Keep the existing behavior for callers without source material metadata.
+#[cfg(test)]
 pub(super) fn create_terrain_primitives(
     primitives: Vec<ZonePrimitive>,
     authored: &[TerrainMaterial],
@@ -117,57 +148,211 @@ pub(super) fn create_terrain_primitives(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> Vec<TerrainDraw> {
-    primitives
+    create_merged_terrain(
+        primitives,
+        authored,
+        (&[], None),
+        texture_images,
+        (meshes, materials),
+    )
+}
+
+/// What a terrain primitive is drawn in: a mesh of its own, or a part of
+/// its group's, from a vertex on.
+enum Geometry {
+    Own(ZonePrimitive),
+    Part(Group, usize),
+}
+
+/// Builds terrain using the material's own sidedness, merging the still,
+/// opaque or masked surfaces of one material in each `cell` into one mesh.
+/// `apart[i]` keeps primitive `i` in a mesh of its own, as Better Water
+/// dresses a water surface alone. Blended and additive surfaces stay apart
+/// too: they are sorted by distance, and a merged mesh would sort as one.
+/// The draws come back one per drawn primitive, in order.
+pub(super) fn create_merged_terrain(
+    primitives: Vec<ZonePrimitive>,
+    authored: &[TerrainMaterial],
+    (apart, cell): (&[bool], Option<f32>),
+    texture_images: &[TextureImages],
+    (meshes, materials): (&mut Assets<Mesh>, &mut Assets<StandardMaterial>),
+) -> Vec<TerrainDraw> {
+    let mut shared = TerrainMaterials::new();
+    let mut material = |mode, texture: Option<usize>, sides| {
+        let texture = texture.filter(|index| texture_images.get(*index).is_some());
+        shared
+            .entry((mode, texture, sides))
+            .or_insert_with(|| {
+                let texture = texture.and_then(|index| texture_images.get(index));
+                let material = create_material(mode, texture, materials, true);
+                if let Some(double_sided) = sides {
+                    let mut value = materials.get_mut(&material).expect("just added material");
+                    value.double_sided = double_sided;
+                    value.cull_mode = (!double_sided).then_some(Face::Back);
+                }
+                material
+            })
+            .clone()
+    };
+    let drawn: Vec<Unmerged> = primitives
         .into_iter()
         .enumerate()
         .filter(|(_, primitive)| drawn(primitive))
         .map(|(index, primitive)| {
-            let texture = primitive
-                .texture
-                .and_then(|index| texture_images.get(index));
-            let material = create_material(primitive.material_mode, texture, materials, true);
+            let (mode, texture) = (primitive.material_mode, primitive.texture);
             let source = authored.get(index);
-            if let Some(source) = source {
-                let mut value = materials.get_mut(&material).expect("just added material");
-                value.double_sided = source.double_sided;
-                value.cull_mode = (!source.double_sided).then_some(Face::Back);
-            }
-            let animation = source.and_then(|source| {
-                material_animation(
-                    source.animation.as_ref()?,
-                    primitive.material_mode,
-                    texture_images,
-                    &material,
-                    materials,
-                )
-            });
+            let sides = source.map(|source| source.double_sided);
+            let animation = source
+                .and_then(|source| source.animation.as_ref())
+                .and_then(|source| {
+                    let frames = frame_images(source, mode, texture_images)?;
+                    Some(TerrainAnimation {
+                        frames,
+                        materials: source
+                            .frames
+                            .iter()
+                            .map(|frame| material(mode, Some(*frame), sides))
+                            .collect(),
+                        ..TerrainAnimation::starting(source)
+                    })
+                });
+            let material = animation.as_ref().map_or_else(
+                || material(mode, texture, sides),
+                |animation| animation.materials[0].clone(),
+            );
+            let group = cell
+                .filter(|_| {
+                    animation.is_none()
+                        && !apart.get(index).copied().unwrap_or(false)
+                        && matches!(mode, MaterialMode::Opaque | MaterialMode::Masked)
+                        && primitive.normals.len() == primitive.positions.len()
+                        && primitive.texture_coordinates.len() == primitive.positions.len()
+                })
+                .map(|cell| {
+                    let (x, z) = centre(&primitive.positions);
+                    #[allow(clippy::cast_possible_truncation)] // Zone coordinates.
+                    let at = ((x / cell).floor() as i32, (z / cell).floor() as i32);
+                    (material.id(), at.0, at.1)
+                });
+            (primitive, material, animation, group)
+        })
+        .collect();
+    merge(drawn, meshes)
+}
+
+/// A drawn terrain primitive before it is merged: its geometry, material,
+/// animation, and the group it may merge in.
+type Unmerged = (
+    ZonePrimitive,
+    Handle<StandardMaterial>,
+    Option<TerrainAnimation>,
+    Option<Group>,
+);
+
+/// Merges each group of more than one surface into one mesh, and gives the
+/// rest meshes of their own; one draw per surface, in order.
+fn merge(drawn: Vec<Unmerged>, meshes: &mut Assets<Mesh>) -> Vec<TerrainDraw> {
+    let mut members: HashMap<Group, usize> = HashMap::new();
+    for (_, _, _, group) in &drawn {
+        if let Some(group) = group {
+            *members.entry(*group).or_default() += 1;
+        }
+    }
+    let mut merged: HashMap<Group, ZonePrimitive> = HashMap::new();
+    let placed: Vec<_> = drawn
+        .into_iter()
+        .map(|(primitive, material, animation, group)| {
+            let geometry = match group.filter(|group| members[group] > 1) {
+                Some(group) => {
+                    let whole = merged.entry(group).or_insert_with(|| ZonePrimitive {
+                        positions: Vec::new(),
+                        normals: Vec::new(),
+                        texture_coordinates: Vec::new(),
+                        indices: Vec::new(),
+                        texture: primitive.texture,
+                        material_mode: primitive.material_mode,
+                        light: Vec::new(),
+                    });
+                    let offset = whole.positions.len();
+                    let base = u32::try_from(offset).expect("a zone's vertices fit a u32 index");
+                    whole
+                        .indices
+                        .extend(primitive.indices.iter().map(|index| index + base));
+                    whole.positions.extend(primitive.positions);
+                    whole.normals.extend(primitive.normals);
+                    whole
+                        .texture_coordinates
+                        .extend(primitive.texture_coordinates);
+                    Geometry::Part(group, offset)
+                }
+                None => Geometry::Own(primitive),
+            };
+            (geometry, material, animation)
+        })
+        .collect();
+    // Kept in the main world too, where the zone light colours their
+    // vertices.
+    let merged: HashMap<Group, Handle<Mesh>> = merged
+        .into_iter()
+        .map(|(group, whole)| {
+            (
+                group,
+                meshes.add(create_mesh(whole, RenderAssetUsages::default())),
+            )
+        })
+        .collect();
+    placed
+        .into_iter()
+        .map(|(geometry, material, animation)| {
+            let (mesh, offset) = match geometry {
+                Geometry::Own(primitive) => (
+                    meshes.add(create_mesh(primitive, RenderAssetUsages::default())),
+                    0,
+                ),
+                Geometry::Part(group, offset) => (merged[&group].clone(), offset),
+            };
             TerrainDraw {
-                // Kept in the main world too, where the zone light colours
-                // its vertices.
-                mesh: meshes.add(create_mesh(primitive, RenderAssetUsages::default())),
+                mesh,
                 material,
                 animation,
+                offset,
+                spawn: offset == 0,
             }
         })
         .collect()
 }
 
+/// The middle of a surface's box on the ground.
+fn centre(positions: &[[f32; 3]]) -> (f32, f32) {
+    let (low, high) = positions.iter().fold(
+        ([f32::INFINITY; 2], [f32::NEG_INFINITY; 2]),
+        |(low, high), position| {
+            (
+                [low[0].min(position[0]), low[1].min(position[2])],
+                [high[0].max(position[0]), high[1].max(position[2])],
+            )
+        },
+    );
+    (
+        f32::midpoint(low[0], high[0]),
+        f32::midpoint(low[1], high[1]),
+    )
+}
+
 /// An animated surface's plain material: drawn, or parked while Rich
 /// Lighting draws the surface.
 type AnimatedSurface = AnyOf<(
-    &'static MeshMaterial3d<StandardMaterial>,
-    &'static crate::rich_light::Parked,
+    &'static mut MeshMaterial3d<StandardMaterial>,
+    &'static mut crate::rich_light::Parked,
 )>;
 
-/// Realizes the complete sequence in the draw's blend mode and starts at its
-/// first frame. Missing images keep the existing still material.
-fn material_animation(
+/// The sequence's images in the draw's blend mode, when it has more than
+/// one frame and every image is there.
+fn frame_images(
     source: &TextureAnimation,
     mode: MaterialMode,
     texture_images: &[TextureImages],
-    material: &Handle<StandardMaterial>,
-    materials: &mut Assets<StandardMaterial>,
-) -> Option<TerrainAnimation> {
+) -> Option<Vec<Handle<Image>>> {
     let frames: Option<Vec<_>> = source
         .frames
         .iter()
@@ -179,15 +364,39 @@ fn material_animation(
             })
         })
         .collect();
-    let frames = frames.filter(|frames| frames.len() > 1)?;
+    frames.filter(|frames| frames.len() > 1)
+}
+
+impl TerrainAnimation {
+    /// The sequence's clock at its first frame, with no frames yet.
+    fn starting(source: &TextureAnimation) -> Self {
+        Self {
+            frames: Vec::new(),
+            materials: Vec::new(),
+            frame_millis: source.frame_millis,
+            elapsed: std::time::Duration::ZERO,
+            next_frame_millis: u128::from(source.frame_millis.get()),
+            skip_frames: source.skip_frames,
+            frame: 0,
+        }
+    }
+}
+
+/// Realizes the complete sequence in the draw's blend mode and starts the
+/// object's shared material at its first frame. Missing images keep the
+/// existing still material.
+fn material_animation(
+    source: &TextureAnimation,
+    mode: MaterialMode,
+    texture_images: &[TextureImages],
+    material: &Handle<StandardMaterial>,
+    materials: &mut Assets<StandardMaterial>,
+) -> Option<TerrainAnimation> {
+    let frames = frame_images(source, mode, texture_images)?;
     materials.get_mut(material)?.base_color_texture = Some(frames[0].clone());
     Some(TerrainAnimation {
         frames,
-        frame_millis: source.frame_millis,
-        elapsed: std::time::Duration::ZERO,
-        next_frame_millis: u128::from(source.frame_millis.get()),
-        skip_frames: source.skip_frames,
-        frame: 0,
+        ..TerrainAnimation::starting(source)
     })
 }
 
@@ -228,28 +437,29 @@ pub(super) fn opaque_frames(
     })
 }
 
-/// Swaps only terrain textures whose WLD animation advanced, retaining the
-/// material's alpha mode, color, sidedness and depth behavior on every frame.
+/// Moves each animated terrain surface to its material for the frame its
+/// WLD animation advanced to; the materials keep the alpha mode, color,
+/// sidedness and depth behavior of the surface.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(super) fn animate_terrain(
     time: Res<Time>,
     mut terrain: Query<(AnimatedSurface, &mut TerrainAnimation)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for ((drawn, parked), mut animation) in &mut terrain {
-        // A surface Rich Lighting draws keeps its plain material parked,
-        // which its rich one follows.
-        let Some(handle) = drawn
-            .map(|drawn| &drawn.0)
-            .or(parked.map(|parked| &parked.0))
+        let Some(material) = animation
+            .advance(time.delta())
+            .and_then(|frame| animation.materials.get(frame).cloned())
         else {
             continue;
         };
-        if let Some(image) = animation.advance(time.delta())
-            && let Some(mut material) = materials.get_mut(handle)
-        {
-            material.base_color_texture = Some(image);
-        }
+        // A surface Rich Lighting draws keeps its plain material parked,
+        // which its rich one follows.
+        let mut current = match (drawn, parked) {
+            (Some(drawn), _) => drawn.map_unchanged(|drawn| &mut drawn.0),
+            (None, Some(parked)) => parked.map_unchanged(|parked| &mut parked.0),
+            (None, None) => continue,
+        };
+        current.set_if_neq(material);
     }
 }
 
@@ -261,7 +471,8 @@ pub(super) fn animate_objects(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for mut object in &mut objects {
-        if let Some(image) = object.animation.advance(time.delta()) {
+        if let Some(frame) = object.animation.advance(time.delta()) {
+            let image = object.animation.frames[frame].clone();
             for handle in &object.targets {
                 if let Some(mut material) = materials.get_mut(handle) {
                     material.base_color_texture = Some(image.clone());
@@ -647,16 +858,22 @@ mod terrain_tests {
             &mut app.world_mut().resource_mut::<Assets<StandardMaterial>>(),
         );
         let draw = draws.pop().unwrap();
-        let handle = draw.material.clone();
         let entity = app
             .world_mut()
             .spawn((MeshMaterial3d(draw.material), draw.animation.unwrap()))
             .id();
+        let mut seen = Vec::new();
         for (delta, expected) in [(100, 0), (1, 1), (250, 0), (100, 0), (1, 0), (1000, 1)] {
             app.world_mut()
                 .resource_mut::<Time>()
                 .advance_by(Duration::from_millis(delta));
             app.update();
+            let handle = app
+                .world()
+                .get::<MeshMaterial3d<StandardMaterial>>(entity)
+                .unwrap()
+                .0
+                .clone();
             let materials = app.world().resource::<Assets<StandardMaterial>>();
             let material = materials.get(&handle).unwrap();
             assert_eq!(
@@ -667,7 +884,17 @@ mod terrain_tests {
             assert_eq!(material.cull_mode, Some(Face::Back));
             assert!(!material.double_sided);
             assert!((material.base_color.alpha() - 0.5).abs() < f32::EPSILON);
+            seen.push(handle);
         }
+        // The surface swaps between materials, and no material changes:
+        // the renderer would prepare a changed one again.
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        assert_eq!(materials.len(), 2);
+        assert_ne!(seen[0], seen[1]);
+        assert_eq!(
+            materials.get(&seen[0]).unwrap().base_color_texture,
+            Some(textures[0].opaque.clone())
+        );
         app.world_mut().despawn(entity);
         app.world_mut()
             .resource_mut::<Time>()
@@ -675,6 +902,112 @@ mod terrain_tests {
         app.update();
         let mut terrain = app.world_mut().query::<&TerrainAnimation>();
         assert_eq!(terrain.iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn still_surfaces_of_a_material_merge_in_their_cell_and_keep_their_place() {
+        let mut images = Assets::<Image>::default();
+        let textures = textures(&mut images);
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let moved = |mode, x: f32| {
+            let mut primitive = primitive(mode);
+            for position in &mut primitive.positions {
+                position[0] += x;
+            }
+            primitive
+        };
+        let still = TerrainMaterial {
+            double_sided: false,
+            animation: None,
+        };
+        let draws = create_merged_terrain(
+            vec![
+                moved(MaterialMode::Opaque, 0.0),
+                moved(MaterialMode::Blended(BlendOpacity::Half), 0.0),
+                moved(MaterialMode::Opaque, 10.0),
+                // Water, kept apart.
+                moved(MaterialMode::Opaque, 20.0),
+                // Another cell.
+                moved(MaterialMode::Opaque, 300.0),
+                // Animated.
+                moved(MaterialMode::Opaque, 30.0),
+                moved(MaterialMode::Opaque, 40.0),
+            ],
+            &[
+                still.clone(),
+                still.clone(),
+                still.clone(),
+                still.clone(),
+                still.clone(),
+                authored(false),
+                still,
+            ],
+            (&[false, false, false, true], Some(TERRAIN_CELL)),
+            &textures,
+            (&mut meshes, &mut materials),
+        );
+        assert_eq!(draws.len(), 7);
+        let merged = &draws[0].mesh;
+        let parts: Vec<_> = draws
+            .iter()
+            .map(|draw| (&draw.mesh == merged, draw.offset, draw.spawn))
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                (true, 0, true),
+                (false, 0, true),
+                (true, 3, false),
+                (false, 0, true),
+                (false, 0, true),
+                (false, 0, true),
+                (true, 6, false),
+            ]
+        );
+        let mesh = meshes.get(merged).unwrap();
+        assert_eq!(mesh.count_vertices(), 9);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x3(positions)) =
+            mesh.attribute(Mesh::ATTRIBUTE_POSITION)
+        else {
+            panic!("positions");
+        };
+        // The third surface's first vertex, where its draw says it starts.
+        assert_eq!(positions[3], [10.0, 0.0, 0.0]);
+        let Some(Indices::U32(indices)) = mesh.indices() else {
+            panic!("indices");
+        };
+        assert_eq!(indices[6..12], [3, 4, 5, 5, 4, 3]);
+        // Five meshes for seven surfaces.
+        assert_eq!(meshes.len(), 5);
+    }
+
+    #[test]
+    fn surfaces_alike_share_one_material() {
+        let mut images = Assets::<Image>::default();
+        let textures = textures(&mut images);
+        let mut materials = Assets::<StandardMaterial>::default();
+        let still = TerrainMaterial {
+            double_sided: false,
+            animation: None,
+        };
+        let draws = create_terrain_primitives(
+            vec![
+                primitive(MaterialMode::Opaque),
+                primitive(MaterialMode::Opaque),
+                primitive(MaterialMode::Masked),
+                primitive(MaterialMode::Opaque),
+            ],
+            &[still.clone(), still.clone(), still, authored(true)],
+            &textures,
+            &mut Assets::<Mesh>::default(),
+            &mut materials,
+        );
+        assert_eq!(draws[0].material, draws[1].material);
+        assert_ne!(draws[0].material, draws[2].material);
+        assert_ne!(draws[0].material, draws[3].material);
+        // Opaque one-sided, masked one-sided, and the two frames two-sided.
+        assert_eq!(materials.len(), 4);
     }
 
     #[test]
@@ -691,24 +1024,23 @@ mod terrain_tests {
             &mut Assets::<StandardMaterial>::default(),
         );
         let mut animation = draws.pop().unwrap().animation.unwrap();
-        assert!(animation.advance(Duration::from_millis(100)).is_none());
+        let advance = |animation: &mut TerrainAnimation, millis| {
+            animation
+                .advance(Duration::from_millis(millis))
+                .map(|frame| animation.frames[frame].clone())
+        };
+        assert!(advance(&mut animation, 100).is_none());
+        assert_eq!(advance(&mut animation, 1), Some(textures[1].opaque.clone()));
         assert_eq!(
-            animation.advance(Duration::from_millis(1)),
-            Some(textures[1].opaque.clone())
-        );
-        assert_eq!(
-            animation.advance(Duration::from_millis(249)),
+            advance(&mut animation, 249),
             Some(textures[0].opaque.clone())
         );
         assert_eq!(animation.next_frame_millis, 400);
-        assert!(animation.advance(Duration::from_millis(50)).is_none());
-        assert_eq!(
-            animation.advance(Duration::from_millis(1)),
-            Some(textures[1].opaque.clone())
-        );
+        assert!(advance(&mut animation, 50).is_none());
+        assert_eq!(advance(&mut animation, 1), Some(textures[1].opaque.clone()));
         // The program's large-delay path uses division above sixteen intervals.
         assert_eq!(
-            animation.advance(Duration::from_millis(1700)),
+            advance(&mut animation, 1700),
             Some(textures[0].opaque.clone())
         );
         assert_eq!(animation.next_frame_millis, 2200);

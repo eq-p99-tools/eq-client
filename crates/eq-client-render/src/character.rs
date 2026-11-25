@@ -4,7 +4,7 @@
 
 use bevy::{
     asset::RenderAssetUsages,
-    camera::visibility::DynamicSkinnedMeshBounds,
+    camera::{primitives::Aabb, visibility::NoAutoAabb},
     mesh::{
         VertexAttributeValues,
         skinning::{SkinnedMesh, SkinnedMeshInverseBindposes},
@@ -219,6 +219,8 @@ pub(super) struct PreparedCharacter {
     /// How far its body lies from its soles along the way it faces, in
     /// model units, in the death clip's last frame ([`lying_length`]).
     lying: Option<f32>,
+    /// A box every pose stays inside ([`posed_bounds`]).
+    bounds: Aabb,
 }
 
 /// The stores a model's textures, meshes, materials and bind poses go in.
@@ -318,9 +320,11 @@ pub(super) fn prepare(
     }
     let soles = asset.standing_bottom().unwrap_or_default();
     let lying = lying_length(&asset);
+    let bounds = posed_bounds(&asset);
     Some(PreparedCharacter {
         soles,
         lying,
+        bounds,
         asset: Arc::new(asset),
         primitives: drawn
             .into_iter()
@@ -393,6 +397,48 @@ pub(super) fn spawn_on_layers(
     hang(commands, parent, prepared, (feet_offset, 1.0), layers);
 }
 
+/// A box every pose of the model stays inside, about its origin: the
+/// farthest any joint reaches in any clip, sampled fifteen times a second,
+/// plus the farthest any vertex sits from its bone, with a tenth to spare
+/// between samples. Working each part's box from its joints every frame,
+/// as Bevy can, cost more than half a millisecond in a busy zone.
+fn posed_bounds(asset: &CharacterAsset) -> Aabb {
+    const STEP: f32 = 1.0 / 15.0;
+    let body = (0..asset.primitives.len())
+        .filter_map(|index| asset.skin(index))
+        .flat_map(|skin| skin.positions)
+        .map(|position| Vec3::from(*position).length())
+        .fold(0.0, f32::max);
+    let reach = |joints: Vec<Mat4>| {
+        joints
+            .iter()
+            .map(|joint| {
+                let scale = joint
+                    .x_axis
+                    .truncate()
+                    .length()
+                    .max(joint.y_axis.truncate().length())
+                    .max(joint.z_axis.truncate().length());
+                joint.w_axis.truncate().length() + body * scale
+            })
+            .fold(0.0, f32::max)
+    };
+    let mut farthest = reach(asset.joints("", 0.0, true));
+    for code in asset.animation_codes() {
+        let length = asset.clip_seconds(code).unwrap_or_default();
+        let mut seconds: f32 = 0.0;
+        loop {
+            farthest = farthest.max(reach(asset.joints(code, seconds.min(length), false)));
+            if seconds >= length {
+                break;
+            }
+            seconds += STEP;
+        }
+    }
+    let farthest = farthest * 1.1;
+    Aabb::from_min_max(Vec3::splat(-farthest), Vec3::splat(farthest))
+}
+
 /// Hangs the model under `parent` with its soles `feet_offset` under it, in
 /// the parent's units, drawn at `scale` times its authored size.
 fn hang(
@@ -404,6 +450,7 @@ fn hang(
 ) {
     let asset = prepared.asset.clone();
     let (_, top) = asset.span().unwrap_or_default();
+    let bounds = prepared.bounds;
     // The soles hang by the lowest point the model reaches standing, as it
     // is drawn, not by its base pose's (inferred, item 6.277).
     let lift = -feet_offset - prepared.soles * scale;
@@ -442,7 +489,8 @@ fn hang(
                             inverse_bindposes: prepared.bindposes.clone(),
                             joints: joints.clone(),
                         },
-                        DynamicSkinnedMeshBounds,
+                        // NoAutoAabb keeps the box: Bevy would put the mesh's own back.
+                        (bounds, NoAutoAabb),
                         visibility,
                         layers.clone(),
                     ))
@@ -1615,6 +1663,43 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_pose_of_a_model_stays_inside_its_box() {
+        let asset = CharacterAsset::testing();
+        let bounds = posed_bounds(&asset);
+        let (min, max) = (Vec3::from(bounds.min()), Vec3::from(bounds.max()));
+        let mut poses = 0;
+        for code in asset.animation_codes() {
+            let length = asset.clip_seconds(code).unwrap_or_default();
+            // Between the box's own samples too.
+            for step in 0..=40_u8 {
+                let seconds = length * f32::from(step) / 40.0;
+                for pose in asset.pose(code, seconds) {
+                    for position in pose.positions {
+                        let position = Vec3::from(position);
+                        assert!(
+                            position.cmpge(min).all() && position.cmple(max).all(),
+                            "{code} at {seconds}: {position} outside {min}..{max}"
+                        );
+                    }
+                }
+                poses += 1;
+            }
+        }
+        assert!(poses > 40, "the testing model has clips");
+        // Its lying clip moves it three units: a box from the base pose alone
+        // would leave it out.
+        assert!(max.x >= 3.0);
+        // Drawn parts keep the box rather than Bevy's.
+        let mut world = World::new();
+        testing::stores(&mut world);
+        let prepared = testing::prepared(&mut world);
+        let root = testing::drawn(&mut world, &prepared);
+        let part = world.get::<AnimatedCharacter>(root).unwrap().parts[0].entity;
+        assert_eq!(world.get::<Aabb>(part).copied(), Some(bounds));
+        assert!(world.get::<NoAutoAabb>(part).is_some());
+    }
 
     #[test]
     fn a_model_is_skinned_once_and_its_instances_share_its_meshes() {
