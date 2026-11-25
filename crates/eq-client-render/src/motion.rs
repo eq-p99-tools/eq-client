@@ -10684,16 +10684,28 @@ pub(super) mod tests {
         app.update();
         assert_attached_heading(&app, camera, player, 256.0);
         let old_point = Vec3::from_array(eq_client_core::render_position(old.position));
+        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward step after reversing");
+        };
         assert!(
             app.world()
                 .get::<Transform>(player)
                 .unwrap()
                 .translation
-                .abs_diff_eq(old_point, 0.001)
+                .abs_diff_eq(
+                    Vec3::from_array(eq_client_core::render_position(reversed.position)),
+                    0.001
+                )
         );
-        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
-            panic!("expected a forward step after reversing");
-        };
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            old.position
+        );
         assert_eq!(reversed.heading, HeadingUpdate::Snapshot);
         let displacement =
             Vec3::from_array(eq_client_core::render_position(reversed.position)) - old_point;
