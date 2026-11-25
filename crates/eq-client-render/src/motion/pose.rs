@@ -417,6 +417,48 @@ mod tests {
     }
 
     #[test]
+    fn release_restore_cursor_keeps_the_ordinary_walk_and_run_pose_clock() {
+        for walking in [false, true] {
+            let mut path = Path::default();
+            path.push(
+                0.0,
+                Snapshot {
+                    horizontal: Vec2::X * 10.0,
+                    vertical: 0.0,
+                },
+            );
+            let (mut app, root) = render_app(path, Vec3::X, 0.25);
+            app.world_mut().resource_mut::<Controls>().walking = walking;
+            for _ in 0..4 {
+                release_frame(&mut app);
+            }
+            let moving = if walking { "L01" } else { "L02" };
+            assert_eq!(crate::character::testing::clip(app.world(), root), moving);
+            let mut phase = crate::character::testing::elapsed(app.world(), root);
+            app.world_mut()
+                .resource_mut::<Controls>()
+                .restore_translation = true;
+            for _ in 0..3 {
+                release_frame(&mut app);
+                assert_eq!(crate::character::testing::clip(app.world(), root), moving);
+                let next = crate::character::testing::elapsed(app.world(), root);
+                assert!(next > phase, "restore restarted the moving clip");
+                phase = next;
+                let controls = app.world().resource::<Controls>();
+                let cursor = controls
+                    .visual
+                    .as_ref()
+                    .unwrap()
+                    .translation
+                    .as_ref()
+                    .unwrap();
+                assert!(cursor.finished() && !cursor.rested());
+                assert_eq!(controls.drawn_pose().unwrap().horizontal, Vec2::X * 10.0);
+            }
+        }
+    }
+
+    #[test]
     fn release_rest_stops_walk_and_run_at_the_translation_endpoint() {
         for walking in [false, true] {
             for snapshots in [false, true] {

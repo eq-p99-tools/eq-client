@@ -7,6 +7,8 @@ mod boats;
 #[cfg(test)]
 mod latency_tests;
 #[cfg(test)]
+mod release_animation_tests;
+#[cfg(test)]
 mod release_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
@@ -3993,11 +3995,11 @@ impl VisualMotion {
         if self
             .translation
             .as_ref()
-            .is_some_and(translation::Playhead::finished)
+            .is_some_and(translation::Playhead::rested)
         {
             // The orientation timeline can still be playing after the feet
-            // reach the release endpoint. Its old velocity must not keep the
-            // model walking or running in place.
+            // reach the release endpoint. Only a genuine release overrides
+            // its velocity: held input or restore can also exhaust a cursor.
             return Some(pose::Snapshot::default());
         }
         self.pose.as_ref().and_then(|pose| pose.at(self.elapsed))

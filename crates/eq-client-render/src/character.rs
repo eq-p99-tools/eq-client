@@ -1563,6 +1563,11 @@ pub(crate) mod testing {
         world.get::<AnimatedCharacter>(root).unwrap().clip.0
     }
 
+    /// Unwrapped animation time, so a test can detect a restarted clip.
+    pub(crate) fn elapsed(world: &World, root: Entity) -> f32 {
+        world.get::<AnimatedCharacter>(root).unwrap().elapsed
+    }
+
     /// The stores a model goes in, empty, on an app or world.
     pub(crate) fn stores(world: &mut World) {
         world.init_resource::<Assets<Image>>();
