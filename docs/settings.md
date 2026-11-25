@@ -15,6 +15,18 @@ where both names are written as hexadecimal bytes so that two names the sanitize
 would merge keep separate files. `login-servers.txt` holds [login presets](login.md).
 These files can contain account/character identifiers and should not be committed.
 
+`select-locations-v1/` holds private last-known selection-preview locations,
+separated by the exact login protocol, endpoint and account, then world and
+character. Names are encoded without punctuation or case collisions. These
+records include account identifiers and positions; keep this directory private.
+There is no shared-history fallback or import from another settings directory.
+Only a connected, living character in a ready matching zone scene updates its
+record. Movement writes are coalesced to once a second, with the latest observed
+position saved on camp or zoning; an abrupt stop can lose the most recent second.
+Malformed, unsupported-version or out-of-bounds records use the curated preview.
+Delete this directory to clear the preview history. Old settings without it need
+no migration.
+
 Window-layout v2 records retain an optional full chat size alongside position
 and minimized state. Existing v1 position-only records remain readable and use
 the authored size. A size belongs to its effective skin and authored layout;

@@ -602,6 +602,17 @@ impl InstalledClient {
         }
     }
 
+    /// Posture clearance read on Titanium and Mac. `RoF2` follows Titanium
+    /// provisionally; its posture collision and clearance remain unread.
+    #[must_use]
+    pub const fn headroom(self) -> Option<crate::falls::Headroom> {
+        match self {
+            Self::EqMac => Some(crate::falls::Headroom::EQMAC),
+            // RoF2's posture clearance is inferred from Titanium.
+            Self::Titanium | Self::Rof2 => Some(crate::falls::Headroom::TITANIUM),
+        }
+    }
+
     /// How long after a take-off the program refuses the next jump: both
     /// programs take a jump request only when more than 1,500 ms have
     /// passed since the last take-off (Titanium key routine 0x4a1d74

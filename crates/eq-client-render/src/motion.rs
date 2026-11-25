@@ -24,7 +24,7 @@ use eq_client_assets::{
 };
 use eq_client_core::{
     Capability, ClientCommand, DiagonalAlong, DiagonalRates, GroundedDiagonal, HeadingUpdate,
-    MovementMode, MovementRequest, Pace, Posture, StrafeSide, Support,
+    JumpPosture, MovementMode, MovementRequest, Pace, Posture, StrafeSide, Support,
     hazards::Hazard,
     movement::{
         AirborneController, CollisionWorld, Landing, PROVISIONAL_PHYSICS, VerticalPhysics,
@@ -1057,6 +1057,12 @@ impl Controls {
         self.visual_boat.map(|frame| (frame.sample, frame.pose))
     }
 
+    /// The lift the latest movement sample stood on. Its vertical travel
+    /// does not make the drawn player walk across its deck.
+    pub(crate) fn drawn_lift(&self) -> Option<u8> {
+        self.riding.map(|(door, _, _)| door)
+    }
+
     /// Whether a jump in water strokes up this frame, given whether the jump
     /// key is `held` now. The program strokes up for 500 ms from a jump
     /// request in water (0x4ac9f3-0x4acbac, read R39 B); a key still held
@@ -1622,9 +1628,8 @@ pub(super) fn input(
     // Titanium moves a ducking player ducked (read R23): its can-move test
     // passes them and its autorun key is gated only on can-act (reads R19 c,
     // R19c), so autorun pressed while ducked runs them ducked, and the duck
-    // itself, a posture change, still ends it. The Mac-era client stands a
-    // ducking player to move, so there the latch is dropped as before
-    // (recording checklist 6.460).
+    // itself, a posture change, still ends it. Mac also moves ducked
+    // (0x53f337, read 2026-11-24); neither generation stands here.
     // A lone standing the session reports at zone entry is the posture the
     // player enters with, not a change (read R24): the world counts only a
     // known posture changing, or a first one other than standing. Where the
@@ -1748,29 +1753,16 @@ pub(super) fn input(
             controls.jump = Some(now);
         }
     }
-    // A crouched jump stands up when its time comes, and goes with the next
-    // sample.
+    // A completed wind-up hands the jump to the normal launch path. That
+    // path makes one tested stand decision; a refused stand does not cancel
+    // the jump or cause a second posture attempt.
     if let Some(Crouch::Until(due)) = controls.crouch.filter(|crouch| match crouch {
         Crouch::Until(due) => now >= *due,
         Crouch::Over => false,
     }) {
         controls.crouch = None;
-        let stood = if controls.quiet_crouch {
-            Ok(())
-        } else {
-            post_posture(&outbox, online.world(), Posture::Standing)
-        };
-        match stood {
-            Ok(()) => {
-                controls.jump = (!detached).then_some(due);
-                controls.crouch = Some(Crouch::Over);
-            }
-            Err(reason) => {
-                controls.send_failed(reason);
-                controls.held = Some(Held::Refused);
-                return;
-            }
-        }
+        controls.jump = (!detached).then_some(due);
+        controls.crouch = Some(Crouch::Over);
     }
     let map = &*keys.map;
     let keyboard = navigation.sample(&keys.input);
@@ -1863,6 +1855,19 @@ pub(super) fn input(
         controls.held = Some(Held::NoBody);
         return;
     };
+    // Only the shape changes while ducked. Keep the existing liquid probes,
+    // feet offset and body component unchanged, including the standing shape.
+    let ducked_world = (posture == Some(eq_client_core::PostureState::Ducking)).then(|| {
+        world
+            .clone()
+            .with_collision_height(crate::posture::movement_height(
+                client,
+                online.world(),
+                body,
+                posture,
+            ))
+    });
+    let world = ducked_world.as_ref().unwrap_or(world);
     let placement_blocked = match client {
         InstalledClient::Titanium => true,
         // Titanium's, inferred for RoF2 (6.489).
@@ -2481,6 +2486,27 @@ pub(super) fn input(
     } else {
         None
     };
+    let launch = jump
+        && !placement_blocked
+        && !flying
+        && !swimming
+        && shore.is_none()
+        && controls
+            .airborne
+            .as_ref()
+            .is_some_and(|airborne| airborne.can_launch(world, feet, physics, body.height));
+    let jump_posture = if launch {
+        crate::posture::jump_posture(online.world(), &outbox)
+    } else {
+        JumpPosture::Keep
+    };
+    // Only an eligible launch can try the stand. A granted stand uses the
+    // standing shape now; a refused stand keeps the ducked shape and jump.
+    // Passive motion, including a falling body's ineligible jump press,
+    // cannot change the shape through this path.
+    let jumping_world = (jump_posture == JumpPosture::StandIfDucked)
+        .then(|| world.clone().with_collision_height(body.height));
+    let world = jumping_world.as_ref().unwrap_or(world);
     let diagonal_heading = mouse_snapshot.unwrap_or(current_heading);
     // A combined input keeps one body heading and both signed component
     // budgets. Run the usual sweep on a copy before selecting that sample.
@@ -2574,7 +2600,9 @@ pub(super) fn input(
         match controls.airborne.as_mut() {
             _ if flying => (world.fly_step(feet, delta, body.height), mode, false),
             Some(airborne) => {
-                let rising = airborne.velocity() > 0.0;
+                // Consume only this frame's grounded launch. Its arc may
+                // hit a ceiling immediately and have no upward speed left.
+                let _ = airborne.take_jump();
                 let landing = fall_step_with_water(
                     airborne,
                     world,
@@ -2589,7 +2617,7 @@ pub(super) fn input(
                 );
                 let falling = airborne.velocity() < 0.0
                     || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
-                let jumped = !rising && airborne.velocity() > 0.0;
+                let jumped = airborne.take_jump();
                 (
                     landing,
                     if falling { MovementMode::Fall } else { mode },
@@ -2604,6 +2632,7 @@ pub(super) fn input(
     if jumped
         && let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::Jump {
             session_id: stamp.session_id,
+            posture: jump_posture,
             created: stamp.created,
         })
     {
@@ -6013,6 +6042,7 @@ pub(super) mod tests {
             200,
         );
         app.update();
+        report_posture(&mut app, eq_client_core::PostureState::Ducking);
         let earlier = Instant::now()
             .checked_sub(Duration::from_millis(1))
             .unwrap();
@@ -6037,6 +6067,128 @@ pub(super) mod tests {
             175,
         );
         assert_eq!(shown(&app), Some(175));
+    }
+
+    #[test]
+    fn a_crouched_jump_launches_ducked_after_a_silently_refused_stand() {
+        let (mut app, receiver) = standing_jump(InstalledClient::Titanium);
+        let world = CollisionWorld::new(flat_surface(0.0).into_iter().chain(solid_box(
+            Vec3::new(-20.0, 6.0, -20.0),
+            Vec3::new(20.0, 7.0, 20.0),
+        )))
+        .unwrap();
+        app.insert_resource(crate::Collision(Some(world)));
+        app.add_systems(Update, crate::posture::refresh.before(super::input));
+        let spawn_id = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .spawn_id;
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            [eq_client_core::WorldEvent::Posture {
+                spawn_id,
+                posture: eq_client_core::PostureState::Ducking,
+            }],
+        );
+        app.world_mut().resource_mut::<Controls>().crouch = Some(Crouch::Until(
+            Instant::now()
+                .checked_sub(Duration::from_millis(1))
+                .unwrap(),
+        ));
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        let sent: Vec<_> = receiver.try_iter().collect();
+        assert!(
+            sent.iter().any(|command| matches!(
+                command,
+                ClientCommand::Jump {
+                    posture: JumpPosture::Keep,
+                    ..
+                }
+            )),
+            "{sent:?}"
+        );
+        assert!(
+            !sent
+                .iter()
+                .any(|command| matches!(command, ClientCommand::SetPosture { .. })),
+            "{sent:?}"
+        );
+        assert!(app.world().resource::<Controls>().jump.is_none());
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .posture(spawn_id),
+            Some(eq_client_core::PostureState::Ducking)
+        );
+    }
+
+    #[test]
+    fn ducked_running_jump_launches_under_a_low_ceiling_for_keys_and_scripts() {
+        use eq_client_core::{GameDialect, PostureState};
+        for (client, generation) in [
+            (InstalledClient::Titanium, GameDialect::Titanium),
+            (InstalledClient::EqMac, GameDialect::EqMac),
+        ] {
+            for scripted in [false, true] {
+                let (mut app, receiver) = standing_jump(client);
+                online::testing::generation(
+                    &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                    generation,
+                );
+                report_posture(&mut app, PostureState::Ducking);
+                let collision = CollisionWorld::new(flat_surface(0.0).into_iter().chain(
+                    solid_box(Vec3::new(-20.0, 6.0, -20.0), Vec3::new(20.0, 7.0, 20.0)),
+                ))
+                .unwrap();
+                app.insert_resource(Collision(Some(collision)));
+                app.add_systems(Update, crate::posture::refresh.before(super::input));
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .reset_all();
+                if scripted {
+                    crate::script::Script::press_keys_for_test(
+                        &mut app,
+                        &[KeyCode::ArrowUp, KeyCode::Space],
+                    );
+                } else {
+                    let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                    keys.press(KeyCode::ArrowUp);
+                    keys.press(KeyCode::Space);
+                }
+                app.update();
+                let sent: Vec<_> = receiver.try_iter().collect();
+                assert!(
+                    sent.iter().any(|command| matches!(
+                        command,
+                        ClientCommand::Jump {
+                            posture: JumpPosture::Keep,
+                            ..
+                        }
+                    )),
+                    "{client:?} script={scripted}: {sent:?}"
+                );
+                assert!(
+                    !sent
+                        .iter()
+                        .any(|command| matches!(command, ClientCommand::SetPosture { .. })),
+                    "{sent:?}"
+                );
+                assert_eq!(
+                    app.world()
+                        .resource::<online::OnlineState>()
+                        .world()
+                        .posture(7),
+                    Some(PostureState::Ducking)
+                );
+            }
+        }
     }
 
     /// The app of [`app`] for this installed client, the player standing
@@ -6072,13 +6224,17 @@ pub(super) mod tests {
         (app, receiver)
     }
 
-    /// The stances the commands asked for, and whether a jump went.
+    /// Requested stances, including a jump's stand decision, and jump intent.
     fn stances_and_jump(receiver: &mpsc::Receiver<ClientCommand>) -> (Vec<Posture>, bool) {
         let sent: Vec<ClientCommand> = receiver.try_iter().collect();
         let stances = sent
             .iter()
             .filter_map(|command| match command {
                 ClientCommand::SetPosture { posture, .. } => Some(*posture),
+                ClientCommand::Jump {
+                    posture: JumpPosture::StandIfDucked,
+                    ..
+                } => Some(Posture::Standing),
                 _ => None,
             })
             .collect();
@@ -6178,6 +6334,7 @@ pub(super) mod tests {
         let (mut app, receiver) = standing_jump(InstalledClient::EqMac);
         app.update();
         assert_eq!(stances_and_jump(&receiver), (vec![Posture::Ducking], false));
+        report_posture(&mut app, eq_client_core::PostureState::Ducking);
         // Jump held through the crouch asks nothing more.
         app.update();
         assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
@@ -6203,6 +6360,33 @@ pub(super) mod tests {
             app.world().resource::<Controls>().crouch,
             Some(Crouch::Until(_))
         ));
+    }
+
+    #[test]
+    fn a_jump_from_standing_still_drops_when_the_windup_duck_cannot_be_posted() {
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let (mut app, _) = standing_jump(client);
+            // A full ordinary command queue refuses the duck synchronously.
+            // No receiver is waiting on this zero-capacity channel.
+            let (sender, receiver) = mpsc::sync_channel(0);
+            app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+            let controls = app.world().resource::<Controls>();
+            assert_eq!((controls.crouch, controls.jump), (None, None));
+            assert_eq!(controls.held, Some(Held::Refused));
+            // Releasing Jump and making the queue available cannot revive
+            // the dropped request on a later frame.
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+            let (sender, receiver) = mpsc::sync_channel(16);
+            app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
+            app.update();
+            assert_eq!(stances_and_jump(&receiver), (Vec::new(), false));
+            let controls = app.world().resource::<Controls>();
+            assert_eq!((controls.crouch, controls.jump), (None, None));
+        }
     }
 
     #[test]
@@ -9353,12 +9537,12 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn autorun_pressed_while_ducked_runs_them_ducked_on_titanium() {
+    fn autorun_pressed_while_ducked_runs_them_ducked_on_both_generations() {
         use eq_client_core::{GameDialect, PostureState};
         // Read R23: nothing stands a ducking player to move, and the autorun
-        // key is gated only on can-act (R19c). The Mac-era client stands
-        // them to move, so the latch is dropped there as before.
-        for (generation, runs) in [(GameDialect::Titanium, true), (GameDialect::EqMac, false)] {
+        // key is gated only on can-act (R19c). Mac also stays ducked
+        // (0x53f337, read 2026-11-24).
+        for (generation, runs) in [(GameDialect::Titanium, true), (GameDialect::EqMac, true)] {
             let (mut app, receiver) = app();
             online::testing::generation(
                 &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -9522,15 +9706,14 @@ pub(super) mod tests {
     fn a_ducked_strafe_is_halved_once() {
         // The Titanium speeds read (the R5 audit's S1). On Titanium the
         // session's ducked grant carries the halving (read R23), so the
-        // strafe speed it grants goes as it is; the Mac-era client's session
-        // stands a ducking player to move, and the step it stands them on is
-        // halved here as before.
+        // strafe speed it grants goes as it is on both generations. The
+        // network already supplies their ducked bounds; don't halve twice.
         use eq_client_core::{GameDialect, PostureState};
         for (generation, posture, moved) in [
             (GameDialect::Titanium, PostureState::Standing, 0.4),
             (GameDialect::Titanium, PostureState::Ducking, 0.4),
             (GameDialect::EqMac, PostureState::Standing, 0.4),
-            (GameDialect::EqMac, PostureState::Ducking, 0.2),
+            (GameDialect::EqMac, PostureState::Ducking, 0.4),
         ] {
             let (mut app, receiver) = app();
             online::testing::generation(

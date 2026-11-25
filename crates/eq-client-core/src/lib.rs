@@ -51,7 +51,7 @@ pub use eq_network_game::chat::{OutboundChat, Tongue};
 pub use eq_network_game::clock;
 pub use eq_network_game::combat;
 pub use eq_network_game::command::GameCommand as ClientCommand;
-pub use eq_network_game::command::Posture;
+pub use eq_network_game::command::{JumpPosture, Posture};
 pub use eq_network_game::confirmations;
 pub use eq_network_game::control;
 pub use eq_network_game::corpses;

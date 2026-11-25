@@ -264,6 +264,8 @@ pub struct ClientWorld {
     guild_names: BTreeMap<u32, String>,
     /// The guild's members, retained across a bound ordinary character transfer.
     guild_members: Option<Vec<crate::guild::GuildMember>>,
+    guild_membership_revision: u64,
+    guild_refusal: (u64, String),
     /// Members added without a public-note field, until a note or full list arrives.
     guild_unknown_notes: std::collections::BTreeSet<String>,
     /// Guild invitations waiting for the player's answer, oldest first.
@@ -1873,6 +1875,8 @@ impl ClientWorld {
                 string_id,
             } => {
                 if self.session_id == Some(*session_id) {
+                    self.guild_refusal.0 = self.guild_refusal.0.wrapping_add(1);
+                    self.guild_refusal.1.clone_from(reason);
                     news.notices.push(Notice::GuildRefused {
                         reason: reason.clone(),
                         string_id: *string_id,

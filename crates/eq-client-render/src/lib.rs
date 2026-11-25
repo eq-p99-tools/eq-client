@@ -106,6 +106,7 @@ mod paperdoll;
 mod pet;
 mod piloting;
 mod poison_wait;
+mod posture;
 mod preview;
 #[cfg(test)]
 mod probes;
@@ -148,6 +149,7 @@ mod water;
 mod weather;
 mod whereabouts;
 mod who;
+mod window_mode;
 mod window_size;
 mod windows;
 mod zone;
@@ -1487,6 +1489,7 @@ mod tests {
                 heard: std::sync::Arc::default(),
             }),
             Some(login::Session {
+                location_scope: None,
                 classic_npc_consider: false,
                 chat_link_expansion: Some(eq_client_core::chat::LinkExpansion::EQEMU_TITANIUM),
                 inventory_move_rules: Some(eq_client_core::inventory::MoveRules::EqEmu),

@@ -31,7 +31,11 @@ the world list: the original login session has ended and the password is not
 retained. Login failures leave their reason visible for another attempt.
 
 Character selection previews the chosen character's dressed model standing in
-its zone, on every server type the client supports.
+its zone, on every server type the client supports. If this login profile has a
+saved in-world location for that exact world and character, and the character
+list names the same zone, the preview stands there. Otherwise it uses the zone's
+curated spot. This affects the preview only; entering the world always uses the
+server's placement. The camera keeps its usual orbit and controls.
 
 ## Create a character
 
