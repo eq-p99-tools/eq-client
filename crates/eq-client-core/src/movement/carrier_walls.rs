@@ -161,3 +161,33 @@ fn carrier_walls_do_not_contain_a_walker_at_the_deck_edge() {
     );
     assert!(world.ground_spawn(end, 0.01, 0.5).is_none());
 }
+
+#[test]
+fn carrier_walls_diagonal_step_keeps_floor_reach_without_reinstating_the_partition() {
+    let mut world = CollisionWorld::new(deck(-100.0)).unwrap();
+    let mut triangles = partition();
+    triangles.extend([
+        [[-10.0, 0.0, -10.0], [0.0, 0.0, 10.0], [0.0, 0.0, -10.0]],
+        [[-10.0, 0.0, -10.0], [-10.0, 0.0, 10.0], [0.0, 0.0, 10.0]],
+        [[0.0, 1.0, -10.0], [10.0, 1.0, 10.0], [10.0, 1.0, -10.0]],
+        [[0.0, 1.0, -10.0], [0.0, 1.0, 10.0], [10.0, 1.0, 10.0]],
+    ]);
+    let instance = CollisionInstance::new(
+        Arc::new(CollisionMesh::new(triangles).unwrap()),
+        Vec3::ZERO,
+        Quat::IDENTITY,
+    )
+    .unwrap()
+    .with_spawn_kind(SpawnKind::Npc);
+    world.set_spawn_instances(vec![(8, instance)]);
+    let end = world.with_titanium_walking().walk(
+        -Vec3::X * 3.0,
+        Vec3::X * 6.0,
+        3.0,
+        Support::Optional {
+            drop: 0.5,
+            climb: 1.1,
+        },
+    );
+    assert!(end.abs_diff_eq(Vec3::new(3.0, 1.0, 0.0), 0.001), "{end:?}");
+}
