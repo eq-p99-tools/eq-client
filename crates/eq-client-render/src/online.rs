@@ -660,13 +660,19 @@ impl Panels<'_> {
             "Current-admission movement worker result; no server acknowledgment implied"
         );
 
+        let previewed = self.motion.reconcile_preview(
+            admission_id,
+            moved.created,
+            moved.position,
+            moved.refused.is_some(),
+        );
         if self.motion.moved(admission_id, moved.created) {
             self.motion
                 .resolve_carrier(moved.created, moved.refused.is_some());
             self.motion.resolve_water_entry(moved.refused.is_some());
             self.motion.refused.clone_from(&moved.refused);
         }
-        if let Some(transform) = drawn {
+        if !previewed && let Some(transform) = drawn {
             self.motion
                 .display_carrier_sample(transform, moved.position, carriers);
         }
