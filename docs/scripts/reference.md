@@ -107,11 +107,27 @@ inventory evidence arrives; scripts must not repeat it on an uncertain result.
 Coin destruction has no script action.
 
 `click("drop")` selects an eligible whole cursor item or stack in Inventory
-on local-only Titanium EQEmu. It opens the ordinary drop confirmation.
-`click("answer", "yes")` on that question submits the exact selection, while
-`click("answer", "no")` cancels. The cursor stays held until a fresh received
-inventory snapshot. Treat submission and any ground-object appearance as
-separate from inventory confirmation.
+on local-only Titanium EQEmu. It uses the saved drop preference: the default
+asks for confirmation, `/fastdrop on` submits without a question, and
+`/fastdrop never` refuses drops. `/fastdrop off` restores the question.
+Ground dropping is not offered on P99 or Mac-era providers.
+
+When asked, `click("answer", "yes")` requests that exact submission once.
+`click("answer", "no")`, Escape or the 20-second timeout cancels without
+submitting it. Closing Inventory cancels a question started by this button.
+Changes to inventory, carried coins or admission also cancel the selection.
+
+The cursor attachment hides while the queued request awaits the worker result.
+A definite refusal before submission restores the unsent cursor presentation.
+After successful submission, local removal releases the cursor action hold.
+Ordinary inventory use can continue without re-entering the zone. This is a
+local projection, separate from received inventory confirmation or a ground object
+appearing. Incoming inventory records can correct the projected placement;
+a complete snapshot supplies a fresh baseline. Movement and fall weight may
+retain the submitted item's mass until matching received records or a complete
+snapshot replace that bound. An uncertain submission keeps the local removal
+and withdraws inventory readiness, without automatic restoration or retry.
+Do not retry an uncertain result.
 
 The map's controls are targets too (see [Map controls](targets.md#map-controls)). Watches and landmarks are saved per character, and the map's presentation beside the window placements, so a script's clicks on them change saved settings, as a person's do. The script does not put them back.
 
