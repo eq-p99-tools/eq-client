@@ -295,22 +295,23 @@ pub(super) fn register(app: &mut App) {
         // Half Bevy's default: the shadows' edges blur over twice the angle,
         // and each costs a quarter of the drawing.
         .insert_resource(bevy::light::PointLightShadowMap { size: 512 })
-        .add_systems(Startup, room_for_lamps);
+        .add_systems(Startup, cluster_on_cpu);
     meter::register(app);
 }
 
-/// Starts Bevy's light cluster lists big enough for a zone's lamps, which
-/// overflow the defaults in Erudin Palace and Qeynos: Bevy grows them, but
-/// draws a few frames with lights missing first.
+/// Clusters the lights on the CPU. Bevy's GPU clustering builds and uploads
+/// its slice and index lists for the camera every frame, sized by their
+/// capacity whatever the lights: 1.5 ms a frame on a fast PC with no light at
+/// all (Qeynos, 11-25), while the client draws a few dozen lights at most.
+/// The CPU path costs next to nothing without lights, and grows its lists
+/// itself, so a zone's lamps never overflow them. `EQ_GPU_CLUSTERING=1`
+/// keeps Bevy's GPU path, to compare.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
-fn room_for_lamps(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSettings>>) {
-    const INDICES: usize = 1 << 18;
-    const SLICES: usize = 1 << 13;
+fn cluster_on_cpu(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSettings>>) {
     if let Some(mut settings) = settings
-        && let Some(gpu) = settings.gpu_clustering.as_mut()
+        && std::env::var_os("EQ_GPU_CLUSTERING").is_none()
     {
-        gpu.initial_index_list_capacity = gpu.initial_index_list_capacity.max(INDICES);
-        gpu.initial_z_slice_list_capacity = gpu.initial_z_slice_list_capacity.max(SLICES);
+        settings.gpu_clustering = None;
     }
 }
 
