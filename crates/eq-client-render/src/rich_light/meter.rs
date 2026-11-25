@@ -104,7 +104,11 @@ fn show_meter(
 #[derive(Default, Clone, Copy, Debug)]
 #[allow(dead_code)] // Read through Debug, in the log.
 struct Changes {
-    rich_materials: usize,
+    rich_added: usize,
+    rich_modified: usize,
+    rich_removed: usize,
+    rich_unused: usize,
+    plain_modified: usize,
     meshes: usize,
     swapped: usize,
     lamps_toggled: usize,
@@ -130,9 +134,21 @@ struct Log {
 fn frame_log(
     time: Res<Time<Real>>,
     state: Res<RichState>,
-    (mut materials, mut meshes): (
+    (mut materials, mut plain, mut meshes): (
         MessageReader<AssetEvent<RichMaterial>>,
+        MessageReader<AssetEvent<StandardMaterial>>,
         MessageReader<AssetEvent<Mesh>>,
+    ),
+    (twice, lights, entities): (
+        Query<
+            (),
+            (
+                With<MeshMaterial3d<RichMaterial>>,
+                With<MeshMaterial3d<StandardMaterial>>,
+            ),
+        >,
+        Query<&ViewVisibility, With<PointLight>>,
+        Query<()>,
     ),
     swapped: Query<(), Added<Parked>>,
     toggled: Query<(), (With<Lamp>, Changed<Visibility>)>,
@@ -141,12 +157,26 @@ fn frame_log(
     drawn: Query<(), With<MeshMaterial3d<RichMaterial>>>,
     mut log: Local<Log>,
 ) {
+    let mut changes = Changes::default();
+    for event in materials.read() {
+        match event {
+            AssetEvent::Added { .. } => changes.rich_added += 1,
+            AssetEvent::Modified { .. } => changes.rich_modified += 1,
+            AssetEvent::Removed { .. } => changes.rich_removed += 1,
+            AssetEvent::Unused { .. } => changes.rich_unused += 1,
+            AssetEvent::LoadedWithDependencies { .. } => {}
+        }
+    }
     let changes = Changes {
-        rich_materials: materials.read().count(),
+        plain_modified: plain
+            .read()
+            .filter(|event| matches!(event, AssetEvent::Modified { .. }))
+            .count(),
         meshes: meshes.read().count(),
         swapped: swapped.iter().count(),
         lamps_toggled: toggled.iter().count(),
         carried_changed: carried.iter().filter(Ref::is_changed).count(),
+        ..changes
     };
     let delta = time.delta_secs();
     if delta > SPIKE {
@@ -174,7 +204,7 @@ fn frame_log(
         .count();
     let mean = log.span.mean();
     info!(
-        "frame log: {} frames, {:.1} fps, mean {:.2} ms, worst {:.2} ms, {} over 33 ms, {} over 50 ms; rich {} interior {}, lamps {shown}/{}, carried {} ({shadowed} shadowed), rich surfaces {}",
+        "frame log: {} frames, {:.1} fps, mean {:.2} ms, worst {:.2} ms, {} over 33 ms, {} over 50 ms; rich {} interior {}, lamps {shown}/{}, carried {} ({shadowed} shadowed), rich surfaces {}, drawn twice {}, point lights {} ({} in view), entities {}",
         log.span.frames,
         1.0 / mean,
         mean * 1000.0,
@@ -186,6 +216,10 @@ fn frame_log(
         lamps.iter().count(),
         carried.iter().count(),
         drawn.iter().count(),
+        twice.iter().count(),
+        lights.iter().count(),
+        lights.iter().filter(|seen| seen.get()).count(),
+        entities.iter().count(),
     );
     log.span = Span::default();
     log.spikes = 0;
