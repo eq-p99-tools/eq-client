@@ -33,8 +33,8 @@ impl CollisionWorld {
         if !self.titanium_walking {
             return true;
         }
-        // [R] The NPC remains in the floor query (0x42d05f). Preserve
-        // separate headroom geometry while changing the walking filter.
+        // [R] The NPC remains in the floor query (0x42d05f) and in the
+        // distinct ceiling query (0x43a0a0: 0x42d123 / 0x42cf5c).
         // [I] Sweep the capsule's radius upward through its existing height:
         // the same body volume, approached vertically instead of sideways.
         // A mast is not made a wall again by a stationary overlap test.

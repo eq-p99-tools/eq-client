@@ -12,6 +12,13 @@ it. Ordinary boarding uses actor `+0x158`; it does not set `+0x160`,
 the mount/rider link managed by `0x483958`. Walking off the deck edge is
 expected once floor support ends.
 
+[R] The ceiling probe (`0x43a0a0`) uses `0x42d123` and `0x42cf5c`, which
+also admit the NPC carrier and its down-facing faces. Unlike the floor
+filter, these do not exclude mount/rider links. They exclude doors,
+collision-mode-2 objects and one model identity; the identity being the
+own model is [I]. This carrier change does not add those general ceiling
+rules to the client's other object classes.
+
 The client applies this distinction to received NPC carrier instances in
 Titanium dry walking. Deck support, vertical collision, headroom, viewing
 rays and other movement modes retain the geometry. Doors and placements

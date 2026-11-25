@@ -118,6 +118,44 @@ fn carrier_walls_keep_boom_headroom_and_vertical_landing() {
 }
 
 #[test]
+fn carrier_walls_headroom_keeps_approaching_edges_and_authored_facing() {
+    for (overhead, blocked) in [
+        // A vertical panel's lower edge is approached by the upward probe,
+        // unlike an overlap whose projection already lies inside its face.
+        (
+            vec![
+                [[0.0, 2.0, -8.0], [0.0, 8.0, -8.0], [0.0, 8.0, 8.0]],
+                [[0.0, 2.0, -8.0], [0.0, 8.0, 8.0], [0.0, 2.0, 8.0]],
+            ],
+            true,
+        ),
+        // Only the downward side is a ceiling; a single upward-facing
+        // floor above the walking reach must not acquire a solid underside.
+        (deck(3.0), false),
+        (
+            deck(3.0).into_iter().map(|[a, b, c]| [a, c, b]).collect(),
+            true,
+        ),
+    ] {
+        let mut world = CollisionWorld::new(deck(-100.0))
+            .unwrap()
+            .with_titanium_walking();
+        let mesh = CollisionMesh::new(deck(0.0).into_iter().chain(overhead)).unwrap();
+        world.set_spawn_instances(vec![(
+            8,
+            CollisionInstance::new(Arc::new(mesh), Vec3::ZERO, Quat::IDENTITY)
+                .unwrap()
+                .with_spawn_kind(SpawnKind::Npc),
+        )]);
+        let end = world.step(-Vec3::X * 3.0, Vec3::X * 6.0, 3.0);
+        assert_eq!(end.x < 0.0, blocked, "{end:?}");
+        if !blocked {
+            assert!(end.abs_diff_eq(Vec3::X * 3.0, 0.001), "{end:?}");
+        }
+    }
+}
+
+#[test]
 fn carrier_walls_keep_zone_placement_and_door_walls() {
     for kind in 0..3 {
         let mut world = CollisionWorld::new(if kind == 0 {
