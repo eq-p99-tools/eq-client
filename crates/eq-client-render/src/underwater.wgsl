@@ -44,17 +44,40 @@ fn noise(p: vec2<f32>) -> f32 {
     );
 }
 
-// How much light comes down through the surface at a level point: a few
-// thin threads where the ripples focus it, drifting and changing as they
-// move, in patches with dark water between.
+// Smooth value noise and its slope (x: value, yz: d/dx, d/dy), as in
+// water.wgsl.
+fn noised(p: vec2<f32>) -> vec3<f32> {
+    let i = floor(p);
+    let f = p - i;
+    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
+    let du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
+    let a = hash(i);
+    let b = hash(i + vec2(1.0, 0.0));
+    let c = hash(i + vec2(0.0, 1.0));
+    let d = hash(i + vec2(1.0, 1.0));
+    let k = vec3(b - a, c - a, a - b - c + d);
+    return vec3(
+        a + k.x * u.x + k.y * u.y + k.z * u.x * u.y,
+        du * vec2(k.x + k.z * u.y, k.y + k.z * u.x),
+    );
+}
+
+// The net of bright lines the moving ripples focus light into, the same
+// pattern water.wgsl lays on the floor of shallow water.
+fn caustic(p: vec2<f32>, t: f32) -> f32 {
+    let c1 = noised(p * 0.35 + vec2(t * 0.21, t * 0.13)).yz;
+    let c2 = noised(p * 0.47 + vec2(-t * 0.17, t * 0.19) + 7.3).yz;
+    return pow(clamp(1.0 - length(c1 + c2) * 0.42, 0.0, 1.0), 6.0);
+}
+
+// How much light comes down through the surface at a level point: two
+// caustic nets, one finer and quicker, so the threads of light shimmer and
+// shift as the surface moves rather than holding still, spread evenly over
+// the whole sunlit surface.
 fn through_surface(p: vec2<f32>, t: f32) -> f32 {
-    let a = noise(p * 0.16 + vec2(t * 0.05, t * 0.03));
-    let b = noise(p * 0.23 + vec2(-t * 0.04, t * 0.06) + 13.7);
-    let c = noise(p * 0.05 + vec2(t * 0.012, -t * 0.008) + 5.1);
-    // Ridges where two drifting fields cross make the threads; only the
-    // brightest are kept, and a slow field leaves most stretches dark.
-    let ridge = 1.0 - abs(a + b - 1.0) * 2.0;
-    return pow(clamp(ridge, 0.0, 1.0), 8.0) * smoothstep(0.42, 0.8, c);
+    let broad = caustic(p, t * 1.4);
+    let fine = caustic(p * 1.7 + vec2(3.1, 9.4), t * 2.3 + 11.0);
+    return broad * 0.6 + fine * 0.4;
 }
 
 // Whether the surface at a level point can see the sun (1) or is shaded by
@@ -138,7 +161,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             let lost = exp(-path * 0.03 - along * 0.025);
             gathered += through_surface(entry, t) * sunlit(entry) * lost;
         }
-        gathered *= step * 2.2;
+        gathered *= step * 1.5;
         color += settings.shafts.rgb * gathered * strength;
     }
     return vec4(color, 1.0);
