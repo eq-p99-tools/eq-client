@@ -2121,22 +2121,21 @@ mod tests {
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.1);
         // With wheel zoom disabled, pitching keeps the camera's distance
-        // along its sightline (Free Chase Tilt, on by default).
+        // along its sightline.
         assert!((state.radius - previous.2).abs() < 1e-3);
         let previous = (state.pitch, state.radius);
-        // With Free Chase Tilt off, it keeps the distance behind the player
-        // and moves only the camera's height, as the program's does.
-        app.world_mut()
-            .resource_mut::<options::OptionsState>()
-            .options
-            .qol
-            .set(eq_client_core::qol::Fix::FreeChaseTilt, false);
+        // A retired setting in an old file cannot restore the height cap.
+        {
+            let mut state = app.world_mut().resource_mut::<options::OptionsState>();
+            let previous = std::mem::take(&mut state.options);
+            state.options =
+                eq_client_core::options::Options::read("free_chase_tilt = false", previous);
+        }
         send_input(&mut app);
         app.update();
         let state = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(state.pitch > previous.0);
-        let behind = |pitch: f32, radius: f32| radius * pitch.cos();
-        assert!((behind(state.pitch, state.radius) - behind(previous.0, previous.1)).abs() < 1e-3);
+        assert!((state.radius - previous.1).abs() < 1e-3);
     }
 
     #[test]

@@ -251,7 +251,6 @@ from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 | Flash on Tells | `flash_on_tells` | On | Requests attention for a tell while the client is in the background |
 | Corpses Lie Along the Ground | `corpses_along_ground` | On | Tilts bodies to the floor slope |
 | Long Chase Camera | `long_chase_camera` | On | Extends chase zoom beyond the classic 200-unit limit, up to 20,000 |
-| Free Chase Tilt | `free_chase_tilt` | On | Lets mouse look tilt the chase camera as far as straight up or straight down at any zoom; off, the classic camera stays between eye level and 30 units above the eyes |
 | Free Camera | `free_camera` | On | Lets a user-assigned Toggle Free Camera key detach the camera and fly it; off, the key does nothing |
 | See the World Clearly | `clear_view` | Off | Lights outdoor night as noon, brightens supported Titanium interiors and hides distance fog, rain and snow |
 | Better Water | `better_water` | Off | Draws water and lava with flowing motion, sky reflections, sun glints, depth tint, shoreline foam and an underwater haze; the original client's flat water when off |
@@ -262,7 +261,6 @@ from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
 | Duel Answer Card | `duel_answer_card` | On | Asks Yes or No when another player challenges you to a duel; Yes accepts as `/duel` does and No sends nothing. The original client has no card and takes only `/duel`; turn it off to play that way |
 | Use Picks Nearest | `use_picks_nearest` | Off | Lets the Use key use the nearest door, item on the ground or world container within reach, wherever you face, as this client used to. The original client uses only what lies at the centre of the view: the first character there, else a door (read R49-19) |
-| Typed Reports | `typed_reports` | Off | A departure: sends `/bugreport` and `/feedback` from the words typed after them, instead of opening the bug report and feedback windows as the original client does. Changes nothing on EqMac and RoF2 servers, where the typed words are always sent |
 
 These choices take effect in the current session. Controls are unavailable where
 their required session feature is absent. Walk While Winded, Move While
@@ -346,13 +344,13 @@ beyond 200 units so distant camera placement still shows the scene around the
 character. Disabling it restores the 200-unit limit. Top-down projection has
 its own range.
 
-Free Chase Tilt turns the chase camera around the character's eyes at its
+Mouse look always turns the chase camera around the character's eyes at its
 zoom distance, up to 89 degrees above or below level, so mouse look can look
 straight down from overhead or straight up from beside the feet. The floor and
-walls still pull the camera in. Disabling it restores the classic height model,
-where the camera rises from eye level to at most 30 units above the eyes, never
-looks up and, zoomed out, tilts down only a little. First person looks straight
-up or down either way.
+walls still pull the camera in. First person also looks straight up or down.
+Report commands always send nonblank text through the normal command path;
+bare or whitespace-only `/bugreport` and `/feedback` open their report windows.
+Neither behavior has a quality-of-life switch.
 
 Always-on improvements:
 

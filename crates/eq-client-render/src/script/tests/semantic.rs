@@ -916,24 +916,25 @@ fn a_slash_step_runs_its_line_as_typing_would() {
 }
 
 #[test]
-fn a_slash_report_takes_the_typed_route_and_its_pace() {
+fn fixed_qol_slash_reports_take_the_typed_route_and_its_pace() {
     // A script may do what a player types: its report runs the typed line,
     // stamped with its admission, and nothing more is sent than typing the
-    // same line sends. Typed Reports is on here, so the bug report and
-    // feedback go from the line.
-    let mut qol = eq_client_core::qol::Settings::default();
-    qol.set(eq_client_core::qol::Fix::TypedReports, true);
-    let typed_reports = |app: &mut App| {
-        let mut options = crate::options::OptionsState::default();
-        options.options.qol = qol;
+    // same line sends. Legacy false settings cannot redirect its words.
+    let qol = eq_client_core::qol::Settings::default();
+    let report_options = |app: &mut App| {
+        let options = crate::options::OptionsState::new(&eq_client_core::options::Options::read(
+            "typed_reports = false\nfree_chase_tilt = false\n",
+            eq_client_core::options::Options::default(),
+        ));
         app.insert_resource(options);
     };
     for line in [
         "petition I am stuck",
         "bug doors: it will not open",
+        "bug pathing:",
         "feedback a note",
     ] {
-        let (app, sent) = slash_step(line, typed_reports);
+        let (app, sent) = slash_step(line, report_options);
         assert_eq!(
             app.world().resource::<RunStatus>().phase(),
             Phase::Completed,
@@ -976,16 +977,12 @@ fn a_slash_report_takes_the_typed_route_and_its_pace() {
             "{line}: {sent:?}"
         );
     }
-    // With it off, as by default, they open their windows as the
-    // program's do, and send nothing.
+    // Only blank tails open their windows and send nothing.
     for (line, report) in [
-        (
-            "bug doors: it will not open",
-            crate::report_windows::Report::Bug,
-        ),
-        ("feedback a note", crate::report_windows::Report::Feedback),
+        ("bugreport   ", crate::report_windows::Report::Bug),
+        ("feedback   ", crate::report_windows::Report::Feedback),
     ] {
-        let (app, sent) = slash_step(line, |_| ());
+        let (app, sent) = slash_step(line, report_options);
         assert_eq!(sent, [], "{line}");
         assert_eq!(
             app.world().resource::<ChatState>().report_window,
@@ -1014,6 +1011,14 @@ fn a_slash_report_takes_the_typed_route_and_its_pace() {
     assert_eq!(rx.try_iter().count(), 1);
     frame_at(&mut app, 10);
     assert_eq!(rx.try_iter().count(), 1);
+}
+
+#[test]
+fn fixed_qol_retired_options_are_not_script_click_targets() {
+    for key in ["free_chase_tilt", "typed_reports"] {
+        assert!(Program::parse(&format!("click(\"option\", \"{key}\")"), Path::new(".")).is_err());
+    }
+    assert!(Program::parse("click(\"option\", \"free_camera\")", Path::new(".")).is_ok());
 }
 
 #[test]

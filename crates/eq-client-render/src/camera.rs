@@ -509,9 +509,7 @@ pub(super) fn orbit_camera(
 
     let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
     let program = client.camera_limits();
-    let limits = program
-        .on_leash(leash(&options.options))
-        .with_tilt(tilt(&options.options));
+    let limits = program.on_leash(leash(&options.options)).with_tilt(tilt());
     let rise = if options.options.invert_y { -1.0 } else { 1.0 };
     let clip = clip_distance(client, &options.options, online.world());
     let turn = options
@@ -625,8 +623,7 @@ impl OrbitCamera {
 /// leash, until a limit holds the height or the distance.
 /// The camera's pitch and radius are that height and distance's angle and
 /// sightline. That is the program's tilt ([`ChaseTilt::Program`]); on this
-/// client's free tilt ([`ChaseTilt::Free`], the player's quality-of-life
-/// choice [`eq_client_core::qol::Fix::FreeChaseTilt`]) a drag turns the
+/// client always uses free tilt ([`ChaseTilt::Free`]): a drag turns the
 /// camera around the eyes as far as straight up or down and the wheel
 /// moves it along its sightline, whatever its height.
 ///
@@ -676,18 +673,9 @@ pub(crate) fn leash(
     }
 }
 
-/// How the player lets mouse look tilt the chase camera: as far as straight
-/// up or down unless they turned the quality-of-life setting off
-/// ([`eq_client_core::qol::Fix::FreeChaseTilt`]), else the program's height
-/// model.
-pub(crate) fn tilt(
-    options: &eq_client_core::options::Options,
-) -> eq_client_assets::camera::ChaseTilt {
-    if options.qol.on(eq_client_core::qol::Fix::FreeChaseTilt) {
-        eq_client_assets::camera::ChaseTilt::Free
-    } else {
-        eq_client_assets::camera::ChaseTilt::Program
-    }
+/// Mouse look always permits full chase tilt, independent of saved settings.
+pub(crate) const fn tilt() -> eq_client_assets::camera::ChaseTilt {
+    eq_client_assets::camera::ChaseTilt::Free
 }
 
 /// How much farther out than the program lets its chase camera go a camera
@@ -1410,13 +1398,7 @@ mod tests {
     #[test]
     fn the_free_tilt_turns_the_chase_camera_as_far_as_straight_up_or_down_at_any_zoom() {
         use eq_client_assets::camera::{ChaseLeash, ChaseTilt, TITANIUM};
-        let mut options = eq_client_core::options::Options::default();
-        // Free by default; turned off, the program's height model.
-        assert_eq!(tilt(&options), ChaseTilt::Free);
-        options
-            .qol
-            .set(eq_client_core::qol::Fix::FreeChaseTilt, false);
-        assert_eq!(tilt(&options), ChaseTilt::Program);
+        assert_eq!(tilt(), ChaseTilt::Free);
         for leash in [ChaseLeash::Program, ChaseLeash::Long] {
             let limits = TITANIUM.on_leash(leash).with_tilt(ChaseTilt::Free);
             let mut camera = OrbitCamera {

@@ -303,29 +303,12 @@ fn ordinary_look_reaches_both_vertical_directions_after_snapping_in() {
     }
 }
 
-/// Turns the Free Chase Tilt setting on or off for a test app.
-fn free_tilt(app: &mut App, on: bool) {
-    app.world_mut()
-        .resource_mut::<options::OptionsState>()
-        .options
-        .qol
-        .set(eq_client_core::qol::Fix::FreeChaseTilt, on);
-}
-
 #[test]
 fn chase_mouse_look_reaches_straight_down_and_straight_up_at_an_ordinary_zoom() {
     // Regression: the program's height model had re-locked the chase view's
-    // mouse look to a few degrees at an ordinary zoom. The setting is on by
-    // default, so a player who never opened the page can look anywhere.
+    // mouse look to a few degrees at an ordinary zoom. Full tilt is always available.
     for (invert_y, pixels) in [(false, -180.0), (true, 180.0)] {
         let (mut app, camera, player, _) = app();
-        assert!(
-            app.world()
-                .resource::<options::OptionsState>()
-                .options
-                .qol
-                .on(eq_client_core::qol::Fix::FreeChaseTilt)
-        );
         app.world_mut()
             .resource_mut::<options::OptionsState>()
             .options
@@ -412,11 +395,20 @@ fn a_steep_free_chase_view_zooms_along_its_sightline_before_snapping_in() {
 }
 
 #[test]
-fn chase_looks_down_from_at_most_30_above_and_never_up_with_normal_and_inverted_mouse_input() {
+fn fixed_qol_legacy_disabled_tilt_still_looks_up_and_down_with_inverted_input() {
     for (invert_y, pixels) in [(false, -180.0), (true, 180.0)] {
         let (mut app, camera, player, _) = app();
-        // The program's height model, Free Chase Tilt turned off.
-        free_tilt(&mut app, false);
+        // Old saved false values cannot restore the removed height-model knob.
+        {
+            let mut state = app.world_mut().resource_mut::<options::OptionsState>();
+            let previous = std::mem::take(&mut state.options);
+            state.options =
+                eq_client_core::options::Options::read("free_chase_tilt = false", previous);
+        }
+        app.world_mut()
+            .get_mut::<OrbitCamera>(camera)
+            .unwrap()
+            .radius = 120.0;
         app.world_mut()
             .resource_mut::<options::OptionsState>()
             .options
@@ -424,20 +416,15 @@ fn chase_looks_down_from_at_most_30_above_and_never_up_with_normal_and_inverted_
         start_look(&mut app);
         // The eyes: the body's center plus its head line.
         let eye = 3.0 + 6.0 * camera::HEAD_LINE;
-        // Looking up brings the camera down to eye level and no lower: the
-        // program's chase never looks up (0x570d81).
+        // Looking up passes eye level and retains the selected sightline distance.
         for _ in 0..4 {
             drag(&mut app, Vec2::new(15.0, pixels));
         }
         let view = app.world().get::<OrbitCamera>(camera).unwrap();
         let pose = app.world().get::<Transform>(camera).unwrap();
         assert!(matches!(view.view, View::Chase));
-        assert!(pose.forward().y.abs() < 1e-5, "{}", pose.forward());
-        assert!(
-            (pose.translation.y - eye).abs() < 1e-3,
-            "{}",
-            pose.translation
-        );
+        assert!(pose.forward().y > 0.999, "{}", pose.forward());
+        assert!(pose.translation.y < eye, "{}", pose.translation);
         assert!(pose.rotation.is_finite());
         assert!(pose.right().is_finite());
         assert_eq!(
@@ -445,17 +432,13 @@ fn chase_looks_down_from_at_most_30_above_and_never_up_with_normal_and_inverted_
             Some(&Visibility::Inherited)
         );
 
-        // Looking down raises it to 30 above the eyes and no higher.
+        // Looking down is not held to the old 30-unit height cap.
         for _ in 0..4 {
             drag(&mut app, Vec2::new(0.0, -pixels));
         }
         let pose = app.world().get::<Transform>(camera).unwrap();
         assert!(pose.forward().y < 0.0);
-        assert!(
-            (pose.translation.y - eye - 30.0).abs() < 1e-3,
-            "{}",
-            pose.translation
-        );
+        assert!(pose.translation.y > eye + 100.0, "{}", pose.translation);
         assert!(pose.rotation.is_finite());
         let view = app.world().get::<OrbitCamera>(camera).unwrap();
         assert!(matches!(view.view, View::Chase));
