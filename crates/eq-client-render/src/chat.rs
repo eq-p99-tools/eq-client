@@ -4826,7 +4826,6 @@ mod tests {
 
     #[test]
     fn a_typed_line_sends_a_report_to_the_staff() {
-        use crate::report_windows::Report;
         use eq_client_core::reports::BugCategory;
         let (mut app, receiver) = slash_app(true);
         let typed = Settings::default();
