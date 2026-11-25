@@ -12,6 +12,7 @@ enum Input {
     MouseForward,
     Turn,
     Opposite,
+    Reverse,
     Restart(usize),
 }
 
@@ -30,6 +31,14 @@ fn clock(app: &mut App, now: Instant) {
     app.world_mut()
         .resource_mut::<crate::outbox::Outbox>()
         .set_test_time(now);
+}
+
+fn tick(app: &mut App, base: Instant, frame: u64) {
+    clock(app, base + Duration::from_micros(frame * 16_667));
+    app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_micros(16_667));
+    app.update();
 }
 
 fn mouse(app: &mut App, held: bool) {
@@ -85,6 +94,18 @@ fn action(app: &mut App, input: Input, frame: usize) {
                 }
             }
         }
+        Input::Reverse => {
+            if frame == 5 {
+                key(app, KeyCode::KeyW, true);
+            }
+            if frame == 24 {
+                key(app, KeyCode::KeyW, false);
+                key(app, KeyCode::KeyS, true);
+            }
+            if frame == 44 {
+                key(app, KeyCode::KeyS, false);
+            }
+        }
         Input::Restart(gap) => {
             if frame == 5 {
                 key(app, KeyCode::KeyW, true);
@@ -119,7 +140,7 @@ fn replay(input: Input, reply_delay: usize, base: Instant, catchup: bool) -> Rep
         positions: vec![],
         rotations: vec![],
         camera_angles: vec![],
-        stop: if matches!(input, Input::Restart(_)) {
+        stop: if matches!(input, Input::Restart(_) | Input::Reverse) {
             44
         } else {
             24
@@ -191,6 +212,7 @@ fn release_catchup_preserves_the_complete_command_and_heading_timelines() {
         Input::MouseForward,
         Input::Turn,
         Input::Opposite,
+        Input::Reverse,
         Input::Restart(0),
         Input::Restart(1),
         Input::Restart(2),
@@ -428,6 +450,96 @@ fn accepted_release_rollback_restores_translation_without_changing_the_rotation_
         assert_eq!(
             results[0], results[1],
             "{interruption}: rollback changed the rotation/camera clock"
+        );
+    }
+}
+
+#[test]
+fn a_timed_out_release_restores_authority_and_a_late_answer_is_not_replayed() {
+    let base = Instant::now() + Duration::from_secs(60);
+    let (mut app, requests, news) = timing_app();
+    tick(&mut app, base, 0);
+    let original = shown(&mut app).0;
+    key(&mut app, KeyCode::KeyW, true);
+    tick(&mut app, base, 1);
+    let request = requests
+        .try_iter()
+        .find_map(|command| match command {
+            ClientCommand::Move(request) => Some(request),
+            _ => None,
+        })
+        .unwrap();
+    let endpoint = Vec3::from_array(eq_client_core::render_position(request.position));
+    key(&mut app, KeyCode::KeyW, false);
+    for frame in 2..=17 {
+        tick(&mut app, base, frame);
+    }
+    assert_eq!(shown(&mut app), (original, original));
+    assert!(
+        app.world().resource::<Controls>().waiting(),
+        "timeout did not retain command ownership"
+    );
+    assert!(
+        !app.world()
+            .resource::<Controls>()
+            .has_translation_playhead()
+    );
+    assert!(
+        requests.try_recv().is_err(),
+        "release emitted an early stop"
+    );
+    news.send(eq_client_core::WorldUpdate::Game(
+        eq_client_core::WorldEvent::MotionSent {
+            session_id: request.session_id,
+            created: request.created,
+            position: request.position,
+            refused: None,
+        },
+    ))
+    .unwrap();
+    for frame in 18..=40 {
+        tick(&mut app, base, frame);
+    }
+    assert_eq!(shown(&mut app), (endpoint, endpoint));
+    assert!(
+        requests.try_recv().is_err(),
+        "late acceptance duplicated a move"
+    );
+}
+
+#[test]
+fn release_catchup_requires_owned_ground_input_without_a_lift_or_jump() {
+    let base = Instant::now() + Duration::from_secs(60);
+    for interruption in ["blur", "lift", "jump"] {
+        let (mut app, requests, _news) = timing_app();
+        tick(&mut app, base, 0);
+        key(&mut app, KeyCode::KeyW, true);
+        tick(&mut app, base, 1);
+        assert!(
+            requests
+                .try_iter()
+                .any(|command| matches!(command, ClientCommand::Move(_)))
+        );
+        key(&mut app, KeyCode::KeyW, false);
+        match interruption {
+            "blur" => {
+                let world = app.world_mut();
+                world
+                    .query::<&mut Window>()
+                    .single_mut(world)
+                    .unwrap()
+                    .focused = false;
+            }
+            "lift" => app.world_mut().resource_mut::<Controls>().riding = Some((1, base, 3.0)),
+            "jump" => app.world_mut().resource_mut::<Controls>().jump = Some(base),
+            _ => unreachable!(),
+        }
+        tick(&mut app, base, 2);
+        assert!(
+            !app.world()
+                .resource::<Controls>()
+                .has_translation_playhead(),
+            "{interruption}: release retimed an ineligible path"
         );
     }
 }

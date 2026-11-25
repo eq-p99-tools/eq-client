@@ -4,8 +4,8 @@ use super::{Segment, VisualMotion};
 use bevy::prelude::*;
 use std::collections::VecDeque;
 
-/// Three frames at 60 Hz. Inferred presentation policy, approved for a local
-/// feel check; it changes neither a submitted endpoint nor a command's clock.
+/// [I] Display-only finish window: three frames at 60 Hz. Catch-up changes
+/// neither a submitted endpoint nor a command's clock.
 pub(super) const RELEASE_FINISH_SECONDS: f32 = 0.05;
 
 #[derive(Clone, Copy)]
