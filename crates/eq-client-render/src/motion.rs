@@ -10,6 +10,8 @@ mod latency_tests;
 mod release_animation_tests;
 #[cfg(test)]
 mod release_tests;
+#[cfg(test)]
+mod rider_animation_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
 mod pad;
@@ -631,7 +633,15 @@ impl Controls {
             {
                 visual.map(|transform| boats::to_local(carried.pose, transform));
             }
-            let from = boats::to_local(carried.pose, from);
+            let drawn_pose = self.visual_boat.map_or(carried.pose, |frame| frame.pose);
+            let from = Transform {
+                // The drawn root still belongs to the last displayed frame.
+                // Converting its position with the newer sample's pose invents
+                // deck travel whenever an idle display queue is restarted.
+                // Rotation retains the existing sample clock and basis.
+                translation: boats::to_local(drawn_pose, from).translation,
+                ..boats::to_local(carried.pose, from)
+            };
             let local = eq_client_core::movement::carrier_local(riding.pose, position);
             let facing = self
                 .facing
