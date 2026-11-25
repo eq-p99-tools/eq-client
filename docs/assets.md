@@ -24,6 +24,14 @@ not at once. On other servers every helm shows (checklist 6.513).
 One-shot animations use the received playback rate when it is positive and
 finite, with the authored rate as the fallback.
 
+Placed WLD objects also animate complete texture sequences with authored timing.
+Placements sharing a model material use one timer, including reflected copies
+and doors supplied by the same zone model. This shared phase is an inferred
+presentation choice. Incomplete or untimed sequences keep their initial image.
+Named boat actors retain sequence metadata, while their separate renderer still
+draws the initial image. Skeleton motion and sprite attachments on static objects
+remain incomplete.
+
 For the player and their paperdoll, a submitted Titanium equipment move can
 show the item's base held model while the server's appearance is pending.
 The estimate uses the item definition and can differ from ornamented wear.

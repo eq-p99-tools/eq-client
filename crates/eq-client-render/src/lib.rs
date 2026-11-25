@@ -976,6 +976,7 @@ fn spawn_static_zone(
 
     let mut door_models = doors::Models::default();
     let mut drawn_models = Vec::with_capacity(zone.models.len());
+    let mut object_animations = Vec::new();
     let models: Vec<_> = zone
         .models
         .into_iter()
@@ -987,17 +988,15 @@ fn spawn_static_zone(
                 .cloned()
                 .collect();
             let pick = doors::PickMesh::from_model(&model);
-            let primitives = create_render_primitives(
+            let draws = gpu_assets::create_zone_object_primitives(
                 model.primitives,
                 &model.materials,
                 &texture_images,
                 meshes,
                 materials,
-                true,
-                // Kept in the main world too, where the zone light colours
-                // their vertices.
-                RenderAssetUsages::default(),
             );
+            let primitives = draws.primitives;
+            object_animations.extend(draws.animations);
             // A model's meshes are shared by its doors and the placements
             // drawn apart without a light of their own: the base pass alone.
             for ((mesh, _), source) in primitives.iter().zip(&drawn) {
@@ -1116,6 +1115,10 @@ fn spawn_static_zone(
             })
             .collect::<Vec<_>>(),
     );
+    for mut animation in object_animations {
+        animation.include_mirrored(&mirrored_materials);
+        commands.spawn((SceneEntity, animation));
+    }
     commands.insert_resource(lights);
 }
 

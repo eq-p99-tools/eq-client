@@ -83,7 +83,7 @@ impl ItemModels {
                 let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
                     continue;
                 };
-                let primitives = crate::stage_mesh(&mesh, &[]);
+                let primitives = crate::stage_mesh(&mesh, &[], None);
                 if !primitives.is_empty() {
                     // Earlier archives win, as the list above orders them.
                     models.entry(model_key(name)).or_insert(Entry {
