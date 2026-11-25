@@ -65,7 +65,7 @@ impl WorldDrop {
         &mut self,
         available: bool,
         scripted: bool,
-        cursor: Option<Cursor>,
+        cursor: Option<&Cursor>,
         edges: &[bool],
         now: Instant,
     ) -> (bool, bool) {
@@ -77,7 +77,7 @@ impl WorldDrop {
         if self.pressed.as_ref().is_some_and(|press| {
             press.scripted != scripted
                 || now.saturating_duration_since(press.began) >= CLICK_LIMIT
-                || cursor.as_ref() != Some(&press.cursor)
+                || cursor != Some(&press.cursor)
         }) {
             self.cancel();
         }
@@ -85,8 +85,8 @@ impl WorldDrop {
         for down in edges {
             if *down {
                 if self.pressed.is_none() {
-                    self.pressed = cursor.clone().map(|cursor| Press {
-                        cursor,
+                    self.pressed = cursor.map(|cursor| Press {
+                        cursor: cursor.clone(),
                         began: now,
                         scripted,
                     });
@@ -127,20 +127,20 @@ mod tests {
         let now = Instant::now();
         let mut owner = WorldDrop::default();
         assert_eq!(
-            owner.track(true, false, Some(cursor()), &[true, false], now),
+            owner.track(true, false, Some(&cursor()), &[true, false], now),
             (true, true)
         );
         assert_eq!(
-            owner.track(true, false, Some(cursor()), &[false], now),
+            owner.track(true, false, Some(&cursor()), &[false], now),
             (false, false)
         );
-        owner.track(true, false, Some(cursor()), &[true], now);
+        owner.track(true, false, Some(&cursor()), &[true], now);
         assert_eq!(
-            owner.track(true, false, Some(cursor()), &[false, true], now),
+            owner.track(true, false, Some(&cursor()), &[false, true], now),
             (true, true)
         );
         assert_eq!(
-            owner.track(true, false, Some(cursor()), &[false], now),
+            owner.track(true, false, Some(&cursor()), &[false], now),
             (true, true)
         );
     }
@@ -149,20 +149,20 @@ mod tests {
         let now = Instant::now();
         for (milliseconds, submits) in [(749, true), (750, false), (751, false)] {
             let mut owner = WorldDrop::default();
-            owner.track(true, false, Some(cursor()), &[true], now);
+            owner.track(true, false, Some(&cursor()), &[true], now);
             assert_eq!(
                 owner
                     .track(
                         true,
                         false,
-                        Some(cursor()),
+                        Some(&cursor()),
                         &[false],
                         now + Duration::from_millis(milliseconds)
                     )
                     .1,
                 submits
             );
-            assert!(!owner.track(true, false, Some(cursor()), &[false], now).1);
+            assert!(!owner.track(true, false, Some(&cursor()), &[false], now).1);
         }
     }
     #[test]
@@ -170,7 +170,7 @@ mod tests {
         let now = Instant::now();
         for reason in 0..4 {
             let mut owner = WorldDrop::default();
-            owner.track(true, false, Some(cursor()), &[true], now);
+            owner.track(true, false, Some(&cursor()), &[true], now);
             let mut changed = cursor();
             if reason == 1 {
                 changed.revision += 1;
@@ -178,8 +178,8 @@ mod tests {
             if reason == 2 {
                 changed.session += 1;
             }
-            owner.track(reason != 0, reason == 3, Some(changed), &[], now);
-            assert!(!owner.track(true, false, Some(cursor()), &[false], now).1);
+            owner.track(reason != 0, reason == 3, Some(&changed), &[], now);
+            assert!(!owner.track(true, false, Some(&cursor()), &[false], now).1);
         }
     }
 }

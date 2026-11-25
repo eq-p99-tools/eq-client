@@ -119,7 +119,7 @@ impl Question {
                     .map_or_else(String::new, |item| {
                         let fallback = format!("Drop {} on the ground?", item.details.name);
                         messages.map_or_else(|| fallback.clone(), |messages|
-                            messages.official(0x2361, &[item.details.name.clone()], &fallback))
+                            messages.official(0x2361, std::slice::from_ref(&item.details.name), &fallback))
                     })
             }
             Self::DeleteSpell { spell, .. } => {

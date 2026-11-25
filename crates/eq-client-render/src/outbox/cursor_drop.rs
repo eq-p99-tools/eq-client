@@ -47,7 +47,7 @@ impl DropPublication {
     /// Refuses a withdrawn reservation, poisoned lock, full or closed queue.
     pub(crate) fn publish(self) -> Result<(), Refusal> {
         let pending = self.pending.lock().map_err(|_| Refusal::Busy)?;
-        if !pending.held.is_some_and(|(id, _)| id == self.id) {
+        if pending.held.is_none_or(|(id, _)| id != self.id) {
             return Err(Refusal::Away);
         }
         self.queue

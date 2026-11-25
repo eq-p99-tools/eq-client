@@ -278,7 +278,7 @@ pub(super) fn input(
     let (owned, release) = world_drop.track(
         world_cursor.is_some(),
         request.is_some(),
-        identity,
+        identity.as_ref(),
         &edges,
         now,
     );
@@ -2243,10 +2243,11 @@ mod tests {
         item.rules.item_type = 0;
         item.rules.titanium_item_class = Some(0);
         item.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
-        let mut online = app.world_mut().resource_mut::<OnlineState>();
-        session::empty_carried_coins(&mut online);
-        session::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
-        drop(online);
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            session::empty_carried_coins(&mut online);
+            session::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+        }
         app.init_resource::<crate::windows::Shown>()
             .init_resource::<crate::clicks::LeftButton>()
             .insert_resource(crate::options::OptionsState::new(
@@ -2334,10 +2335,11 @@ mod tests {
                 .question()
                 .is_none()
         );
-        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
-        mouse.clear();
-        mouse.release(MouseButton::Left);
-        drop(mouse);
+        {
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.clear();
+            mouse.release(MouseButton::Left);
+        }
         app.update();
         assert!(
             app.world()
@@ -2478,23 +2480,24 @@ mod tests {
             let mut settings = crate::ViewerSettings::default();
             settings.0.installed_client = client;
             app.insert_resource(settings);
-            let mut online = app.world_mut().resource_mut::<OnlineState>();
-            let player = online.world().player().unwrap().clone();
-            let item = online.world().inventory().items()[&InventorySlot::CURSOR].clone();
-            testing::enter_with(
-                &mut online,
-                1,
-                player,
-                None,
-                Capability::ALL
-                    .iter()
-                    .copied()
-                    .filter(|capability| *capability != Capability::GroundDropping)
-                    .collect(),
-            );
-            testing::empty_carried_coins(&mut online);
-            testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
-            drop(online);
+            {
+                let mut online = app.world_mut().resource_mut::<OnlineState>();
+                let player = online.world().player().unwrap().clone();
+                let item = online.world().inventory().items()[&InventorySlot::CURSOR].clone();
+                testing::enter_with(
+                    &mut online,
+                    1,
+                    player,
+                    None,
+                    Capability::ALL
+                        .iter()
+                        .copied()
+                        .filter(|capability| *capability != Capability::GroundDropping)
+                        .collect(),
+                );
+                testing::empty_carried_coins(&mut online);
+                testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+            }
             door_scene(&mut app);
             for down in [true, false, true, false] {
                 scripted_frame(
@@ -2601,7 +2604,7 @@ mod tests {
         use bevy::ui::ComputedStackIndex;
         for covers_press in [false, true] {
             let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
-            let point = Some(Vec2::new(400.0, 300.0));
+            let point = Vec2::new(400.0, 300.0);
             let panel = app
                 .world_mut()
                 .spawn((
@@ -2614,18 +2617,18 @@ mod tests {
                         },
                         ..default()
                     },
-                    UiGlobalTransform::from_translation(point.unwrap()),
+                    UiGlobalTransform::from_translation(point),
                     ComputedStackIndex(1),
                     InheritedVisibility::VISIBLE,
                 ))
                 .id();
-            scripted_frame(&mut app, Thing::World(400, 300), point, true);
+            scripted_frame(&mut app, Thing::World(400, 300), Some(point), true);
             if covers_press {
                 app.world_mut().despawn(panel);
             } else {
                 app.world_mut().get_mut::<ComputedNode>(panel).unwrap().size = Vec2::splat(200.0);
             }
-            scripted_frame(&mut app, Thing::World(400, 300), point, false);
+            scripted_frame(&mut app, Thing::World(400, 300), Some(point), false);
             assert!(
                 app.world()
                     .resource::<crate::confirm::Asked>()

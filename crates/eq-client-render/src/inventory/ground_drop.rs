@@ -172,7 +172,8 @@ impl InventoryState {
 #[allow(
     clippy::too_many_arguments,
     clippy::needless_pass_by_value,
-    clippy::too_many_lines
+    clippy::too_many_lines,
+    clippy::type_complexity
 )] // One controller owns selection, answers and submission.
 pub(crate) fn input(
     mut state: ResMut<InventoryState>,
