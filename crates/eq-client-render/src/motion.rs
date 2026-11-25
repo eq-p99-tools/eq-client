@@ -9,6 +9,7 @@ mod latency_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
 mod placement;
+pub(super) mod pose;
 mod shoreline;
 
 use super::{
@@ -109,6 +110,9 @@ pub(super) struct Controls {
     placement: placement::Check,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
+    /// Display-only history waiting for this sample's presentation segment.
+    sample_pose: Option<pose::Path>,
+    drawn_pose: Option<pose::Snapshot>,
     /// A submitted, collision-checked dry-ground endpoint may be shown before
     /// its local worker result. It never changes the observed world position.
     preview: Option<Preview>,
@@ -118,6 +122,9 @@ pub(super) struct Controls {
     /// same binary. This switch is absent from production builds.
     #[cfg(test)]
     suppress_submitted_preview: bool,
+    /// Deterministic elapsed time for command-equivalence fixtures only.
+    #[cfg(test)]
+    test_span: Option<f32>,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
@@ -285,10 +292,14 @@ impl Default for Controls {
             placement: placement::Check::default(),
             taps: TapBuffer::default(),
             visual: None,
+            sample_pose: None,
+            drawn_pose: None,
             preview: None,
             restore_preview: false,
             #[cfg(test)]
             suppress_submitted_preview: false,
+            #[cfg(test)]
+            test_span: None,
             airborne: None,
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
@@ -418,7 +429,8 @@ impl Controls {
         // Only a matching worker result can retire the immediately shown
         // mouse heading. Doing so while queuing a preview restores old yaw.
         let mouse_heading = self.mouse_heading;
-        self.display_in_frame(from, position, self.facing);
+        let pose = self.sample_pose.take();
+        self.display_in_frame(from, position, self.facing, pose);
         self.mouse_heading = mouse_heading;
         self.preview = Some(Preview {
             session_id,
@@ -453,6 +465,8 @@ impl Controls {
         }
         if refused || preview.position != position {
             self.visual = Some(VisualMotion::at(position));
+            self.drawn_pose = None;
+            self.sample_pose = None;
         }
         true
     }
@@ -481,7 +495,8 @@ impl Controls {
     /// turn in the sample's span is the player facing a new way at once, so
     /// it shows at once while the positions still play.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
-        self.display_in_frame(from, position, self.facing);
+        let pose = self.sample_pose.take().filter(|_| self.refused.is_none());
+        self.display_in_frame(from, position, self.facing, pose);
     }
 
     /// Plays accepted rider motion in the boat frame; carry is applied only
@@ -523,7 +538,7 @@ impl Controls {
                 sample: carried.sample,
                 pose: carried.pose,
             });
-            self.display_in_frame(from, local, facing);
+            self.display_in_frame(from, local, facing, None);
         } else {
             self.display_sample(from, position);
         }
@@ -534,6 +549,7 @@ impl Controls {
         from: Transform,
         position: eq_client_core::WorldPosition,
         facing: Option<f32>,
+        pose: Option<pose::Path>,
     ) {
         if self.refused.is_some()
             || self
@@ -570,6 +586,7 @@ impl Controls {
             span,
             snap,
             follow_heading: self.sent_yaw != SentYaw::Ordinary,
+            pose,
         };
         match self.visual.as_mut().filter(|visual| !visual.finished()) {
             Some(visual) => {
@@ -834,6 +851,7 @@ impl Controls {
                 .airborne
                 .as_ref()
                 .map(|_| AirborneController::default());
+            self.clear_poses();
         }
         self.taps = TapBuffer::default();
         self.jump = None;
@@ -856,6 +874,7 @@ impl Controls {
         self.shoreline.reset();
         self.moving = false;
         self.visual = None;
+        self.clear_poses();
         self.taps = TapBuffer::default();
         self.jump = None;
         self.mouse_turn = 0.0;
@@ -881,6 +900,10 @@ impl Controls {
     /// admits; a fresh start covers at most 0.1 s so an idle gap never
     /// becomes a jump.
     fn span(&self, elapsed: Duration) -> f32 {
+        #[cfg(test)]
+        if let Some(span) = self.test_span {
+            return span;
+        }
         elapsed.as_secs_f32().min(self.span_limit().as_secs_f32())
     }
 
@@ -1248,6 +1271,33 @@ impl Controls {
             }
             Some(_) => LiquidBasis::Pending,
         }
+    }
+
+    /// Velocity at the point currently drawn, never the newest simulated
+    /// endpoint. A carrier or lift retains its own presentation precedence.
+    pub(crate) fn drawn_pose(&self) -> Option<pose::Snapshot> {
+        (!self.movement_options.fly
+            && self.boat.is_none()
+            && self.visual_boat.is_none()
+            && self.riding.is_none())
+        .then_some(self.drawn_pose)
+        .flatten()
+    }
+
+    fn clear_poses(&mut self) {
+        self.sample_pose = None;
+        self.drawn_pose = None;
+        if let Some(visual) = self.visual.as_mut() {
+            visual.pose = None;
+            for segment in &mut visual.queue {
+                segment.pose = None;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_pose(&mut self, pose: Option<pose::Snapshot>) {
+        self.drawn_pose = pose;
     }
 }
 
@@ -2675,6 +2725,7 @@ pub(super) fn input(
                 ))
             .then_some((landing, trial, intent.request, displacement))
         });
+    let mut poses = pose::Path::default();
     let (landing, mut mode, jumped) = if placement_blocked {
         (feet, MovementMode::Forward, false)
     } else if let Some(plan) = &shore {
@@ -2704,7 +2755,7 @@ pub(super) fn input(
                 // Consume only this frame's grounded launch. Its arc may
                 // hit a ceiling immediately and have no upward speed left.
                 let _ = airborne.take_jump();
-                let landing = fall_step_with_water(
+                let landing = fall_step_observed(
                     airborne,
                     world,
                     physics,
@@ -2715,6 +2766,7 @@ pub(super) fn input(
                     body.height,
                     jump,
                     water_enabled,
+                    Some(&mut poses),
                 );
                 let falling = airborne.velocity() < 0.0
                     || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
@@ -2850,6 +2902,7 @@ pub(super) fn input(
         controls.held = Some(Held::Refused);
         return;
     }
+    let dry_pose = shore.is_none();
     controls.shoreline.sent(mode, shore, created);
     if entering {
         controls.water_entry_rollback = previous_airborne;
@@ -2899,6 +2952,14 @@ pub(super) fn input(
     // request's stamp to this one's, so the next span runs from the stamp.
     controls.last_sent = Some(created);
     controls.sent_span = span;
+    controls.sample_pose = (!placement_blocked
+        && !flying
+        && !swimming
+        && !entering
+        && dry_pose
+        && boat_sample.is_none()
+        && support.is_none())
+    .then_some(poses);
     controls.riding = under.map(|door| (door, created, position.y));
     controls.boat_pending = Some((
         created,
@@ -3146,6 +3207,36 @@ pub(super) fn fall_step_with_water(
     jump: bool,
     water_enabled: bool,
 ) -> Vec3 {
+    fall_step_observed(
+        airborne,
+        world,
+        physics,
+        climb,
+        feet,
+        delta,
+        span,
+        height,
+        jump,
+        water_enabled,
+        None,
+    )
+}
+
+/// Observes the same accepted slices without changing their physics or commands.
+#[allow(clippy::too_many_arguments)]
+fn fall_step_observed(
+    airborne: &mut AirborneController,
+    world: &CollisionWorld,
+    physics: VerticalPhysics,
+    climb: Option<f32>,
+    feet: Vec3,
+    delta: Vec3,
+    span: f32,
+    height: f32,
+    jump: bool,
+    water_enabled: bool,
+    mut poses: Option<&mut pose::Path>,
+) -> Vec3 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // At most five slices.
     let slices = (span / 0.05).ceil().clamp(1.0, 5.0) as u8;
     let slice = f32::from(slices);
@@ -3181,6 +3272,31 @@ pub(super) fn fall_step_with_water(
         let allowed = reach + jump_rise(rising, physics.gravity, elapsed);
         if next.y - feet.y > allowed {
             break;
+        }
+        if let Some(poses) = poses.as_deref_mut() {
+            let horizontal = Vec2::new(next.x - position.x, next.z - position.z)
+                / step.seconds.max(f32::EPSILON);
+            // Observe the launch speed before this slice's gravity. Reading
+            // only trial.velocity() can miss L03 in a long movement sample.
+            let vertical = if step.jump && airborne.can_launch(world, position, physics, height) {
+                physics.jump_speed
+            } else {
+                airborne.velocity()
+            };
+            poses.push(
+                elapsed - step.seconds,
+                pose::Snapshot {
+                    horizontal,
+                    vertical,
+                },
+            );
+            poses.push(
+                elapsed,
+                pose::Snapshot {
+                    horizontal,
+                    vertical: trial.velocity(),
+                },
+            );
         }
         *airborne = trial;
         position = next;
@@ -3499,12 +3615,13 @@ fn safe_fall(world: &ClientWorld) -> u32 {
 
 /// One accepted sample waiting to play: where it ends, how many seconds of
 /// play it covers, and whether its facing shows at once.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Segment {
     to: Transform,
     span: f32,
     snap: bool,
     follow_heading: bool,
+    pose: Option<pose::Path>,
 }
 
 /// Local samples played in order over their own spans. A marked dry-ground
@@ -3516,6 +3633,7 @@ struct VisualMotion {
     elapsed: f32,
     duration: f32,
     follow_heading: bool,
+    pose: Option<pose::Path>,
     /// Samples accepted while an earlier one still plays, oldest first.
     queue: std::collections::VecDeque<Segment>,
 }
@@ -3535,6 +3653,7 @@ impl VisualMotion {
                 span: 0.0,
                 snap: false,
                 follow_heading: false,
+                pose: None,
             },
         )
     }
@@ -3551,6 +3670,7 @@ impl VisualMotion {
             elapsed: 0.0,
             duration: segment.span,
             follow_heading: segment.follow_heading,
+            pose: segment.pose,
             queue: std::collections::VecDeque::new(),
         }
     }
@@ -3585,6 +3705,10 @@ impl VisualMotion {
         self.queue.is_empty() && self.elapsed >= self.duration
     }
 
+    fn drawn_pose(&self) -> Option<pose::Snapshot> {
+        self.pose.as_ref().and_then(|pose| pose.at(self.elapsed))
+    }
+
     /// Plays on `seconds`, moving to the next accepted sample as each ends,
     /// with the time left over carried into it.
     fn advance(&mut self, seconds: f32, transform: &mut Transform) {
@@ -3601,6 +3725,7 @@ impl VisualMotion {
             self.to = next.to;
             self.duration = next.span;
             self.follow_heading = next.follow_heading;
+            self.pose = next.pose;
         }
         let fraction = (self.elapsed / self.duration.max(0.01)).clamp(0.0, 1.0);
         transform.translation = self.from.translation.lerp(self.to.translation, fraction);
@@ -3645,9 +3770,11 @@ pub(super) fn interpolate(
     if let Some(visual) = controls.visual.as_mut() {
         visual.advance(time.delta_secs(), &mut transform);
         follow_heading = visual.follow_heading;
+        let pose = visual.drawn_pose();
         if visual.finished() {
             controls.visual = None;
         }
+        controls.drawn_pose = pose;
     }
     // A rising lift carries the drawn model on its floor between samples,
     // as the program draws its rider; the samples sent are unchanged.
@@ -4766,6 +4893,7 @@ pub(super) mod tests {
                 span: 0.1,
                 snap: false,
                 follow_heading: false,
+                pose: None,
             },
         );
         let mut transform = bevy::prelude::Transform::from_scale(bevy::prelude::Vec3::splat(2.0));
@@ -6336,7 +6464,7 @@ pub(super) mod tests {
 
     /// The app of [`app`] for this installed client, the player standing
     /// still on its floor where the session takes jumps, holding Jump.
-    fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
+    pub(super) fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
         let (mut app, _) = app();
         let (sender, receiver) = mpsc::sync_channel(16);
         app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
@@ -9572,6 +9700,7 @@ pub(super) mod tests {
                 elapsed: 0.0,
                 duration: 0.1,
                 follow_heading: false,
+                pose: None,
                 queue: std::collections::VecDeque::new(),
             }),
             ..Default::default()

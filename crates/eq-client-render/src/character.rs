@@ -13,6 +13,9 @@ use bevy::{
 };
 use eq_client_assets::characters::{CharacterAsset, STANDING_CLIP};
 use eq_client_core::world::Motion;
+
+#[cfg(test)]
+mod own_jump_tests;
 use std::sync::Arc;
 
 use super::{create_render_primitives, create_texture_images};
@@ -656,23 +659,35 @@ pub(super) fn animate(
                 .and_then(|remote| world.spawn(remote.id))
                 .map(|spawn| spawn.state.race)
         };
+        let water = collision
+            .as_deref()
+            .and_then(|collision| collision.0.as_ref())
+            .map_or(Water::Dry, |collision| {
+                water_at(
+                    collision,
+                    transform.translation,
+                    character.feet * transform.scale.y,
+                )
+            });
         let selected = if pinned.is_none() {
-            let water = collision
-                .as_deref()
-                .and_then(|collision| collision.0.as_ref())
-                .map_or(Water::Dry, |collision| {
-                    water_at(
-                        collision,
-                        transform.translation,
-                        character.feet * transform.scale.y,
-                    )
-                });
             wet_clip(
                 selected,
                 (water, swim_choice, race),
                 character.clip,
                 |clip| character.asset.clip_seconds(clip).is_some(),
             )
+        } else {
+            selected
+        };
+        let selected = if own && pinned.is_none() && water == Water::Dry {
+            controls
+                .as_deref()
+                .and_then(super::motion::Controls::drawn_pose)
+                .map_or(selected, |pose| {
+                    own_air_clip(selected, pose, |clip| {
+                        character.asset.clip_seconds(clip).is_some()
+                    })
+                })
         } else {
             selected
         };
@@ -1248,6 +1263,51 @@ fn in_the_air(
     }
 }
 
+/// Titanium's own-player picker (0x4868ee, read 157). Its strength is the
+/// unscaled actor field, not launch speed divided by its factor. `EqMac` and
+/// `RoF2` follow it provisionally; their own selectors remain unread. Unlike
+/// the remote picker, moving rise is L03 and the apex uses ordinary motion.
+/// Postures, gestures, water and carriers retain their existing precedence.
+pub(super) fn own_air_clip(
+    selected: (&'static str, bool),
+    pose: super::motion::pose::Snapshot,
+    has: impl Fn(&str) -> bool,
+) -> (&'static str, bool) {
+    if !matches!(selected.0, STANDING_CLIP | "L01" | "L02")
+        || !pose.horizontal.is_finite()
+        || !pose.vertical.is_finite()
+    {
+        return selected;
+    }
+    let moving = pose.horizontal.abs().max_element() >= 0.001 * TICKS_PER_SECOND;
+    let strength = eq_client_assets::falls::JUMP_STRENGTH;
+    let clip = if moving {
+        if pose.vertical >= strength {
+            "L03"
+        } else if pose.vertical < -3.2 * TICKS_PER_SECOND {
+            "L05"
+        } else {
+            return if selected.0 == STANDING_CLIP {
+                ("L01", false)
+            } else {
+                selected
+            };
+        }
+    } else if pose.vertical >= 0.5 * strength {
+        "L04"
+    } else if pose.vertical < -2.25 * TICKS_PER_SECOND {
+        "L05"
+    } else {
+        return (STANDING_CLIP, false);
+    };
+    if has(clip) {
+        (clip, clip != "L05")
+    } else {
+        // As for a missing remote airborne clip, retain a valid stance.
+        (STANDING_CLIP, false)
+    }
+}
+
 /// The clip a character plays at its pace ([`paced_clip`]); a change into
 /// the walk or the run logs the pace it was chosen by.
 fn paced(
@@ -1491,6 +1551,11 @@ fn posture_clip(
 pub(crate) mod testing {
     use super::*;
     use bevy::ecs::system::RunSystemOnce;
+
+    /// The clip selected by the real animation system for a test model.
+    pub(crate) fn clip(world: &World, root: Entity) -> &'static str {
+        world.get::<AnimatedCharacter>(root).unwrap().clip.0
+    }
 
     /// The stores a model goes in, empty, on an app or world.
     pub(crate) fn stores(world: &mut World) {

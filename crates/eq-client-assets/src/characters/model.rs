@@ -680,6 +680,19 @@ impl CharacterAsset {
         asset
     }
 
+    /// The test model with additional named clips using its animated child
+    /// bone. This exercises renderer selection and joint updates without
+    /// depending on installed game assets.
+    pub fn testing_animations(codes: &[&str]) -> Self {
+        let mut asset = Self::testing();
+        for code in codes {
+            asset
+                .clips
+                .insert((*code).into(), asset.clips["P01"].clone());
+        }
+        asset
+    }
+
     /// The [`testing`](Self::testing) model with its triangle repeated, once
     /// for each of `pieces`, so tests can see which pieces show.
     #[must_use]
