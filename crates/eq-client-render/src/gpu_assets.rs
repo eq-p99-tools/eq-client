@@ -19,6 +19,12 @@ pub(super) struct TextureImages {
 #[derive(Component)]
 pub(super) struct TerrainAnimation {
     frames: Vec<Handle<Image>>,
+    /// A terrain surface's material for each frame, made with the zone: the
+    /// surface swaps between them, and none of them changes. The renderer
+    /// prepares a changed material again, and hundreds of surfaces animate
+    /// in a zone like Qeynos. Empty for an object, whose shared material
+    /// takes each frame's image instead.
+    materials: Vec<Handle<StandardMaterial>>,
     frame_millis: std::num::NonZeroU32,
     elapsed: std::time::Duration,
     next_frame_millis: u128,
@@ -32,6 +38,7 @@ impl TerrainAnimation {
     pub(super) fn testing(frames: Vec<Handle<Image>>) -> Self {
         Self {
             frames,
+            materials: Vec::new(),
             frame_millis: std::num::NonZeroU32::new(1000).unwrap(),
             elapsed: std::time::Duration::ZERO,
             next_frame_millis: 1000,
@@ -40,7 +47,8 @@ impl TerrainAnimation {
         }
     }
 
-    fn advance(&mut self, delta: std::time::Duration) -> Option<Handle<Image>> {
+    /// Steps the clock, giving the frame it moves to.
+    fn advance(&mut self, delta: std::time::Duration) -> Option<usize> {
         self.elapsed = self.elapsed.saturating_add(delta);
         let now = self.elapsed.as_millis();
         if now <= self.next_frame_millis {
@@ -69,7 +77,7 @@ impl TerrainAnimation {
             return None;
         }
         self.frame = frame;
-        self.frames.get(frame).cloned()
+        Some(frame)
     }
 }
 
@@ -107,6 +115,12 @@ pub(super) struct TerrainDraw {
     pub animation: Option<TerrainAnimation>,
 }
 
+/// Terrain materials by what makes one: the blend, the texture and, when
+/// authored, the sides. Surfaces alike share a material, as do the frames
+/// of animated surfaces alike.
+type TerrainMaterials =
+    HashMap<(MaterialMode, Option<usize>, Option<bool>), Handle<StandardMaterial>>;
+
 /// Builds terrain using the material's own sidedness. Opposite-wound faces
 /// may occupy the same plane: each is visible only from its authored side.
 /// Keep the existing behavior for callers without source material metadata.
@@ -117,35 +131,53 @@ pub(super) fn create_terrain_primitives(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) -> Vec<TerrainDraw> {
+    let mut shared = TerrainMaterials::new();
+    let mut material = |mode, texture: Option<usize>, sides| {
+        let texture = texture.filter(|index| texture_images.get(*index).is_some());
+        shared
+            .entry((mode, texture, sides))
+            .or_insert_with(|| {
+                let texture = texture.and_then(|index| texture_images.get(index));
+                let material = create_material(mode, texture, materials, true);
+                if let Some(double_sided) = sides {
+                    let mut value = materials.get_mut(&material).expect("just added material");
+                    value.double_sided = double_sided;
+                    value.cull_mode = (!double_sided).then_some(Face::Back);
+                }
+                material
+            })
+            .clone()
+    };
     primitives
         .into_iter()
         .enumerate()
         .filter(|(_, primitive)| drawn(primitive))
         .map(|(index, primitive)| {
-            let texture = primitive
-                .texture
-                .and_then(|index| texture_images.get(index));
-            let material = create_material(primitive.material_mode, texture, materials, true);
+            let (mode, texture) = (primitive.material_mode, primitive.texture);
             let source = authored.get(index);
-            if let Some(source) = source {
-                let mut value = materials.get_mut(&material).expect("just added material");
-                value.double_sided = source.double_sided;
-                value.cull_mode = (!source.double_sided).then_some(Face::Back);
-            }
-            let animation = source.and_then(|source| {
-                material_animation(
-                    source.animation.as_ref()?,
-                    primitive.material_mode,
-                    texture_images,
-                    &material,
-                    materials,
-                )
-            });
+            let sides = source.map(|source| source.double_sided);
+            let animation = source
+                .and_then(|source| source.animation.as_ref())
+                .and_then(|source| {
+                    let frames = frame_images(source, mode, texture_images)?;
+                    Some(TerrainAnimation {
+                        frames,
+                        materials: source
+                            .frames
+                            .iter()
+                            .map(|frame| material(mode, Some(*frame), sides))
+                            .collect(),
+                        ..TerrainAnimation::starting(source)
+                    })
+                });
             TerrainDraw {
                 // Kept in the main world too, where the zone light colours
                 // its vertices.
                 mesh: meshes.add(create_mesh(primitive, RenderAssetUsages::default())),
-                material,
+                material: animation.as_ref().map_or_else(
+                    || material(mode, texture, sides),
+                    |animation| animation.materials[0].clone(),
+                ),
                 animation,
             }
         })
@@ -155,19 +187,17 @@ pub(super) fn create_terrain_primitives(
 /// An animated surface's plain material: drawn, or parked while Rich
 /// Lighting draws the surface.
 type AnimatedSurface = AnyOf<(
-    &'static MeshMaterial3d<StandardMaterial>,
-    &'static crate::rich_light::Parked,
+    &'static mut MeshMaterial3d<StandardMaterial>,
+    &'static mut crate::rich_light::Parked,
 )>;
 
-/// Realizes the complete sequence in the draw's blend mode and starts at its
-/// first frame. Missing images keep the existing still material.
-fn material_animation(
+/// The sequence's images in the draw's blend mode, when it has more than
+/// one frame and every image is there.
+fn frame_images(
     source: &TextureAnimation,
     mode: MaterialMode,
     texture_images: &[TextureImages],
-    material: &Handle<StandardMaterial>,
-    materials: &mut Assets<StandardMaterial>,
-) -> Option<TerrainAnimation> {
+) -> Option<Vec<Handle<Image>>> {
     let frames: Option<Vec<_>> = source
         .frames
         .iter()
@@ -179,15 +209,39 @@ fn material_animation(
             })
         })
         .collect();
-    let frames = frames.filter(|frames| frames.len() > 1)?;
+    frames.filter(|frames| frames.len() > 1)
+}
+
+impl TerrainAnimation {
+    /// The sequence's clock at its first frame, with no frames yet.
+    fn starting(source: &TextureAnimation) -> Self {
+        Self {
+            frames: Vec::new(),
+            materials: Vec::new(),
+            frame_millis: source.frame_millis,
+            elapsed: std::time::Duration::ZERO,
+            next_frame_millis: u128::from(source.frame_millis.get()),
+            skip_frames: source.skip_frames,
+            frame: 0,
+        }
+    }
+}
+
+/// Realizes the complete sequence in the draw's blend mode and starts the
+/// object's shared material at its first frame. Missing images keep the
+/// existing still material.
+fn material_animation(
+    source: &TextureAnimation,
+    mode: MaterialMode,
+    texture_images: &[TextureImages],
+    material: &Handle<StandardMaterial>,
+    materials: &mut Assets<StandardMaterial>,
+) -> Option<TerrainAnimation> {
+    let frames = frame_images(source, mode, texture_images)?;
     materials.get_mut(material)?.base_color_texture = Some(frames[0].clone());
     Some(TerrainAnimation {
         frames,
-        frame_millis: source.frame_millis,
-        elapsed: std::time::Duration::ZERO,
-        next_frame_millis: u128::from(source.frame_millis.get()),
-        skip_frames: source.skip_frames,
-        frame: 0,
+        ..TerrainAnimation::starting(source)
     })
 }
 
@@ -228,28 +282,29 @@ pub(super) fn opaque_frames(
     })
 }
 
-/// Swaps only terrain textures whose WLD animation advanced, retaining the
-/// material's alpha mode, color, sidedness and depth behavior on every frame.
+/// Moves each animated terrain surface to its material for the frame its
+/// WLD animation advanced to; the materials keep the alpha mode, color,
+/// sidedness and depth behavior of the surface.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(super) fn animate_terrain(
     time: Res<Time>,
     mut terrain: Query<(AnimatedSurface, &mut TerrainAnimation)>,
-    mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for ((drawn, parked), mut animation) in &mut terrain {
-        // A surface Rich Lighting draws keeps its plain material parked,
-        // which its rich one follows.
-        let Some(handle) = drawn
-            .map(|drawn| &drawn.0)
-            .or(parked.map(|parked| &parked.0))
+        let Some(material) = animation
+            .advance(time.delta())
+            .and_then(|frame| animation.materials.get(frame).cloned())
         else {
             continue;
         };
-        if let Some(image) = animation.advance(time.delta())
-            && let Some(mut material) = materials.get_mut(handle)
-        {
-            material.base_color_texture = Some(image);
-        }
+        // A surface Rich Lighting draws keeps its plain material parked,
+        // which its rich one follows.
+        let mut current = match (drawn, parked) {
+            (Some(drawn), _) => drawn.map_unchanged(|drawn| &mut drawn.0),
+            (None, Some(parked)) => parked.map_unchanged(|parked| &mut parked.0),
+            (None, None) => continue,
+        };
+        current.set_if_neq(material);
     }
 }
 
@@ -261,7 +316,8 @@ pub(super) fn animate_objects(
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
     for mut object in &mut objects {
-        if let Some(image) = object.animation.advance(time.delta()) {
+        if let Some(frame) = object.animation.advance(time.delta()) {
+            let image = object.animation.frames[frame].clone();
             for handle in &object.targets {
                 if let Some(mut material) = materials.get_mut(handle) {
                     material.base_color_texture = Some(image.clone());
@@ -647,16 +703,22 @@ mod terrain_tests {
             &mut app.world_mut().resource_mut::<Assets<StandardMaterial>>(),
         );
         let draw = draws.pop().unwrap();
-        let handle = draw.material.clone();
         let entity = app
             .world_mut()
             .spawn((MeshMaterial3d(draw.material), draw.animation.unwrap()))
             .id();
+        let mut seen = Vec::new();
         for (delta, expected) in [(100, 0), (1, 1), (250, 0), (100, 0), (1, 0), (1000, 1)] {
             app.world_mut()
                 .resource_mut::<Time>()
                 .advance_by(Duration::from_millis(delta));
             app.update();
+            let handle = app
+                .world()
+                .get::<MeshMaterial3d<StandardMaterial>>(entity)
+                .unwrap()
+                .0
+                .clone();
             let materials = app.world().resource::<Assets<StandardMaterial>>();
             let material = materials.get(&handle).unwrap();
             assert_eq!(
@@ -667,7 +729,17 @@ mod terrain_tests {
             assert_eq!(material.cull_mode, Some(Face::Back));
             assert!(!material.double_sided);
             assert!((material.base_color.alpha() - 0.5).abs() < f32::EPSILON);
+            seen.push(handle);
         }
+        // The surface swaps between materials, and no material changes:
+        // the renderer would prepare a changed one again.
+        let materials = app.world().resource::<Assets<StandardMaterial>>();
+        assert_eq!(materials.len(), 2);
+        assert_ne!(seen[0], seen[1]);
+        assert_eq!(
+            materials.get(&seen[0]).unwrap().base_color_texture,
+            Some(textures[0].opaque.clone())
+        );
         app.world_mut().despawn(entity);
         app.world_mut()
             .resource_mut::<Time>()
@@ -675,6 +747,34 @@ mod terrain_tests {
         app.update();
         let mut terrain = app.world_mut().query::<&TerrainAnimation>();
         assert_eq!(terrain.iter(app.world()).count(), 0);
+    }
+
+    #[test]
+    fn surfaces_alike_share_one_material() {
+        let mut images = Assets::<Image>::default();
+        let textures = textures(&mut images);
+        let mut materials = Assets::<StandardMaterial>::default();
+        let still = TerrainMaterial {
+            double_sided: false,
+            animation: None,
+        };
+        let draws = create_terrain_primitives(
+            vec![
+                primitive(MaterialMode::Opaque),
+                primitive(MaterialMode::Opaque),
+                primitive(MaterialMode::Masked),
+                primitive(MaterialMode::Opaque),
+            ],
+            &[still.clone(), still.clone(), still, authored(true)],
+            &textures,
+            &mut Assets::<Mesh>::default(),
+            &mut materials,
+        );
+        assert_eq!(draws[0].material, draws[1].material);
+        assert_ne!(draws[0].material, draws[2].material);
+        assert_ne!(draws[0].material, draws[3].material);
+        // Opaque one-sided, masked one-sided, and the two frames two-sided.
+        assert_eq!(materials.len(), 4);
     }
 
     #[test]
@@ -691,24 +791,23 @@ mod terrain_tests {
             &mut Assets::<StandardMaterial>::default(),
         );
         let mut animation = draws.pop().unwrap().animation.unwrap();
-        assert!(animation.advance(Duration::from_millis(100)).is_none());
+        let advance = |animation: &mut TerrainAnimation, millis| {
+            animation
+                .advance(Duration::from_millis(millis))
+                .map(|frame| animation.frames[frame].clone())
+        };
+        assert!(advance(&mut animation, 100).is_none());
+        assert_eq!(advance(&mut animation, 1), Some(textures[1].opaque.clone()));
         assert_eq!(
-            animation.advance(Duration::from_millis(1)),
-            Some(textures[1].opaque.clone())
-        );
-        assert_eq!(
-            animation.advance(Duration::from_millis(249)),
+            advance(&mut animation, 249),
             Some(textures[0].opaque.clone())
         );
         assert_eq!(animation.next_frame_millis, 400);
-        assert!(animation.advance(Duration::from_millis(50)).is_none());
-        assert_eq!(
-            animation.advance(Duration::from_millis(1)),
-            Some(textures[1].opaque.clone())
-        );
+        assert!(advance(&mut animation, 50).is_none());
+        assert_eq!(advance(&mut animation, 1), Some(textures[1].opaque.clone()));
         // The program's large-delay path uses division above sixteen intervals.
         assert_eq!(
-            animation.advance(Duration::from_millis(1700)),
+            advance(&mut animation, 1700),
             Some(textures[0].opaque.clone())
         );
         assert_eq!(animation.next_frame_millis, 2200);
