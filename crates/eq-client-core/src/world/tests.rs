@@ -8233,6 +8233,7 @@ fn local_pad_completion_cannot_replace_a_correction_or_new_admission() {
             },
         );
         assert!(refused.ignored && refused.replies.is_empty());
+        assert_eq!(refused.notices, Vec::<Notice>::new());
         let refused = game(
             &mut world,
             WorldEvent::LocalPadRefused {
@@ -8242,6 +8243,10 @@ fn local_pad_completion_cannot_replace_a_correction_or_new_admission() {
             },
         );
         assert_eq!(refused.ignored, cancelled != 0);
+        assert!(
+            refused.notices.is_empty(),
+            "only the host's final stop is announced"
+        );
         assert!(
             refused.replies.is_empty(),
             "a completion refusal must not settle a crossing"

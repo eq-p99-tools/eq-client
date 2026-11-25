@@ -1,0 +1,1 @@
+- Still zone surfaces of one material are drawn as one mesh per 256-unit cell, each surface keeping its own vertex light, so the renderer culls, prepares and draws far fewer objects. Water, animated, blended and additive surfaces stay apart.
