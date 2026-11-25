@@ -1,0 +1,1 @@
+Right-clicking the world now turns the character toward the existing camera's horizontal view on Titanium and RoF2, including a press without a drag. The camera keeps its direction and pitch, and movement samples retain their normal cadence. EqMac retains its rate-based turning behavior.
