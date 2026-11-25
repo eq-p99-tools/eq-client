@@ -8233,7 +8233,7 @@ fn local_pad_completion_cannot_replace_a_correction_or_new_admission() {
             },
         );
         assert!(refused.ignored && refused.replies.is_empty());
-        assert!(refused.notices.is_empty());
+        assert_eq!(refused.notices, Vec::<Notice>::new());
         let refused = game(
             &mut world,
             WorldEvent::LocalPadRefused {
