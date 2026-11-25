@@ -114,7 +114,7 @@ pub struct ZoneModel {
     pub name: String,
     /// Model geometry grouped by material.
     pub primitives: Vec<ZonePrimitive>,
-    /// Authored draw flags, in the order of `primitives`.
+    /// Authored material properties, in the order of `primitives`.
     pub materials: Vec<ObjectMaterial>,
     /// Solid triangles a walker meets where the zone places this model,
     /// including invisible collision surfaces. A face flagged passable is
@@ -142,11 +142,13 @@ pub struct ZoneModel {
     pub radius: Option<f32>,
 }
 
-/// Authored sidedness of a placed-object draw call, independent of its alpha mode.
-#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+/// Authored properties of a placed-object draw call, independent of its alpha mode.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct ObjectMaterial {
     /// Whether WLD material fragment 0x30 permits drawing its back face.
     pub double_sided: bool,
+    /// The complete authored texture sequence, when its timing is known.
+    pub animation: Option<TextureAnimation>,
 }
 
 /// One placed instance from `objects.wld`.
@@ -208,8 +210,8 @@ pub struct TerrainMaterial {
     pub animation: Option<TextureAnimation>,
 }
 
-/// An ordered WLD texture sequence. Texture indexes refer to [`ZoneAsset::textures`].
-#[derive(Clone, Debug)]
+/// An ordered WLD texture sequence, indexed in its containing asset's texture list.
+#[derive(Clone, Debug, Eq, PartialEq)]
 pub struct TextureAnimation {
     /// Every frame in authored order, including repeated bitmap references.
     pub frames: Vec<usize>,
@@ -430,10 +432,11 @@ fn read_zone(
         // Both parses list the meshes in the file's order.
         let raw = doc.fragment_iter::<libeq::wld::parser::DmSpriteDef2>();
         for (mesh, raw) in world.meshes().zip(raw) {
-            for staged in stage_mesh(&mesh, &mesh_light(raw)) {
-                terrain_materials.push(terrain_material(
+            for staged in stage_mesh(&mesh, &mesh_light(raw), Some((&doc, raw))) {
+                terrain_materials.push(authored_material(
                     &doc,
                     staged.material.as_deref(),
+                    staged.material_reference,
                     &mut archive,
                     &mut textures,
                     &mut texture_indices,
@@ -482,9 +485,10 @@ fn read_zone(
 /// Reads the material's sidedness and the 0x30 -> 0x05 -> 0x04 -> 0x03
 /// texture graph. Never flatten layered bitmap entries into animation frames,
 /// invent a delay, or play a partial sequence with missing bitmaps.
-fn terrain_material(
+fn authored_material(
     doc: &libeq::wld::parser::WldDoc,
     name: Option<&str>,
+    reference: Option<i32>,
     archive: &mut PfsReader<File>,
     textures: &mut Vec<ZoneTexture>,
     texture_indices: &mut HashMap<String, usize>,
@@ -494,7 +498,7 @@ fn terrain_material(
         double_sided: true,
         animation: None,
     };
-    let Some(material) = material_definition(doc, name) else {
+    let Some(material) = material_definition(doc, name, reference) else {
         return Ok(result);
     };
     result.double_sided = material.flags.is_two_sided();
@@ -548,7 +552,11 @@ fn terrain_material(
 fn material_definition<'a>(
     doc: &'a libeq::wld::parser::WldDoc,
     name: Option<&str>,
+    reference: Option<i32>,
 ) -> Option<&'a libeq::wld::parser::MaterialDef> {
+    if let Some(reference) = reference {
+        return doc.get(&libeq::wld::parser::FragmentRef::new(reference));
+    }
     let name = name?;
     doc.fragment_iter::<libeq::wld::parser::MaterialDef>()
         .find(|material| {
@@ -740,13 +748,14 @@ fn load_object_models(
     let mut models = Vec::new();
     let mut model_indices = HashMap::new();
     let mut report = ObjectReport::default();
-    let fragments = mesh_fragments(&doc);
-    for model in world.models() {
+    let actors = doc.fragment_iter::<libeq::wld::parser::ActorDef>();
+    for (actor, model) in actors.zip(world.models()) {
         let (Some(name), Some(mesh)) = (model.name(), model.mesh()) else {
             continue;
         };
         // Object models carry no light of their own: their placements do.
-        let staged = stage_mesh(&mesh, &[]);
+        let raw = actor_mesh(&doc, actor);
+        let staged = stage_mesh(&mesh, &[], raw.map(|raw| (&doc, raw)));
         let vertex_count = mesh.positions().len();
         let Some(realized) = realize_object(
             &doc,
@@ -759,7 +768,6 @@ fn load_object_models(
         else {
             continue;
         };
-        let raw = mesh.name().and_then(|name| fragments.get(name).copied());
         let (collision, no_hit_collision) = placed_collision(&mesh, raw.is_some_and(no_hit));
         model_indices.insert(name.to_owned(), models.len());
         models.push(ZoneModel {
@@ -870,9 +878,17 @@ fn realize_object(
     };
     if textures_read == Textures::Realize {
         for primitive in staged {
+            let authored = authored_material(
+                doc,
+                primitive.material.as_deref(),
+                primitive.material_reference,
+                archive,
+                textures,
+                texture_indices,
+            )?;
             result.materials.push(ObjectMaterial {
-                double_sided: material_definition(doc, primitive.material.as_deref())
-                    .is_none_or(|material| material.flags.is_two_sided()),
+                double_sided: authored.double_sided,
+                animation: authored.animation,
             });
             result
                 .primitives
@@ -963,10 +979,10 @@ fn merge_posed(posed: Vec<PosedMesh>) -> (Vec<StagedPrimitive>, Triangles, Trian
             collision.extend(triangles);
         }
         for primitive in staged {
-            match by_material
-                .iter_mut()
-                .find(|merged| merged.material == primitive.material)
-            {
+            match by_material.iter_mut().find(|merged| {
+                merged.material_reference == primitive.material_reference
+                    && merged.material == primitive.material
+            }) {
                 Some(merged) => merged.append(primitive),
                 None => by_material.push(primitive),
             }
@@ -1018,7 +1034,7 @@ fn pose_hierarchy(
     let mut pose = |mesh: &libeq::wld::Mesh<'_>,
                     raw: &libeq::wld::parser::DmSpriteDef2,
                     joint_of: &dyn Fn(usize) -> Mat4| {
-        let mut staged = stage_mesh(mesh, &[]);
+        let mut staged = stage_mesh(mesh, &[], Some((doc, raw)));
         for primitive in &mut staged {
             for (index, (position, normal)) in primitive
                 .positions
@@ -1105,6 +1121,8 @@ struct StagedPrimitive {
     texture: Option<String>,
     /// The material's name in upper case, such as `HUMCH0001_MDF`.
     material: Option<String>,
+    /// The exact palette reference in this WLD, retained across posing/merging.
+    material_reference: Option<i32>,
     /// One per position, or empty.
     light: Vec<[u8; 4]>,
 }
@@ -1183,10 +1201,23 @@ fn placement_rotation(degrees: [f32; 3]) -> [f32; 4] {
 /// Reads a mesh's drawable primitives, positioned at the mesh's center.
 /// A mesh's primitives, each over all of the mesh's vertices, with `light`
 /// (one per vertex, or empty) for each.
-fn stage_mesh(mesh: &libeq::wld::Mesh<'_>, light: &[[u8; 4]]) -> Vec<StagedPrimitive> {
+fn stage_mesh(
+    mesh: &libeq::wld::Mesh<'_>,
+    light: &[[u8; 4]],
+    source: Option<(
+        &libeq::wld::parser::WldDoc,
+        &libeq::wld::parser::DmSpriteDef2,
+    )>,
+) -> Vec<StagedPrimitive> {
     let center = mesh.center();
     let mut primitives = Vec::new();
     for primitive in mesh.primitives() {
+        let material_reference = source.and_then(|(doc, raw)| {
+            let (_, material) = raw.face_material_groups.get(primitive.index())?;
+            let palette = doc.get(&raw.material_list_ref)?;
+            let reference = palette.fragments.get(usize::from(*material))?;
+            Some(i32::from_le_bytes(reference.to_bytes().try_into().ok()?))
+        });
         let (material_mode, texture, name) = {
             let material = primitive.material();
             let Some(material_mode) = material_mode(*material.render_method()) else {
@@ -1220,10 +1251,21 @@ fn stage_mesh(mesh: &libeq::wld::Mesh<'_>, light: &[[u8; 4]]) -> Vec<StagedPrimi
             material_mode,
             texture,
             material: name,
+            material_reference,
             light: light.to_vec(),
         });
     }
     primitives
+}
+
+/// Resolves a static actor's exact mesh through its fragment graph.
+fn actor_mesh<'a>(
+    doc: &'a libeq::wld::parser::WldDoc,
+    actor: &libeq::wld::parser::ActorDef,
+) -> Option<&'a libeq::wld::parser::DmSpriteDef2> {
+    let sprite: &libeq::wld::parser::DmSprite =
+        skeleton::fragment(doc, *actor.fragment_references.first()?)?;
+    doc.get(&sprite.reference)
 }
 
 /// The name EQ uses to match an actor model, such as `IT63` for `it63_ACTORDEF`:
@@ -1245,20 +1287,6 @@ fn mesh_collision(mesh: &libeq::wld::Mesh<'_>) -> Vec<[[f32; 3]; 3]> {
         .map(|p| [p[0] + center.0, p[1] + center.1, p[2] + center.2])
         .collect();
     solid_triangles(&positions, &mesh.collision_indices())
-}
-
-/// Each mesh fragment of an object archive by name, the first where two
-/// share one, for the engine's no-hit case.
-fn mesh_fragments(
-    doc: &libeq::wld::parser::WldDoc,
-) -> HashMap<&str, &libeq::wld::parser::DmSpriteDef2> {
-    let mut fragments = HashMap::new();
-    for raw in doc.fragment_iter::<libeq::wld::parser::DmSpriteDef2>() {
-        if let Some(name) = doc.get_string(raw.name_reference) {
-            fragments.entry(name).or_insert(raw);
-        }
-    }
-    fragments
 }
 
 /// A one-mesh model's solid triangles, as (where the zone places it, kept
