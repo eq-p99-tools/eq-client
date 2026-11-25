@@ -63,7 +63,7 @@ impl Playhead {
         }
     }
 
-    pub(super) fn push(&mut self, segment: Segment) {
+    pub(super) fn push(&mut self, segment: &Segment) {
         // A delayed zero-input stop must not replay distance or bank idle time.
         if self.finished() {
             self.elapsed = self.duration;
@@ -144,6 +144,7 @@ mod tests {
                 span: 0.2,
                 snap: false,
                 follow_heading: false,
+                pose: None,
             },
         )
     }
@@ -183,11 +184,12 @@ mod tests {
         visual.advance(0.011, &mut shown);
         assert_eq!(shown.translation, Vec3::X);
         let playhead = visual.translation.as_mut().unwrap();
-        playhead.push(Segment {
+        playhead.push(&Segment {
             to: Transform::from_xyz(2.0, 0.0, 0.0),
             span: 0.005,
             snap: false,
             follow_heading: false,
+            pose: None,
         });
         assert_eq!(playhead.advance(0.006), Vec3::X * 2.0);
     }
@@ -211,11 +213,12 @@ mod tests {
         for _ in 0..100 {
             assert_eq!(playhead.advance(0.016), Vec3::X);
         }
-        playhead.push(Segment {
+        playhead.push(&Segment {
             to: Transform::from_xyz(2.0, 0.0, 0.0),
             span: 0.1,
             snap: false,
             follow_heading: false,
+            pose: None,
         });
         let next = playhead.advance(0.01);
         assert!(next.x > 1.0 && next.x < 2.0, "idle time banked movement");
@@ -230,12 +233,14 @@ mod tests {
                 span: 0.2,
                 snap: false,
                 follow_heading: false,
+                pose: None,
             },
             Segment {
                 to: Transform::from_xyz(2.0, 0.0, 1.0),
                 span: 0.2,
                 snap: false,
                 follow_heading: false,
+                pose: None,
             },
         ]);
         let mut playhead = Playhead::from_visual(&visual);
@@ -260,11 +265,12 @@ mod tests {
         let mut playhead = Playhead::from_visual(&visual());
         playhead.release(true);
         assert_eq!(playhead.advance(0.05), Vec3::X);
-        playhead.push(Segment {
+        playhead.push(&Segment {
             to: Transform::from_xyz(1.0, 0.0, 0.0),
             span: 0.1,
             snap: false,
             follow_heading: false,
+            pose: None,
         });
         let offset = Vec3::new(20.0, 4.0, -5.0);
         playhead.map(|point| point + offset);

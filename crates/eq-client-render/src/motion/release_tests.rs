@@ -585,6 +585,7 @@ fn release_rollback_preserves_a_fresh_legal_step_submitted_in_the_same_frame() {
                 span: 0.25,
                 snap: false,
                 follow_heading: false,
+                pose: None,
             },
         );
         visual.elapsed = 0.05;

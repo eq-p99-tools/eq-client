@@ -319,7 +319,7 @@ impl Default for Controls {
             suppress_submitted_preview: false,
             #[cfg(test)]
             test_span: None,
-=======
+            #[cfg(test)]
             suppress_release_catchup: false,
             #[cfg(test)]
             test_now: None,
@@ -680,7 +680,7 @@ impl Controls {
                     visual.face(rotation);
                 }
                 if let Some(playhead) = visual.translation.as_mut() {
-                    playhead.push(segment);
+                    playhead.push(&segment);
                 }
                 visual.queue.push_back(segment);
             }
