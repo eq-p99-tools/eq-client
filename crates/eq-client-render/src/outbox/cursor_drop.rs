@@ -132,6 +132,13 @@ pub(super) fn consumes_cursor(command: &ClientCommand) -> bool {
         ClientCommand::UseItem(request) => {
             request.slot == eq_client_core::inventory::InventorySlot::CURSOR
         }
+        ClientCommand::Consume { slot, .. } | ClientCommand::ApplyPoison { slot, .. } => {
+            *slot == eq_client_core::inventory::InventorySlot::CURSOR || slot.is_in_cursor_bag()
+        }
+        ClientCommand::Sell { slot, .. } => {
+            let slot = eq_client_core::inventory::InventorySlot(*slot);
+            slot == eq_client_core::inventory::InventorySlot::CURSOR || slot.is_in_cursor_bag()
+        }
         _ => false,
     }
 }

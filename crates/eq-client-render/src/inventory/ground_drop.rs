@@ -393,6 +393,31 @@ mod tests {
             outbox.for_script(Some(7)).send(online.world(), offer()),
             Err(crate::outbox::Refusal::CursorDropPending)
         );
+        for command in [
+            ClientCommand::Consume {
+                session_id: 7,
+                slot: InventorySlot::CURSOR,
+                created: Instant::now(),
+            },
+            ClientCommand::ApplyPoison {
+                session_id: 7,
+                slot: InventorySlot::CURSOR,
+                created: Instant::now(),
+            },
+            ClientCommand::Sell {
+                session_id: 7,
+                merchant_id: 42,
+                own_id: 9,
+                slot: InventorySlot::CURSOR.0,
+                quantity: 1,
+                created: Instant::now(),
+            },
+        ] {
+            assert_eq!(
+                outbox.for_script(Some(7)).send(online.world(), command),
+                Err(crate::outbox::Refusal::CursorDropPending)
+            );
+        }
         assert!(!state.click_slot(InventorySlot(22), false, &mut online, &outbox));
         state.actions.auto_store = true;
         state.store_cursor(&mut online, &outbox);
