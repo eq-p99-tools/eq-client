@@ -12,6 +12,7 @@ mod liquids;
 mod navigator;
 pub mod navmesh;
 mod pace;
+mod pad;
 mod path;
 mod route;
 mod swimming;
@@ -33,6 +34,7 @@ pub use navigator::{
     Fallback, GridNavigator, Navigator, Planned, Refusals, RouteSearch, Scope, SearchRequest,
 };
 pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
+pub use pad::PadArrival;
 pub use path::{PathProgress, PathSearch};
 pub use route::{Background, Route, RouteStep, SearchTiming};
 pub use swimming::{LiquidContact, ShorelineStep, SwimDepth};
