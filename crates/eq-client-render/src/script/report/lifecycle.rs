@@ -84,6 +84,7 @@ fn snapshot(world: &ClientWorld, view: Option<View>, online_enabled: bool) -> St
             } else { "retained_admission" },
             "admission_id": world.session_id(), "spawn_id": player.spawn_id,
             "name": player.name, "level": player.level, "race": player.race,
+            "displayed_level": world.displayed_level(),
             "gender": player.gender, "class": player.class,
             "zone": (!world.zone().is_empty()).then_some(world.zone()),
         })
@@ -566,6 +567,31 @@ mod tests {
     }
 
     #[test]
+    fn eqmac_level_report_names_the_character_and_displayed_levels_separately() {
+        let mut world = ClientWorld::default();
+        world.carry_as(eq_client_core::GameDialect::EqMac);
+        admitted(&mut world, "Disposable", "qeynos");
+        apply(
+            &mut world,
+            &WorldUpdate::Game(WorldEvent::Level {
+                current: 55,
+                previous: 1,
+                experience: 123,
+            }),
+        );
+        apply(
+            &mut world,
+            &WorldUpdate::Game(WorldEvent::Listing {
+                spawn_id: 9,
+                change: eq_client_core::listing::ListingChange::Level(1),
+            }),
+        );
+        let value = report(&world, None);
+        assert_eq!(value["player"]["level"], 55);
+        assert_eq!(value["player"]["displayed_level"], 1);
+    }
+
+    #[test]
     fn admitted_and_retained_player_identity_are_explicit() {
         let mut world = ClientWorld::default();
         offered(&mut world, scope(1), &["Disposable"], None, None);
@@ -578,7 +604,7 @@ mod tests {
         assert_eq!(
             value["player"],
             json!({"currency":"current_admission","admission_id":12,"spawn_id":9,
-            "name":"Disposable","level":1,"race":1,"gender":0,"class":1,"zone":"qeynos"})
+            "name":"Disposable","level":1,"displayed_level":1,"race":1,"gender":0,"class":1,"zone":"qeynos"})
         );
         apply(&mut world, &WorldUpdate::Connection(Link::Zoning));
         let value = report(&world, None);
