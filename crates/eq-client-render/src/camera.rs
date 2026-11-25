@@ -187,6 +187,9 @@ impl MouseLook {
 pub(crate) struct MouseAim {
     /// Horizontal input owned by an attached online look this frame.
     pub(crate) horizontal: Option<f32>,
+    /// Completed facing along the captured camera's horizontal sightline,
+    /// updated by drag and retained exactly while idle. Yaw defines it at vertical pitch.
+    pub(crate) heading: Option<f32>,
     /// Focus, admission or exclusive input ownership changed.
     pub(crate) interrupted: bool,
 }
@@ -243,7 +246,12 @@ pub(crate) fn look(
     let mut mask_left = ownership.left;
     for event in events.read().filter(|event| Some(event.window) == primary) {
         match (event.button, event.state.is_pressed()) {
-            (MouseButton::Right, down) => look.right(down, available, free),
+            (MouseButton::Right, down) => {
+                look.right(down, available, free);
+                if down && look.held {
+                    aim.heading = None;
+                }
+            }
             (MouseButton::Left, true) => {
                 look.left = look.held;
                 ownership.left = look.left;
@@ -282,8 +290,8 @@ fn mouse_turn_capped(yaw: f32, race: Option<u32>, seconds: f32) -> f32 {
     yaw.clamp(-most, most)
 }
 
-/// Samples horizontal look before locomotion. Online the attached view follows
-/// the actor's rotation, and offline the same input turns the orbit directly.
+/// Samples horizontal look before locomotion. An online absolute turn starts
+/// from the existing view, and offline the input turns the orbit directly.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn turn(
     look: Res<MouseLook>,
@@ -299,6 +307,7 @@ pub(super) fn turn(
 ) {
     aim.horizontal = None;
     if !look.held {
+        aim.heading = None;
         motion.clear();
         return;
     }
@@ -315,9 +324,21 @@ pub(super) fn turn(
         );
         if online.enabled {
             aim.horizontal = Some(yaw);
+            if yaw != 0.0 || aim.heading.is_none() {
+                // [I] Acquiring right look faces along the existing camera.
+                // Camera forward is -Z, whereas the actor faces +Z. Use the
+                // horizontal sightline, independent of chase/first-person pitch.
+                let forward = Quat::from_rotation_y(camera.yaw + yaw) * Vec3::NEG_Z;
+                aim.heading = Some(eq_client_core::world_heading(forward.x.atan2(forward.z)));
+            }
+            // Keep the exact heading through idle held frames and acceptance;
+            // repeated quaternion conversions must not invent tiny new turns.
         } else {
+            aim.heading = None;
             camera.yaw += yaw;
         }
+    } else {
+        aim.heading = None;
     }
 }
 
@@ -508,6 +529,7 @@ pub(super) fn orbit_camera(
         }
         if playing
             && online.enabled
+            && !online.world().generation().supports_heading_snapshots()
             && look.held
             && let Some((_, player)) = player
         {

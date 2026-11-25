@@ -103,6 +103,9 @@ pub(crate) fn apply(
             // The executor already hit-tested the drawn script pointer over
             // visible world space. Once captured, ordinary look stays held.
             look.right(true, true, true);
+            if !was_held {
+                aim.heading = None;
+            }
             aim.interrupted = false;
         }
         *wheel = Wheel {
