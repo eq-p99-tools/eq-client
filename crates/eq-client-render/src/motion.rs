@@ -6,11 +6,14 @@ mod boat_pace_tests;
 mod boats;
 #[cfg(test)]
 mod latency_tests;
+#[cfg(test)]
+mod release_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
 mod placement;
 pub(super) mod pose;
 mod shoreline;
+mod translation;
 
 use super::{
     Collision, OrbitCamera, Player, PlayerBody,
@@ -118,6 +121,12 @@ pub(super) struct Controls {
     preview: Option<Preview>,
     /// A withdrawn preview must return to the current observed placement.
     restore_preview: bool,
+    /// Accepted catch-up restores translation alone on interruption. Rotation
+    /// keeps the existing playback and authority rules.
+    restore_translation: bool,
+    /// The latest submitted sample is an ordinary own ground step. Display
+    /// catch-up never grants movement or changes the sample's timing.
+    release_sample: bool,
     /// Private timing probes compare the unchanged accepted-only path in the
     /// same binary. This switch is absent from production builds.
     #[cfg(test)]
@@ -125,6 +134,11 @@ pub(super) struct Controls {
     /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
     test_span: Option<f32>,
+    #[cfg(test)]
+    suppress_release_catchup: bool,
+    /// Deterministic frame clock for the command-parity fixture only.
+    #[cfg(test)]
+    test_now: Option<Instant>,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
@@ -296,10 +310,16 @@ impl Default for Controls {
             drawn_pose: None,
             preview: None,
             restore_preview: false,
+            restore_translation: false,
+            release_sample: false,
             #[cfg(test)]
             suppress_submitted_preview: false,
             #[cfg(test)]
             test_span: None,
+=======
+            suppress_release_catchup: false,
+            #[cfg(test)]
+            test_now: None,
             airborne: None,
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
@@ -411,6 +431,20 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.test_now {
+            return now;
+        }
+        Instant::now()
+    }
+
+    fn has_translation_playhead(&self) -> bool {
+        self.visual
+            .as_ref()
+            .is_some_and(|visual| visual.translation.is_some())
+    }
+
     /// Starts only the exact endpoint already accepted by the local command
     /// queue and collision sweep. The worker remains authoritative for the
     /// simulation, permission checks and the next movement sample's basis.
@@ -595,6 +629,9 @@ impl Controls {
                 if snap {
                     visual.face(rotation);
                 }
+                if let Some(playhead) = visual.translation.as_mut() {
+                    playhead.push(segment);
+                }
                 visual.queue.push_back(segment);
             }
             None => self.visual = Some(VisualMotion::start(from, segment)),
@@ -776,9 +813,11 @@ impl Controls {
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
         let restore_preview = self.restore_preview || self.preview.is_some();
+        let restore_translation = self.restore_translation || self.has_translation_playhead();
         *self = Self {
             speed,
             restore_preview,
+            restore_translation,
             last_sent: self.last_sent,
             last_answer: self.last_answer,
             last_jump: self.last_jump,
@@ -795,6 +834,12 @@ impl Controls {
             pending: self
                 .pending
                 .filter(|pending| pending.kind == PendingKind::Move),
+            #[cfg(test)]
+            suppress_release_catchup: self.suppress_release_catchup,
+            #[cfg(test)]
+            test_now: self.test_now,
+            #[cfg(test)]
+            last_accepted: self.now(),
             ..Self::default()
         };
     }
@@ -833,6 +878,7 @@ impl Controls {
         }
         if changed && revision.is_some() {
             self.moving = false;
+            self.restore_translation |= self.has_translation_playhead();
             self.restore_preview |= self.preview.take().is_some();
         }
         self.stunned
@@ -844,6 +890,7 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
+        self.restore_translation |= self.has_translation_playhead();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         if previous.fly != options.fly {
@@ -864,12 +911,13 @@ impl Controls {
         self.moving = false;
         // The session schedules its paced stop when the permission changes.
         // Resume with a fresh local sample window.
-        self.last_accepted = Instant::now();
+        self.last_accepted = self.now();
     }
 
     /// Stops prediction without revoking the session's calibration. A pending
     /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
+        self.restore_translation |= self.has_translation_playhead();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         self.moving = false;
@@ -883,7 +931,7 @@ impl Controls {
         if self.crouch == Some(Crouch::Over) {
             self.crouch = None;
         }
-        self.last_accepted = Instant::now();
+        self.last_accepted = self.now();
     }
 
     /// A full queue sent nothing and can be retried with a fresh bounded sample.
@@ -1138,7 +1186,7 @@ impl Controls {
     }
 
     fn finish(&mut self) {
-        let now = Instant::now();
+        let now = self.now();
         self.pending = None;
         self.last_accepted = now;
         self.last_answer = Some(now);
@@ -1812,7 +1860,7 @@ pub(super) fn input(
     if !(standing || lying || moves_ducked) {
         controls.autorun = false;
     }
-    let now = Instant::now();
+    let now = controls.now();
     controls.settle(now);
     let water_enabled = match client {
         InstalledClient::Titanium => true,
@@ -1963,6 +2011,49 @@ pub(super) fn input(
             controls.autorun,
         );
         controls.shoreline.observe(now, stroke, forward_up);
+    }
+    // Read held intent before the pending/sample gates. This only selects a
+    // display clock: it does not consume taps, end `moving`, or send a stop.
+    let release_safe = controls.visual.is_some()
+        && controls.release_sample
+        && focused
+        && standing
+        && !flying
+        && !swimming
+        && !shoreline_active
+        && controls.following.is_none()
+        && !keys.script_routing()
+        && controls.riding.is_none()
+        && controls.boat.is_none()
+        && controls.visual_boat.is_none()
+        && controls.jump.is_none()
+        && controls.crouch.is_none()
+        && controls
+            .airborne
+            .as_ref()
+            .is_none_or(|airborne| airborne.velocity() == 0.0 && airborne.peak().is_none());
+    #[cfg(test)]
+    let release_safe = release_safe && !controls.suppress_release_catchup;
+    let released = release_safe
+        && controls.mouse_turn == 0.0
+        && controls.released_turn == 0.0
+        && online
+            .world()
+            .player()
+            .zip(cameras.single().ok())
+            .is_some_and(|(player, (camera, _))| {
+                let intent = controls.intent(
+                    &keyboard,
+                    map,
+                    scripted,
+                    focused,
+                    (camera.yaw, player.position.heading),
+                    look.as_deref(),
+                );
+                intent.direction == Vec3::ZERO && intent.turn == 0.0
+            });
+    if let Some(visual) = controls.visual.as_mut() {
+        visual.release_translation(released);
     }
     let mut movement_keys = map.movement_keys();
     if flying {
@@ -3023,7 +3114,7 @@ pub(super) fn input(
     // First-frame feedback uses the same resolved endpoint as the queued
     // request. Keep special transport/support frames on their existing
     // accepted-only path; none of their custody or physics is predicted here.
-    if !placement_blocked
+    let preview_eligible = !placement_blocked
         && !swimming
         && !entering
         && !flying
@@ -3039,8 +3130,10 @@ pub(super) fn input(
                 | MovementMode::Walk
                 | MovementMode::Strafe(_)
                 | MovementMode::GroundedDiagonal(_)
-        )
-    {
+        );
+    controls.release_sample =
+        preview_eligible && follow_heading.is_none() && !keys.script_routing();
+    if preview_eligible {
         controls.preview_sample(session_id, created, *drawn, position_sent);
     }
 }
@@ -3636,6 +3729,9 @@ struct VisualMotion {
     pose: Option<pose::Path>,
     /// Samples accepted while an earlier one still plays, oldest first.
     queue: std::collections::VecDeque<Segment>,
+    /// Only translation may drain faster after a qualified release. The
+    /// ordinary fields above remain the rotation/input timeline.
+    translation: Option<translation::Playhead>,
 }
 
 impl VisualMotion {
@@ -3672,6 +3768,7 @@ impl VisualMotion {
             follow_heading: segment.follow_heading,
             pose: segment.pose,
             queue: std::collections::VecDeque::new(),
+            translation: None,
         }
     }
 
@@ -3693,6 +3790,30 @@ impl VisualMotion {
         for segment in &mut self.queue {
             segment.to = map(segment.to);
         }
+        if let Some(playhead) = self.translation.as_mut() {
+            playhead.map(|point| map(Transform::from_translation(point)).translation);
+        }
+    }
+
+    fn release_translation(&mut self, released: bool) {
+        let flat = |from: Transform, to: Transform| {
+            (from.translation.y - to.translation.y).abs() < 0.000_1
+                && (from.rotation * Vec3::Z).distance_squared(to.rotation * Vec3::Z) < 1e-8
+        };
+        let mut prior = self.to;
+        let compatible = flat(self.from, self.to)
+            && self.queue.iter().all(|segment| {
+                let same = flat(prior, segment.to);
+                prior = segment.to;
+                same
+            });
+        let released = released && compatible;
+        if released && self.translation.is_none() && !self.finished() {
+            self.translation = Some(translation::Playhead::from_visual(self));
+        }
+        if let Some(playhead) = self.translation.as_mut() {
+            playhead.release(released);
+        }
     }
 
     /// Where the newest accepted sample ends.
@@ -3702,7 +3823,12 @@ impl VisualMotion {
 
     /// Whether everything accepted has played.
     fn finished(&self) -> bool {
-        self.queue.is_empty() && self.elapsed >= self.duration
+        self.queue.is_empty()
+            && self.elapsed >= self.duration
+            && self
+                .translation
+                .as_ref()
+                .is_none_or(translation::Playhead::finished)
     }
 
     fn drawn_pose(&self) -> Option<pose::Snapshot> {
@@ -3730,6 +3856,9 @@ impl VisualMotion {
         let fraction = (self.elapsed / self.duration.max(0.01)).clamp(0.0, 1.0);
         transform.translation = self.from.translation.lerp(self.to.translation, fraction);
         transform.rotation = self.from.rotation.slerp(self.to.rotation, fraction);
+        if let Some(playhead) = self.translation.as_mut() {
+            transform.translation = playhead.advance(seconds);
+        }
     }
 }
 
@@ -3746,6 +3875,15 @@ pub(super) fn interpolate(
     mut displayed_mouse: Local<Option<Entity>>,
 ) {
     controls.restore_observed_preview(online.world());
+    let restore_translation = controls
+        .restore_translation
+        .then(|| {
+            online
+                .world()
+                .player()
+                .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)))
+        })
+        .flatten();
     let preview = controls.mouse_heading;
     if controls.visual.is_none()
         && preview.is_none()
@@ -3753,6 +3891,7 @@ pub(super) fn interpolate(
         && controls.riding.is_none()
         && controls.boat.is_none()
         && controls.visual_boat.is_none()
+        && restore_translation.is_none()
     {
         return;
     }
@@ -3761,6 +3900,15 @@ pub(super) fn interpolate(
         return;
     };
     let had_preview = displayed_mouse.take() == Some(entity);
+    if let Some(position) = restore_translation {
+        controls.restore_translation = false;
+        transform.translation = position;
+        if let Some(visual) = controls.visual.as_mut() {
+            // The old orientation clock may continue, but its translation
+            // endpoints cannot play after an authoritative interruption.
+            visual.translation = Some(translation::Playhead::at(position));
+        }
+    }
     let mut follow_heading = false;
     let pace = controls
         .visual
@@ -9702,6 +9850,7 @@ pub(super) mod tests {
                 follow_heading: false,
                 pose: None,
                 queue: std::collections::VecDeque::new(),
+                translation: None,
             }),
             ..Default::default()
         };

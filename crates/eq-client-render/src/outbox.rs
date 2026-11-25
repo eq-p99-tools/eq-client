@@ -121,6 +121,8 @@ pub(crate) struct Outbox {
     /// the step's.
     sent_chat: Arc<AtomicBool>,
     posture: Arc<Mutex<Option<crate::posture::Context>>>,
+    #[cfg(test)]
+    test_now: Option<Instant>,
 }
 
 /// Whether a command goes as chat, which the session paces (6.523). An emote
@@ -148,6 +150,19 @@ fn interrupts_apply(command: &ClientCommand) -> bool {
 }
 
 impl Outbox {
+    #[cfg(test)]
+    pub(crate) fn set_test_time(&mut self, now: Instant) {
+        self.test_now = Some(now);
+    }
+
+    fn now(&self) -> Instant {
+        #[cfg(test)]
+        if let Some(now) = self.test_now {
+            return now;
+        }
+        Instant::now()
+    }
+
     pub(crate) fn new(queue: Option<SyncSender<ClientCommand>>) -> Self {
         Self {
             queue,
@@ -158,6 +173,8 @@ impl Outbox {
             language: Arc::default(),
             sent_chat: Arc::default(),
             posture: Arc::default(),
+            #[cfg(test)]
+            test_now: None,
         }
     }
 
@@ -173,6 +190,8 @@ impl Outbox {
             language: self.language.clone(),
             sent_chat: Arc::default(),
             posture: self.posture.clone(),
+            #[cfg(test)]
+            test_now: self.test_now,
         }
     }
 
@@ -313,7 +332,7 @@ impl Outbox {
         let session_id = world.session_id().ok_or(Refusal::NotAdmitted)?;
         Ok(Stamp {
             session_id,
-            created: Instant::now(),
+            created: self.now(),
         })
     }
 
@@ -324,7 +343,7 @@ impl Outbox {
         world.in_world().then_some(())?;
         Some(Stamp {
             session_id: world.session_id()?,
-            created: Instant::now(),
+            created: self.now(),
         })
     }
 
