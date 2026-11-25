@@ -401,6 +401,13 @@ mod tests {
         });
     }
 
+    fn release_frame(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_micros(16_667));
+        app.update();
+    }
+
     fn resume_translation(app: &mut App, root: Entity) {
         let from = *app.world().get::<Transform>(root).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
@@ -441,14 +448,8 @@ mod tests {
                         .player()
                         .unwrap()
                         .position;
-                    let tick = |app: &mut App| {
-                        app.world_mut()
-                            .resource_mut::<Time>()
-                            .advance_by(Duration::from_micros(16_667));
-                        app.update();
-                    };
                     for _ in 0..4 {
-                        tick(&mut app);
+                        release_frame(&mut app);
                     }
                     let moving_clip = if walking { "L01" } else { "L02" };
                     assert_eq!(
@@ -466,7 +467,7 @@ mod tests {
                         assert!(visual.translation.is_some());
                     }
                     for _ in 0..3 {
-                        tick(&mut app);
+                        release_frame(&mut app);
                     }
                     assert_eq!(
                         app.world().get::<Transform>(root).unwrap().translation,
@@ -501,14 +502,14 @@ mod tests {
                     );
                     if !baseline {
                         for _ in 0..2 {
-                            tick(&mut app);
+                            release_frame(&mut app);
                         }
                         assert_eq!(crate::character::testing::clip(app.world(), root), "P01");
                         // New submitted deck-free travel resumes animation;
                         // the standing snapshot cannot stick over a fresh leg.
                         resume_translation(&mut app, root);
                         for _ in 0..2 {
-                            tick(&mut app);
+                            release_frame(&mut app);
                         }
                         assert_eq!(
                             crate::character::testing::clip(app.world(), root),
