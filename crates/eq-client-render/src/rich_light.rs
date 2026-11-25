@@ -183,6 +183,9 @@ impl MaterialExtension for BaseLight {
     }
 }
 
+/// A plain material and the frame it shows.
+type FrameKey = (AssetId<StandardMaterial>, Option<AssetId<Image>>);
+
 /// A zone surface drawn by its rich material, keeping the plain material it
 /// returns to.
 #[derive(Component)]
@@ -212,7 +215,7 @@ pub(super) struct RichState {
     /// An animated surface's rich material for each frame of its plain
     /// one, made once: the surface takes the frame's material, and no
     /// material changes while the zone animates.
-    frames: HashMap<(AssetId<StandardMaterial>, Option<AssetId<Image>>), Handle<RichMaterial>>,
+    frames: HashMap<FrameKey, Handle<RichMaterial>>,
     carried: Vec<PassLight>,
     /// The player's height, for the own light's shadow.
     own_height: f32,
