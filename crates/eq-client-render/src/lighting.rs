@@ -39,6 +39,9 @@ enum Colouring {
 /// One drawn zone mesh whose vertices the zone light colours.
 pub(super) struct LitMesh {
     pub mesh: Handle<Mesh>,
+    /// Where its vertices start in the mesh: a still terrain surface is
+    /// drawn in a mesh merged with its neighbours, and lit as its own.
+    pub offset: usize,
     /// One per vertex: its baked light, or no light of its own and the full
     /// ambient weight (inferred) where the file gives none.
     pub light: Vec<[u8; 4]>,
@@ -428,6 +431,29 @@ pub(super) fn carried_lights(
     lights
 }
 
+/// Writes a lit mesh's colours into its part of the drawn mesh, which
+/// starts white where nothing has written it yet.
+fn write_colours(mesh: &mut Mesh, offset: usize, colours: Vec<[f32; 4]>) {
+    let count = mesh.count_vertices();
+    // A mesh of its own takes its colours whole.
+    if offset == 0 && colours.len() >= count {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+        return;
+    }
+    if !matches!(
+        mesh.attribute(Mesh::ATTRIBUTE_COLOR),
+        Some(bevy::mesh::VertexAttributeValues::Float32x4(all)) if all.len() == count
+    ) {
+        mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, vec![[1.0; 4]; count]);
+    }
+    if let Some(bevy::mesh::VertexAttributeValues::Float32x4(all)) =
+        mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR)
+        && let Some(part) = all.get_mut(offset..offset + colours.len())
+    {
+        part.copy_from_slice(&colours);
+    }
+}
+
 /// A mesh's vertex colours: its base light and its draw's lights.
 fn colours(lit: &LitMesh, worked: &Worked) -> Vec<[f32; 4]> {
     if worked.base.is_empty() {
@@ -601,7 +627,7 @@ pub(super) fn update(
         }
         worked.assigned = assigned;
         if let Some(mut mesh) = meshes.get_mut(&lit.mesh) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours(lit, worked));
+            write_colours(&mut mesh, lit.offset, colours(lit, worked));
         }
     }
     scene.applied = Some(colouring);
@@ -617,6 +643,29 @@ mod tests {
         clock::{Fog, ZoneSky},
     };
     use eq_network_game::appearance::AppearanceChange;
+
+    #[test]
+    fn a_surface_merged_with_others_writes_only_its_own_colours() {
+        let mut mesh = Mesh::new(
+            bevy::mesh::PrimitiveTopology::TriangleList,
+            bevy::asset::RenderAssetUsages::default(),
+        );
+        mesh.insert_attribute(Mesh::ATTRIBUTE_POSITION, vec![[0.0_f32; 3]; 5]);
+        write_colours(&mut mesh, 2, vec![[0.5; 4]; 2]);
+        write_colours(&mut mesh, 0, vec![[0.25; 4]; 2]);
+        let Some(bevy::mesh::VertexAttributeValues::Float32x4(colours)) =
+            mesh.attribute(Mesh::ATTRIBUTE_COLOR)
+        else {
+            panic!("no vertex colours");
+        };
+        assert_eq!(
+            colours,
+            &[[0.25; 4], [0.25; 4], [0.5; 4], [0.5; 4], [1.0; 4]]
+        );
+        // So does a mesh of its own.
+        write_colours(&mut mesh, 0, vec![[0.75; 4]; 5]);
+        assert_eq!(mesh.attribute(Mesh::ATTRIBUTE_COLOR).unwrap().len(), 5);
+    }
 
     fn colours_of(app: &App, mesh: &Handle<Mesh>) -> Vec<[f32; 4]> {
         match app
@@ -666,6 +715,7 @@ mod tests {
         // A palace vertex: light of its own, no ambient weight.
         let baked = [100, 50, 0, 0];
         scene.meshes.push(LitMesh {
+            offset: 0,
             mesh: mesh.clone(),
             light: vec![baked; 3],
             placed_at: Some((positions.clone(), vec![[0.0, 1.0, 0.0]; 3])),
