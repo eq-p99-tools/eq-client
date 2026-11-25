@@ -343,17 +343,20 @@ with an ordinary eligible item on the cursor to ask before dropping it.
 Visible UI and spawns take precedence. The fallback **Drop cursor item**
 button uses the same confirmation. It asks before dropping one
 ordinary, verified droppable item or whole stack. The server chooses the
-location. An item moved onto the cursor only by local prediction needs a
-received cursor update before it can be dropped. The cursor attachment clears
-after enqueue, while the received item stays in the custody model.
-A nearby object appearing does not
-identify the item that left the cursor. Use ordinary ground pickup with a
-known empty cursor. After submitting a drop, re-enter the world for a fresh
-inventory snapshot. A drop requires current item and carried coin information.
-The hold pauses conflicting inventory actions. Movement
-can continue after the worker accepts a conservative carried-weight report.
-Falls use the retained weight bound when available. If a landing needs
-weight and the bound becomes unknown, the client shows that in chat.
+location. A known item moved onto the cursor can be dropped after the ordinary
+move settles. The cursor attachment clears after enqueue. A definite refusal
+before submission restores the unsent cursor presentation. Successful submission
+projects local removal so ordinary inventory use can continue; that removal is
+not a received item receipt. A nearby object appearing does not identify the
+item that left the cursor. A different identified cursor item can be dropped
+through the same checks. Use ordinary ground pickup with a known empty cursor.
+A drop requires current item and carried coin information. The submission queue
+holds conflicting cursor actions until the worker reports its result. Retained
+mass keeps movement and fall calculations conservative until received instance
+or snapshot data replaces it. An uncertain transport result keeps the item
+removed locally and withdraws inventory readiness, without automatic restoration
+or retry. If a landing needs weight and the bound is unknown, the client shows
+that in chat.
 Choose **No**, press Escape or let the 20-second question expire to cancel.
 Closing Inventory also cancels a question started by its fallback button.
 Typing `/fastdrop on` turns the question off, so the world gesture drops at

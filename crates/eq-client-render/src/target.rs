@@ -260,10 +260,12 @@ pub(super) fn input(
         .flatten();
     // The native type fallthrough follows the droppability test. Keep the
     // ordinary door press alive until release chooses a spawn or the world.
+    // The submission-only historical cursor basis cannot consume an otherwise
+    // positively checked excluded-item door gesture.
     let plain_world = world_cursor.is_some()
         && online
             .world()
-            .prepare_cursor_drop()
+            .prepare_cursor_drop_input()
             .is_ok_and(|drop| world_drop::plain_world(&drop.item));
     let mut edges = native_edges;
     if request.is_some() || edges.is_empty() {
@@ -297,7 +299,7 @@ pub(super) fn input(
         }
         // Spawn priority is evaluated only after validating the captured
         // cursor identity, and before its ground-drop eligibility.
-        if release && !matches!(native_spawn, Some(Choice::Spawn(..))) {
+        if release && !plain_world && !matches!(native_spawn, Some(Choice::Spawn(..))) {
             if let Ok(drop) = online.world().prepare_cursor_drop() {
                 if !world_drop::plain_world(&drop.item) {
                     // A named script scene target must not authorize a
@@ -320,7 +322,7 @@ pub(super) fn input(
                 }
                 return;
             }
-        } else if release {
+        } else if release && matches!(native_spawn, Some(Choice::Spawn(..))) {
             door_clicks.cancel();
         }
     }
@@ -2570,6 +2572,170 @@ mod tests {
                     .resource::<crate::confirm::Asked>()
                     .question()
                     .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn excluded_cursor_door_after_received_snapshot_control() {
+        excluded_cursor_door_history(false, false);
+    }
+
+    #[test]
+    fn excluded_cursor_door_after_destroy_then_new_received_cursor_reproducer() {
+        excluded_cursor_door_history(true, false);
+    }
+
+    #[test]
+    fn excluded_cursor_door_after_destroy_then_new_snapshot_control() {
+        excluded_cursor_door_history(true, true);
+    }
+
+    /// Offline regression through target/door systems: ordinary destruction,
+    /// local settlement, then a different received cursor instance.
+    fn excluded_cursor_door_history(destroy_first: bool, snapshot_after_arrival: bool) {
+        use crate::online::testing;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+
+        let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Fast);
+        let mut next = app
+            .world()
+            .resource::<OnlineState>()
+            .world()
+            .inventory()
+            .items()[&InventorySlot::CURSOR]
+            .clone();
+        next.details.id = 6380;
+        next.rules.item_type = 0x21;
+        next.rules.ground_drop_serial = std::num::NonZeroU32::new(18);
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            if destroy_first {
+                let selected = online.world().prepare_cursor_destruction().unwrap();
+                online.world().check_cursor_destruction(&selected).unwrap();
+                testing::inventory(&mut online, InventoryUpdate::DestroyCursor);
+                assert!(
+                    online
+                        .world()
+                        .inventory()
+                        .items()
+                        .get(&InventorySlot::CURSOR)
+                        .is_none()
+                );
+                // EQEmu's ordinary refusal window elapsed during the live
+                // gap before the next summon. This is a local settlement,
+                // not a received empty-cursor acknowledgment.
+                testing::inventory(&mut online, InventoryUpdate::Settled);
+                testing::inventory(&mut online, InventoryUpdate::Cursor(vec![next.clone()]));
+            } else {
+                testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![next.clone()]));
+            }
+            if snapshot_after_arrival {
+                testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![next.clone()]));
+            }
+            let inventory = online.world().inventory();
+            assert!(inventory.received() && !inventory.stale() && !inventory.predicted());
+            assert_eq!(inventory.items()[&InventorySlot::CURSOR], next);
+            assert!(inventory.queued().next().is_none());
+            let refusal = online
+                .world()
+                .prepare_cursor_drop()
+                .err()
+                .map(|error| error.to_string());
+            assert_eq!(
+                refusal.as_deref(),
+                (destroy_first && !snapshot_after_arrival)
+                    .then_some("Wait for the server to identify the current cursor item")
+            );
+            println!("Drop eligibility before ordinary excluded-door input: {refusal:?}");
+        }
+        door_scene(&mut app);
+        for down in [true, false, true, false] {
+            scripted_frame(
+                &mut app,
+                Thing::Door(0),
+                Some(Vec2::new(400.0, 300.0)),
+                down,
+            );
+        }
+        let sent: Vec<_> = commands.try_iter().collect();
+        assert!(
+            sent.iter()
+                .all(|command| !matches!(command, ClientCommand::DropItem(_)))
+        );
+        assert!(
+            app.world()
+                .resource::<crate::confirm::Asked>()
+                .question()
+                .is_none()
+        );
+        assert_eq!(
+            sent.iter()
+                .filter(|command| matches!(command, ClientCommand::ClickDoor { .. }))
+                .count(),
+            1,
+            "excluded cursor must keep the ordinary door gesture; destroy={destroy_first}, snapshot={snapshot_after_arrival}"
+        );
+        assert_eq!(
+            app.world()
+                .resource::<OnlineState>()
+                .world()
+                .inventory()
+                .items()[&InventorySlot::CURSOR],
+            next
+        );
+    }
+
+    #[test]
+    fn excluded_world_input_preserves_unknown_instance_and_nonexcluded_submission_gates() {
+        use crate::online::testing;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+        for unknown_instance in [false, true] {
+            let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Fast);
+            let mut next = app
+                .world()
+                .resource::<OnlineState>()
+                .world()
+                .inventory()
+                .items()[&InventorySlot::CURSOR]
+                .clone();
+            next.rules.item_type = if unknown_instance { 0x21 } else { 0 };
+            next.rules.ground_drop_serial =
+                (!unknown_instance).then_some(std::num::NonZeroU32::new(18).unwrap());
+            {
+                let mut online = app.world_mut().resource_mut::<OnlineState>();
+                testing::inventory(&mut online, InventoryUpdate::DestroyCursor);
+                testing::inventory(&mut online, InventoryUpdate::Settled);
+                testing::inventory(&mut online, InventoryUpdate::Cursor(vec![next.clone()]));
+                assert!(online.world().prepare_cursor_drop().is_err());
+                assert_eq!(
+                    online.world().prepare_cursor_drop_input().is_err(),
+                    unknown_instance
+                );
+            }
+            door_scene(&mut app);
+            for down in [true, false, true, false] {
+                scripted_frame(
+                    &mut app,
+                    Thing::World(400, 300),
+                    Some(Vec2::new(400.0, 300.0)),
+                    down,
+                );
+            }
+            assert!(commands.try_recv().is_err());
+            assert!(
+                app.world()
+                    .resource::<crate::confirm::Asked>()
+                    .question()
+                    .is_none()
+            );
+            assert_eq!(
+                app.world()
+                    .resource::<OnlineState>()
+                    .world()
+                    .inventory()
+                    .items()[&InventorySlot::CURSOR],
+                next
             );
         }
     }

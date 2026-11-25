@@ -555,12 +555,11 @@ impl Outbox {
             }
         }
         if cursor_drop::consumes_cursor(command)
-            && (world.worker_inventory().ground_drop_pending()
-                || self
-                    .cursor_drop
-                    .lock()
-                    .map_err(|_| Refusal::Busy)?
-                    .in_admission(world.session_id()))
+            && self
+                .cursor_drop
+                .lock()
+                .map_err(|_| Refusal::Busy)?
+                .in_admission(world.session_id())
         {
             return Err(Refusal::CursorDropPending);
         }

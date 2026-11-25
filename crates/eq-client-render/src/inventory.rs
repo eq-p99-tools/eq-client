@@ -653,14 +653,14 @@ pub(super) fn update(
     for mut status in &mut statuses {
         status.0 = if state.demo {
             "Offline demo: moves settle here, not on a server".into()
-        } else if inventory.ground_drop_pending() {
-            "Drop sent. Re-enter the world for a fresh inventory snapshot.".into()
         } else if inventory.awaiting_correction() {
             "Server corrected the inventory; waiting for the remaining slots".into()
         } else if inventory.stale() {
             "Contents may be outdated - awaiting refresh".into()
         } else if !inventory.received() {
             "Inventory not received in full".into()
+        } else if inventory.ground_drop_projected() {
+            "Drop submitted. Its inventory change is not confirmed.".into()
         } else {
             String::new()
         };
@@ -668,11 +668,7 @@ pub(super) fn update(
     for mut status in &mut statuses {
         if inventory.bandage_stock_pending() {
             status.0 = "Bandage stock is awaiting a server update".into();
-        } else if inventory.received()
-            && !inventory.stale()
-            && !inventory.ground_drop_pending()
-            && !state.actions.message.is_empty()
-        {
+        } else if inventory.received() && !inventory.stale() && !state.actions.message.is_empty() {
             status.0.clone_from(&state.actions.message);
         } else if inventory.predicted() && !inventory.stale() && !state.demo {
             status.0 = "Move sent; contents include local prediction".into();

@@ -78,9 +78,10 @@ impl InventoryState {
         }
     }
 
-    /// Presentation only. The received item remains in the authoritative model.
-    pub(crate) fn cursor_drop_hidden(&self, world: &eq_client_core::world::ClientWorld) -> bool {
-        self.ground_drop.waiting() || world.worker_inventory().ground_drop_pending()
+    /// Hide staged presentation until the worker supplies its local projection
+    /// or a definite pre-send refusal. Projected inventory owns absence after it.
+    pub(crate) fn cursor_drop_hidden(&self, _world: &eq_client_core::world::ClientWorld) -> bool {
+        self.ground_drop.waiting()
     }
 
     pub(super) fn ground_drop_result(
@@ -201,8 +202,7 @@ pub(crate) fn input(
         && online.world().can(Capability::GroundDropping)
         && state.ground_drop.queued.is_none()
         && !state.destruction.waiting()
-        && !on_carrier
-        && !online.world().inventory().ground_drop_pending();
+        && !on_carrier;
     for mut node in &mut buttons {
         node.display = if visible {
             Display::Flex
@@ -352,8 +352,8 @@ mod tests {
     };
 
     #[test]
-    #[allow(clippy::too_many_lines)] // One reservation covers publication and worker/snapshot handoff.
-    fn staged_drop_owns_cursor_before_publication_and_until_received_snapshot() {
+    #[allow(clippy::too_many_lines)] // One reservation covers publication and the worker projection handoff.
+    fn staged_drop_owns_cursor_until_worker_projection_then_releases_submission_lock() {
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 7, testing::player(9));
         testing::empty_carried_coins(&mut online);
@@ -382,7 +382,7 @@ mod tests {
                 .get(&InventorySlot::CURSOR),
             Some(&original)
         );
-        assert!(!online.world().worker_inventory().ground_drop_pending());
+        assert!(!online.world().worker_inventory().ground_drop_projected());
         assert!(received.try_recv().is_err(), "staging must not publish");
         let offer = || ClientCommand::OfferTrade {
             session_id: 7,
@@ -431,14 +431,12 @@ mod tests {
             gate.recv_timeout(Duration::from_secs(5)).unwrap();
             let command = received.recv_timeout(Duration::from_secs(5)).unwrap();
             assert!(received.try_recv().is_err());
-            command
+            (command, received)
         });
         release.send(()).unwrap();
         publication.publish().unwrap();
-        assert!(matches!(
-            consumer.join().unwrap(),
-            ClientCommand::DropItem(_)
-        ));
+        let (command, received) = consumer.join().unwrap();
+        assert!(matches!(command, ClientCommand::DropItem(_)));
 
         testing::news(
             &mut online,
@@ -446,18 +444,30 @@ mod tests {
                 session_id: 7,
                 revision,
                 sequence: None,
-                update: Some(InventoryUpdate::GroundDropPending(
-                    original.rules.ground_drop_serial.unwrap(),
+                update: Some(InventoryUpdate::GroundDropProjected(
+                    eq_client_core::inventory::InventoryDropProjection {
+                        revision,
+                        item: Box::new(original.clone()),
+                    },
                 )),
                 error: None,
             }],
         );
         assert!(state.ground_drop_result(7, revision, None));
-        assert!(state.cursor_drop_hidden(online.world()));
-        assert_eq!(
-            outbox.send(online.world(), offer()),
-            Err(crate::outbox::Refusal::CursorDropPending)
+        assert!(!state.cursor_drop_hidden(online.world()));
+        assert!(online.world().worker_inventory().ground_drop_projected());
+        assert!(
+            !online
+                .world()
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
         );
+        assert_eq!(outbox.send(online.world(), offer()), Ok(()));
+        assert!(matches!(
+            received.try_recv(),
+            Ok(ClientCommand::OfferTrade { .. })
+        ));
         testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![original]));
         assert!(!state.cursor_drop_hidden(online.world()));
     }
@@ -501,7 +511,7 @@ mod tests {
             let lines = chat.history.lines(eq_client_core::chat::ChatTab::System);
             assert_eq!(lines.len(), 1);
             assert_eq!(lines[0].0, before);
-            assert!(!online.world().worker_inventory().ground_drop_pending());
+            assert!(!online.world().worker_inventory().ground_drop_projected());
             let outcome = outbox.send(
                 online.world(),
                 ClientCommand::OfferTrade {
@@ -647,90 +657,64 @@ mod tests {
     }
 
     #[test]
-    fn submitted_drop_keeps_confirmation_unavailable_until_snapshot() {
+    fn projected_submission_allows_a_different_received_cursor_drop_without_readmission() {
         let original = cursor(17);
         let replacement = cursor(18);
-        for updates in [
-            vec![InventoryUpdate::Cursor(vec![replacement.clone()])],
-            vec![
-                InventoryUpdate::Set(vec![replacement.clone()]),
-                InventoryUpdate::Set(vec![original.clone()]),
-            ],
-        ] {
-            let mut online = OnlineState::new(true);
-            testing::admit(&mut online, 7, testing::player(9));
-            testing::empty_carried_coins(&mut online);
-            testing::inventory(
-                &mut online,
-                InventoryUpdate::Snapshot(vec![original.clone()]),
-            );
-            let revision = online.world().inventory().revision();
-            testing::news(
-                &mut online,
-                [WorldEvent::InventoryAction {
-                    session_id: 7,
-                    revision,
-                    sequence: None,
-                    update: Some(InventoryUpdate::GroundDropPending(
-                        original.rules.ground_drop_serial.unwrap(),
-                    )),
-                    error: None,
-                }],
-            );
-            for update in updates {
-                testing::inventory(&mut online, update);
-            }
-            testing::inventory(&mut online, InventoryUpdate::Remove(InventorySlot::CURSOR));
-            assert!(online.world().inventory().ground_drop_pending());
-            assert!(online.world().inventory().stale());
-            assert_eq!(
-                online
-                    .world()
-                    .inventory()
-                    .items()
-                    .get(&InventorySlot::CURSOR),
-                Some(&original)
-            );
-            assert!(online.world().prepare_cursor_drop().is_err());
-
-            let (tx, rx) = mpsc::sync_channel(4);
-            let mut app = crate::testing::app();
-            app.insert_resource(online)
-                .insert_resource(Outbox::new(Some(tx)))
-                .init_resource::<InventoryState>()
-                .init_resource::<Asked>()
-                .add_systems(Update, input);
-            app.world_mut()
-                .resource_mut::<crate::windows::Shown>()
-                .open(crate::windows::WindowId::Inventory);
-            let button = app
-                .world_mut()
-                .spawn((Button, Interaction::None, Node::default(), DropButton))
-                .id();
-            crate::clicks::testing::click(&mut app, button);
-            assert_eq!(
-                app.world().get::<Node>(button).unwrap().display,
-                Display::None
-            );
-            assert!(app.world().resource::<Asked>().question().is_none());
-            assert!(rx.try_recv().is_err());
-
-            testing::inventory(
-                &mut app.world_mut().resource_mut::<OnlineState>(),
-                InventoryUpdate::Snapshot(vec![replacement.clone()]),
-            );
-            crate::clicks::testing::click(&mut app, button);
-            assert_eq!(
-                app.world().get::<Node>(button).unwrap().display,
-                Display::Flex
-            );
-            assert!(matches!(
-                app.world().resource::<Asked>().question(),
-                Some(Question::DropItem { .. })
-            ));
-            assert!(rx.try_recv().is_err());
-        }
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 7, testing::player(9));
+        testing::empty_carried_coins(&mut online);
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![original]));
+        let request = online.world().prepare_cursor_drop().unwrap();
+        let revision = request.revision;
+        testing::news(
+            &mut online,
+            [WorldEvent::InventoryAction {
+                session_id: 7,
+                revision,
+                sequence: None,
+                update: Some(InventoryUpdate::GroundDropProjected((&request).into())),
+                error: None,
+            }],
+        );
+        assert!(online.world().inventory().ground_drop_projected());
+        assert!(
+            !online
+                .world()
+                .inventory()
+                .items()
+                .contains_key(&InventorySlot::CURSOR)
+        );
+        testing::inventory(&mut online, InventoryUpdate::Cursor(vec![replacement]));
+        let (tx, rx) = mpsc::sync_channel(4);
+        let mut app = crate::testing::app();
+        app.insert_resource(online)
+            .insert_resource(Outbox::new(Some(tx)))
+            .init_resource::<InventoryState>()
+            .init_resource::<Asked>()
+            .add_systems(Update, input);
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Inventory);
+        let button = app
+            .world_mut()
+            .spawn((Button, Interaction::None, Node::default(), DropButton))
+            .id();
+        crate::clicks::testing::click(&mut app, button);
+        assert_eq!(
+            app.world().get::<Node>(button).unwrap().display,
+            Display::Flex
+        );
+        assert!(matches!(
+            app.world().resource::<Asked>().question(),
+            Some(Question::DropItem { .. })
+        ));
+        assert!(rx.try_recv().is_err());
+        app.world_mut().resource_mut::<Asked>().give(true);
+        app.update();
+        assert!(matches!(rx.try_recv(), Ok(ClientCommand::DropItem(_))));
+        assert!(rx.try_recv().is_err());
     }
+
     /// With `/fastdrop` on, a click sends the drop once with no question,
     /// and the same checks still refuse a cursor whose coins are unknown
     /// (6.536).

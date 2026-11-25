@@ -2519,6 +2519,12 @@ impl ClientWorld {
     fn reset_after_loss(&mut self, ended: bool, transferring: bool) {
         self.zone.weather = None;
         self.drop_actions();
+        if self.inventory.ground_drop_projected() {
+            // Delivery is uncertain across a lost link. Preserve the local
+            // absence, but never resume this estimate as current custody.
+            self.inventory
+                .apply(crate::inventory::InventoryUpdate::Invalidated);
+        }
         if ended || !transferring {
             self.casting.reset_cooldowns();
             self.buffs.clear();
