@@ -96,6 +96,9 @@ pub(super) struct Tuning {
     pub own_shadow_near: f32,
     /// Whether the camera glows (bloom, on a high dynamic range target).
     pub bloom: bool,
+    /// Whether the sun keeps its shadows while Rich Lighting is on (for
+    /// measuring their cost; the plain look always has them).
+    pub sun_shadow: bool,
     /// The glow's strength (Bevy's natural bloom is 0.15).
     pub glow: f32,
     /// The camera's tone curve.
@@ -125,12 +128,16 @@ impl Default for Tuning {
             own_shadow: true,
             own_shadow_near: 0.7,
             bloom: true,
+            sun_shadow: true,
             tone: Tonemapping::ReinhardLuminance,
         }
     }
 }
 
 const WARM_WHITE: [f32; 3] = [1.0, 0.86, 0.66];
+
+/// Below this outdoor scale the lights add nothing worth drawing.
+const DARK: f32 = 0.01;
 
 /// A zone surface lit per pixel (`rich_light.wgsl`).
 pub(super) type RichMaterial = ExtendedMaterial<StandardMaterial, BaseLight>;
@@ -247,6 +254,7 @@ impl Tuning {
                 "own_shadow" => flag.map(|value| self.own_shadow = value),
                 "own_near" => number.map(|value| self.own_shadow_near = value),
                 "bloom" => flag.map(|value| self.bloom = value),
+                "sun_shadow" => flag.map(|value| self.sun_shadow = value),
                 "tone" => match value {
                     "none" => Some(Tonemapping::None),
                     "reinhard" => Some(Tonemapping::ReinhardLuminance),
@@ -284,15 +292,17 @@ pub(super) fn register(app: &mut App) {
 }
 
 /// Starts Bevy's light cluster lists big enough for a zone's lamps, which
-/// overflow the default list in Erudin Palace: Bevy grows it, but draws a
-/// few frames with lights missing first.
+/// overflow the defaults in Erudin Palace and Qeynos: Bevy grows them, but
+/// draws a few frames with lights missing first.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 fn room_for_lamps(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSettings>>) {
     const INDICES: usize = 1 << 18;
+    const SLICES: usize = 1 << 13;
     if let Some(mut settings) = settings
         && let Some(gpu) = settings.gpu_clustering.as_mut()
     {
         gpu.initial_index_list_capacity = gpu.initial_index_list_capacity.max(INDICES);
+        gpu.initial_z_slice_list_capacity = gpu.initial_z_slice_list_capacity.max(SLICES);
     }
 }
 
@@ -698,14 +708,20 @@ pub(super) fn lamps(
         .take(tuning.lamps_drawn)
         .map(|(_, entity)| *entity)
         .collect();
+    // By day outdoors the lights add nothing: none is drawn, so none is
+    // clustered or casts a shadow.
+    let lit = scale > DARK;
     for (entity, lamp, _, mut light, mut shown) in &mut placed {
-        let visibility = if drawn.contains(&entity) {
+        let visibility = if lit && drawn.contains(&entity) {
             Visibility::Inherited
         } else {
             Visibility::Hidden
         };
         if *shown != visibility {
             *shown = visibility;
+        }
+        if visibility == Visibility::Hidden {
+            continue;
         }
         let wander = if lamp.flickers {
             1.0 + tuning.flicker * flicker(seconds, lamp.phase)
@@ -722,7 +738,8 @@ pub(super) fn lamps(
     // twice, a shadowed part and an unshadowed fill, so its shadows darken
     // by the shadowed part alone.
     let mut slots = Vec::with_capacity(state.carried.len() + 1);
-    for (index, pass) in state.carried.iter().enumerate() {
+    let carried_now = if lit { state.carried.as_slice() } else { &[] };
+    for (index, pass) in carried_now.iter().enumerate() {
         if index == 0 && tuning.own_shadow {
             slots.push((pass, index, tuning.shadow_strength, true));
             slots.push((pass, index, 1.0 - tuning.shadow_strength, false));
@@ -790,7 +807,14 @@ pub(super) fn grade(
     state: Res<RichState>,
     tuning: Res<Tuning>,
     mut camera: Query<(Entity, &mut Tonemapping, Has<Bloom>), With<OrbitCamera>>,
+    mut suns: Query<&mut DirectionalLight, With<crate::daylight::Sun>>,
 ) {
+    let sun_shadow = !state.active || tuning.sun_shadow;
+    for mut sun in &mut suns {
+        if sun.shadow_maps_enabled != sun_shadow {
+            sun.shadow_maps_enabled = sun_shadow;
+        }
+    }
     // The tone curve only where the base holds all the light: outdoors it
     // would darken the plain day.
     let curve = if state.active && state.interior {

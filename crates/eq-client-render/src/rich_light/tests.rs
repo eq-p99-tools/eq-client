@@ -352,7 +352,19 @@ fn outdoors_rich_lighting_keeps_the_plain_day_and_adds_the_lamps() {
         }
         other => panic!("no vertex colours: {other:?}"),
     }
-    // By day the lamp is out.
-    let lamp = world.query::<(&Lamp, &PointLight)>().single(world).unwrap();
-    assert!(lamp.1.intensity.abs() < f32::EPSILON);
+    // By day the lamp is out and not drawn, and no carried light is
+    // placed: nothing is clustered or casts a shadow.
+    let lamp = world
+        .query::<(&PointLight, &Visibility)>()
+        .iter(world)
+        .filter(|_| true)
+        .count();
+    assert_eq!(lamp, 1);
+    let (light, shown) = world
+        .query_filtered::<(&PointLight, &Visibility), With<Lamp>>()
+        .single(world)
+        .unwrap();
+    assert!(light.intensity.abs() < f32::EPSILON);
+    assert_eq!(*shown, Visibility::Hidden);
+    assert_eq!(world.query::<&Carried>().iter(world).count(), 0);
 }
