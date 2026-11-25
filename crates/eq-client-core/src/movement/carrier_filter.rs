@@ -5,8 +5,8 @@ use glam::Vec3;
 use parry3d::{
     bounding_volume::Aabb,
     math::{Pose, Vector},
-    query::{ShapeCastOptions, cast_shapes},
-    shape::Ball,
+    query::{PointQueryWithLocation, ShapeCastOptions, cast_shapes},
+    shape::{Ball, TrianglePointLocation},
 };
 
 #[derive(Clone, Copy)]
@@ -77,8 +77,7 @@ fn headroom(surface: Surface<'_>, feet: Vec3, height: f32) -> bool {
             }
             // As in flight_sweep, a separating plane stays separating for
             // this whole linear move when it is nonclosing. This avoids a
-            // numerically unstable zero-distance contact beside a mast;
-            // overlapping planes still receive the ordinary edge query.
+            // numerically unstable zero-distance contact beside a mast.
             // Include the world-to-model subtraction in the error bound:
             // a scaled/translated actor otherwise turns exact tangency
             // into a tiny overlap and reports a false upward contact.
@@ -86,6 +85,21 @@ fn headroom(surface: Surface<'_>, feet: Vec3, height: f32) -> bool {
                 start.abs().max_element() + surface.pose.translation.abs().max_element() + height;
             let roundoff = magnitude.max(1.0) * f32::EPSILON * 8.0;
             if distance - CAPSULE_RADIUS >= -roundoff && rise.dot(normal) >= 0.0 {
+                return true;
+            }
+            // A centre already projected inside the convex face is at its
+            // minimum possible distance from that plane. Moving parallel
+            // or away cannot deepen its initial overlap, even if the centre
+            // is exactly on a wide partition. Keep the cast for edge/vertex
+            // approaches: their distance can still decrease along the plane.
+            if rise.dot(normal) >= 0.0
+                && matches!(
+                    triangle
+                        .project_local_point_and_get_location(begin, false)
+                        .1,
+                    TrianglePointLocation::OnFace(..)
+                )
+            {
                 return true;
             }
         }
