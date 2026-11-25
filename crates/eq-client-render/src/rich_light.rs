@@ -88,6 +88,10 @@ pub(super) struct Tuning {
     /// How much of the first carried light casts shadows; the rest lights
     /// through, so its shadows are soft, never black.
     pub shadow_strength: f32,
+    /// Whether the first carried light casts shadows at all.
+    pub own_shadow: bool,
+    /// Whether the camera glows (bloom, on a high dynamic range target).
+    pub bloom: bool,
     /// The glow's strength (Bevy's natural bloom is 0.15).
     pub glow: f32,
     /// The camera's tone curve.
@@ -114,6 +118,8 @@ impl Default for Tuning {
             glow: 0.10,
             light_cap: 1.5,
             shadow_strength: 0.6,
+            own_shadow: true,
+            bloom: true,
             tone: Tonemapping::ReinhardLuminance,
         }
     }
@@ -176,14 +182,120 @@ pub(super) struct RichState {
     applied_cap: f32,
 }
 
+impl Tuning {
+    /// The look with `name=value` pairs applied, comma separated: for
+    /// comparing looks and their cost (`EQ_RICH_TUNE`, the capture probe).
+    /// Unknown names and values are skipped with a warning.
+    pub(super) fn with(mut self, pairs: &str) -> Self {
+        for pair in pairs.split(',').filter(|pair| !pair.trim().is_empty()) {
+            let Some((name, value)) = pair.split_once('=') else {
+                warn!("Rich Lighting tuning: no value in {pair:?}");
+                continue;
+            };
+            let (name, value) = (name.trim(), value.trim());
+            let number = value.parse::<f32>().ok();
+            let count = value.parse::<usize>().ok();
+            let flag = match value {
+                "1" | "on" | "true" => Some(true),
+                "0" | "off" | "false" => Some(false),
+                _ => None,
+            };
+            let set = match name {
+                "fill" => number.map(|value| self.fill = value),
+                "wash" => number.map(|value| self.wash = value),
+                "span" => number.map(|value| self.wash_span = value),
+                "lamp" => number.map(|value| self.lamp = value),
+                "carried" => number.map(|value| self.carried = value),
+                "outdoor" => number.map(|value| self.outdoor = value),
+                "whiten" => number.map(|value| self.whiten = value),
+                "reach" => number.map(|value| self.reach = value),
+                "drawn" => count.map(|value| self.lamps_drawn = value),
+                "shadowed" => count.map(|value| self.shadowed_lamps = value),
+                "near" => number.map(|value| self.lamp_shadow_near = value),
+                "flicker" => number.map(|value| self.flicker = value),
+                "roughness" => number.map(|value| self.roughness = value),
+                "reflectance" => number.map(|value| self.reflectance = value),
+                "glow" => number.map(|value| self.glow = value),
+                "cap" => number.map(|value| self.light_cap = value),
+                "shadow" => number.map(|value| self.shadow_strength = value),
+                "own_shadow" => flag.map(|value| self.own_shadow = value),
+                "bloom" => flag.map(|value| self.bloom = value),
+                "tone" => match value {
+                    "none" => Some(Tonemapping::None),
+                    "reinhard" => Some(Tonemapping::ReinhardLuminance),
+                    "boring" => Some(Tonemapping::SomewhatBoringDisplayTransform),
+                    "blender" => Some(Tonemapping::BlenderFilmic),
+                    "aces" => Some(Tonemapping::AcesFitted),
+                    _ => None,
+                }
+                .map(|tone| self.tone = tone),
+                _ => None,
+            };
+            if set.is_none() {
+                warn!("Rich Lighting tuning: can't use {name}={value}");
+            }
+        }
+        self
+    }
+}
+
 pub(super) fn register(app: &mut App) {
     embedded_asset!(app, "rich_light.wgsl");
     app.add_plugins(MaterialPlugin::<RichMaterial>::default())
         .init_resource::<RichState>()
-        .init_resource::<Tuning>()
+        .insert_resource(std::env::var("EQ_RICH_TUNE").map_or_else(
+            |_| Tuning::default(),
+            |pairs| Tuning::default().with(&pairs),
+        ))
         // Half Bevy's default: the shadows' edges blur over twice the angle,
         // and each costs a quarter of the drawing.
         .insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+    if std::env::var_os("EQ_FRAME_LOG").is_some() {
+        app.add_systems(Last, frame_log);
+    }
+}
+
+/// Logs the frame times every five seconds (`EQ_FRAME_LOG`): the mean, the
+/// slowest frame, and what Rich Lighting draws, for measuring its cost.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+fn frame_log(
+    time: Res<Time<Real>>,
+    state: Res<RichState>,
+    lamps: Query<&Visibility, With<Lamp>>,
+    carried: Query<&PointLight, With<Carried>>,
+    drawn: Query<(), With<MeshMaterial3d<RichMaterial>>>,
+    mut window: Local<(f32, f32, u32)>,
+) {
+    let delta = time.delta_secs();
+    let (spent, worst, frames) = &mut *window;
+    *spent += delta;
+    *worst = worst.max(delta);
+    *frames += 1;
+    if *spent < 5.0 {
+        return;
+    }
+    let shown = lamps
+        .iter()
+        .filter(|shown| **shown != Visibility::Hidden)
+        .count();
+    let shadowed = carried
+        .iter()
+        .filter(|light| light.shadow_maps_enabled)
+        .count();
+    #[allow(clippy::cast_precision_loss)] // A frame count.
+    let mean = *spent / *frames as f32;
+    info!(
+        "frame log: {frames} frames, {:.1} fps, mean {:.2} ms, worst {:.2} ms; rich {} interior {}, lamps {shown}/{}, carried {} ({shadowed} shadowed), rich surfaces {}",
+        1.0 / mean,
+        mean * 1000.0,
+        *worst * 1000.0,
+        state.active,
+        state.interior,
+        lamps.iter().count(),
+        carried.iter().count(),
+        drawn.iter().count(),
+    );
+    *window = (0.0, 0.0, 0);
 }
 
 /// The vertex colour's light with Rich Lighting: the engine's base plus
@@ -569,7 +681,7 @@ pub(super) fn lamps(
     // by the shadowed part alone.
     let mut slots = Vec::with_capacity(state.carried.len() + 1);
     for (index, pass) in state.carried.iter().enumerate() {
-        if index == 0 {
+        if index == 0 && tuning.own_shadow {
             slots.push((pass, index, tuning.shadow_strength, true));
             slots.push((pass, index, 1.0 - tuning.shadow_strength, false));
         } else {
@@ -641,12 +753,13 @@ pub(super) fn grade(
         if *tone != curve {
             *tone = curve;
         }
-        if state.active && !glowing {
+        let glow = state.active && tuning.bloom;
+        if glow && !glowing {
             commands.entity(entity).insert(Bloom {
                 intensity: tuning.glow,
                 ..Bloom::NATURAL
             });
-        } else if !state.active && glowing {
+        } else if !glow && glowing {
             commands.entity(entity).remove::<(Bloom, Hdr)>();
         }
     }

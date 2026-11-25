@@ -29,45 +29,7 @@ fn point(name: &str) -> Option<Vec3> {
 
 /// The look, from `EQ_PROBE_TUNE`: `name=value` pairs, comma separated.
 fn tuning() -> Tuning {
-    let mut tuning = Tuning::default();
-    for pair in std::env::var("EQ_PROBE_TUNE")
-        .unwrap_or_default()
-        .split(',')
-    {
-        let Some((name, value)) = pair.split_once('=') else {
-            continue;
-        };
-        let number = || value.parse::<f32>().unwrap();
-        match name.trim() {
-            "fill" => tuning.fill = number(),
-            "wash" => tuning.wash = number(),
-            "span" => tuning.wash_span = number(),
-            "lamp" => tuning.lamp = number(),
-            "carried" => tuning.carried = number(),
-            "outdoor" => tuning.outdoor = number(),
-            "whiten" => tuning.whiten = number(),
-            "reach" => tuning.reach = number(),
-            "drawn" => tuning.lamps_drawn = value.parse().unwrap(),
-            "shadowed" => tuning.shadowed_lamps = value.parse().unwrap(),
-            "near" => tuning.lamp_shadow_near = number(),
-            "roughness" => tuning.roughness = number(),
-            "reflectance" => tuning.reflectance = number(),
-            "glow" => tuning.glow = number(),
-            "cap" => tuning.light_cap = number(),
-            "shadow" => tuning.shadow_strength = number(),
-            "tone" => {
-                tuning.tone = match value {
-                    "none" => Tonemapping::None,
-                    "reinhard" => Tonemapping::ReinhardLuminance,
-                    "boring" => Tonemapping::SomewhatBoringDisplayTransform,
-                    "blender" => Tonemapping::BlenderFilmic,
-                    _ => Tonemapping::AcesFitted,
-                }
-            }
-            other => panic!("unknown tuning {other}"),
-        }
-    }
-    tuning
+    Tuning::default().with(&std::env::var("EQ_PROBE_TUNE").unwrap_or_default())
 }
 
 #[test]
