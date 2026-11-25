@@ -63,21 +63,22 @@ fn noised(p: vec2<f32>) -> vec3<f32> {
 }
 
 // The net of bright lines the moving ripples focus light into, the same
-// pattern water.wgsl lays on the floor of shallow water.
+// pattern water.wgsl lays on the floor of shallow water, here finer and
+// kept to its thinnest, brightest threads.
 fn caustic(p: vec2<f32>, t: f32) -> f32 {
     let c1 = noised(p * 0.35 + vec2(t * 0.21, t * 0.13)).yz;
     let c2 = noised(p * 0.47 + vec2(-t * 0.17, t * 0.19) + 7.3).yz;
-    return pow(clamp(1.0 - length(c1 + c2) * 0.42, 0.0, 1.0), 6.0);
+    return pow(clamp(1.0 - length(c1 + c2) * 0.42, 0.0, 1.0), 14.0);
 }
 
-// How much light comes down through the surface at a level point: two
-// caustic nets, one finer and quicker, so the threads of light shimmer and
-// shift as the surface moves rather than holding still, spread evenly over
-// the whole sunlit surface.
+// How much light comes down through the surface at a level point: a few
+// thin wisps of the caustic net, shimmering with the surface, each lit
+// only while a slow drifting field lets it through, so rays come and go
+// one by one rather than standing in rows.
 fn through_surface(p: vec2<f32>, t: f32) -> f32 {
-    let broad = caustic(p, t * 1.4);
-    let fine = caustic(p * 1.7 + vec2(3.1, 9.4), t * 2.3 + 11.0);
-    return broad * 0.6 + fine * 0.4;
+    let threads = caustic(p * 1.8, t * 1.5);
+    let gate = smoothstep(0.62, 0.85, noise(p * 0.21 + vec2(t * 0.07, -t * 0.05) + 31.7));
+    return threads * gate;
 }
 
 // Whether the surface at a level point can see the sun (1) or is shaded by
