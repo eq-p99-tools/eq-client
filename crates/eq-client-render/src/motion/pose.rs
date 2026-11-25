@@ -51,15 +51,17 @@ mod tests {
 
     fn floor() -> CollisionWorld {
         CollisionWorld::new([
+            // Wound to face up, so the floor stays support once downward
+            // faces stop counting as floor (6.651).
             [
                 [-100.0, 0.0, -100.0],
-                [100.0, 0.0, -100.0],
                 [100.0, 0.0, 100.0],
+                [100.0, 0.0, -100.0],
             ],
             [
                 [-100.0, 0.0, -100.0],
-                [100.0, 0.0, 100.0],
                 [-100.0, 0.0, 100.0],
+                [100.0, 0.0, 100.0],
             ],
         ])
         .unwrap()
