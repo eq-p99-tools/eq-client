@@ -34,7 +34,10 @@ fn carrier_walls_are_filtered_only_for_titanium_dry_walking() {
                 .as_ref()
                 .unwrap_or(&world)
                 .step(-Vec3::X * 3.0, Vec3::X * 6.0, 3.0);
-            let crosses = matches!(client, InstalledClient::Titanium) && !flying && !swimming;
+            let crosses = match client {
+                InstalledClient::Titanium => !flying && !swimming,
+                InstalledClient::EqMac | InstalledClient::Rof2 => false,
+            };
             assert_eq!(
                 next.x > 2.99,
                 crosses,
