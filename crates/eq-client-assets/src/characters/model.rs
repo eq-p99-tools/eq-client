@@ -834,7 +834,7 @@ pub(super) fn load_with_source(
             return Err(invalid("skin bone assignments"));
         }
         let piece = Piece::of(&name, mesh_name);
-        for staged in stage_mesh(&mesh, &[]) {
+        for staged in stage_mesh(&mesh, &[], None) {
             let material = staged.material.clone();
             // Bone-local, in the renderer's frame, where the joints act.
             skins.push(Skin {

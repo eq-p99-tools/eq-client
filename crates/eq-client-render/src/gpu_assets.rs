@@ -5,7 +5,7 @@ use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
 use eq_client_assets::{
-    BlendOpacity, MaterialMode, ObjectMaterial, TerrainMaterial, ZonePrimitive,
+    BlendOpacity, MaterialMode, ObjectMaterial, TerrainMaterial, TextureAnimation, ZonePrimitive,
 };
 use image::{RgbaImage, imageops::FilterType};
 use std::collections::HashMap;
@@ -60,6 +60,33 @@ impl TerrainAnimation {
     }
 }
 
+/// A zone-owned timer drives the shared object material and its reflected copy.
+/// Sharing their phase is an inferred presentation choice until native object
+/// phase ownership is read.
+#[derive(Component)]
+pub(super) struct ObjectAnimation {
+    animation: TerrainAnimation,
+    targets: Vec<Handle<StandardMaterial>>,
+}
+
+impl ObjectAnimation {
+    /// Reflection changes culling alone; both materials take each frame together.
+    pub(super) fn include_mirrored(
+        &mut self,
+        mirrored: &HashMap<AssetId<StandardMaterial>, Handle<StandardMaterial>>,
+    ) {
+        if let Some(material) = mirrored.get(&self.targets[0].id()) {
+            self.targets.push(material.clone());
+        }
+    }
+}
+
+/// The shared meshes/materials and their timers for one zone object model.
+pub(super) struct ObjectDraws {
+    pub primitives: crate::doors::Primitives,
+    pub animations: Vec<ObjectAnimation>,
+}
+
 /// One terrain draw call with the authored material and optional animation.
 pub(super) struct TerrainDraw {
     pub mesh: Handle<Mesh>,
@@ -93,30 +120,13 @@ pub(super) fn create_terrain_primitives(
                 value.cull_mode = (!source.double_sided).then_some(Face::Back);
             }
             let animation = source.and_then(|source| {
-                let animation = source.animation.as_ref()?;
-                let frames: Option<Vec<_>> = animation
-                    .frames
-                    .iter()
-                    .map(|index| {
-                        let images = texture_images.get(*index)?;
-                        Some(match primitive.material_mode {
-                            MaterialMode::Masked | MaterialMode::Additive => images.masked.clone(),
-                            MaterialMode::Opaque | MaterialMode::Blended(_) => {
-                                images.opaque.clone()
-                            }
-                        })
-                    })
-                    .collect();
-                let frames = frames.filter(|frames| frames.len() > 1)?;
-                materials.get_mut(&material)?.base_color_texture = Some(frames[0].clone());
-                Some(TerrainAnimation {
-                    frames,
-                    frame_millis: animation.frame_millis,
-                    elapsed: std::time::Duration::ZERO,
-                    next_frame_millis: u128::from(animation.frame_millis.get()),
-                    skip_frames: animation.skip_frames,
-                    frame: 0,
-                })
+                material_animation(
+                    source.animation.as_ref()?,
+                    primitive.material_mode,
+                    texture_images,
+                    &material,
+                    materials,
+                )
             });
             TerrainDraw {
                 // Kept in the main world too, where the zone light colours
@@ -127,6 +137,38 @@ pub(super) fn create_terrain_primitives(
             }
         })
         .collect()
+}
+
+/// Realizes the complete sequence in the draw's blend mode and starts at its
+/// first frame. Missing images keep the existing still material.
+fn material_animation(
+    source: &TextureAnimation,
+    mode: MaterialMode,
+    texture_images: &[TextureImages],
+    material: &Handle<StandardMaterial>,
+    materials: &mut Assets<StandardMaterial>,
+) -> Option<TerrainAnimation> {
+    let frames: Option<Vec<_>> = source
+        .frames
+        .iter()
+        .map(|index| {
+            let images = texture_images.get(*index)?;
+            Some(match mode {
+                MaterialMode::Masked | MaterialMode::Additive => images.masked.clone(),
+                MaterialMode::Opaque | MaterialMode::Blended(_) => images.opaque.clone(),
+            })
+        })
+        .collect();
+    let frames = frames.filter(|frames| frames.len() > 1)?;
+    materials.get_mut(material)?.base_color_texture = Some(frames[0].clone());
+    Some(TerrainAnimation {
+        frames,
+        frame_millis: source.frame_millis,
+        elapsed: std::time::Duration::ZERO,
+        next_frame_millis: u128::from(source.frame_millis.get()),
+        skip_frames: source.skip_frames,
+        frame: 0,
+    })
 }
 
 /// A terrain primitive's full-colour texture frames, in animation order,
@@ -179,6 +221,24 @@ pub(super) fn animate_terrain(
             && let Some(mut material) = materials.get_mut(&handle.0)
         {
             material.base_color_texture = Some(image);
+        }
+    }
+}
+
+/// Advances each shared object material once, whatever its placement count.
+#[allow(clippy::needless_pass_by_value)]
+pub(super) fn animate_objects(
+    time: Res<Time>,
+    mut objects: Query<&mut ObjectAnimation>,
+    mut materials: ResMut<Assets<StandardMaterial>>,
+) {
+    for mut object in &mut objects {
+        if let Some(image) = object.animation.advance(time.delta()) {
+            for handle in &object.targets {
+                if let Some(mut material) = materials.get_mut(handle) {
+                    material.base_color_texture = Some(image.clone());
+                }
+            }
         }
     }
 }
@@ -275,6 +335,53 @@ pub(super) fn create_render_primitives(
             (meshes.add(create_mesh(primitive, usage)), material)
         })
         .collect()
+}
+
+/// Builds static zone object draws and one timer per animated shared material.
+/// Other actor renderers retain their existing still-image behavior.
+pub(super) fn create_zone_object_primitives(
+    primitives: Vec<ZonePrimitive>,
+    authored: &[ObjectMaterial],
+    texture_images: &[TextureImages],
+    meshes: &mut Assets<Mesh>,
+    materials: &mut Assets<StandardMaterial>,
+) -> ObjectDraws {
+    let sources: Vec<_> = primitives
+        .iter()
+        .enumerate()
+        .filter(|(_, primitive)| drawn(primitive))
+        .map(|(index, primitive)| {
+            (
+                primitive.material_mode,
+                authored
+                    .get(index)
+                    .and_then(|source| source.animation.as_ref()),
+            )
+        })
+        .collect();
+    let primitives = create_render_primitives(
+        primitives,
+        authored,
+        texture_images,
+        meshes,
+        materials,
+        true,
+        RenderAssetUsages::default(),
+    );
+    let animations = primitives
+        .iter()
+        .zip(sources)
+        .filter_map(|((_, material), (mode, source))| {
+            Some(ObjectAnimation {
+                animation: material_animation(source?, mode, texture_images, material, materials)?,
+                targets: vec![material.clone()],
+            })
+        })
+        .collect();
+    ObjectDraws {
+        primitives,
+        animations,
+    }
 }
 
 /// A reflected placement reverses raster winding. Unbatched objects keep their

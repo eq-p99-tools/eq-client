@@ -1,7 +1,7 @@
 //! Model actors in character archives, including ships and launches.
 use super::{
-    LoadError, ObjectMeshes, Textures, ZoneModel, ZoneTexture, guarded, mesh_collision, parse_wld,
-    posed_hierarchy, realize_object, stage_mesh, zone_name,
+    LoadError, ObjectMeshes, Textures, ZoneModel, ZoneTexture, actor_mesh, guarded, mesh_collision,
+    parse_wld, posed_hierarchy, realize_object, stage_mesh, zone_name,
 };
 use libeq::pfs::PfsReader;
 use std::{collections::HashMap, fs::File, path::Path};
@@ -11,7 +11,7 @@ use std::{collections::HashMap, fs::File, path::Path};
 pub struct ActorAsset {
     /// The actor's draw geometry, authored solidity and materials.
     pub model: ZoneModel,
-    /// Textures indexed by the model's primitives.
+    /// Textures indexed by the model's primitives and material animations.
     pub textures: Vec<ZoneTexture>,
 }
 
@@ -60,13 +60,18 @@ fn read_actor(path: &Path, stem: &str, tag: &str) -> Result<ActorAsset, LoadErro
         .ok_or_else(|| LoadError::MissingWorld(name.clone()))?;
     let (doc, world) = parse_wld(&bytes, &name)?;
     let actor_name = format!("{tag}_ACTORDEF");
-    let geometry = world.models().find_map(|model| {
+    let actors = doc.fragment_iter::<libeq::wld::parser::ActorDef>();
+    let geometry = actors.zip(world.models()).find_map(|(actor, model)| {
         let name = model.name()?;
         if !name.eq_ignore_ascii_case(&actor_name) {
             return None;
         }
         let mesh = model.mesh()?;
-        Some((stage_mesh(&mesh, &[]), mesh_collision(&mesh)))
+        let raw = actor_mesh(&doc, actor);
+        Some((
+            stage_mesh(&mesh, &[], raw.map(|raw| (&doc, raw))),
+            mesh_collision(&mesh),
+        ))
     });
     let (staged, collision) = if let Some(geometry) = geometry {
         geometry
