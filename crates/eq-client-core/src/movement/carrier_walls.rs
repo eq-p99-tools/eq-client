@@ -190,3 +190,65 @@ fn carrier_walls_diagonal_step_keeps_floor_reach_without_reinstating_the_partiti
     );
     assert!(end.abs_diff_eq(Vec3::new(3.0, 1.0, 0.0), 0.001), "{end:?}");
 }
+
+#[test]
+fn carrier_walls_wide_translated_partitions_do_not_pin_their_centre_line() {
+    for (scale, origin, rotation) in [
+        (
+            1.0,
+            Vec3::new(0.0, 5.0, 10.0),
+            Quat::from_rotation_y(crate::static_yaw(128.0)),
+        ),
+        (
+            0.64,
+            Vec3::new(30.0, 5.0, -20.0),
+            Quat::from_rotation_y(0.7),
+        ),
+    ] {
+        let faces = [
+            [
+                [-100.0, 0.0, -100.0],
+                [100.0, 0.0, 100.0],
+                [100.0, 0.0, -100.0],
+            ],
+            [
+                [-100.0, 0.0, -100.0],
+                [-100.0, 0.0, 100.0],
+                [100.0, 0.0, 100.0],
+            ],
+            [
+                [0.0, 0.0, -100.0],
+                [0.0, 100.0, -100.0],
+                [0.0, 100.0, 100.0],
+            ],
+            [[0.0, 0.0, -100.0], [0.0, 100.0, 100.0], [0.0, 0.0, 100.0]],
+        ];
+        let mesh = CollisionMesh::new(
+            faces.map(|face| face.map(|point| (Vec3::from_array(point) * scale).to_array())),
+        )
+        .unwrap();
+        let instance = CollisionInstance::new(Arc::new(mesh), origin, rotation)
+            .unwrap()
+            .with_spawn_kind(SpawnKind::Npc);
+        let mut world = CollisionWorld::new(deck(-100.0))
+            .unwrap()
+            .with_titanium_walking();
+        world.set_spawn_instances(vec![(8, instance)]);
+        let start = origin - rotation * Vec3::X * (20.0 * scale);
+        let end = world.step(
+            start,
+            rotation * Vec3::X * (40.0 * scale),
+            (3.0 * scale).max(1.0),
+        );
+        let local = rotation.inverse() * (end - origin) / scale;
+        assert!(
+            local.x > 19.99,
+            "scale={scale}, origin={origin:?}: {local:?}"
+        );
+        let escaped = world.step(origin, rotation * Vec3::X, (3.0 * scale).max(1.0));
+        assert!(
+            escaped.distance(origin) > 0.99,
+            "centre-line escape: {origin:?} -> {escaped:?}"
+        );
+    }
+}
