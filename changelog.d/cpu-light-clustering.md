@@ -1,0 +1,2 @@
+- Lights are clustered on the CPU: Bevy's GPU light clustering spent about 1.5 ms a frame even with no point lights. `EQ_GPU_CLUSTERING=1` brings the GPU path back for comparison.
+- The frame log (`EQ_FRAME_LOG`) now counts mesh events and plain material changes, the uploads the renderer redoes each frame.
