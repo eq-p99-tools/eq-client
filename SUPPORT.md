@@ -24,6 +24,14 @@ checking this application's behavior. **Yes means provided by that policy**,
 not a live certification, and individual operations still validate their
 prerequisites.
 
+The networking pin `f289c176` includes the EqMac level-rise handler. Character
+level continues to govern AA and other eligibility checks; an own-spawn level
+appearance changes only the displayed level. Inventory level labels, local
+`/who` and the map's own-player details use that displayed value. Lifecycle
+reports name both values. See [EqMac levels](docs/eqmac-levels.md) for the consumer
+mapping and profile-reset behavior. The level path has offline synthetic
+regressions; this pin adds no capability or new live level-up certification.
+
 | Area | P99 | EQEmu | Quarm | TAKP |
 | --- | --- | --- | --- | --- |
 | Protocol / installation | Titanium | Titanium | EQMac / TAKP | EQMac / TAKP |
