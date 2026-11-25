@@ -2066,12 +2066,12 @@ fn typed_report(
     asked: &super::reports::Asked,
     online: &super::online::OnlineState,
     outbox: &crate::outbox::Outbox,
-    (state, qol): (&mut ChatState, &Settings),
+    state: &mut ChatState,
 ) -> Result<(), Unsent> {
     use super::reports::Answer;
     let world = online.world();
     let stamp = outbox.stamp(world)?;
-    match super::reports::answer(asked, world, stamp, qol.on(Fix::TypedReports))? {
+    match super::reports::answer(asked, world, stamp)? {
         Answer::Send(command, echo) => {
             outbox.send(world, *command)?;
             state.report_echo = echo;
@@ -2113,7 +2113,7 @@ fn submit_line(
     // A report to the staff goes from a typed line, whoever types it: the
     // keyboard, a social or a script's `slash` step (6.511).
     if let Some(asked) = super::reports::Asked::typed(&command) {
-        return typed_report(&asked, online, outbox, (state, qol));
+        return typed_report(&asked, online, outbox, state);
     }
     match targeted(&command, online.world()) {
         Some(Targeted::Tell(line)) => {
@@ -4826,25 +4826,9 @@ mod tests {
 
     #[test]
     fn a_typed_line_sends_a_report_to_the_staff() {
-        use crate::report_windows::Report;
         use eq_client_core::reports::BugCategory;
         let (mut app, receiver) = slash_app(true);
-        // As the program does, a bug report or feedback opens its window
-        // and leaves the words aside, unless Typed Reports is on.
-        for (line, report) in [
-            ("/bug doors: it will not open", Report::Bug),
-            ("/feedback a note", Report::Feedback),
-        ] {
-            send_typed(&mut app, line);
-            assert!(receiver.try_recv().is_err(), "{line}");
-            let mut chat = app.world_mut().resource_mut::<ChatState>();
-            assert_eq!(chat.report_window.take(), Some(report), "{line}");
-        }
-        let mut typed = Settings::default();
-        typed.set(Fix::TypedReports, true);
-        let mut options = crate::options::OptionsState::default();
-        options.options.qol = typed;
-        app.insert_resource(options);
+        let typed = Settings::default();
         send_typed(&mut app, "/petition  I am stuck in the wall. ");
         assert!(matches!(
             receiver.try_recv(),
@@ -4866,15 +4850,8 @@ mod tests {
         }
         // The program's echo waits for the session to say the report went.
         assert!(app.world().resource::<ChatState>().report_echo.is_some());
-        // A line with nothing to say sends nothing, and the Titanium
-        // program's line for it is queued, in this client's words where the
-        // installation lacks it. Empty feedback says nothing.
-        for line in [
-            "/petition",
-            "/guidehelp   ",
-            "/bugreport pathing:",
-            "/feedback",
-        ] {
+        // Petition and guidehelp keep their existing empty-line responses.
+        for line in ["/petition", "/guidehelp   "] {
             send_typed(&mut app, line);
             assert!(receiver.try_recv().is_err(), "{line}");
         }
@@ -4890,7 +4867,6 @@ mod tests {
             [
                 "Use /petition with what to say.",
                 "Use /guidehelp with what to say.",
-                "Say what the bug report is about.",
             ]
         );
 
@@ -4929,6 +4905,70 @@ mod tests {
                 ),
                 "{line}"
             );
+        }
+    }
+
+    #[test]
+    fn fixed_qol_typed_reports_ignore_legacy_false_and_use_the_normal_command_path() {
+        use crate::report_windows::Report;
+        use eq_client_core::{GameDialect, reports::BugCategory};
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            let (mut app, receiver) = slash_app(true);
+            crate::online::testing::generation(
+                &mut app
+                    .world_mut()
+                    .resource_mut::<super::super::online::OnlineState>(),
+                generation,
+            );
+            let options =
+                crate::options::OptionsState::new(&eq_client_core::options::Options::read(
+                    "typed_reports = false\nfree_chase_tilt = false\ninvert_y = true\n",
+                    eq_client_core::options::Options::default(),
+                ));
+            assert!(options.options.invert_y);
+            app.insert_resource(options);
+            for (line, report) in [
+                ("/bug", Report::Bug),
+                ("/bugreport  \t ", Report::Bug),
+                ("/feedback", Report::Feedback),
+                ("/feedback \t ", Report::Feedback),
+            ] {
+                send_typed(&mut app, line);
+                assert!(receiver.try_recv().is_err(), "{generation:?}: {line}");
+                assert_eq!(
+                    app.world_mut()
+                        .resource_mut::<ChatState>()
+                        .report_window
+                        .take(),
+                    Some(report)
+                );
+            }
+            for (line, category, words) in [
+                (
+                    "/bugreport pathing: blocked",
+                    BugCategory::Pathing,
+                    "blocked",
+                ),
+                ("/bugreport pathing:", BugCategory::Other, "pathing:"),
+            ] {
+                send_typed(&mut app, line);
+                let ClientCommand::ReportBug {
+                    session_id, report, ..
+                } = receiver.try_recv().unwrap()
+                else {
+                    panic!("expected bug report: {generation:?}: {line}");
+                };
+                assert_eq!(session_id, 1);
+                assert_eq!(report.category, category);
+                assert_eq!(report.text, words);
+                assert!(report.place.is_some());
+                assert!(app.world().resource::<ChatState>().report_window.is_none());
+            }
+            send_typed(&mut app, "/feedback a note");
+            assert!(
+                matches!(receiver.try_recv(), Ok(ClientCommand::SendFeedback { text, .. }) if text == "a note")
+            );
+            assert!(receiver.try_recv().is_err());
         }
     }
 
