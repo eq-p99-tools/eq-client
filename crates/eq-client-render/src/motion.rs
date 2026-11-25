@@ -561,6 +561,20 @@ impl Controls {
         }
     }
 
+    fn advance_display(&mut self, seconds: f32, transform: &mut Transform) -> bool {
+        let Some(visual) = self.visual.as_mut() else {
+            return false;
+        };
+        visual.advance(seconds, transform);
+        let follow_heading = visual.follow_heading;
+        let pose = visual.drawn_pose();
+        if visual.finished() {
+            self.visual = None;
+        }
+        self.drawn_pose = pose;
+        follow_heading
+    }
+
     /// Queues a locally accepted sample without changing the simulation
     /// position. Samples play in order over their own spans. A dry-ground
     /// submission may already be playing through `preview_sample`; its exact
@@ -3964,21 +3978,12 @@ pub(super) fn interpolate(
     };
     let had_preview = displayed_mouse.take() == Some(entity);
     controls.apply_translation_restore(&mut transform);
-    let mut follow_heading = false;
     let pace = controls
         .visual
         .as_ref()
         .map(|_| (time.delta_secs(), transform.translation));
     let advanced_in_boat = controls.visual.is_some() && controls.visual_boat.is_some();
-    if let Some(visual) = controls.visual.as_mut() {
-        visual.advance(time.delta_secs(), &mut transform);
-        follow_heading = visual.follow_heading;
-        let pose = visual.drawn_pose();
-        if visual.finished() {
-            controls.visual = None;
-        }
-        controls.drawn_pose = pose;
-    }
+    let follow_heading = controls.advance_display(time.delta_secs(), &mut transform);
     // A rising lift carries the drawn model on its floor between samples,
     // as the program draws its rider; the samples sent are unchanged.
     if let Some((door, at, sent)) = controls.riding {

@@ -95,13 +95,25 @@ impl Playhead {
     pub(super) fn advance(&mut self, seconds: f32) -> Vec3 {
         let seconds = seconds.max(0.0);
         let remaining = self.remaining();
-        let play = self.finish_left.map_or(seconds, |left| {
-            if left <= seconds + f32::EPSILON * RELEASE_FINISH_SECONDS {
-                remaining
-            } else {
-                remaining * seconds / left
+        if self
+            .finish_left
+            .is_some_and(|left| left <= seconds + f32::EPSILON * RELEASE_FINISH_SECONDS)
+        {
+            // Spending the whole remaining path must reach its exact endpoint.
+            // Subtracting several f32 leg durations can otherwise leave a tiny
+            // residual and introduce an extra rendered frame at the deadline.
+            if let Some(last) = self.queue.back() {
+                self.to = last.to;
+                self.duration = last.span;
             }
-        });
+            self.queue.clear();
+            self.elapsed = self.duration;
+            self.finish_left = Some(0.0);
+            return self.to;
+        }
+        let play = self
+            .finish_left
+            .map_or(seconds, |left| remaining * seconds / left);
         if let Some(left) = self.finish_left.as_mut() {
             *left = (*left - seconds).max(0.0);
         }
