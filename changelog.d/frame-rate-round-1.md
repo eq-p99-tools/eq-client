@@ -1,3 +1,3 @@
-- Lights are clustered on the CPU: Bevy's GPU light clustering spent about 1.5 ms a frame even with no point lights. `EQ_GPU_CLUSTERING=1` brings the GPU path back for comparison.
+- Lights are clustered on the CPU: Bevy's GPU light clustering path rebuilt its lists every frame even with no point lights. `EQ_GPU_CLUSTERING=1` brings the GPU path back for comparison.
 - The frame log (`EQ_FRAME_LOG`) now counts mesh events and plain material changes, the uploads the renderer redoes each frame.
 - Animated zone textures (water, lava, flames) switch each surface between ready-made frame materials instead of editing its material, which the renderer prepared again about 40 times a frame in Qeynos. Zone surfaces that look alike now share one material.
