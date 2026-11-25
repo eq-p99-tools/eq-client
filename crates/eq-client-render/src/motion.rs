@@ -927,6 +927,8 @@ impl Controls {
     /// A local pad assigns the origin but leaves the actual velocities in
     /// place (0x48aaa6, read6.654). Its first physics step, not this reset,
     /// may clear vertical speed using the separately cached arrival floor.
+    /// [R] This move also keeps fall-start (actor +0x4c); landing at
+    /// 0x48b6c5 clears it. A below-soles first step keeps the old peak (H2).
     pub(super) fn local_pad_landed(&mut self) {
         let airborne = self.airborne.take();
         let wet = self.wet;

@@ -137,7 +137,7 @@ impl Controls {
         let Some(pad) = self
             .pad
             .as_ref()
-            .filter(|pad| pad.crossing == completed.crossing && pad.submitted)
+            .filter(|pad| pad.crossing == completed.crossing && pad.submitted && !pad.stopped)
         else {
             return;
         };
@@ -146,6 +146,7 @@ impl Controls {
             .as_ref()
             .filter(|prepared| prepared.position == completed.position)
         else {
+            self.stop_pad("completion did not match the prepared arrival");
             return;
         };
         let mut airborne = prepared.airborne.clone();
@@ -172,6 +173,112 @@ impl Controls {
 mod tests {
     use super::*;
 
+    fn submitted_pad() -> (Controls, LocalPadCompletion) {
+        let crossing = LocalPadCrossing {
+            session_id: 11,
+            spawn_id: 7,
+            revision: 1,
+            entry: WorldPosition::default(),
+            landing: WorldPosition {
+                z: 38.0,
+                ..WorldPosition::default()
+            },
+        };
+        let mut airborne = AirborneController::default();
+        airborne.carry_from_water(-12.0, Vec3::ZERO, 70.0);
+        let mut controls = Controls {
+            airborne: Some(airborne),
+            ..Controls::default()
+        };
+        controls.begin_pad(crossing);
+        let collision = CollisionWorld::new([
+            [
+                [-100.0, 38.0, -100.0],
+                [100.0, 38.0, 100.0],
+                [100.0, 38.0, -100.0],
+            ],
+            [
+                [-100.0, 38.0, -100.0],
+                [-100.0, 38.0, 100.0],
+                [100.0, 38.0, 100.0],
+            ],
+        ])
+        .unwrap();
+        controls.prepare_pad(&collision, 3.75);
+        let pad = controls.pad.as_mut().unwrap();
+        pad.submitted = true;
+        let completed = LocalPadCompletion {
+            crossing,
+            position: pad.prepared.as_ref().unwrap().position,
+        };
+        (controls, completed)
+    }
+
+    #[test]
+    fn pad_completion_mismatch_stops_once_without_committing_trial_physics() {
+        let (mut controls, completed) = submitted_pad();
+        let accepted = controls.last_accepted;
+        controls.autorun = true;
+        let mut mismatch = completed;
+        mismatch.position.z += 1.0;
+        controls.complete_pad(mismatch);
+        assert!(controls.pad.as_ref().unwrap().stopped);
+        assert!(!controls.autorun);
+        assert_eq!(controls.last_accepted, accepted);
+        assert!(controls.pad_landing.is_none());
+        assert!((controls.airborne.as_ref().unwrap().velocity() + 12.0).abs() < f32::EPSILON);
+        let notice = controls.take_pad_notice().unwrap();
+        assert!(notice.contains("did not match") && notice.contains("Use /quit"));
+        // A late matching result cannot reopen a terminal stop or repeat its line.
+        controls.complete_pad(completed);
+        controls.complete_pad(mismatch);
+        assert!(controls.pad.as_ref().unwrap().stopped);
+        assert!(controls.take_pad_notice().is_none());
+        assert_eq!(controls.refused.as_deref(), Some(notice.as_str()));
+    }
+
+    #[test]
+    fn pad_retry_success_has_no_failure_notice() {
+        let (mut controls, completed) = submitted_pad();
+        controls.pad_refused(completed.crossing.revision, "retryable refusal");
+        assert!(!controls.pad.as_ref().unwrap().submitted);
+        assert!(controls.take_pad_notice().is_none());
+        assert!(controls.refused.is_none());
+        controls.pad.as_mut().unwrap().submitted = true;
+        controls.complete_pad(completed);
+        assert!(controls.pad.is_none());
+        assert!(controls.take_pad_notice().is_none());
+        assert!(controls.refused.is_none());
+        assert!(controls.pad_landing.is_some());
+    }
+
+    #[test]
+    fn stale_or_cancelled_pad_completion_is_silent() {
+        let (mut controls, completed) = submitted_pad();
+        let mut stale = completed;
+        stale.crossing.revision += 1;
+        stale.position.z += 1.0;
+        controls.complete_pad(stale);
+        assert!(!controls.pad.as_ref().unwrap().stopped);
+        assert!(controls.take_pad_notice().is_none());
+        controls.complete_pad(completed);
+        controls.complete_pad(completed);
+        assert!(controls.pad.is_none());
+        assert!(controls.refused.is_none());
+        for reset in [false, true] {
+            let (mut controls, completed) = submitted_pad();
+            if reset {
+                controls.reset(None);
+            } else {
+                controls.same_zone_landed();
+            }
+            controls.complete_pad(completed);
+            assert!(controls.pad.is_none());
+            assert!(controls.take_pad_notice().is_none());
+            assert!(controls.refused.is_none());
+        }
+    }
+
     #[test]
     fn current_refusal_retries_once_then_offers_reentry_without_releasing_raw_placement() {
         let mut controls = Controls::default();
@@ -189,6 +296,8 @@ mod tests {
         controls.pad_refused(1, "invalid observation");
         assert!(!controls.pad.as_ref().unwrap().submitted);
         assert!(!controls.pad.as_ref().unwrap().stopped);
+        assert!(controls.take_pad_notice().is_none());
+        assert!(controls.refused.is_none());
         controls.pad.as_mut().unwrap().submitted = true;
         controls.pad_refused(1, "invalid observation");
         assert!(controls.pad.as_ref().unwrap().stopped);
