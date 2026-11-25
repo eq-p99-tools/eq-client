@@ -549,6 +549,84 @@ fn a_timed_out_release_restores_authority_and_a_late_answer_is_not_replayed() {
 }
 
 #[test]
+fn release_rollback_preserves_a_fresh_legal_step_submitted_in_the_same_frame() {
+    let base = Instant::now() + Duration::from_secs(60);
+    let (mut app, requests, news) = timing_app();
+    tick(&mut app, base, 0);
+    let original = shown(&mut app).0;
+    let position = eq_client_core::world_position([-0.6, 3.0, 0.0], 384.0);
+    crate::online::testing::news(
+        &mut app.world_mut().resource_mut::<online::OnlineState>(),
+        [eq_client_core::WorldEvent::Position {
+            spawn_id: 7,
+            position,
+            velocity: [0.0; 3],
+            forward: 0.0,
+        }],
+    );
+    let observed = Vec3::from_array(eq_client_core::render_position(position));
+    let rotation = Quat::from_rotation_y(eq_client_core::render_heading(position.heading));
+    {
+        // A delayed renderer can still own an accepted path when the sample
+        // clock is ready again. Model an interruption already observed by Input.
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        let mut visual = VisualMotion::start(
+            Transform::from_translation(original).with_rotation(rotation),
+            Segment {
+                to: Transform::from_translation(observed).with_rotation(rotation),
+                span: 0.25,
+                snap: false,
+                follow_heading: false,
+            },
+        );
+        visual.elapsed = 0.05;
+        visual.release_translation(true);
+        controls.visual = Some(visual);
+        controls.release_sample = true;
+        controls.restore_translation = true;
+        controls.last_accepted = base;
+    }
+    key(&mut app, KeyCode::KeyW, true);
+    tick(&mut app, base, 12);
+    let request = requests
+        .try_iter()
+        .find_map(|command| match command {
+            ClientCommand::Move(request) => Some(request),
+            _ => None,
+        })
+        .expect("fresh input did not submit a legal step");
+    let endpoint = Vec3::from_array(eq_client_core::render_position(request.position));
+    let (root, focus) = shown(&mut app);
+    assert!(root.distance(observed) > 0.001, "fresh step was discarded");
+    assert!(root.distance(observed) < endpoint.distance(observed));
+    assert_eq!(root, focus);
+    assert_eq!(
+        app.world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position,
+        position,
+        "display restoration changed movement authority"
+    );
+    news.send(eq_client_core::WorldUpdate::Game(
+        eq_client_core::WorldEvent::MotionSent {
+            session_id: request.session_id,
+            created: request.created,
+            position: request.position,
+            refused: None,
+        },
+    ))
+    .unwrap();
+    tick(&mut app, base, 13);
+    let accepted = shown(&mut app).0;
+    assert!(accepted.distance(observed) > root.distance(observed));
+    assert!(accepted.distance(observed) <= endpoint.distance(observed));
+    assert!(requests.try_recv().is_err(), "acceptance added a sample");
+}
+
+#[test]
 fn release_catchup_requires_owned_ground_input_without_a_lift_or_jump() {
     let base = Instant::now() + Duration::from_secs(60);
     for interruption in [
@@ -558,6 +636,8 @@ fn release_catchup_requires_owned_ground_input_without_a_lift_or_jump() {
         "airborne",
         "no_body",
         "no_collision",
+        "mouse_acquired",
+        "mouse_drag",
     ] {
         let (mut app, requests, _news) = timing_app();
         tick(&mut app, base, 0);
@@ -594,6 +674,17 @@ fn release_catchup_requires_owned_ground_input_without_a_lift_or_jump() {
                 world.entity_mut(player).remove::<PlayerBody>();
             }
             "no_collision" => app.world_mut().resource_mut::<Collision>().0 = None,
+            "mouse_acquired" | "mouse_drag" => {
+                app.insert_resource(MouseAim {
+                    horizontal: Some(if interruption == "mouse_drag" {
+                        0.2
+                    } else {
+                        0.0
+                    }),
+                    acquired: interruption == "mouse_acquired",
+                    ..default()
+                });
+            }
             _ => unreachable!(),
         }
         tick(&mut app, base, 2);

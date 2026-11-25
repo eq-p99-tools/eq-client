@@ -124,6 +124,8 @@ pub(super) struct Controls {
     /// Accepted catch-up restores translation alone on interruption. Rotation
     /// keeps the existing playback and authority rules.
     restore_translation: bool,
+    /// World-space placement prepared before input, applied when a root exists.
+    restored_translation: Option<Vec3>,
     /// The latest submitted sample is an ordinary own ground step. Display
     /// catch-up never grants movement or changes the sample's timing.
     release_sample: bool,
@@ -311,6 +313,7 @@ impl Default for Controls {
             preview: None,
             restore_preview: false,
             restore_translation: false,
+            restored_translation: None,
             release_sample: false,
             #[cfg(test)]
             suppress_submitted_preview: false,
@@ -514,6 +517,37 @@ impl Controls {
         }
     }
 
+    fn translation_basis(&self, position: Vec3) -> Vec3 {
+        self.visual_boat.map_or(position, |frame| {
+            if let Some(riding) = self.boat.filter(|riding| {
+                riding.sample.spawn_id == frame.sample.spawn_id
+                    && riding.sample.incarnation == frame.sample.incarnation
+            }) {
+                Vec3::from_array(eq_client_core::render_position(
+                    eq_client_core::movement::carrier_local(riding.pose, riding.position),
+                ))
+            } else {
+                boats::to_local(frame.pose, Transform::from_translation(position)).translation
+            }
+        })
+    }
+
+    fn prepare_translation_restore(&mut self, world: &ClientWorld) {
+        if self.restore_translation
+            && let Some(player) = world.player()
+        {
+            let position = Vec3::from_array(eq_client_core::render_position(player.position));
+            let basis = self.translation_basis(position);
+            self.restore_translation = false;
+            self.restored_translation = Some(position);
+            if let Some(visual) = self.visual.as_mut() {
+                // Clear the interrupted path before input can append a fresh
+                // legal step. Present must not discard that step a second time.
+                visual.translation = Some(translation::Playhead::at(basis));
+            }
+        }
+    }
+
     /// Queues a locally accepted sample without changing the simulation
     /// position. Samples play in order over their own spans. A dry-ground
     /// submission may already be playing through `preview_sample`; its exact
@@ -580,11 +614,14 @@ impl Controls {
 
     fn display_in_frame(
         &mut self,
-        from: Transform,
+        mut from: Transform,
         position: eq_client_core::WorldPosition,
         facing: Option<f32>,
         pose: Option<pose::Path>,
     ) {
+        if let Some(position) = self.restored_translation {
+            from.translation = self.translation_basis(position);
+        }
         if self.refused.is_some()
             || self
                 .mouse_heading
@@ -813,7 +850,9 @@ impl Controls {
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
         let restore_preview = self.restore_preview || self.preview.is_some();
-        let restore_translation = self.restore_translation || self.has_translation_playhead();
+        let restore_translation = self.restore_translation
+            || self.restored_translation.is_some()
+            || self.has_translation_playhead();
         *self = Self {
             speed,
             restore_preview,
@@ -2014,6 +2053,7 @@ pub(super) fn input(
     }
     // Read held intent before the pending/sample gates. This only selects a
     // display clock: it does not consume taps, end `moving`, or send a stop.
+    controls.prepare_translation_restore(online.world());
     let release_safe = controls.visual.is_some()
         && controls.release_sample
         && focused
@@ -2029,6 +2069,9 @@ pub(super) fn input(
         && controls.visual_boat.is_none()
         && controls.jump.is_none()
         && controls.crouch.is_none()
+        && scripted_facing.is_none()
+        && mouse_aim.is_none_or(|yaw| yaw == 0.0)
+        && !aim.as_ref().is_some_and(|aim| aim.acquired)
         && controls
             .airborne
             .as_ref()
@@ -3890,15 +3933,7 @@ pub(super) fn interpolate(
     mut displayed_mouse: Local<Option<Entity>>,
 ) {
     controls.restore_observed_preview(online.world());
-    let restore_translation = controls
-        .restore_translation
-        .then(|| {
-            online
-                .world()
-                .player()
-                .map(|player| Vec3::from_array(eq_client_core::render_position(player.position)))
-        })
-        .flatten();
+    controls.prepare_translation_restore(online.world());
     let preview = controls.mouse_heading;
     if controls.visual.is_none()
         && preview.is_none()
@@ -3906,7 +3941,7 @@ pub(super) fn interpolate(
         && controls.riding.is_none()
         && controls.boat.is_none()
         && controls.visual_boat.is_none()
-        && restore_translation.is_none()
+        && controls.restored_translation.is_none()
     {
         return;
     }
@@ -3915,14 +3950,8 @@ pub(super) fn interpolate(
         return;
     };
     let had_preview = displayed_mouse.take() == Some(entity);
-    if let Some(position) = restore_translation {
-        controls.restore_translation = false;
+    if let Some(position) = controls.restored_translation.take() {
         transform.translation = position;
-        if let Some(visual) = controls.visual.as_mut() {
-            // The old orientation clock may continue, but its translation
-            // endpoints cannot play after an authoritative interruption.
-            visual.translation = Some(translation::Playhead::at(position));
-        }
     }
     let mut follow_heading = false;
     let pace = controls
