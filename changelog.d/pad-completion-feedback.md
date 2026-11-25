@@ -1,0 +1,1 @@
+- A stopped local pad arrival gives one actionable recovery message if its completion disagrees with the prepared landing. A refusal followed by a successful retry no longer prints a failure line.

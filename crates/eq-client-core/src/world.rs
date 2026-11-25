@@ -981,7 +981,8 @@ impl ClientWorld {
             WorldEvent::LocalPadRefused { session_id, revision, reason } => {
                 if self.pending_local_pad.is_some_and(|pad| pad.session_id == *session_id && pad.revision == *revision) {
                     news.local_pad_refused = Some((*revision, reason.clone()));
-                    news.notices.push(Notice::ZoneLineRefused(reason.clone()));
+                    // The host owns the single retry and reports only a final
+                    // stop; an initial refusal can still finish successfully.
                 } else {
                     news.ignored = true;
                 }
