@@ -228,15 +228,20 @@ fn nomination_follows_loaded_wld_winding_without_filtering_placement_or_collisio
     let floors = eq_client_core::movement::CollisionWorld::new(nominations).unwrap();
     assert!(floors.ground(Vec3::new(0.0, 32.0, 0.0), 0.1, 0.1).is_some());
     assert!(floors.ground(Vec3::new(0.0, 64.0, 0.0), 0.1, 0.1).is_none());
-    // The downward ceiling remains in the preview's first-floor rule and
-    // the solid collision/headroom world; only nomination was filtered.
+    // The preview surface locator still sees the downward ceiling. Floor
+    // support skips it; solid viewing and ceiling geometry keep it.
     assert_eq!(all.height_below(0.0, 0.0, 69.0), Some(64.0));
+    let collision = zone_collision(&zone).unwrap();
     assert!(
-        zone_collision(&zone)
-            .unwrap()
+        collision
             .ground(Vec3::new(0.0, 64.0, 0.0), 0.1, 0.1)
-            .is_some()
+            .is_none()
     );
+    assert_eq!(
+        collision.ray_distance(Vec3::new(0.0, 69.0, 0.0), -Vec3::Y, 10.0),
+        Some(5.0)
+    );
+    assert!(!collision.posture_clearance(Vec3::new(0.0, 62.0, 0.0), 3.0, 0.0));
     let mesh = select_spot_mesh(None, "test", &zone).unwrap();
     let spot = propose_select_spot(&zone, &mesh).unwrap();
     assert!(

@@ -893,16 +893,16 @@ mod tests {
         // and the ledge's face between them.
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 0.0],
             [-30.0, 0.0, 0.0],
+            [30.0, 0.0, 0.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec();
         triangles.extend(quad(
             [-30.0, -5.0, 0.0],
-            [30.0, -5.0, 0.0],
-            [30.0, -5.0, 30.0],
             [-30.0, -5.0, 30.0],
+            [30.0, -5.0, 30.0],
+            [30.0, -5.0, 0.0],
         ));
         triangles.extend(quad(
             [-30.0, -5.0, 0.0],
@@ -989,9 +989,9 @@ mod tests {
         let moved = |t: [[f32; 3]; 3]| t.map(|p| (Vec3::from_array(p) + by).to_array());
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         )
         .map(moved)
         .to_vec();
@@ -1310,9 +1310,9 @@ mod tests {
     fn wide_doorway(leaf: (f32, f32)) -> (CollisionWorld, Vec<[[f32; 3]; 3]>) {
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec();
         for (from, to) in [(-30.0, 6.0), (14.0, 30.0)] {
@@ -1383,9 +1383,9 @@ mod tests {
         };
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec();
         for (from, to) in [(-30.0, 6.0), (14.0, 30.0)] {
@@ -1563,9 +1563,9 @@ mod tests {
     fn a_follower_reaches_the_goal_around_a_wall_or_stops_as_close_as_it_can() {
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec();
         // A wall across z = 0 that leaves a gap for x > 10.
@@ -1613,22 +1613,22 @@ mod tests {
     fn ledge(ramp: bool) -> CollisionWorld {
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, -10.0],
             [-30.0, 0.0, -10.0],
+            [30.0, 0.0, -10.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec();
         triangles.extend(quad(
             [-30.0, 0.0, -10.0],
-            [20.0, 0.0, -10.0],
-            [20.0, 0.0, 0.0],
             [-30.0, 0.0, 0.0],
+            [20.0, 0.0, 0.0],
+            [20.0, 0.0, -10.0],
         ));
         triangles.extend(quad(
             [-30.0, 4.0, 0.0],
-            [30.0, 4.0, 0.0],
-            [30.0, 4.0, 30.0],
             [-30.0, 4.0, 30.0],
+            [30.0, 4.0, 30.0],
+            [30.0, 4.0, 0.0],
         ));
         triangles.extend(quad(
             [-30.0, 0.0, 0.0],
@@ -1640,18 +1640,18 @@ mod tests {
             // Rises 4 over 10, well within a walkable slope.
             triangles.extend(quad(
                 [20.0, 0.0, -10.0],
-                [30.0, 0.0, -10.0],
-                [30.0, 4.0, 0.0],
                 [20.0, 4.0, 0.0],
+                [30.0, 4.0, 0.0],
+                [30.0, 0.0, -10.0],
             ));
             // The ramp's side above the lower floor.
             triangles.push([[20.0, 0.0, -10.0], [20.0, 0.0, 0.0], [20.0, 4.0, 0.0]]);
         } else {
             triangles.extend(quad(
                 [20.0, 0.0, -10.0],
-                [30.0, 0.0, -10.0],
-                [30.0, 0.0, 0.0],
                 [20.0, 0.0, 0.0],
+                [30.0, 0.0, 0.0],
+                [30.0, 0.0, -10.0],
             ));
             triangles.extend(quad(
                 [20.0, 0.0, 0.0],
@@ -1696,9 +1696,9 @@ mod tests {
         // A floor too small for any step, with nothing below to drop onto.
         let world = CollisionWorld::new(quad(
             [-1.0, 0.0, -1.0],
-            [1.0, 0.0, -1.0],
-            [1.0, 0.0, 1.0],
             [-1.0, 0.0, 1.0],
+            [1.0, 0.0, 1.0],
+            [1.0, 0.0, -1.0],
         ))
         .unwrap();
         for planner in planners(&world) {
@@ -1722,9 +1722,9 @@ mod tests {
     fn open_field() -> CollisionWorld {
         CollisionWorld::new(quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         ))
         .unwrap()
     }
@@ -1846,7 +1846,7 @@ mod tests {
         let [x0, y0, z0] = low;
         let [x1, y1, z1] = high;
         [
-            quad([x0, y1, z0], [x1, y1, z0], [x1, y1, z1], [x0, y1, z1]),
+            quad([x0, y1, z0], [x0, y1, z1], [x1, y1, z1], [x1, y1, z0]),
             quad([x0, y0, z0], [x1, y0, z0], [x1, y1, z0], [x0, y1, z0]),
             quad([x0, y0, z1], [x1, y0, z1], [x1, y1, z1], [x0, y1, z1]),
             quad([x0, y0, z0], [x0, y0, z1], [x0, y1, z1], [x0, y1, z0]),
@@ -1861,9 +1861,9 @@ mod tests {
     fn a_follower_climbs_the_stairs_the_route_takes_instead_of_walking_beside_them() {
         let mut triangles = quad(
             [-30.0, 0.0, -30.0],
-            [30.0, 0.0, -30.0],
-            [30.0, 0.0, 30.0],
             [-30.0, 0.0, 30.0],
+            [30.0, 0.0, 30.0],
+            [30.0, 0.0, -30.0],
         )
         .to_vec();
         // Stairs rising 1.5 per unit along +x to a platform 6 high.

@@ -696,13 +696,13 @@ mod tests {
         crate::movement::CollisionWorld::new([
             [
                 corner(-100.0, -20.0),
-                corner(300.0, -20.0),
                 corner(300.0, 20.0),
+                corner(300.0, -20.0),
             ],
             [
                 corner(-100.0, -20.0),
-                corner(300.0, 20.0),
                 corner(-100.0, 20.0),
+                corner(300.0, 20.0),
             ],
         ])
         .unwrap()
@@ -806,8 +806,8 @@ mod tests {
         // A deck two over the ground, and a slab three over the deck.
         let plate = |y: f32, half: f32| {
             [
-                [[-half, y, -half], [half, y, -half], [half, y, half]],
-                [[-half, y, -half], [half, y, half], [-half, y, half]],
+                [[-half, y, -half], [half, y, half], [half, y, -half]],
+                [[-half, y, -half], [-half, y, half], [half, y, half]],
             ]
         };
         let world = crate::movement::CollisionWorld::new(
@@ -870,8 +870,8 @@ mod tests {
         // carried height stayed 16 over it.
         let plate = |y: f32, from: f32, to: f32| {
             [
-                [[from, y, -20.0], [to, y, -20.0], [to, y, 20.0]],
-                [[from, y, -20.0], [to, y, 20.0], [from, y, 20.0]],
+                [[from, y, -20.0], [to, y, 20.0], [to, y, -20.0]],
+                [[from, y, -20.0], [from, y, 20.0], [to, y, 20.0]],
             ]
         };
         let world = crate::movement::CollisionWorld::new(
@@ -1034,7 +1034,7 @@ mod tests {
                 render(bx - nx, by - ny, high),
                 render(bx + nx, by + ny, high),
             );
-            [[a, b, c], [a, c, d]]
+            [[a, c, b], [a, d, c]]
         };
         let last = floors[floors.len() - 1];
         #[allow(clippy::cast_precision_loss)]
@@ -1172,8 +1172,8 @@ mod tests {
     #[test]
     fn remote_models_stand_on_a_floor_near_their_soles() {
         let floor = [
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, -20.0], [20.0, 0.0, 20.0]],
-            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [-20.0, 0.0, 20.0]],
+            [[-20.0, 0.0, -20.0], [20.0, 0.0, 20.0], [20.0, 0.0, -20.0]],
+            [[-20.0, 0.0, -20.0], [-20.0, 0.0, 20.0], [20.0, 0.0, 20.0]],
         ];
         let world = crate::movement::CollisionWorld::new(floor).unwrap();
         let soles = |y: f32| super::grounded_soles(&world, glam::Vec3::Y * y, 4.0);
@@ -1250,10 +1250,10 @@ mod tests {
             })
         };
         let world = crate::movement::CollisionWorld::new([
-            [corner(-50.0, -20.0), corner(0.0, -20.0), corner(0.0, 20.0)],
-            [corner(-50.0, -20.0), corner(0.0, 20.0), corner(-50.0, 20.0)],
-            [corner(0.0, -20.0), corner(50.0, -20.0), corner(50.0, 20.0)],
-            [corner(0.0, -20.0), corner(50.0, 20.0), corner(0.0, 20.0)],
+            [corner(-50.0, -20.0), corner(0.0, 20.0), corner(0.0, -20.0)],
+            [corner(-50.0, -20.0), corner(-50.0, 20.0), corner(0.0, 20.0)],
+            [corner(0.0, -20.0), corner(50.0, 20.0), corner(50.0, -20.0)],
+            [corner(0.0, -20.0), corner(0.0, 20.0), corner(50.0, 20.0)],
         ])
         .unwrap();
         let yaw = std::f32::consts::PI;

@@ -1152,13 +1152,13 @@ mod tests {
         let floor = eq_client_core::movement::CollisionWorld::new([
             [
                 corner(-50.0, -50.0),
-                corner(50.0, -50.0),
                 corner(50.0, 50.0),
+                corner(50.0, -50.0),
             ],
             [
                 corner(-50.0, -50.0),
-                corner(50.0, 50.0),
                 corner(-50.0, 50.0),
+                corner(50.0, 50.0),
             ],
         ])
         .unwrap();
@@ -1379,8 +1379,8 @@ mod tests {
         };
         let mut collision = CollisionWorld::new([[
             [-500.0, -30.0, -500.0],
-            [500.0, -30.0, -500.0],
             [0.0, -30.0, 500.0],
+            [500.0, -30.0, -500.0],
         ]])
         .unwrap();
         collision.set_spawn_obstacles(vec![(

@@ -73,6 +73,27 @@ impl<'a> Surface<'a> {
         self.mesh.cast_ray(&self.pose, ray, reach, solid)
     }
 
+    /// A support query skips downward-facing faces, without changing the
+    /// geometry used by walls, ceilings or viewing rays (6.651, Titanium
+    /// 0x10185790 / 0x10192400). The same rule on Mac is inferred.
+    /// A two-sided render material still contributes only its authored front.
+    pub(super) fn cast_floor(self, ray: &Ray, reach: f32) -> Option<f32> {
+        let local = ray.inverse_transform_by(&self.pose);
+        let up = self.pose.rotation.inverse() * Vector::Y;
+        self.mesh
+            .bvh()
+            .cast_ray(&local, reach, |index, best| {
+                let face = self.mesh.triangle(index);
+                // Test the authored normal before ray casting: returned
+                // hit normals can be flipped to face the incoming ray.
+                (face.scaled_normal().dot(up) >= 0.0)
+                    .then(|| face.cast_local_ray(&local, best, false))
+                    .flatten()
+            })
+            .filter(|(_, time)| *time < reach)
+            .map(|(_, time)| time)
+    }
+
     pub(super) fn minimum_y(self) -> f32 {
         if self.pose == Pose::IDENTITY {
             return self.mesh.local_aabb().mins.y;

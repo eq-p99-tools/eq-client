@@ -2021,8 +2021,8 @@ mod tests {
             [-50.0, 2.0, 50.0],
         ];
         let floor = eq_client_core::movement::CollisionWorld::new([
-            [corners[0], corners[1], corners[2]],
-            [corners[0], corners[2], corners[3]],
+            [corners[0], corners[2], corners[1]],
+            [corners[0], corners[3], corners[2]],
         ])
         .unwrap();
         // Its soles hang at the root, on the floor, as `interpolate` finds
@@ -2661,8 +2661,8 @@ mod tests {
                 [-50.0, y, 50.0],
             ];
             eq_client_core::movement::CollisionWorld::new([
-                [corners[0], corners[1], corners[2]],
-                [corners[0], corners[2], corners[3]],
+                [corners[0], corners[2], corners[1]],
+                [corners[0], corners[3], corners[2]],
             ])
             .unwrap()
         };
