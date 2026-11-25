@@ -4,15 +4,40 @@
 // lamps, carried lights) are worked out on a white surface, softly capped,
 // and added to the base before the texture multiplies both.
 #import bevy_pbr::{
+    mesh_bindings::mesh,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     forward_io::{VertexOutput, FragmentOutput},
 }
 
-// The base light's tint, white unless the client asks otherwise.
-@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> base_tint: vec4<f32>;
-// x: the soft ceiling on the lights' own brightness.
-@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<uniform> limits: vec4<f32>;
+// The material's own values (BaseLightUniform in rich_light.rs).
+struct BaseLight {
+    // The base light's tint, white unless the client asks otherwise.
+    tint: vec4<f32>,
+    // x: the soft ceiling on the lights' own brightness.
+    limits: vec4<f32>,
+}
+
+#ifdef BINDLESS
+// Bindless: every surface's values in one array, found through the
+// material's slot, so the surfaces draw in batches.
+struct BaseLightIndices {
+    material: u32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<storage> base_light_indices: array<BaseLightIndices>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<storage> base_lights: array<BaseLight>;
+#else
+@group(#{MATERIAL_BIND_GROUP}) @binding(50) var<uniform> base_light: BaseLight;
+#endif
+
+fn own_light(in: VertexOutput) -> BaseLight {
+#ifdef BINDLESS
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    return base_lights[base_light_indices[slot].material];
+#else
+    return base_light;
+#endif
+}
 
 @fragment
 fn fragment(
@@ -20,6 +45,9 @@ fn fragment(
     @builtin(front_facing) is_front: bool,
 ) -> FragmentOutput {
     var in = vertex_output;
+    let own = own_light(in);
+    let base_tint = own.tint;
+    let limits = own.limits;
 #ifdef VERTEX_COLORS
     let base = in.color.rgb * base_tint.rgb;
     // The texture alone, as the surface's colour under the lights.

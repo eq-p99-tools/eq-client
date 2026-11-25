@@ -37,7 +37,7 @@ use bevy::{
     pbr::{ExtendedMaterial, MaterialExtension, MaterialPlugin},
     post_process::bloom::Bloom,
     prelude::*,
-    render::render_resource::AsBindGroup,
+    render::render_resource::{AsBindGroup, ShaderType},
     shader::ShaderRef,
 };
 use std::{
@@ -130,16 +130,35 @@ const WARM_WHITE: [f32; 3] = [1.0, 0.86, 0.66];
 /// A zone surface lit per pixel (`rich_light.wgsl`).
 pub(super) type RichMaterial = ExtendedMaterial<StandardMaterial, BaseLight>;
 
+/// The rich material's own values. Bindless where the GPU allows, as
+/// Bevy's standard material is, so the zone's thousands of surfaces draw
+/// in batches rather than one by one (each surface keeps its own material).
 #[derive(Asset, AsBindGroup, Reflect, Debug, Clone)]
+#[data(50, BaseLightUniform, binding_array(101))]
+#[bindless(index_table(range(50..51), binding(100)))]
 pub(super) struct BaseLight {
     /// The base light's tint.
-    #[uniform(100)]
     tint: LinearRgba,
     /// x: how far the lights' own brightness may go, softly: a light is
     /// drawn as L / (1 + L / x) by its luminance, so a torch against a wall
     /// brightens the wall without washing its texture out.
-    #[uniform(101)]
     limits: Vec4,
+}
+
+/// [`BaseLight`] as the shader reads it (`rich_light.wgsl`).
+#[derive(Clone, Copy, Default, ShaderType)]
+pub(super) struct BaseLightUniform {
+    tint: Vec4,
+    limits: Vec4,
+}
+
+impl From<&BaseLight> for BaseLightUniform {
+    fn from(light: &BaseLight) -> Self {
+        Self {
+            tint: light.tint.to_vec4(),
+            limits: light.limits,
+        }
+    }
 }
 
 impl MaterialExtension for BaseLight {
