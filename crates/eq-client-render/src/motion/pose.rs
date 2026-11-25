@@ -389,4 +389,178 @@ mod tests {
             }
         }
     }
+
+    fn ordinary_pose_clock(mut controls: ResMut<Controls>) {
+        // Negative control: the merged #710 selector reads the unchanged
+        // orientation timeline, even after the translation path is finished.
+        controls.drawn_pose = controls.visual.as_ref().and_then(|visual| {
+            visual
+                .pose
+                .as_ref()
+                .and_then(|path| path.at(visual.elapsed))
+        });
+    }
+
+    fn release_frame(app: &mut App) {
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_micros(16_667));
+        app.update();
+    }
+
+    fn resume_translation(app: &mut App, root: Entity) {
+        let from = *app.world().get::<Transform>(root).unwrap();
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.sent_span = 0.1;
+        controls.visual.as_mut().unwrap().release_translation(false);
+        controls.display_sample(from, crate::world_position((Vec3::X * 2.0).to_array(), 0.0));
+    }
+
+    #[test]
+    fn release_restore_cursor_keeps_the_ordinary_walk_and_run_pose_clock() {
+        for walking in [false, true] {
+            let mut path = Path::default();
+            path.push(
+                0.0,
+                Snapshot {
+                    horizontal: Vec2::X * 10.0,
+                    vertical: 0.0,
+                },
+            );
+            let (mut app, root) = render_app(path, Vec3::X, 0.25);
+            app.world_mut().resource_mut::<Controls>().walking = walking;
+            for _ in 0..4 {
+                release_frame(&mut app);
+            }
+            let moving = if walking { "L01" } else { "L02" };
+            assert_eq!(crate::character::testing::clip(app.world(), root), moving);
+            let mut phase = crate::character::testing::elapsed(app.world(), root);
+            app.world_mut()
+                .resource_mut::<Controls>()
+                .restore_translation = true;
+            for _ in 0..3 {
+                release_frame(&mut app);
+                assert_eq!(crate::character::testing::clip(app.world(), root), moving);
+                let next = crate::character::testing::elapsed(app.world(), root);
+                assert!(next > phase, "restore restarted the moving clip");
+                phase = next;
+                let controls = app.world().resource::<Controls>();
+                let cursor = controls
+                    .visual
+                    .as_ref()
+                    .unwrap()
+                    .translation
+                    .as_ref()
+                    .unwrap();
+                assert!(cursor.finished() && !cursor.rested());
+                assert_eq!(controls.drawn_pose().unwrap().horizontal, Vec2::X * 10.0);
+            }
+        }
+    }
+
+    #[test]
+    fn release_rest_stops_walk_and_run_at_the_translation_endpoint() {
+        for walking in [false, true] {
+            for snapshots in [false, true] {
+                let mut rotations = Vec::new();
+                for baseline in [false, true] {
+                    let mut path = Path::default();
+                    if snapshots {
+                        path.push(
+                            0.0,
+                            Snapshot {
+                                horizontal: Vec2::X * 10.0,
+                                vertical: 0.0,
+                            },
+                        );
+                    }
+                    let (mut app, root) = render_app(path, Vec3::X, 0.25);
+                    app.world_mut().resource_mut::<Controls>().walking = walking;
+                    if baseline {
+                        app.add_systems(
+                            Update,
+                            ordinary_pose_clock
+                                .after(interpolate)
+                                .before(crate::character::animate),
+                        );
+                    }
+                    let original_world = app
+                        .world()
+                        .resource::<OnlineState>()
+                        .world()
+                        .player()
+                        .unwrap()
+                        .position;
+                    for _ in 0..4 {
+                        release_frame(&mut app);
+                    }
+                    let moving_clip = if walking { "L01" } else { "L02" };
+                    assert_eq!(
+                        crate::character::testing::clip(app.world(), root),
+                        moving_clip
+                    );
+                    {
+                        let mut controls = app.world_mut().resource_mut::<Controls>();
+                        let visual = controls.visual.as_mut().unwrap();
+                        // render_app's target rotation is the ordinary sample
+                        // facing; make the initial pose agree for this flat path.
+                        visual.from.rotation = visual.to.rotation;
+                        visual.release_translation(true);
+                        assert!(visual.translation.is_some());
+                    }
+                    for _ in 0..3 {
+                        release_frame(&mut app);
+                    }
+                    assert_eq!(
+                        app.world().get::<Transform>(root).unwrap().translation,
+                        Vec3::X
+                    );
+                    rotations.push(app.world().get::<Transform>(root).unwrap().rotation);
+                    assert!(
+                        app.world()
+                            .resource::<Controls>()
+                            .visual
+                            .as_ref()
+                            .unwrap()
+                            .elapsed
+                            < 0.25
+                    );
+                    assert_eq!(
+                        crate::character::testing::clip(app.world(), root),
+                        if baseline { moving_clip } else { "P01" },
+                        "walking={walking} snapshots={snapshots} baseline={baseline}"
+                    );
+                    assert_eq!(
+                        app.world()
+                            .resource::<OnlineState>()
+                            .world()
+                            .player()
+                            .unwrap()
+                            .position,
+                        original_world
+                    );
+                    if !baseline {
+                        for _ in 0..2 {
+                            release_frame(&mut app);
+                        }
+                        assert_eq!(crate::character::testing::clip(app.world(), root), "P01");
+                        // New submitted deck-free travel resumes animation;
+                        // the standing snapshot cannot stick over a fresh leg.
+                        resume_translation(&mut app, root);
+                        for _ in 0..2 {
+                            release_frame(&mut app);
+                        }
+                        assert_eq!(
+                            crate::character::testing::clip(app.world(), root),
+                            moving_clip
+                        );
+                    }
+                }
+                assert_eq!(
+                    rotations[0], rotations[1],
+                    "presentation changed the rotation clock"
+                );
+            }
+        }
+    }
 }
