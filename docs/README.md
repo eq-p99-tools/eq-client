@@ -8,6 +8,7 @@
 | [Controls, maps and chat](controls.md) | Key bindings, free camera, windows, entity maps, chat and links |
 | [Detachable chat tabs](chat-tabs.md) | Reordering, detaching and docking chat tabs, and where each character's arrangement is kept |
 | [Gameplay](gameplay.md) | Movement/zoning, inventory, banking, spells, combat and interaction |
+| [EqMac levels](eqmac-levels.md) | Character level for gates and the own spawn's displayed level |
 | [Settings](settings.md) | Per-character files, display options and quality-of-life choices |
 | [Zone lighting](zone-lighting.md) | How zones without a sky are lit, as the original's engine lights them |
 | [Assets and offline previews](assets.md) | Installed assets, rendering limits, synthetic demos and screenshots |

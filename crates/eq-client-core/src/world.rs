@@ -423,6 +423,8 @@ pub struct ClientWorld {
 
     // The character: from admission until camping.
     player: Option<PlayerState>,
+    /// `EQMac`'s own spawn level, separate from the character level used by gates.
+    displayed_level: Option<u8>,
     vitals: Vitals,
     inventory: Inventory,
     inventory_moves: inventory_moves::Moves,
@@ -485,7 +487,9 @@ impl ClientWorld {
                 }],
                 ..Changes::default()
             },
-            WorldUpdate::Chat(_) | WorldUpdate::SpellTable(_) => Changes::default(),
+            WorldUpdate::Chat(_) | WorldUpdate::SpellTable(_) | WorldUpdate::CheckingFiles(_) => {
+                Changes::default()
+            }
         }
     }
 
@@ -1273,7 +1277,7 @@ impl ClientWorld {
                     && let Some(player) = self.player.as_mut()
                 {
                     let guild = player.listing.guild;
-                    who::relist(*change, &mut player.level, &mut player.listing);
+                    who::relist_own(*change, self.generation, player, &mut self.displayed_level);
                     if guild != player.listing.guild {
                         self.forget_guild();
                     }
@@ -2540,6 +2544,7 @@ impl ClientWorld {
 
     /// Forgets the admission and its zone.
     fn forget_admission(&mut self) {
+        self.displayed_level = None;
         self.alternate_advancement = crate::alternate_advancement::State::default();
         self.liquid_hazards = LiquidHazardInputs::default();
         self.characters = None;

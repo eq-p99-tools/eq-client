@@ -331,7 +331,7 @@ fn without_an_installation_the_command_says_there_is_no_window() {
             "{:?}",
             chat.history.lines(eq_client_core::chat::ChatTab::All)
         )
-        .contains("Turn on Typed Reports")
+        .contains("Type the report text after /bugreport")
     );
 }
 

@@ -4,9 +4,12 @@ mod belongings_tests;
 #[cfg(test)]
 mod boat_pace_tests;
 mod boats;
+#[cfg(test)]
+mod latency_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
 mod placement;
+pub(super) mod pose;
 mod shoreline;
 
 use super::{
@@ -107,6 +110,21 @@ pub(super) struct Controls {
     placement: placement::Check,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
+    /// Display-only history waiting for this sample's presentation segment.
+    sample_pose: Option<pose::Path>,
+    drawn_pose: Option<pose::Snapshot>,
+    /// A submitted, collision-checked dry-ground endpoint may be shown before
+    /// its local worker result. It never changes the observed world position.
+    preview: Option<Preview>,
+    /// A withdrawn preview must return to the current observed placement.
+    restore_preview: bool,
+    /// Private timing probes compare the unchanged accepted-only path in the
+    /// same binary. This switch is absent from production builds.
+    #[cfg(test)]
+    suppress_submitted_preview: bool,
+    /// Deterministic elapsed time for command-equivalence fixtures only.
+    #[cfg(test)]
+    test_span: Option<f32>,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
@@ -190,6 +208,13 @@ struct Pending {
     kind: PendingKind,
 }
 
+#[derive(Clone, Copy)]
+struct Preview {
+    session_id: u64,
+    created: Instant,
+    position: eq_client_core::WorldPosition,
+}
+
 /// Whether local liquid checks have a worker position on which to base a sample.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum LiquidBasis {
@@ -267,6 +292,14 @@ impl Default for Controls {
             placement: placement::Check::default(),
             taps: TapBuffer::default(),
             visual: None,
+            sample_pose: None,
+            drawn_pose: None,
+            preview: None,
+            restore_preview: false,
+            #[cfg(test)]
+            suppress_submitted_preview: false,
+            #[cfg(test)]
+            test_span: None,
             airborne: None,
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
@@ -378,12 +411,82 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
-    /// Shows a locally accepted sample without changing the simulation
-    /// position: the model plays the accepted samples back in order, each
-    /// over the time of play it covers, so it passes at the pace sent and
-    /// never ahead of the newest accepted position. A sample accepted while
-    /// the last still plays waits its turn; when none is left the model
-    /// stands at the newest until the next is accepted. Display only;
+    /// Starts only the exact endpoint already accepted by the local command
+    /// queue and collision sweep. The worker remains authoritative for the
+    /// simulation, permission checks and the next movement sample's basis.
+    fn preview_sample(
+        &mut self,
+        session_id: Option<u64>,
+        created: Instant,
+        from: Transform,
+        position: eq_client_core::WorldPosition,
+    ) {
+        #[cfg(test)]
+        if self.suppress_submitted_preview {
+            return;
+        }
+        let Some(session_id) = session_id else { return };
+        // Only a matching worker result can retire the immediately shown
+        // mouse heading. Doing so while queuing a preview restores old yaw.
+        let mouse_heading = self.mouse_heading;
+        let pose = self.sample_pose.take();
+        self.display_in_frame(from, position, self.facing, pose);
+        self.mouse_heading = mouse_heading;
+        self.preview = Some(Preview {
+            session_id,
+            created,
+            position,
+        });
+    }
+
+    /// A matching result settles the preview once. Acceptance cannot replay
+    /// its distance; a refusal or changed endpoint replaces it with the
+    /// worker's observed placement, never a second provisional segment.
+    pub(super) fn reconcile_preview(
+        &mut self,
+        session_id: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: bool,
+    ) -> bool {
+        let Some(preview) = self
+            .preview
+            .filter(|preview| Some(preview.session_id) == session_id && preview.created == created)
+        else {
+            return false;
+        };
+        self.preview = None;
+        if refused
+            || self
+                .mouse_heading
+                .is_some_and(|heading| arc(heading, position.heading) == 0.0)
+        {
+            self.mouse_heading = None;
+        }
+        if refused || preview.position != position {
+            self.visual = Some(VisualMotion::at(position));
+            self.drawn_pose = None;
+            self.sample_pose = None;
+        }
+        true
+    }
+
+    fn restore_observed_preview(&mut self, world: &ClientWorld) {
+        if std::mem::take(&mut self.restore_preview) {
+            self.preview = None;
+            self.visual = world
+                .player()
+                .map(|player| VisualMotion::at(player.position));
+        }
+    }
+
+    /// Queues a locally accepted sample without changing the simulation
+    /// position. Samples play in order over their own spans. A dry-ground
+    /// submission may already be playing through `preview_sample`; its exact
+    /// result is settled by `reconcile_preview` rather than queued twice.
+    /// No playback advances beyond its submitted, collision-checked endpoint.
+    /// A sample accepted while the last still plays waits its turn; when
+    /// none is left the model stands at the newest endpoint. Display only;
     /// inferred, recording checklist 6.340 (the official client moves its
     /// own player every frame).
     ///
@@ -392,7 +495,8 @@ impl Controls {
     /// turn in the sample's span is the player facing a new way at once, so
     /// it shows at once while the positions still play.
     pub fn display_sample(&mut self, from: Transform, position: eq_client_core::WorldPosition) {
-        self.display_in_frame(from, position, self.facing);
+        let pose = self.sample_pose.take().filter(|_| self.refused.is_none());
+        self.display_in_frame(from, position, self.facing, pose);
     }
 
     /// Plays accepted rider motion in the boat frame; carry is applied only
@@ -434,7 +538,7 @@ impl Controls {
                 sample: carried.sample,
                 pose: carried.pose,
             });
-            self.display_in_frame(from, local, facing);
+            self.display_in_frame(from, local, facing, None);
         } else {
             self.display_sample(from, position);
         }
@@ -445,6 +549,7 @@ impl Controls {
         from: Transform,
         position: eq_client_core::WorldPosition,
         facing: Option<f32>,
+        pose: Option<pose::Path>,
     ) {
         if self.refused.is_some()
             || self
@@ -481,6 +586,7 @@ impl Controls {
             span,
             snap,
             follow_heading: self.sent_yaw != SentYaw::Ordinary,
+            pose,
         };
         match self.visual.as_mut().filter(|visual| !visual.finished()) {
             Some(visual) => {
@@ -669,8 +775,10 @@ impl Controls {
     /// it around the call.
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
+        let restore_preview = self.restore_preview || self.preview.is_some();
         *self = Self {
             speed,
+            restore_preview,
             last_sent: self.last_sent,
             last_answer: self.last_answer,
             last_jump: self.last_jump,
@@ -725,6 +833,7 @@ impl Controls {
         }
         if changed && revision.is_some() {
             self.moving = false;
+            self.restore_preview |= self.preview.take().is_some();
         }
         self.stunned
     }
@@ -735,12 +844,14 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
+        self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         if previous.fly != options.fly {
             self.airborne = self
                 .airborne
                 .as_ref()
                 .map(|_| AirborneController::default());
+            self.clear_poses();
         }
         self.taps = TapBuffer::default();
         self.jump = None;
@@ -759,9 +870,11 @@ impl Controls {
     /// Stops prediction without revoking the session's calibration. A pending
     /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
+        self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         self.moving = false;
         self.visual = None;
+        self.clear_poses();
         self.taps = TapBuffer::default();
         self.jump = None;
         self.mouse_turn = 0.0;
@@ -787,6 +900,10 @@ impl Controls {
     /// admits; a fresh start covers at most 0.1 s so an idle gap never
     /// becomes a jump.
     fn span(&self, elapsed: Duration) -> f32 {
+        #[cfg(test)]
+        if let Some(span) = self.test_span {
+            return span;
+        }
         elapsed.as_secs_f32().min(self.span_limit().as_secs_f32())
     }
 
@@ -1104,6 +1221,7 @@ impl Controls {
 
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
         if self.is_pending_move(session_id, created) {
+            self.restore_preview |= self.preview.take().is_some();
             self.resolve_carrier(created, true);
             self.finish();
             self.resolve_water_entry(true);
@@ -1153,6 +1271,33 @@ impl Controls {
             }
             Some(_) => LiquidBasis::Pending,
         }
+    }
+
+    /// Velocity at the point currently drawn, never the newest simulated
+    /// endpoint. A carrier or lift retains its own presentation precedence.
+    pub(crate) fn drawn_pose(&self) -> Option<pose::Snapshot> {
+        (!self.movement_options.fly
+            && self.boat.is_none()
+            && self.visual_boat.is_none()
+            && self.riding.is_none())
+        .then_some(self.drawn_pose)
+        .flatten()
+    }
+
+    fn clear_poses(&mut self) {
+        self.sample_pose = None;
+        self.drawn_pose = None;
+        if let Some(visual) = self.visual.as_mut() {
+            visual.pose = None;
+            for segment in &mut visual.queue {
+                segment.pose = None;
+            }
+        }
+    }
+
+    #[cfg(test)]
+    pub(crate) fn set_test_pose(&mut self, pose: Option<pose::Snapshot>) {
+        self.drawn_pose = pose;
     }
 }
 
@@ -1599,16 +1744,22 @@ pub(super) fn input(
         .filter(|_| mouse_allowed);
     if !heading_snapshots || !mouse_allowed {
         controls.mouse_heading = None;
-    } else if let Some(yaw) = mouse_aim.filter(|yaw| *yaw != 0.0)
-        && let Ok((_, player)) = players.single()
-    {
-        // Start from the current drawn actor, then apply every owned delta
-        // while the next movement sample waits for its normal opportunity.
-        let drawn_yaw = controls.mouse_heading.map_or_else(
-            || player.rotation.to_euler(EulerRot::YXZ).0,
-            eq_client_core::render_heading,
+    } else if let Some(heading) = aim.as_ref().and_then(|aim| aim.heading) {
+        // Acquiring a look turns the actor to the existing camera even with
+        // no drag. Each later frame keeps that view as its turn baseline.
+        // Preserve the exact prior value within a heading round trip's f32
+        // resolution; an aligned view must not invent a tiny new sample.
+        let prior = controls.mouse_heading.or_else(|| {
+            online
+                .world()
+                .player()
+                .map(|player| player.position.heading)
+        });
+        controls.mouse_heading = Some(
+            prior
+                .filter(|prior| arc(*prior, heading).abs() <= 512.0 * f32::EPSILON)
+                .unwrap_or(heading),
         );
-        controls.mouse_heading = Some(eq_client_core::world_heading(drawn_yaw + yaw));
     }
     if let Some(yaw) = mouse_aim.filter(|_| !heading_snapshots) {
         let limit = MOUSE_WIRE_RATE * MAX_CYCLE;
@@ -1846,7 +1997,7 @@ pub(super) fn input(
             return;
         }
     }
-    let (Ok((body, _)), Ok((camera, _)), Some(world), Some(accepted)) = (
+    let (Ok((body, drawn)), Ok((camera, _)), Some(world), Some(accepted)) = (
         players.single(),
         cameras.single(),
         moving_world,
@@ -2574,6 +2725,7 @@ pub(super) fn input(
                 ))
             .then_some((landing, trial, intent.request, displacement))
         });
+    let mut poses = pose::Path::default();
     let (landing, mut mode, jumped) = if placement_blocked {
         (feet, MovementMode::Forward, false)
     } else if let Some(plan) = &shore {
@@ -2603,7 +2755,7 @@ pub(super) fn input(
                 // Consume only this frame's grounded launch. Its arc may
                 // hit a ceiling immediately and have no upward speed left.
                 let _ = airborne.take_jump();
-                let landing = fall_step_with_water(
+                let landing = fall_step_observed(
                     airborne,
                     world,
                     physics,
@@ -2614,6 +2766,7 @@ pub(super) fn input(
                     body.height,
                     jump,
                     water_enabled,
+                    Some(&mut poses),
                 );
                 let falling = airborne.velocity() < 0.0
                     || feet.y - landing.y > eq_client_core::movement::MAX_GROUNDED_STEP;
@@ -2749,6 +2902,7 @@ pub(super) fn input(
         controls.held = Some(Held::Refused);
         return;
     }
+    let dry_pose = shore.is_none();
     controls.shoreline.sent(mode, shore, created);
     if entering {
         controls.water_entry_rollback = previous_airborne;
@@ -2798,6 +2952,14 @@ pub(super) fn input(
     // request's stamp to this one's, so the next span runs from the stamp.
     controls.last_sent = Some(created);
     controls.sent_span = span;
+    controls.sample_pose = (!placement_blocked
+        && !flying
+        && !swimming
+        && !entering
+        && dry_pose
+        && boat_sample.is_none()
+        && support.is_none())
+    .then_some(poses);
     controls.riding = under.map(|door| (door, created, position.y));
     controls.boat_pending = Some((
         created,
@@ -2858,6 +3020,29 @@ pub(super) fn input(
     // Until the heading sent reaches the facing, the model shows the facing.
     controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
     controls.wait_for(session_id, created, PendingKind::Move);
+    // First-frame feedback uses the same resolved endpoint as the queued
+    // request. Keep special transport/support frames on their existing
+    // accepted-only path; none of their custody or physics is predicted here.
+    if !placement_blocked
+        && !swimming
+        && !entering
+        && !flying
+        && boat_sample.is_none()
+        && support.is_none()
+        && controls.visual_boat.is_none()
+        && controls.boat.is_none()
+        && controls.riding.is_none()
+        && matches!(
+            mode,
+            MovementMode::Forward
+                | MovementMode::Backward
+                | MovementMode::Walk
+                | MovementMode::Strafe(_)
+                | MovementMode::GroundedDiagonal(_)
+        )
+    {
+        controls.preview_sample(session_id, created, *drawn, position_sent);
+    }
 }
 
 /// How the lift the last sample stood on moved the feet since that sample.
@@ -3022,6 +3207,36 @@ pub(super) fn fall_step_with_water(
     jump: bool,
     water_enabled: bool,
 ) -> Vec3 {
+    fall_step_observed(
+        airborne,
+        world,
+        physics,
+        climb,
+        feet,
+        delta,
+        span,
+        height,
+        jump,
+        water_enabled,
+        None,
+    )
+}
+
+/// Observes the same accepted slices without changing their physics or commands.
+#[allow(clippy::too_many_arguments)]
+fn fall_step_observed(
+    airborne: &mut AirborneController,
+    world: &CollisionWorld,
+    physics: VerticalPhysics,
+    climb: Option<f32>,
+    feet: Vec3,
+    delta: Vec3,
+    span: f32,
+    height: f32,
+    jump: bool,
+    water_enabled: bool,
+    mut poses: Option<&mut pose::Path>,
+) -> Vec3 {
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // At most five slices.
     let slices = (span / 0.05).ceil().clamp(1.0, 5.0) as u8;
     let slice = f32::from(slices);
@@ -3057,6 +3272,31 @@ pub(super) fn fall_step_with_water(
         let allowed = reach + jump_rise(rising, physics.gravity, elapsed);
         if next.y - feet.y > allowed {
             break;
+        }
+        if let Some(poses) = poses.as_deref_mut() {
+            let horizontal = Vec2::new(next.x - position.x, next.z - position.z)
+                / step.seconds.max(f32::EPSILON);
+            // Observe the launch speed before this slice's gravity. Reading
+            // only trial.velocity() can miss L03 in a long movement sample.
+            let vertical = if step.jump && airborne.can_launch(world, position, physics, height) {
+                physics.jump_speed
+            } else {
+                airborne.velocity()
+            };
+            poses.push(
+                elapsed - step.seconds,
+                pose::Snapshot {
+                    horizontal,
+                    vertical,
+                },
+            );
+            poses.push(
+                elapsed,
+                pose::Snapshot {
+                    horizontal,
+                    vertical: trial.velocity(),
+                },
+            );
         }
         *airborne = trial;
         position = next;
@@ -3375,27 +3615,49 @@ fn safe_fall(world: &ClientWorld) -> u32 {
 
 /// One accepted sample waiting to play: where it ends, how many seconds of
 /// play it covers, and whether its facing shows at once.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Segment {
     to: Transform,
     span: f32,
     snap: bool,
     follow_heading: bool,
+    pose: Option<pose::Path>,
 }
 
-/// The accepted samples the model plays back, one after another, each over
-/// its own span; never past the newest accepted position.
+/// Local samples played in order over their own spans. A marked dry-ground
+/// submission may play before its worker result, never beyond its exact
+/// collision-checked endpoint; acceptance does not queue it again.
 struct VisualMotion {
     from: Transform,
     to: Transform,
     elapsed: f32,
     duration: f32,
     follow_heading: bool,
+    pose: Option<pose::Path>,
     /// Samples accepted while an earlier one still plays, oldest first.
     queue: std::collections::VecDeque<Segment>,
 }
 
 impl VisualMotion {
+    fn at(position: eq_client_core::WorldPosition) -> Self {
+        let transform = Transform::from_translation(Vec3::from_array(
+            eq_client_core::render_position(position),
+        ))
+        .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
+            position.heading,
+        )));
+        Self::start(
+            transform,
+            Segment {
+                to: transform,
+                span: 0.0,
+                snap: false,
+                follow_heading: false,
+                pose: None,
+            },
+        )
+    }
+
     /// Plays `segment` from where the model is shown now.
     fn start(from: Transform, segment: Segment) -> Self {
         Self {
@@ -3408,6 +3670,7 @@ impl VisualMotion {
             elapsed: 0.0,
             duration: segment.span,
             follow_heading: segment.follow_heading,
+            pose: segment.pose,
             queue: std::collections::VecDeque::new(),
         }
     }
@@ -3442,6 +3705,10 @@ impl VisualMotion {
         self.queue.is_empty() && self.elapsed >= self.duration
     }
 
+    fn drawn_pose(&self) -> Option<pose::Snapshot> {
+        self.pose.as_ref().and_then(|pose| pose.at(self.elapsed))
+    }
+
     /// Plays on `seconds`, moving to the next accepted sample as each ends,
     /// with the time left over carried into it.
     fn advance(&mut self, seconds: f32, transform: &mut Transform) {
@@ -3458,6 +3725,7 @@ impl VisualMotion {
             self.to = next.to;
             self.duration = next.span;
             self.follow_heading = next.follow_heading;
+            self.pose = next.pose;
         }
         let fraction = (self.elapsed / self.duration.max(0.01)).clamp(0.0, 1.0);
         transform.translation = self.from.translation.lerp(self.to.translation, fraction);
@@ -3465,7 +3733,7 @@ impl VisualMotion {
     }
 }
 
-/// Advances the player and follow camera every rendered frame between network
+/// Advances the player and follow camera every rendered frame between movement
 /// samples. With `eq_client_render::motion::pace` logging at debug, each
 /// frame says how fast the model was shown moving, for a sitting's numbers.
 #[allow(clippy::needless_pass_by_value)]
@@ -3477,6 +3745,7 @@ pub(super) fn interpolate(
     mut cameras: Query<(&mut OrbitCamera, Has<crate::camera::FreeCamera>)>,
     mut displayed_mouse: Local<Option<Entity>>,
 ) {
+    controls.restore_observed_preview(online.world());
     let preview = controls.mouse_heading;
     if controls.visual.is_none()
         && preview.is_none()
@@ -3501,9 +3770,11 @@ pub(super) fn interpolate(
     if let Some(visual) = controls.visual.as_mut() {
         visual.advance(time.delta_secs(), &mut transform);
         follow_heading = visual.follow_heading;
+        let pose = visual.drawn_pose();
         if visual.finished() {
             controls.visual = None;
         }
+        controls.drawn_pose = pose;
     }
     // A rising lift carries the drawn model on its floor between samples,
     // as the program draws its rider; the samples sent are unchanged.
@@ -3545,8 +3816,7 @@ pub(super) fn interpolate(
         }
     }
     if let Some(heading) = preview {
-        // Position still plays only accepted samples. An older queued pose
-        // never overwrites the latest local mouse orientation.
+        // An older queued pose never overwrites the latest local mouse orientation.
         transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
         *displayed_mouse = Some(entity);
     } else if had_preview && let Some(player) = online.world().player() {
@@ -4623,6 +4893,7 @@ pub(super) mod tests {
                 span: 0.1,
                 snap: false,
                 follow_heading: false,
+                pose: None,
             },
         );
         let mut transform = bevy::prelude::Transform::from_scale(bevy::prelude::Vec3::splat(2.0));
@@ -6193,7 +6464,7 @@ pub(super) mod tests {
 
     /// The app of [`app`] for this installed client, the player standing
     /// still on its floor where the session takes jumps, holding Jump.
-    fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
+    pub(super) fn standing_jump(client: InstalledClient) -> (App, mpsc::Receiver<ClientCommand>) {
         let (mut app, _) = app();
         let (sender, receiver) = mpsc::sync_channel(16);
         app.insert_resource(crate::outbox::Outbox::new(Some(sender)));
@@ -7509,8 +7780,12 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
+        let previewed =
+            controls.reconcile_preview(Some(request.session_id), created, request.position, false);
         assert!(controls.moved(Some(request.session_id), created));
-        controls.display_sample(drawn, request.position);
+        if !previewed {
+            controls.display_sample(drawn, request.position);
+        }
         controls.resolve_water_entry(false);
     }
 
@@ -9425,6 +9700,7 @@ pub(super) mod tests {
                 elapsed: 0.0,
                 duration: 0.1,
                 follow_heading: false,
+                pose: None,
                 queue: std::collections::VecDeque::new(),
             }),
             ..Default::default()
@@ -9941,8 +10217,12 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
+        let previewed =
+            controls.reconcile_preview(Some(request.session_id), created, request.position, false);
         assert!(controls.moved(Some(request.session_id), created));
-        controls.display_sample(drawn, request.position);
+        if !previewed {
+            controls.display_sample(drawn, request.position);
+        }
         controls.last_accepted = Instant::now()
             .checked_sub(Duration::from_millis(100))
             .unwrap();
@@ -10376,7 +10656,8 @@ pub(super) mod tests {
     }
 
     fn mouse_look_app() -> (App, mpsc::Receiver<ClientCommand>, Entity, Entity) {
-        let (mut app, receiver) = app();
+        let (mut app, receiver) = fixture();
+        crate::systems::configure_stages(&mut app);
         crate::camera::testing::install_look(&mut app);
         let mut time = Time::<()>::default();
         time.advance_by(Duration::from_millis(250));
@@ -10384,12 +10665,17 @@ pub(super) mod tests {
             .init_resource::<crate::items::ItemState>()
             .init_resource::<crate::inventory::InventoryState>()
             .init_resource::<crate::windows::pointer::Wheel>()
-            .add_systems(Update, crate::camera::turn.before(input))
+            .add_systems(
+                Update,
+                (crate::camera::turn, input, spend_endurance)
+                    .chain()
+                    .in_set(crate::systems::Stage::Input),
+            )
             .add_systems(
                 Update,
                 (interpolate, crate::camera::orbit_camera)
                     .chain()
-                    .after(input),
+                    .in_set(crate::systems::Stage::Present),
             );
         let world = app.world_mut();
         world.resource_mut::<ButtonInput<KeyCode>>().reset_all();
@@ -10398,6 +10684,9 @@ pub(super) mod tests {
             .single(world)
             .unwrap();
         world.entity_mut(camera).insert(Transform::default());
+        world.get_mut::<OrbitCamera>(camera).unwrap().yaw =
+            crate::camera::behind(eq_client_core::render_heading(0.0));
+        world.get_mut::<OrbitCamera>(camera).unwrap().focus = Vec3::new(0.0, 3.0, 0.0);
         let player = world
             .query_filtered::<Entity, With<Player>>()
             .single(world)
@@ -10420,6 +10709,286 @@ pub(super) mod tests {
         let view_forward = world.get::<Transform>(camera).unwrap().forward();
         assert!(actor_forward.abs_diff_eq(turned_to(heading) * Vec3::Z, 0.001));
         assert!(actor_forward.abs_diff_eq(view_forward.with_y(0.0).normalize(), 0.001));
+    }
+
+    #[test]
+    fn aligned_right_press_does_not_enqueue_a_roundoff_turn() {
+        let (mut app, receiver, camera, player) = mouse_look_app();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        for _ in 0..16 {
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            assert_attached_heading(&app, camera, player, 0.0);
+        }
+    }
+
+    #[test]
+    fn right_press_faces_the_existing_view_without_drag_or_camera_snap() {
+        for (first_person, pitch) in [(false, -0.3), (true, 0.0), (true, 1.55)] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            {
+                let mut orbit = app.world_mut().get_mut::<OrbitCamera>(camera).unwrap();
+                orbit.yaw = 0.83;
+                orbit.pitch = pitch;
+                if first_person {
+                    orbit.look_first_person_for_test();
+                    orbit.look = pitch;
+                }
+            }
+            // Warm the actual Present stage before the press. The actor and
+            // camera deliberately disagree; no MouseMotion message is sent.
+            app.update();
+            let rotation = app.world().get::<Transform>(camera).unwrap().rotation;
+            let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+            let (yaw, pitch) = (orbit.yaw, orbit.view_pitch());
+            let forward = Quat::from_rotation_y(yaw) * Vec3::NEG_Z;
+            let heading = eq_client_core::world_heading(forward.x.atan2(forward.z));
+            assert!((turned_to(0.0) * Vec3::Z).distance(forward) > 0.5);
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            for _ in 0..3 {
+                app.update();
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "the normal sample gate stays closed"
+                );
+                assert_attached_heading(&app, camera, player, heading);
+                let orbit = app.world().get::<OrbitCamera>(camera).unwrap();
+                assert!(
+                    Quat::from_rotation_y(orbit.yaw).angle_between(Quat::from_rotation_y(yaw))
+                        < 0.001
+                );
+                assert!((orbit.view_pitch() - pitch).abs() < 0.0001);
+                assert!(
+                    app.world()
+                        .get::<Transform>(camera)
+                        .unwrap()
+                        .rotation
+                        .angle_between(rotation)
+                        < 0.001
+                );
+            }
+            // One absolute turn waits for the normal opportunity. Acceptance
+            // and subsequent zero-delta held frames retain the same view.
+            app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+                .checked_sub(Duration::from_millis(100))
+                .unwrap();
+            app.update();
+            let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+                panic!("expected one stationary heading snapshot");
+            };
+            assert_eq!(request.heading, HeadingUpdate::Snapshot);
+            assert!(arc(heading, request.position.heading).abs() < 0.001);
+            assert_eq!(
+                Vec3::from_array(eq_client_core::render_position(request.position)),
+                Vec3::new(0.0, 3.0, 0.0)
+            );
+            accept(&mut app, &request);
+            for _ in 0..12 {
+                app.update();
+                assert!(receiver.try_recv().is_err());
+                assert_attached_heading(&app, camera, player, heading);
+                assert!(
+                    app.world()
+                        .get::<Transform>(camera)
+                        .unwrap()
+                        .rotation
+                        .angle_between(rotation)
+                        < 0.001
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn right_press_applies_same_frame_drag_once_from_the_existing_camera() {
+        let (mut app, receiver, camera, player) = mouse_look_app();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+        app.update();
+        let yaw = app.world().get::<OrbitCamera>(camera).unwrap().yaw;
+        let turn = app
+            .world()
+            .resource::<crate::options::OptionsState>()
+            .options
+            .turn_per_pixel(crate::camera::screen_width(None));
+        let expected = Quat::from_rotation_y(yaw - 73.0 * turn) * Vec3::NEG_Z;
+        let heading = eq_client_core::world_heading(expected.x.atan2(expected.z));
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        mouse_drag(&mut app, 73.0, 0.0);
+        app.update();
+        assert_attached_heading(&app, camera, player, heading);
+        app.update();
+        assert_attached_heading(&app, camera, player, heading);
+        assert!(receiver.try_recv().is_err());
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now()
+            .checked_sub(Duration::from_millis(100))
+            .unwrap();
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected one dragged heading snapshot");
+        };
+        assert_eq!(request.heading, HeadingUpdate::Snapshot);
+        assert!(arc(heading, request.position.heading).abs() < 0.001);
+        assert_eq!(
+            Vec3::from_array(eq_client_core::render_position(request.position)),
+            Vec3::new(0.0, 3.0, 0.0)
+        );
+        accept(&mut app, &request);
+        for _ in 0..12 {
+            app.update();
+            assert!(receiver.try_recv().is_err());
+            assert_attached_heading(&app, camera, player, request.position.heading);
+        }
+    }
+
+    #[test]
+    fn right_press_with_held_w_moves_along_the_existing_camera_and_repress_recaptures_it() {
+        let (mut app, receiver, camera, player) = keyboard_mouse_look_app();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+        app.update();
+        let forward = Quat::from_rotation_y(0.83) * Vec3::NEG_Z;
+        native_movement_key(&mut app, KeyCode::KeyW, true);
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        let ClientCommand::Move(request) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward sample");
+        };
+        assert_eq!(request.heading, HeadingUpdate::Snapshot);
+        let delta = Vec3::from_array(eq_client_core::render_position(request.position))
+            - Vec3::new(0.0, 3.0, 0.0);
+        assert!(delta.normalize().abs_diff_eq(forward, 0.001));
+        assert!(
+            (delta.length() - 6.0 * app.world().resource::<Controls>().sent_span).abs() < 0.001
+        );
+        assert_attached_heading(&app, camera, player, request.position.heading);
+        accept(&mut app, &request);
+        native_movement_key(&mut app, KeyCode::KeyW, false);
+        crate::camera::testing::button(&mut app, MouseButton::Right, false);
+        app.update();
+        let ClientCommand::Move(stop) = receiver.try_recv().unwrap() else {
+            panic!("expected the ordinary zero-input stop");
+        };
+        assert_eq!(stop.mode, MovementMode::Forward);
+        assert_eq!(stop.heading, HeadingUpdate::Rate);
+        assert_eq!(stop.position, request.position);
+        accept(&mut app, &stop);
+        app.update();
+        app.update();
+        app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 2.4;
+        app.update();
+        let before = app.world().get::<Transform>(camera).unwrap().rotation;
+        app.world_mut().resource_mut::<Controls>().last_accepted = Instant::now();
+        crate::camera::testing::button(&mut app, MouseButton::Right, true);
+        app.update();
+        let forward = Quat::from_rotation_y(2.4) * Vec3::NEG_Z;
+        let heading = eq_client_core::world_heading(forward.x.atan2(forward.z));
+        assert_attached_heading(&app, camera, player, heading);
+        assert!(
+            app.world()
+                .get::<Transform>(camera)
+                .unwrap()
+                .rotation
+                .angle_between(before)
+                < 0.001
+        );
+        assert!(receiver.try_recv().is_err());
+    }
+
+    #[test]
+    fn idle_right_press_over_ui_or_without_focus_owns_no_facing() {
+        for over_ui in [true, false] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+            if over_ui {
+                app.world_mut()
+                    .resource_mut::<crate::chat::ChatState>()
+                    .hovered = true;
+            } else {
+                let world = app.world_mut();
+                world
+                    .query_filtered::<&mut Window, With<bevy::window::PrimaryWindow>>()
+                    .single_mut(world)
+                    .unwrap()
+                    .focused = false;
+            }
+            app.update();
+            let before = app.world().get::<Transform>(camera).unwrap().rotation;
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            app.update();
+            assert!(app.world().resource::<MouseAim>().heading.is_none());
+            assert!(app.world().resource::<Controls>().mouse_heading.is_none());
+            assert!(
+                app.world()
+                    .get::<Transform>(player)
+                    .unwrap()
+                    .rotation
+                    .angle_between(turned_to(0.0))
+                    < 0.001
+            );
+            assert!(
+                app.world()
+                    .get::<Transform>(camera)
+                    .unwrap()
+                    .rotation
+                    .angle_between(before)
+                    < 0.001
+            );
+            assert!(receiver.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn right_press_preserves_detached_and_offline_orbit_ownership() {
+        for detached in [false, true] {
+            let (mut app, receiver, camera, player) = mouse_look_app();
+            app.world_mut().get_mut::<OrbitCamera>(camera).unwrap().yaw = 0.83;
+            if detached {
+                app.add_systems(
+                    Update,
+                    crate::camera::toggle_free
+                        .before(crate::camera::turn)
+                        .in_set(crate::systems::Stage::Input),
+                );
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .press(KeyCode::F9);
+                app.update();
+                app.world_mut()
+                    .resource_mut::<ButtonInput<KeyCode>>()
+                    .reset(KeyCode::F9);
+                assert!(
+                    app.world()
+                        .entity(camera)
+                        .contains::<crate::camera::FreeCamera>()
+                );
+            } else {
+                app.world_mut()
+                    .resource_mut::<online::OnlineState>()
+                    .enabled = false;
+                app.update();
+            }
+            let before = app.world().get::<Transform>(camera).unwrap().rotation;
+            crate::camera::testing::button(&mut app, MouseButton::Right, true);
+            mouse_drag(&mut app, 73.0, 0.0);
+            app.update();
+            assert!(app.world().resource::<MouseAim>().heading.is_none());
+            assert!(
+                app.world()
+                    .get::<Transform>(player)
+                    .unwrap()
+                    .rotation
+                    .angle_between(turned_to(0.0))
+                    < 0.001
+            );
+            let after = app.world().get::<Transform>(camera).unwrap().rotation;
+            if detached {
+                assert!(after.angle_between(before) < 0.001);
+            } else {
+                assert!(after.angle_between(before) > 0.1);
+            }
+            assert!(receiver.try_recv().is_err());
+        }
     }
 
     #[test]
@@ -10522,22 +11091,44 @@ pub(super) mod tests {
         assert!(receiver.try_recv().is_err(), "another sample is in flight");
         assert_eq!(
             app.world().get::<Transform>(player).unwrap().translation,
-            Vec3::new(0.0, 3.0, 0.0)
+            Vec3::from_array(eq_client_core::render_position(old.position))
+        );
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            world_position([0.0, 3.0, 0.0], 0.0),
+            "a drawn preview must not advance the observed position",
         );
         accept(&mut app, &old);
         app.update();
         assert_attached_heading(&app, camera, player, 256.0);
         let old_point = Vec3::from_array(eq_client_core::render_position(old.position));
+        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward step after reversing");
+        };
         assert!(
             app.world()
                 .get::<Transform>(player)
                 .unwrap()
                 .translation
-                .abs_diff_eq(old_point, 0.001)
+                .abs_diff_eq(
+                    Vec3::from_array(eq_client_core::render_position(reversed.position)),
+                    0.001
+                )
         );
-        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
-            panic!("expected a forward step after reversing");
-        };
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            old.position
+        );
         assert_eq!(reversed.heading, HeadingUpdate::Snapshot);
         let displacement =
             Vec3::from_array(eq_client_core::render_position(reversed.position)) - old_point;
@@ -10581,6 +11172,15 @@ pub(super) mod tests {
             app.update();
             assert!(receiver.try_recv().is_err());
             assert_attached_heading(&app, camera, player, expected);
+            if corrected {
+                app.world_mut().resource_mut::<Controls>().speed = Some(6.0);
+                app.update();
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "restoring a grant cannot revive the old press"
+                );
+                assert_attached_heading(&app, camera, player, expected);
+            }
         }
     }
 
@@ -11079,7 +11679,7 @@ pub(super) mod tests {
                         .unwrap()
                         .translation
                         .abs_diff_eq(
-                            Vec3::from_array(eq_client_core::render_position(chord.position)),
+                            Vec3::from_array(eq_client_core::render_position(released.position)),
                             0.001,
                         )
                 );

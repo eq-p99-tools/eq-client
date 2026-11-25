@@ -104,6 +104,22 @@ pub(super) fn relist(change: ListingChange, level: &mut u8, listing: &mut Listin
     }
 }
 
+/// Mac level appearance writes spawn +0xad, never character +0x90.
+pub(super) fn relist_own(
+    change: ListingChange,
+    dialect: crate::GameDialect,
+    player: &mut crate::PlayerState,
+    displayed_level: &mut Option<u8>,
+) {
+    if super::character::separate_spawn_level(dialect)
+        && let ListingChange::Level(level) = change
+    {
+        *displayed_level = Some(level);
+    } else {
+        relist(change, &mut player.level, &mut player.listing);
+    }
+}
+
 /// What the player hears when their anonymity changes. Both programs keep
 /// it as two bits that `/anonymous` and `/roleplay` set apart: `/roleplay`
 /// never touches the anonymous bit, so a change of that bit is
@@ -139,7 +155,7 @@ impl ClientWorld {
         };
         let before = player.listing.anonymity;
         let guild = player.listing.guild;
-        relist(change, &mut player.level, &mut player.listing);
+        relist_own(change, self.generation, player, &mut self.displayed_level);
         let notice = match change {
             ListingChange::Away(away) => Some(ListingNotice::Away(away)),
             // The Titanium program says its line as `/lfg` goes (read
@@ -333,7 +349,7 @@ impl ClientWorld {
             .iter()
             .map(|player| ZonePlayer {
                 name: player.name.clone(),
-                level: player.level,
+                level: self.displayed_level().unwrap_or(player.level),
                 class: player.class,
                 race: player.race,
                 guild: guild(&player.listing),

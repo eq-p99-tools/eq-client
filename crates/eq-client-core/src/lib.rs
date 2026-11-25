@@ -122,6 +122,9 @@ pub enum WorldUpdate {
     /// Where the connection stands; anything but connected disables local
     /// gameplay input immediately.
     Connection(world::Link),
+    /// Local file-check progress: completed operands, total operands, bytes read.
+    /// No gameplay authority; `None` only clears the temporary indication.
+    CheckingFiles(Option<(usize, usize, u64)>),
     /// A decoded line for the on-screen communication log.
     Chat(chat::ChatLine),
     /// A server string-table message; presentation resolves the ID locally.

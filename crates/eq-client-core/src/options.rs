@@ -963,6 +963,27 @@ mod tests {
     use super::*;
 
     #[test]
+    fn fixed_qol_retired_settings_preserve_the_rest_of_an_old_file() {
+        let options = Options::read(
+            "free_chase_tilt = false\ntyped_reports = false\ninvert_y = true\nclip_plane = 42\nlong_chase_camera = false\nfree_camera = false\nclear_view = true\nuse_picks_nearest = true\n",
+            Options::default(),
+        );
+        assert!(options.invert_y);
+        assert_eq!(options.clip_plane, 42);
+        assert!(!options.qol.on(Fix::LongChaseCamera));
+        assert!(!options.qol.on(Fix::FreeCamera));
+        assert!(options.qol.on(Fix::ClearView));
+        assert!(options.qol.on(Fix::UsePicksNearest));
+        let text = options.text();
+        for retired in ["free_chase_tilt", "typed_reports"] {
+            assert!(!text.contains(retired));
+            assert!(!Toggle::all().any(|toggle| toggle.key() == retired));
+            assert_eq!(Fix::from_key(retired), None);
+        }
+        assert_eq!(Options::read(&text, Options::default()), options);
+    }
+
+    #[test]
     fn options_keep_to_their_file_and_old_files_still_read() {
         let mut options = Options::default();
         options.set(Toggle::InvertY, true);

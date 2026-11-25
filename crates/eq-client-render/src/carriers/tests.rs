@@ -21,7 +21,10 @@ fn asset() -> ActorAsset {
                 material_mode: MaterialMode::Opaque,
                 light: Vec::new(),
             }],
-            materials: vec![ObjectMaterial { double_sided: true }],
+            materials: vec![ObjectMaterial {
+                double_sided: true,
+                animation: None,
+            }],
             collision: vec![[points[0], points[1], points[2]]],
             no_hit_collision: Vec::new(),
             vertex_count: None,

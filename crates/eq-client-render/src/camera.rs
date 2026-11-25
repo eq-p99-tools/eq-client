@@ -187,6 +187,11 @@ impl MouseLook {
 pub(crate) struct MouseAim {
     /// Horizontal input owned by an attached online look this frame.
     pub(crate) horizontal: Option<f32>,
+    /// A captured press starts this frame's look from the existing view.
+    pub(crate) acquired: bool,
+    /// Completed facing along the camera's horizontal sightline on acquisition
+    /// or drag. Retained yaw defines it even at vertical pitch.
+    pub(crate) heading: Option<f32>,
     /// Focus, admission or exclusive input ownership changed.
     pub(crate) interrupted: bool,
 }
@@ -231,6 +236,7 @@ pub(crate) fn look(
         && (!online.enabled || online.world().connected());
     let available =
         focused && playing && !script.is_some_and(|script| script.background_owns_input());
+    aim.acquired = false;
     aim.interrupted = !available || ownership.admission != admission;
     if aim.interrupted {
         *look = MouseLook::default();
@@ -243,7 +249,12 @@ pub(crate) fn look(
     let mut mask_left = ownership.left;
     for event in events.read().filter(|event| Some(event.window) == primary) {
         match (event.button, event.state.is_pressed()) {
-            (MouseButton::Right, down) => look.right(down, available, free),
+            (MouseButton::Right, down) => {
+                look.right(down, available, free);
+                if down && look.held {
+                    aim.acquired = true;
+                }
+            }
             (MouseButton::Left, true) => {
                 look.left = look.held;
                 ownership.left = look.left;
@@ -282,8 +293,8 @@ fn mouse_turn_capped(yaw: f32, race: Option<u32>, seconds: f32) -> f32 {
     yaw.clamp(-most, most)
 }
 
-/// Samples horizontal look before locomotion. Online the attached view follows
-/// the actor's rotation, and offline the same input turns the orbit directly.
+/// Samples horizontal look before locomotion. An online absolute turn starts
+/// from the existing view, and offline the input turns the orbit directly.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn turn(
     look: Res<MouseLook>,
@@ -298,6 +309,8 @@ pub(super) fn turn(
     (windows, time): (Query<&Window, With<PrimaryWindow>>, Option<Res<Time>>),
 ) {
     aim.horizontal = None;
+    aim.heading = None;
+    let acquired = std::mem::take(&mut aim.acquired);
     if !look.held {
         motion.clear();
         return;
@@ -315,6 +328,13 @@ pub(super) fn turn(
         );
         if online.enabled {
             aim.horizontal = Some(yaw);
+            if yaw != 0.0 || acquired {
+                // [I] Acquiring right look faces along the existing camera.
+                // Camera forward is -Z, whereas the actor faces +Z. Use the
+                // horizontal sightline, independent of chase/first-person pitch.
+                let forward = Quat::from_rotation_y(camera.yaw + yaw) * Vec3::NEG_Z;
+                aim.heading = Some(eq_client_core::world_heading(forward.x.atan2(forward.z)));
+            }
         } else {
             camera.yaw += yaw;
         }
@@ -489,9 +509,7 @@ pub(super) fn orbit_camera(
 
     let client = settings.map_or_else(Default::default, |settings| settings.0.installed_client);
     let program = client.camera_limits();
-    let limits = program
-        .on_leash(leash(&options.options))
-        .with_tilt(tilt(&options.options));
+    let limits = program.on_leash(leash(&options.options)).with_tilt(tilt());
     let rise = if options.options.invert_y { -1.0 } else { 1.0 };
     let clip = clip_distance(client, &options.options, online.world());
     let turn = options
@@ -508,6 +526,7 @@ pub(super) fn orbit_camera(
         }
         if playing
             && online.enabled
+            && !online.world().generation().supports_heading_snapshots()
             && look.held
             && let Some((_, player)) = player
         {
@@ -604,8 +623,7 @@ impl OrbitCamera {
 /// leash, until a limit holds the height or the distance.
 /// The camera's pitch and radius are that height and distance's angle and
 /// sightline. That is the program's tilt ([`ChaseTilt::Program`]); on this
-/// client's free tilt ([`ChaseTilt::Free`], the player's quality-of-life
-/// choice [`eq_client_core::qol::Fix::FreeChaseTilt`]) a drag turns the
+/// client always uses free tilt ([`ChaseTilt::Free`]): a drag turns the
 /// camera around the eyes as far as straight up or down and the wheel
 /// moves it along its sightline, whatever its height.
 ///
@@ -655,18 +673,9 @@ pub(crate) fn leash(
     }
 }
 
-/// How the player lets mouse look tilt the chase camera: as far as straight
-/// up or down unless they turned the quality-of-life setting off
-/// ([`eq_client_core::qol::Fix::FreeChaseTilt`]), else the program's height
-/// model.
-pub(crate) fn tilt(
-    options: &eq_client_core::options::Options,
-) -> eq_client_assets::camera::ChaseTilt {
-    if options.qol.on(eq_client_core::qol::Fix::FreeChaseTilt) {
-        eq_client_assets::camera::ChaseTilt::Free
-    } else {
-        eq_client_assets::camera::ChaseTilt::Program
-    }
+/// Mouse look always permits full chase tilt, independent of saved settings.
+pub(crate) const fn tilt() -> eq_client_assets::camera::ChaseTilt {
+    eq_client_assets::camera::ChaseTilt::Free
 }
 
 /// How much farther out than the program lets its chase camera go a camera
@@ -1389,13 +1398,7 @@ mod tests {
     #[test]
     fn the_free_tilt_turns_the_chase_camera_as_far_as_straight_up_or_down_at_any_zoom() {
         use eq_client_assets::camera::{ChaseLeash, ChaseTilt, TITANIUM};
-        let mut options = eq_client_core::options::Options::default();
-        // Free by default; turned off, the program's height model.
-        assert_eq!(tilt(&options), ChaseTilt::Free);
-        options
-            .qol
-            .set(eq_client_core::qol::Fix::FreeChaseTilt, false);
-        assert_eq!(tilt(&options), ChaseTilt::Program);
+        assert_eq!(tilt(), ChaseTilt::Free);
         for leash in [ChaseLeash::Program, ChaseLeash::Long] {
             let limits = TITANIUM.on_leash(leash).with_tilt(ChaseTilt::Free);
             let mut camera = OrbitCamera {

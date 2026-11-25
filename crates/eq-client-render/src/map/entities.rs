@@ -79,15 +79,18 @@ impl Known<'_> {
 /// distance, visibility or count filter inherited from the 3D renderer.
 fn known(world: &ClientWorld) -> impl Iterator<Item = Known<'_>> {
     let player = world.player();
-    player.and_then(known_player).into_iter().chain(
-        world
-            .spawns()
-            .values()
-            .filter(move |spawn| {
-                player.is_none_or(|player| player.spawn_id != spawn.state.spawn_id)
-            })
-            .filter_map(known_spawn),
-    )
+    player
+        .and_then(|player| known_player(player, world.displayed_level().unwrap_or(player.level)))
+        .into_iter()
+        .chain(
+            world
+                .spawns()
+                .values()
+                .filter(move |spawn| {
+                    player.is_none_or(|player| player.spawn_id != spawn.state.spawn_id)
+                })
+                .filter_map(known_spawn),
+        )
 }
 
 fn kind_name(kind: SpawnKind) -> &'static str {
@@ -547,7 +550,7 @@ fn legend_text(view: &MapView, counts: [usize; 3]) -> String {
 /// Resolve a single entity without scanning the complete spawn collection.
 pub(super) fn entity(world: &ClientWorld, id: u16) -> Option<Known<'_>> {
     if let Some(player) = world.player().filter(|player| player.spawn_id == id) {
-        return known_player(player);
+        return known_player(player, world.displayed_level().unwrap_or(player.level));
     }
     world.spawn(id).and_then(known_spawn)
 }
@@ -567,13 +570,13 @@ fn known_spawn(spawn: &Spawn) -> Option<Known<'_>> {
     })
 }
 
-fn known_player(player: &eq_client_core::PlayerState) -> Option<Known<'_>> {
+fn known_player(player: &eq_client_core::PlayerState, displayed_level: u8) -> Option<Known<'_>> {
     finite(player.position).then_some(Known {
         id: player.spawn_id,
         name: &player.name,
         kind: SpawnKind::Player,
         position: player.position,
-        level: player.level,
+        level: displayed_level,
         class: player.class,
         invisible: false,
         own: true,

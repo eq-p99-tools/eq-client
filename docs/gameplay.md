@@ -617,16 +617,18 @@ it, whoever types it: the keyboard, a social's line or a script's `slash()`
 step, each with the same checks and pace. A button's game command answers
 that the client does not take the command that way yet.
 
-On Titanium servers these follow the official client (read R49-23,
-recording checklist 6.511), in the installation's own lines:
+On Titanium, the petition behavior and report windows follow read R49-23
+(recording checklist 6.511), using the installation's own lines. Typed
+bug/feedback routing is this client's own rule:
 - `/petition` sends its words and echoes them in the official line. With no
   words it prints the official line for that and sends nothing.
   `/guidehelp` is the same, with its own two lines.
 - Where the world turns the petition window on, the official client shows
   its petition window instead and ignores the words. Which window that is
   is unread, so this client sends the words as above: a departure.
-- `/bugreport` and `/feedback` open the installed skin's bug report and
-  feedback windows and ignore the words, as the official client does:
+- Bare or whitespace-only `/bugreport` and `/feedback` open the installed
+  skin's bug report and feedback windows. Nonblank text submits a report
+  directly; the original client opens the windows and ignores those words:
   - Opening the bug report fills its three place labels with where you
     stand, each cut to a whole number, and clears its four check boxes and
     the target's name. The place and heading go with the report as shown.
@@ -667,20 +669,19 @@ recording checklist 6.511), in the installation's own lines:
   - The feedback window's **Send** sends the words with your place and
     heading, clears the box and closes, with no line; empty, it only
     closes. Its **Cancel** clears the box and closes.
-  - The **Typed Reports** setting (off by default) sends the typed words
-    instead, as earlier versions of this client did: a bug report then
-    prints the official sent line, or its empty-box line with no words.
   - If the installed skin has no such window, a line says so and points to
-    Typed Reports (a departure: the official client always has them).
+    typing the report after the command (the original client always has its windows).
 
-Elsewhere, or on any server:
+On every server that offers the report:
 - A bug report's first word may name its category with a colon, such as
   `/bug pathing: the guard walks into the wall`. A word that names no
-  category, or one without its colon, leaves the whole line as the text,
-  under Other. Bug reports and feedback carry the player's place and
+  category, one without its colon, or a category with no following body,
+  leaves the whole line as the text under Other. For example,
+  `/bugreport pathing:` sends `pathing:` as Other. Only a blank literal
+  command tail opens the window. Bug reports and feedback carry the player's place and
   heading, and a bug report the selected entity where there is one.
-- On Mac-era servers, whose official client is unread, a line with nothing
-  to say sends nothing and answers `Use /petition with what to say.`, and
+- On Mac-era servers, whose official client is unread, an empty `/petition`
+  sends nothing and answers `Use /petition with what to say.`, and
   this client says `Your petition was sent.` or `Your bug report was sent.`
   in its own words.
 - One report of a kind is sent at a time: another of the same kind within
@@ -1015,6 +1016,14 @@ ownership conflict invalidates the old snapshot for that ID.
 Camp uses timed preparation and acknowledgement where offered. The local
 `--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).
+
+Your own jump's pose follows local velocity at the point being drawn. A
+moving jump briefly uses its moving-rise clip, returns to the walk/run near
+the apex, and uses the fall clip on a sufficiently fast descent. A jump
+from still uses a different rise clip and thresholds. This changes only
+presentation; movement, jump requests and endurance actions are unchanged.
+The Titanium selector is read; EqMac and RoF2 follow it provisionally. See
+[own jump animation](own-jump-animation.md) for the rules and remaining reads.
 
 A boat carries whoever stands or jumps over its deck. As in the Titanium
 program, the floor under the feet links the player to the boat however far
