@@ -187,6 +187,11 @@ impl MouseLook {
 pub(crate) struct MouseAim {
     /// Horizontal input owned by an attached online look this frame.
     pub(crate) horizontal: Option<f32>,
+    /// A captured press starts this frame's look from the existing view.
+    pub(crate) acquired: bool,
+    /// Completed facing along the camera's horizontal sightline on acquisition
+    /// or drag. Retained yaw defines it even at vertical pitch.
+    pub(crate) heading: Option<f32>,
     /// Focus, admission or exclusive input ownership changed.
     pub(crate) interrupted: bool,
 }
@@ -231,6 +236,7 @@ pub(crate) fn look(
         && (!online.enabled || online.world().connected());
     let available =
         focused && playing && !script.is_some_and(|script| script.background_owns_input());
+    aim.acquired = false;
     aim.interrupted = !available || ownership.admission != admission;
     if aim.interrupted {
         *look = MouseLook::default();
@@ -243,7 +249,12 @@ pub(crate) fn look(
     let mut mask_left = ownership.left;
     for event in events.read().filter(|event| Some(event.window) == primary) {
         match (event.button, event.state.is_pressed()) {
-            (MouseButton::Right, down) => look.right(down, available, free),
+            (MouseButton::Right, down) => {
+                look.right(down, available, free);
+                if down && look.held {
+                    aim.acquired = true;
+                }
+            }
             (MouseButton::Left, true) => {
                 look.left = look.held;
                 ownership.left = look.left;
@@ -282,8 +293,8 @@ fn mouse_turn_capped(yaw: f32, race: Option<u32>, seconds: f32) -> f32 {
     yaw.clamp(-most, most)
 }
 
-/// Samples horizontal look before locomotion. Online the attached view follows
-/// the actor's rotation, and offline the same input turns the orbit directly.
+/// Samples horizontal look before locomotion. An online absolute turn starts
+/// from the existing view, and offline the input turns the orbit directly.
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn turn(
     look: Res<MouseLook>,
@@ -298,6 +309,8 @@ pub(super) fn turn(
     (windows, time): (Query<&Window, With<PrimaryWindow>>, Option<Res<Time>>),
 ) {
     aim.horizontal = None;
+    aim.heading = None;
+    let acquired = std::mem::take(&mut aim.acquired);
     if !look.held {
         motion.clear();
         return;
@@ -315,6 +328,13 @@ pub(super) fn turn(
         );
         if online.enabled {
             aim.horizontal = Some(yaw);
+            if yaw != 0.0 || acquired {
+                // [I] Acquiring right look faces along the existing camera.
+                // Camera forward is -Z, whereas the actor faces +Z. Use the
+                // horizontal sightline, independent of chase/first-person pitch.
+                let forward = Quat::from_rotation_y(camera.yaw + yaw) * Vec3::NEG_Z;
+                aim.heading = Some(eq_client_core::world_heading(forward.x.atan2(forward.z)));
+            }
         } else {
             camera.yaw += yaw;
         }
@@ -508,6 +528,7 @@ pub(super) fn orbit_camera(
         }
         if playing
             && online.enabled
+            && !online.world().generation().supports_heading_snapshots()
             && look.held
             && let Some((_, player)) = player
         {

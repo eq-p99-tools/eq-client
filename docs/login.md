@@ -5,9 +5,17 @@
 ## Choose an installation
 
 Use Titanium with P99 or EQEmu, and a TAKP installation with Quarm or TAKP.
-The installation supplies terrain, models, UI, strings and spell data. P99 also
-uses its patch-level files for validation checksums; Quarm does not run the P99
-checksum scan. Keep the installation patched for the server you use.
+The installation supplies terrain, models, UI, strings and spell data. Titanium
+servers' requested integrity files are measured when requested, after login-server
+selection. On every server, P99 included, a requested file whose size and
+modification time match the cache is answered from it; any other requested file is
+read in full. The cache cannot see an edit that keeps a file's size and restores its
+modification time; such a file is answered from the cache until the server refuses
+it. A refusal clears the refused files from the cache, so the next login rereads
+them. To clear the cache by hand, delete `asset-checksums-v1.json` from this
+client's settings directory (see [settings](settings.md)); the next check rereads
+every file it asks for. Quarm does not use the Titanium integrity path. Keep the
+installation patched for the server you use.
 
 ```console
 cargo run -p eq-client --release --locked -- --eq-dir "/path/to/EverQuest"

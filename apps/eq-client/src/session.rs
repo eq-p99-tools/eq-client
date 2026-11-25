@@ -8,13 +8,10 @@ use eq_client_assets::spells::Definitions;
 use eq_client_core::{
     WorldEvent, WorldUpdate, food::AutoEat, machine::DisplaySnapshot, world::Link,
 };
-use eq_network::{
-    assets::Assets,
-    client::{
-        CancellationToken, Client, ClientConfig, ClientEvent, ClientIdentity, ConnectionState,
-        InstalledZoneBoundaries, LoginError, PlayerAdmissionError, RecordEvent, RunOptions,
-        ServerProtocol,
-    },
+use eq_network::client::{
+    CancellationToken, Client, ClientConfig, ClientEvent, ClientIdentity, ConnectionState,
+    InstalledZoneBoundaries, LoginError, PlayerAdmissionError, RecordEvent, RunOptions,
+    ServerProtocol,
 };
 use std::{
     env,
@@ -160,6 +157,8 @@ impl SessionWorker {
         spell_definitions: Arc<Definitions>,
     ) -> Result<eq_client_render::Session> {
         let protocol = login.protocol;
+        let login_began = std::time::Instant::now();
+        tracing::debug!("Login submit dispatched");
         let location_scope = location_scope(&login);
         let client = client(login, options)?;
         let classic_npc_consider = client.consider_npcs_by_level();
@@ -186,10 +185,14 @@ impl SessionWorker {
         let (sender, receiver) = relay::start();
         let (commands, command_queue) = mpsc::sync_channel(32);
         let worker = thread::spawn(move || {
+            tracing::debug!(
+                elapsed_ms = login_began.elapsed().as_millis(),
+                "Login worker started"
+            );
             let mut spell_bridge = SpellBridge::new(spell_provider);
             let mut options = RunOptions::default();
             options.reconnect = false;
-            let result = (|| {
+            let result = {
                 // A Titanium login sends what the installation's files hold.
                 let sight = crate::logins::speaks_titanium(protocol).then(|| {
                     Arc::new(eq_client_render::SightProvider::from_definitions(
@@ -199,13 +202,22 @@ impl SessionWorker {
                 });
                 let client = if let Some(sight) = &sight {
                     client
-                        .with_assets(Assets::scan_all(&install)?)?
+                        .with_installed_assets(install, settings.as_deref())
                         .with_sight_catalog(sight.clone())
                 } else {
                     client
                 };
                 crate::gaps::begin(settings.as_deref());
                 client.run_with_commands(&worker_cancel, options, &command_queue, |event| {
+                    if matches!(
+                        &event,
+                        ClientEvent::World(WorldEvent::ServerSelection { .. })
+                    ) {
+                        tracing::debug!(
+                            elapsed_ms = login_began.elapsed().as_millis(),
+                            "Login server list received"
+                        );
+                    }
                     crate::gaps::write_when_due();
                     if let Some(fact) = spell_bridge.capture(&event)? {
                         if let Some(sight) = &sight {
@@ -214,6 +226,21 @@ impl SessionWorker {
                         sender.send(&worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
+                        ClientEvent::FilesChecking(progress) => {
+                            if let Some(progress) = progress {
+                                tracing::debug!(
+                                    completed = progress.completed,
+                                    total = progress.total,
+                                    bytes = progress.bytes,
+                                    elapsed_ms = progress.elapsed_ms,
+                                    cache_hits = progress.cache_hits,
+                                    "Client file check progress"
+                                );
+                            }
+                            Some(WorldUpdate::CheckingFiles(progress.map(|progress| {
+                                (progress.completed, progress.total, progress.bytes)
+                            })))
+                        }
                         // A spell table is taken above.
                         ClientEvent::World(WorldEvent::SpellTable(_)) => None,
                         ClientEvent::World(event) => {
@@ -258,7 +285,7 @@ impl SessionWorker {
                     }
                     Ok(())
                 })
-            })();
+            };
             crate::gaps::end();
             if let Err(error) = result {
                 tracing::error!("Session ended: {error:#}");
