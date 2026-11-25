@@ -226,10 +226,12 @@ pub(super) fn input(
             && !keys.pressed(Act::Use)
     });
     let now = std::time::Instant::now();
-    let local_drop = scene.client() == InstalledClient::Titanium
-        && online
+    let local_drop = match scene.client() {
+        InstalledClient::Titanium => online
             .world()
-            .can(eq_client_core::Capability::GroundDropping);
+            .can(eq_client_core::Capability::GroundDropping),
+        InstalledClient::EqMac | InstalledClient::Rof2 => false,
+    };
     let cursor_gesture = local_drop
         && online
             .world()
@@ -258,7 +260,7 @@ pub(super) fn input(
         .flatten();
     // The native type fallthrough follows the droppability test. Keep the
     // ordinary door press alive until release chooses a spawn or the world.
-    let plain_world = local_drop
+    let plain_world = world_cursor.is_some()
         && online
             .world()
             .prepare_cursor_drop()
@@ -298,6 +300,14 @@ pub(super) fn input(
         if release && !matches!(native_spawn, Some(Choice::Spawn(..))) {
             if let Ok(drop) = online.world().prepare_cursor_drop() {
                 if !world_drop::plain_world(&drop.item) {
+                    // A named script scene target must not authorize a
+                    // different destructive action at the same point.
+                    if let Some(wanted) = request.as_ref().map(|request| request.thing)
+                        && !matches!(wanted, Thing::World(..))
+                    {
+                        scripted.refused = Some(wanted.covered().to_owned());
+                        return;
+                    }
                     inventory.request_world_drop(drop);
                     if scripted.request.is_some() {
                         scripted.acted = true;
@@ -2364,7 +2374,7 @@ mod tests {
     }
 
     #[test]
-    fn native_down_up_and_up_down_in_one_frame_use_their_own_press() {
+    fn native_drop_down_up_and_up_down_in_one_frame_use_their_own_press() {
         let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
         app.add_plugins(bevy::input::InputPlugin);
         native_drop_edges(&mut app, &[true, false]);
@@ -2515,7 +2525,7 @@ mod tests {
     }
 
     #[test]
-    fn excluded_common_types_keep_plain_world_door_dispatch() {
+    fn excluded_common_types_keep_plain_world_door_dispatch_without_dropping() {
         use crate::online::testing;
         use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
         for kind in [0x0c, 0x21, 0x27] {
@@ -2558,6 +2568,31 @@ mod tests {
                     .question()
                     .is_none()
             );
+        }
+    }
+
+    #[test]
+    fn a_named_script_door_cannot_authorize_a_world_drop() {
+        use eq_client_core::options::NoSafeDrop;
+        for mode in [NoSafeDrop::Ask, NoSafeDrop::Fast] {
+            let (mut app, commands) = drop_scene(mode);
+            door_scene(&mut app);
+            for down in [true, false] {
+                scripted_frame(
+                    &mut app,
+                    Thing::Door(0),
+                    Some(Vec2::new(400.0, 300.0)),
+                    down,
+                );
+            }
+            assert!(app.world().resource::<ScenePointer>().refused.is_some());
+            assert!(
+                app.world()
+                    .resource::<crate::confirm::Asked>()
+                    .question()
+                    .is_none()
+            );
+            assert!(commands.try_recv().is_err());
         }
     }
 
