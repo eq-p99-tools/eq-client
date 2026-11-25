@@ -26,6 +26,11 @@ steps. The display interpolates accepted movement instead of waiting for each
 remote position update. Speed, elapsed time and admission checks constrain the
 outgoing requests; corrections replace the predicted position.
 
+For ordinary movement on flat, dry ground, releasing the controls uses a 50 ms
+display finish window while preserving the remaining path. Facing and movement
+requests keep their usual timing. A quick re-press can still wait for the next
+movement sample.
+
 A standing Titanium walk climbs onto an edge it runs into. The official
 client sweeps the body as a sphere lifted over its origin, so an edge under the
 sphere's bottom passes beneath it (program reads R49-25 and R49-25b). The lift

@@ -3,7 +3,7 @@
 use super::*;
 use std::sync::{Mutex, mpsc};
 
-fn key(app: &mut App, code: KeyCode, pressed: bool) {
+pub(super) fn key(app: &mut App, code: KeyCode, pressed: bool) {
     let world = app.world_mut();
     let window = world
         .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()
@@ -23,7 +23,7 @@ fn key(app: &mut App, code: KeyCode, pressed: bool) {
     });
 }
 
-fn timing_app() -> (
+pub(super) fn timing_app() -> (
     App,
     mpsc::Receiver<ClientCommand>,
     mpsc::Sender<eq_client_core::WorldUpdate>,
@@ -83,7 +83,7 @@ fn timing_app() -> (
     (app, requests, news)
 }
 
-fn shown(app: &mut App) -> (Vec3, Vec3) {
+pub(super) fn shown(app: &mut App) -> (Vec3, Vec3) {
     let world = app.world_mut();
     let root = world
         .query_filtered::<&Transform, With<Player>>()
@@ -296,6 +296,10 @@ fn frame_loop_movement_latency_probe() {
         ] {
             for key in [KeyCode::KeyW, KeyCode::KeyA, KeyCode::KeyS, KeyCode::KeyD] {
                 let (mut app, requests, news) = timing_app();
+                // Keep this historical #701 comparison independent of T1.
+                app.world_mut()
+                    .resource_mut::<Controls>()
+                    .suppress_release_catchup = true;
                 app.world_mut()
                     .resource_mut::<Controls>()
                     .suppress_submitted_preview = !preview;
