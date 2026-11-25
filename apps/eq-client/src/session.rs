@@ -236,6 +236,8 @@ impl SessionWorker {
                             tracing::info!("{message}");
                             None
                         }
+                        // Look build only: the file-check progress is not shown.
+                        ClientEvent::FilesChecking(_) => None,
                         // A reconnect is a fresh login; this viewer asks for
                         // none, but says so if one comes.
                         ClientEvent::Reconnecting {
