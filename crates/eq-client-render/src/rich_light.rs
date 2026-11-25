@@ -268,9 +268,23 @@ pub(super) fn register(app: &mut App) {
         ))
         // Half Bevy's default: the shadows' edges blur over twice the angle,
         // and each costs a quarter of the drawing.
-        .insert_resource(bevy::light::PointLightShadowMap { size: 512 });
+        .insert_resource(bevy::light::PointLightShadowMap { size: 512 })
+        .add_systems(Startup, room_for_lamps);
     if std::env::var_os("EQ_FRAME_LOG").is_some() {
         app.add_systems(Last, frame_log);
+    }
+}
+
+/// Starts Bevy's light cluster lists big enough for a zone's lamps, which
+/// overflow the default list in Erudin Palace: Bevy grows it, but draws a
+/// few frames with lights missing first.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+fn room_for_lamps(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSettings>>) {
+    const INDICES: usize = 1 << 18;
+    if let Some(mut settings) = settings
+        && let Some(gpu) = settings.gpu_clustering.as_mut()
+    {
+        gpu.initial_index_list_capacity = gpu.initial_index_list_capacity.max(INDICES);
     }
 }
 
