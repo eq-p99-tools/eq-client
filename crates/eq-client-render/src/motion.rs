@@ -1501,7 +1501,7 @@ fn stroke_pitch(
 /// The mouse's look and aim, and the spell names a root is read by.
 type Pointing<'w> = (
     Option<Res<'w, MouseLook>>,
-    Option<ResMut<'w, MouseAim>>,
+    Option<Res<'w, MouseAim>>,
     Option<Res<'w, crate::spellbook::SpellNames>>,
 );
 
@@ -1570,7 +1570,7 @@ pub(super) fn input(
         ResMut<crate::chat::ChatState>,
         Option<Res<crate::hud::HudState>>,
     ),
-    (look, mut aim, spells): Pointing,
+    (look, aim, spells): Pointing,
 ) {
     let client = settings.0.installed_client;
     // The program's speed-modifier routine ends following once a root
@@ -1692,9 +1692,6 @@ pub(super) fn input(
         .as_ref()
         .and_then(|aim| aim.horizontal)
         .filter(|_| mouse_allowed);
-    if !mouse_allowed && let Some(aim) = aim.as_mut() {
-        aim.heading = None;
-    }
     if !heading_snapshots || !mouse_allowed {
         controls.mouse_heading = None;
     } else if let Some(heading) = aim.as_ref().and_then(|aim| aim.heading) {
@@ -11046,6 +11043,15 @@ pub(super) mod tests {
             app.update();
             assert!(receiver.try_recv().is_err());
             assert_attached_heading(&app, camera, player, expected);
+            if corrected {
+                app.world_mut().resource_mut::<Controls>().speed = Some(6.0);
+                app.update();
+                assert!(
+                    receiver.try_recv().is_err(),
+                    "restoring a grant cannot revive the old press"
+                );
+                assert_attached_heading(&app, camera, player, expected);
+            }
         }
     }
 

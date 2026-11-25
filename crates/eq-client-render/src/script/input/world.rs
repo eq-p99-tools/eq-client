@@ -104,7 +104,7 @@ pub(crate) fn apply(
             // visible world space. Once captured, ordinary look stays held.
             look.right(true, true, true);
             if !was_held {
-                aim.heading = None;
+                aim.acquired = true;
             }
             aim.interrupted = false;
         }
