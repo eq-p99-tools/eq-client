@@ -119,8 +119,9 @@ impl Relay {
     ///
     /// # Errors
     /// Fails once [`CEILING`] updates are waiting beyond the window's queue:
-    /// the window has stopped taking the session's news. A window that let
-    /// go of its queue instead cancels the session, as a closed window does.
+    /// the window has stopped taking the session's news. This quota error
+    /// takes precedence over receiver closure. Below the quota, a window
+    /// that let go of its queue cancels the session, as a closed window does.
     pub(super) fn send(&self, cancel: &CancellationToken, update: WorldUpdate) -> Result<()> {
         let waiting = self.held.load(Ordering::Acquire);
         if waiting >= self.ceiling {
@@ -151,6 +152,43 @@ mod tests {
     use super::*;
     use eq_client_core::world::Link;
     use std::time::Duration;
+
+    /// Uses the real sender and forwarder, with its start controlled by the test.
+    fn paused(
+        window_queue: usize,
+        ceiling: usize,
+    ) -> (
+        Relay,
+        mpsc::Receiver<WorldUpdate>,
+        impl FnOnce() + Send + 'static,
+    ) {
+        let (sender, incoming) = mpsc::channel();
+        let (window, updates) = mpsc::sync_channel(window_queue);
+        let held = Arc::new(AtomicUsize::new(0));
+        let counted = held.clone();
+        (
+            Relay {
+                sender,
+                held,
+                ceiling,
+            },
+            updates,
+            move || forward(&incoming, &window, &counted, window_queue),
+        )
+    }
+
+    /// Waits until the forwarder and its input receiver have both gone away.
+    fn finish(forwarder: impl FnOnce() + Send + 'static) {
+        let (finished, completion) = mpsc::channel();
+        let worker = thread::spawn(move || {
+            forwarder();
+            finished.send(()).unwrap();
+        });
+        completion
+            .recv_timeout(Duration::from_secs(5))
+            .expect("the closed window's forwarder did not finish");
+        worker.join().unwrap();
+    }
 
     fn update(n: usize) -> WorldUpdate {
         WorldUpdate::Connection(if n.is_multiple_of(2) {
@@ -235,17 +273,35 @@ mod tests {
 
     #[test]
     fn a_window_that_let_go_of_its_queue_cancels_the_session() {
-        let (relay, updates) = start_with(4, 1_000);
+        let (relay, updates, forwarder) = paused(4, 1_000);
         drop(updates);
         let cancel = CancellationToken::default();
-        let deadline = Instant::now() + Duration::from_secs(5);
-        let mut n = 0;
-        while !cancel.is_cancelled() {
+        // One update lets the forwarder observe the closed window. Wait for
+        // its receiver to drop before asking the sender to detect that closure.
+        relay.send(&cancel, update(0)).unwrap();
+        assert!(!cancel.is_cancelled());
+        finish(forwarder);
+        relay.send(&cancel, update(1)).unwrap();
+        assert!(cancel.is_cancelled());
+    }
+
+    #[test]
+    fn the_queue_quota_takes_precedence_even_when_the_consumer_has_closed() {
+        let (relay, updates, forwarder) = paused(4, 2);
+        drop(updates);
+        let cancel = CancellationToken::default();
+        // Reach the test quota before the forwarder can observe the closure.
+        for n in 0..2 {
             relay.send(&cancel, update(n)).unwrap();
-            n += 1;
-            assert!(Instant::now() < deadline, "the session was never cancelled");
-            thread::yield_now();
         }
+        let refused = relay.send(&cancel, update(2)).unwrap_err();
+        assert!(refused.to_string().contains("2 updates waiting"));
+        assert!(!cancel.is_cancelled());
+        finish(forwarder);
+        // Even after closure is known, the existing quota-first result remains.
+        let refused = relay.send(&cancel, update(3)).unwrap_err();
+        assert!(refused.to_string().contains("2 updates waiting"));
+        assert!(!cancel.is_cancelled());
     }
 
     #[test]
