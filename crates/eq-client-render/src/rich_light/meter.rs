@@ -204,7 +204,7 @@ fn frame_log(
         .count();
     let mean = log.span.mean();
     info!(
-        "frame log: {} frames, {:.1} fps, mean {:.2} ms, worst {:.2} ms, {} over 33 ms, {} over 50 ms; rich {} interior {}, lamps {shown}/{}, carried {} ({shadowed} shadowed), rich surfaces {}, drawn twice {}, point lights {} ({} in view), entities {}",
+        "frame log: {} frames, {:.1} fps, mean {:.2} ms, worst {:.2} ms, {} over 33 ms, {} over 50 ms; rich {} interior {}, lamps {shown}/{}, carried {} ({shadowed} shadowed), rich surfaces {}, rich materials {}, drawn twice {}, point lights {} ({} in view), entities {}",
         log.span.frames,
         1.0 / mean,
         mean * 1000.0,
@@ -216,6 +216,7 @@ fn frame_log(
         lamps.iter().count(),
         carried.iter().count(),
         drawn.iter().count(),
+        state.materials.len(),
         twice.iter().count(),
         lights.iter().count(),
         lights.iter().filter(|seen| seen.get()).count(),
