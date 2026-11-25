@@ -13217,21 +13217,22 @@ pub(super) mod tests {
     }
 
     #[test]
-    fn landing_during_a_drop_reports_damage_and_keeps_custody_held() {
+    fn landing_during_a_projected_drop_uses_its_retained_weight_bound() {
         use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
 
-        for (updates, uncertain_purse, amount) in [
-            (vec![], false, Some(191)),
-            (vec![], true, None),
+        for (updates, uncertain_purse, weight_tenths, amount) in [
+            (vec![], false, Some(1_550), Some(195)),
+            (vec![], true, Some(1_550), None),
             (
                 vec![
                     InventoryUpdate::Set(vec![drop_item(1, 19)]),
                     InventoryUpdate::Remove(InventorySlot::CURSOR),
                 ],
                 false,
-                Some(191),
+                Some(1_551),
+                Some(195),
             ),
-            (vec![InventoryUpdate::Invalidated], false, None),
+            (vec![InventoryUpdate::Invalidated], false, None, None),
         ] {
             let (mut app, _) = landing(Some(10), eq_client_core::Capability::ALL.to_vec());
             let mut online = app.world_mut().resource_mut::<online::OnlineState>();
@@ -13239,6 +13240,16 @@ pub(super) mod tests {
                 &mut online,
                 50,
                 std::iter::once(InventoryUpdate::Cursor(vec![drop_item(1_500, 18)])).chain(updates),
+            );
+            // A replacement token does not prove that the earlier 1500-
+            // tenths candidate left the server cursor. Assert the retained
+            // bound itself before testing the resulting landing report.
+            assert_eq!(
+                online
+                    .world()
+                    .worker_inventory()
+                    .ground_drop_weight_tenths(0),
+                weight_tenths
             );
             if uncertain_purse {
                 online::testing::news(
