@@ -87,17 +87,20 @@ fn frame(ferry: &mut Ferry) {
 }
 
 fn floor_at(root: Vec3) -> CollisionWorld {
-    CollisionWorld::new(
-        eq_client_assets::testing::flat_surface(root.y)
-            .into_iter()
-            .map(|triangle| {
-                triangle.map(|mut point| {
-                    point[0] += root.x;
-                    point[2] += root.z;
-                    point
-                })
-            }),
-    )
+    let [x, y, z] = root.to_array();
+    // Upward winding: geometry is retained even on frames whose probe misses.
+    CollisionWorld::new([
+        [
+            [x - 20.0, y, z - 20.0],
+            [x + 20.0, y, z + 20.0],
+            [x + 20.0, y, z - 20.0],
+        ],
+        [
+            [x - 20.0, y, z - 20.0],
+            [x - 20.0, y, z + 20.0],
+            [x + 20.0, y, z + 20.0],
+        ],
+    ])
     .unwrap()
 }
 
