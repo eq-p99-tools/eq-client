@@ -286,9 +286,7 @@ pub(super) fn register(app: &mut App) {
         // and each costs a quarter of the drawing.
         .insert_resource(bevy::light::PointLightShadowMap { size: 512 })
         .add_systems(Startup, room_for_lamps);
-    if std::env::var_os("EQ_FRAME_LOG").is_some() {
-        app.add_systems(Last, frame_log);
-    }
+    meter::register(app);
 }
 
 /// Starts Bevy's light cluster lists big enough for a zone's lamps, which
@@ -304,49 +302,6 @@ fn room_for_lamps(settings: Option<ResMut<bevy::light::cluster::GlobalClusterSet
         gpu.initial_index_list_capacity = gpu.initial_index_list_capacity.max(INDICES);
         gpu.initial_z_slice_list_capacity = gpu.initial_z_slice_list_capacity.max(SLICES);
     }
-}
-
-/// Logs the frame times every five seconds (`EQ_FRAME_LOG`): the mean, the
-/// slowest frame, and what Rich Lighting draws, for measuring its cost.
-#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
-fn frame_log(
-    time: Res<Time<Real>>,
-    state: Res<RichState>,
-    lamps: Query<&Visibility, With<Lamp>>,
-    carried: Query<&PointLight, With<Carried>>,
-    drawn: Query<(), With<MeshMaterial3d<RichMaterial>>>,
-    mut window: Local<(f32, f32, u32)>,
-) {
-    let delta = time.delta_secs();
-    let (spent, worst, frames) = &mut *window;
-    *spent += delta;
-    *worst = worst.max(delta);
-    *frames += 1;
-    if *spent < 5.0 {
-        return;
-    }
-    let shown = lamps
-        .iter()
-        .filter(|shown| **shown != Visibility::Hidden)
-        .count();
-    let shadowed = carried
-        .iter()
-        .filter(|light| light.shadow_maps_enabled)
-        .count();
-    #[allow(clippy::cast_precision_loss)] // A frame count.
-    let mean = *spent / *frames as f32;
-    info!(
-        "frame log: {frames} frames, {:.1} fps, mean {:.2} ms, worst {:.2} ms; rich {} interior {}, lamps {shown}/{}, carried {} ({shadowed} shadowed), rich surfaces {}",
-        1.0 / mean,
-        mean * 1000.0,
-        *worst * 1000.0,
-        state.active,
-        state.interior,
-        lamps.iter().count(),
-        carried.iter().count(),
-        drawn.iter().count(),
-    );
-    *window = (0.0, 0.0, 0);
 }
 
 /// The vertex colour's light with Rich Lighting: the engine's base plus
@@ -837,6 +792,8 @@ pub(super) fn grade(
         }
     }
 }
+
+mod meter;
 
 #[cfg(test)]
 mod capture;
