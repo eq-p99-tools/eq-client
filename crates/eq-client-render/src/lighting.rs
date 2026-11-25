@@ -31,8 +31,9 @@ pub(super) type Placed = (Vec<[f32; 3]>, Vec<[f32; 3]>);
 enum Colouring {
     /// White: the plain textures.
     White,
-    /// By the engine's sum at these inputs.
-    Lit(BaseInputs),
+    /// By the engine's sum at these inputs, or, with Rich Lighting, by the
+    /// base alone, which the GPU's per-pixel lights add to (`rich_light`).
+    Lit(BaseInputs, bool),
 }
 
 /// One drawn zone mesh whose vertices the zone light colours.
@@ -63,11 +64,14 @@ struct Worked {
 
 #[derive(Resource)]
 pub(super) struct SceneLights {
-    zone: String,
-    placed: Vec<PlacedLight>,
+    pub(super) zone: String,
+    pub(super) placed: Vec<PlacedLight>,
     /// The installed program's day ambient table, when it holds one.
     day: Option<DayAmbient>,
     pub(super) meshes: Vec<LitMesh>,
+    /// The zone's other drawn meshes, which take no vertex light: only Rich
+    /// Lighting's per-pixel lights reach them.
+    pub(super) plain: Vec<AssetId<Mesh>>,
     worked: Vec<Worked>,
     /// How the meshes were last coloured; None before the first time.
     applied: Option<Colouring>,
@@ -82,6 +86,7 @@ impl SceneLights {
             placed,
             day: day.copied(),
             meshes: Vec::new(),
+            plain: Vec::new(),
             worked: Vec::new(),
             applied: None,
             carried: Vec::new(),
@@ -110,10 +115,15 @@ pub(super) fn interior(
             InstalledClient::Rof2 => true,
             InstalledClient::EqMac => false,
         }
-        && world.connected()
+        && in_scene(scene, world)
+        && world.sky().is_some_and(|sky| sky.sky == 0)
+}
+
+/// Whether the player is in the world, in the zone the scene was built for.
+pub(super) fn in_scene(scene: Option<&SceneLights>, world: &ClientWorld) -> bool {
+    world.connected()
         && world.session_id().is_some()
         && world.pending_transfer().is_none()
-        && world.sky().is_some_and(|sky| sky.sky == 0)
         && scene.is_some_and(|scene| scene.zone == world.zone())
 }
 
@@ -298,15 +308,15 @@ pub(super) fn adjust(
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
-struct Lamp {
-    range: f32,
-    rgb: [f32; 3],
+pub(super) struct Lamp {
+    pub(super) range: f32,
+    pub(super) rgb: [f32; 3],
     level: f32,
 }
 
 /// Titanium eqgame.exe 0x43746b definitions and 0x439377 default
 /// ranges. Unknown types have no projection, including high-bit variants.
-fn carried(kind: u8) -> Option<Lamp> {
+pub(super) fn carried(kind: u8) -> Option<Lamp> {
     let warm = [0.996, 0.9412, 0.6274];
     let magic = [0.4, 0.996, 0.996];
     let (range, rgb) = match kind {
@@ -368,7 +378,7 @@ fn bounds(positions: &[[f32; 3]]) -> Option<([f32; 3], [f32; 3])> {
 
 /// The lights the player and others nearby carry, nearest the camera first
 /// for others. `ShowDynamicLights` is on by default (eqgame.exe 0x4a3341).
-fn carried_lights(
+pub(super) fn carried_lights(
     world: &ClientWorld,
     nearby: &NearbyEntities,
     eye: Vec3,
@@ -450,7 +460,11 @@ type Positions<'w, 's> = (
 /// them, or white when the zone isn't drawn so. The base light is worked
 /// out once per zone and input; a mesh is rewritten when the lights its
 /// draw takes change, as when a carried light moves near it.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines
+)]
 pub(super) fn update(
     online: Res<OnlineState>,
     settings: Res<ViewerSettings>,
@@ -460,13 +474,26 @@ pub(super) fn update(
     nearby: Res<NearbyEntities>,
     (eye, player, transforms): Positions,
     mut meshes: ResMut<Assets<Mesh>>,
+    tuning: Option<Res<crate::rich_light::Tuning>>,
 ) {
+    let tuning = tuning.map_or_else(crate::rich_light::Tuning::default, |tuning| *tuning);
     let world = online.world();
     let clearly = options.options.qol.on(eq_client_core::qol::Fix::ClearView);
     let Some(mut scene) = scene else {
         return;
     };
-    let lit = interior(Some(&scene), world, &settings, clearly);
+    // Rich Lighting is this client's own look, so it lights a zone without
+    // a sky on any installed client, the Mac-era one too.
+    let rich_on = !clearly
+        && options
+            .options
+            .qol
+            .on(eq_client_core::qol::Fix::RichLighting);
+    let lit = interior(Some(&scene), world, &settings, clearly)
+        || (rich_on
+            && in_scene(Some(&scene), world)
+            && world.sky().is_some_and(|sky| sky.sky == 0));
+    let rich = lit && rich_on;
     let inputs = world.sky().filter(|_| lit).map(|sky| {
         let minute = crate::daylight::sky_minute(
             settings.0.installed_client.clock(),
@@ -480,7 +507,9 @@ pub(super) fn update(
             scene.day.as_ref(),
         )
     });
-    let carried = match (inputs, player.single()) {
+    // With Rich Lighting the GPU lights each pixel; the colours hold the
+    // base alone and no carried light rewrites them.
+    let carried = match (inputs.filter(|_| !rich), player.single()) {
         (Some(_), Ok((own, body))) => {
             let eye = eye
                 .single()
@@ -525,7 +554,7 @@ pub(super) fn update(
             .collect();
         scene.applied = None;
     }
-    let colouring = inputs.map_or(Colouring::White, Colouring::Lit);
+    let colouring = inputs.map_or(Colouring::White, |inputs| Colouring::Lit(inputs, rich));
     let refresh = scene.applied != Some(colouring);
     // Nothing a draw takes can have changed: the placed lights stay put.
     if !refresh && carried == scene.carried {
@@ -534,6 +563,25 @@ pub(super) fn update(
     for (lit, worked) in scene.meshes.iter().zip(&mut scene.worked) {
         if refresh {
             worked.base = match inputs {
+                Some(inputs) if !lit.additive && rich => {
+                    let near = match (&lit.placed_at, worked.bounds) {
+                        (Some(_), Some(bounds)) => {
+                            crate::rich_light::near(&scene.placed, bounds, &tuning)
+                        }
+                        _ => Vec::new(),
+                    };
+                    lit.light
+                        .iter()
+                        .enumerate()
+                        .map(|(index, baked)| {
+                            let at = lit
+                                .placed_at
+                                .as_ref()
+                                .map(|(positions, _)| positions[index]);
+                            crate::rich_light::base(*baked, inputs, at, &near, &tuning)
+                        })
+                        .collect()
+                }
                 Some(inputs) if !lit.additive => lit
                     .light
                     .iter()
@@ -543,7 +591,9 @@ pub(super) fn update(
             };
         }
         let assigned = match (worked.bounds, worked.base.is_empty()) {
-            (Some(bounds), false) => assign(bounds, worked.placed.iter().chain(&carried).copied()),
+            (Some(bounds), false) if !rich => {
+                assign(bounds, worked.placed.iter().chain(&carried).copied())
+            }
             _ => Vec::new(),
         };
         if !refresh && assigned == worked.assigned {

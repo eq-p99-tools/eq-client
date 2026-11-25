@@ -7,7 +7,11 @@ mod boats;
 #[cfg(test)]
 mod latency_tests;
 #[cfg(test)]
+mod release_animation_tests;
+#[cfg(test)]
 mod release_tests;
+#[cfg(test)]
+mod rider_animation_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
 mod pad;
@@ -629,7 +633,15 @@ impl Controls {
             {
                 visual.map(|transform| boats::to_local(carried.pose, transform));
             }
-            let from = boats::to_local(carried.pose, from);
+            let drawn_pose = self.visual_boat.map_or(carried.pose, |frame| frame.pose);
+            let from = Transform {
+                // The drawn root still belongs to the last displayed frame.
+                // Converting its position with the newer sample's pose invents
+                // deck travel whenever an idle display queue is restarted.
+                // Rotation retains the existing sample clock and basis.
+                translation: boats::to_local(drawn_pose, from).translation,
+                ..boats::to_local(carried.pose, from)
+            };
             let local = eq_client_core::movement::carrier_local(riding.pose, position);
             let facing = self
                 .facing
@@ -3992,6 +4004,16 @@ impl VisualMotion {
     }
 
     fn drawn_pose(&self) -> Option<pose::Snapshot> {
+        if self
+            .translation
+            .as_ref()
+            .is_some_and(translation::Playhead::rested)
+        {
+            // The orientation timeline can still be playing after the feet
+            // reach the release endpoint. Only a genuine release overrides
+            // its velocity: held input or restore can also exhaust a cursor.
+            return Some(pose::Snapshot::default());
+        }
         self.pose.as_ref().and_then(|pose| pose.at(self.elapsed))
     }
 

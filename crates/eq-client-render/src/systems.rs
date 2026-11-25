@@ -161,6 +161,11 @@ pub(super) fn schedule(app: &mut App) {
                 entities::reconcile,
                 entities::interpolate,
                 crate::lighting::update,
+                crate::rich_light::gather,
+                crate::rich_light::swap,
+                crate::rich_light::follow_frames,
+                crate::rich_light::lamps,
+                crate::rich_light::grade,
                 character::lie,
                 doors::reconcile,
                 doors::report_radii,
@@ -629,6 +634,7 @@ pub(super) fn install_overlays(app: &mut App) {
     paperdoll::register(app);
     crate::creation_preview::register(app);
     entities::outline::register(app);
+    crate::rich_light::register(app);
     crate::water::register(app);
     app.add_systems(
         Update,

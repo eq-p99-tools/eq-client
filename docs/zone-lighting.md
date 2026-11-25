@@ -129,3 +129,49 @@ Further inferences:
   (glows) are drawn as before. The engine's alpha path isn't read.
 - Boats in a no-sky zone are still lit by the renderer's own ambient light,
   set from the same zone ambient.
+
+## Rich Lighting (a departure, off by default)
+
+The quality-of-life setting Rich Lighting (`rich_lighting`) draws every
+zone by this client's own look instead of the engine's
+(`crates/eq-client-render/src/rich_light.rs`). It is not the original's and
+claims no parity; with it off, everything above holds unchanged. Nothing in
+it is set per zone: it works from each zone's own placed lights, baked light
+and ambient, on any installed client (the Mac-era one too).
+
+Zone surfaces draw with a lit material (`rich_light.wgsl`): the texture
+times the vertex colour (the base), added as light the exposure doesn't
+scale, plus Bevy's point lights per pixel, with a soft specular highlight.
+The zone's placed lights are point lights, not the first three of a mesh's
+list, with a strength of half the engine's 0.05 R² / d² term, no cap, a
+smooth fade to nothing at 1.2 R, and their colours moved 30% toward a warm
+white. Warm lights flicker by up to 10%. The 48 whose light comes nearest the
+camera are drawn. The carried lights (the player's and those of the eight
+nearest others) follow their bearers. The first casts soft shadows: 60% of
+it is shadowed and 40% lights through, so a shadow is never black, and the
+shadow maps are 512 texels a side, which blurs their edges. The lights are
+worked out on a white surface and softly capped by luminance,
+L / (1 + L / 1.5), before the texture multiplies them, so a torch against a
+wall brightens it without washing its texture out. Outdoors the ceiling
+rises by 2^-E, so it holds once the night's grading darkens the frame. The camera draws in high dynamic range with
+a soft glow.
+
+**In a zone without a sky** the base is the engine's base, as above, plus:
+
+- 12% of the zone ambient on every vertex, as a fill;
+- the wash: each placed light within 2 R of a vertex tints it by its own
+  colour, fading smoothly with distance, overlapping lights giving their
+  mean, at 60%. It keeps a room's colours (the palace's blues), which the
+  engine gets from each mesh's third light at full strength, without that
+  light's hard edge where meshes meet.
+
+The camera takes the Reinhard luminance tone curve, so a bright pool rolls
+off rather than clipping. Doors and shared models, which the engine's path
+leaves with the base alone, take the point lights too.
+
+**In a zone with a sky** the base stays the plain texture, so the day looks
+as it does without the setting, with no tone curve. The lights are drawn at
+30% of the indoor strength, scaled by the night's exposure (E stops, 0 by
+day) by 2^-E - 1: nothing by day, and by night enough that once the night's
+grading darkens the frame a light keeps 1 - 2^E of its strength while the
+world around it darkens.
