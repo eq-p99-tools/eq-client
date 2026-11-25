@@ -149,7 +149,7 @@ fn sample(ferry: &mut Ferry, index: u16, floor: bool, baseline: bool) {
         }
     }
     let root = Vec3::from_array(eq_client_core::render_position(position));
-    let collision = floor.then(|| floor_at(root));
+    let collision = Some(floor_at(if floor { root } else { root + Vec3::X * 1000.0 }));
     assert_eq!(
         collision
             .as_ref()
