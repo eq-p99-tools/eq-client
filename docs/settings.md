@@ -12,6 +12,9 @@ preference per character. Its values are 0 to ask, 1 to drop immediately, and
 -1 to refuse drops. Missing values use the installation's `[Options]`
 preference or default 0. Invalid saved values safely restore the question.
 `/fastdrop on|off|never` changes this same saved option.
+The bare command and an unknown word leave the setting unchanged and show
+usage through line 0x333f **[I]**. Both behaviors are inferred: the Titanium
+read establishes the three mode lines 0x333c, 0x333d and 0x333e only.
 
 Settings such as windows, options, hotbar, key bindings and map watches are kept
 per world/character. Shared files seed characters that have no saved settings.
