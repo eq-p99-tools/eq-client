@@ -144,6 +144,7 @@ mod trade;
 mod tradeskills;
 mod training;
 mod translocate;
+mod underwater;
 mod water;
 mod weather;
 mod whereabouts;
@@ -863,7 +864,11 @@ fn setup_scene(
         .camera_distance
         .unwrap_or(default_radius)
         .clamp(20.0, 20_000.0);
-    let placed = Transform::from_translation(player_position);
+    // The viewer faces the given heading (`--start-heading`), north if none.
+    let heading = settings.0.start_position.map_or(0.0, |start| start.heading);
+    let placed = Transform::from_translation(player_position).with_rotation(Quat::from_rotation_y(
+        eq_client_core::render_heading(heading),
+    ));
     scene.enter(
         &mut commands,
         zone::Entry {

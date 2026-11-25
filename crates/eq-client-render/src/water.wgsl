@@ -247,7 +247,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
         // The sun glints in the ripples.
         let toward = max(dot(mirrored, normalize(sun.xyz)), 0.0);
-        let glint = (pow(toward, 600.0) * 5.0 + pow(toward, 60.0) * 0.18) * sun.w;
+        // Far off, a ripple is smaller than a pixel: the glint spreads and
+        // dims there instead of sparkling on and off as the view moves.
+        let sharp = mix(600.0, 90.0, smoothstep(30.0, 250.0, distance));
+        let glint = (pow(toward, sharp) * 5.0 * sharp / 600.0 + pow(toward, 60.0) * 0.18) * sun.w;
         water_layer += glint * water.sun_color.rgb / max(opacity, 0.2);
         opacity = min(1.0, opacity + glint);
 
@@ -269,32 +272,61 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 }
 
 // The colour (rgb) the mirrored ray from `start` finds on screen and how
-// sure the find is (a), by marching it against the scene's depth.
+// sure the find is (a), by marching it against the scene's depth. A find is
+// narrowed down between the last two steps, and its weight eases in and
+// out (screen edges, reach, how far behind the surface the ray went), so a
+// moving camera slides reflections rather than popping them.
 #ifdef DEPTH_PREPASS
+fn behind_scene(point: vec3<f32>) -> vec3<f32> {
+    // How far the point is behind what is drawn there (x, positive when
+    // behind), and its place on screen (yz); x is -1e9 off screen.
+    let ndc = position_world_to_ndc(point);
+    if any(abs(ndc.xy) > vec2(1.0)) || ndc.z <= 0.0 {
+        return vec3(-1e9, 0.0, 0.0);
+    }
+    let uv = ndc_to_uv(ndc.xy);
+    let coord = uv * view.viewport.zw + view.viewport.xy;
+    let scene = depth_ndc_to_view_z(prepass_depth(vec4(coord, 0.0, 0.0), 0u));
+    return vec3(scene - depth_ndc_to_view_z(ndc.z), uv);
+}
+
 fn trace(start: vec3<f32>, direction: vec3<f32>, distance: f32) -> vec4<f32> {
     let steps = 24;
     let reach = clamp(distance * 1.5, 40.0, 400.0);
+    var before = 0.5;
     var travelled = 0.5;
     var step = reach / f32(steps) * 0.25;
     for (var i = 0; i < steps; i++) {
+        before = travelled;
         travelled += step;
         step *= 1.12;
-        let point = start + direction * travelled;
-        let ndc = position_world_to_ndc(point);
-        if any(abs(ndc.xy) > vec2(1.0)) || ndc.z <= 0.0 {
+        let probe = behind_scene(start + direction * travelled);
+        if probe.x < -1e8 {
             return vec4(0.0);
         }
-        let uv = ndc_to_uv(ndc.xy);
-        let coord = uv * view.viewport.zw + view.viewport.xy;
-        let scene = depth_ndc_to_view_z(prepass_depth(vec4(coord, 0.0, 0.0), 0u));
-        let ray = depth_ndc_to_view_z(ndc.z);
-        // The ray has gone behind something drawn, not far behind it.
-        let gap = scene - ray;
-        if gap > 0.0 && gap < max(step * 2.0, 3.0) {
-            let edge = smoothstep(0.0, 0.12, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
-            let far = 1.0 - smoothstep(0.6, 1.0, travelled / reach);
+        if probe.x > 0.0 {
+            // Narrow the crossing down between the last two steps.
+            var near = before;
+            var far = travelled;
+            for (var j = 0; j < 5; j++) {
+                let middle = 0.5 * (near + far);
+                if behind_scene(start + direction * middle).x > 0.0 {
+                    far = middle;
+                } else {
+                    near = middle;
+                }
+            }
+            let hit = behind_scene(start + direction * far);
+            if hit.x < -1e8 {
+                return vec4(0.0);
+            }
+            let uv = hit.yz;
+            // A ray that passed well behind a thin thing found nothing.
+            let solid = 1.0 - smoothstep(1.0, 4.0, hit.x);
+            let edge = smoothstep(0.0, 0.15, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
+            let fade = 1.0 - smoothstep(0.5, 1.0, far / reach);
             let colour = textureSampleLevel(view_transmission_texture, view_transmission_sampler, uv, 0.0).rgb;
-            return vec4(colour, edge * far);
+            return vec4(colour, solid * edge * fade);
         }
     }
     return vec4(0.0);

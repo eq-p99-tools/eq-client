@@ -14,16 +14,13 @@
 //! Only the drawn scene changes: no movement, region, collision or swim
 //! rule reads anything here.
 
+use crate::underwater::UnderwaterView;
 use bevy::{
     asset::embedded_asset,
-    core_pipeline::{
-        fullscreen_material::{FullscreenMaterial, FullscreenMaterialPlugin},
-        prepass::DepthPrepass,
-    },
+    core_pipeline::prepass::DepthPrepass,
     pbr::{DistanceFog, ExtendedMaterial, FogFalloff, MaterialExtension, MaterialPlugin},
     prelude::*,
     reflect::Reflect,
-    render::extract_component::ExtractComponent,
     render::render_resource::{AsBindGroup, Face, ShaderType},
     shader::ShaderRef,
 };
@@ -187,23 +184,20 @@ fn centroid_key(point: Vec3) -> [i64; 3] {
 
 pub(super) fn register(app: &mut App) {
     embedded_asset!(app, "water.wgsl");
-    embedded_asset!(app, "underwater.wgsl");
-    app.add_plugins((
-        MaterialPlugin::<WaterMaterial>::default(),
-        FullscreenMaterialPlugin::<UnderwaterView>::default(),
-    ))
-    .add_systems(
-        Update,
-        (wear, depth, animate, weather)
-            .chain()
-            .in_set(crate::Stage::Present),
-    )
-    .add_systems(
-        Update,
-        underwater
-            .after(crate::daylight::update)
-            .in_set(crate::Stage::Present),
-    );
+    crate::underwater::register(app);
+    app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
+        .add_systems(
+            Update,
+            (wear, depth, animate, weather)
+                .chain()
+                .in_set(crate::Stage::Present),
+        )
+        .add_systems(
+            Update,
+            underwater
+                .after(crate::daylight::update)
+                .in_set(crate::Stage::Present),
+        );
 }
 
 fn better(options: &crate::options::OptionsState) -> bool {
@@ -265,12 +259,11 @@ fn new_look(surface: &WaterSurface, plain: Option<&StandardMaterial>) -> WaterMa
         alpha_mode: AlphaMode::Opaque,
         specular_transmission: if lava { 0.0 } else { 1.0 },
         unlit: true,
-        double_sided: !lava,
-        cull_mode: if lava {
-            plain.and_then(|plain| plain.cull_mode).or(Some(Face::Back))
-        } else {
-            None
-        },
+        // Zones build water two-sided from two sheets in the same plane,
+        // one facing up and one facing down: each keeps the side its plain
+        // material shows, or the two would fight for the same pixels.
+        double_sided: plain.is_some_and(|plain| plain.double_sided),
+        cull_mode: plain.map_or(Some(Face::Back), |plain| plain.cull_mode),
         fog_enabled: true,
         ..default()
     };
@@ -421,24 +414,6 @@ fn weather(
 /// The camera's own fog before the haze replaced it, if it had any.
 struct Before(Option<DistanceFog>);
 
-/// What the view under the surface adds once the scene is drawn
-/// (`underwater.wgsl`): a gentle shimmer and light slanting down from the
-/// surface. Mirrors `Underwater` there.
-#[derive(Component, ExtractComponent, Clone, Copy, Default, ShaderType)]
-pub(crate) struct UnderwaterView {
-    /// The tint of the light shafts (rgb) and how strong they are (a).
-    shafts: Vec4,
-    /// Seconds on the wrapped clock (x), depth under the surface (y), 1
-    /// for lava (z), and how far the camera looks up, -1 to 1 (w).
-    state: Vec4,
-}
-
-impl FullscreenMaterial for UnderwaterView {
-    fn fragment_shader() -> ShaderRef {
-        "embedded://eq_client_render/underwater.wgsl".into()
-    }
-}
-
 /// How far above a point under the surface the surface is, found by
 /// stepping up until the liquid ends; none past `limit`.
 fn depth_below_surface(
@@ -485,7 +460,8 @@ fn underwater(
     options: Res<crate::options::OptionsState>,
     collision: Res<crate::Collision>,
     time: Res<Time>,
-    suns: Query<&DirectionalLight, With<crate::daylight::Sun>>,
+    online: Res<crate::online::OnlineState>,
+    suns: Query<(&DirectionalLight, &GlobalTransform), With<crate::daylight::Sun>>,
     mut cameras: Query<Divers, With<crate::camera::OrbitCamera>>,
     mut saved: Local<Option<Before>>,
 ) {
@@ -550,11 +526,16 @@ fn underwater(
             commands.entity(camera).insert(haze);
         }
     }
-    let sun = suns.iter().next().map_or(1.0, |light| {
-        (light.illuminance / crate::daylight::DAY_SUN).clamp(0.0, 1.0)
+    // Sunlight bends toward straight down as it enters the water; a zone
+    // without a sky (a dungeon) has no sun to send down.
+    let outdoors = online.world().sky().is_none_or(|sky| sky.sky != 0);
+    let (sun, toward) = suns.iter().next().map_or((1.0, Vec3::Y), |(light, place)| {
+        (
+            (light.illuminance / crate::daylight::DAY_SUN).clamp(0.0, 1.0),
+            place.back().as_vec3(),
+        )
     });
-    let look_up = place.forward().y;
-    let shafts = if lava {
+    let shafts = if lava || !outdoors {
         Vec4::ZERO
     } else {
         // Shafts fade with depth and at night.
@@ -562,13 +543,27 @@ fn underwater(
     };
     commands.entity(camera).insert(UnderwaterView {
         shafts,
+        light: into_water(toward).extend(depth),
         state: Vec4::new(
             time.elapsed_secs_wrapped(),
             depth,
             f32::from(u8::from(lava)),
-            look_up,
+            0.0,
         ),
     });
+}
+
+/// The way sunlight travels once it is in the water, for a sun in
+/// direction `toward`: bent toward straight down at the surface (water's
+/// index 1.33). A sun at or under the horizon still lights from high up,
+/// as the sky's glow does.
+fn into_water(toward: Vec3) -> Vec3 {
+    let toward = Vec3::new(toward.x, toward.y.max(0.25), toward.z).normalize();
+    let incoming = -toward;
+    let ratio = 1.0 / 1.33;
+    let cos_in = toward.y;
+    let cos_out = (1.0 - ratio * ratio * (1.0 - cos_in * cos_in)).sqrt();
+    (incoming * ratio + Vec3::Y * (ratio * cos_in - cos_out)).normalize()
 }
 
 #[cfg(test)]
