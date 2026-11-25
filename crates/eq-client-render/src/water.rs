@@ -162,11 +162,78 @@ pub(super) fn surface_liquid(
         }
     }
     let surface = water.max(lava);
-    (surface >= 2 && surface * 2 >= water + lava + other).then_some(if lava > water {
+    (surface >= 1 && surface * 2 >= water + lava + other).then_some(if lava > water {
         Liquid::Lava
     } else {
         Liquid::Water
     })
+}
+
+/// Which liquid each primitive is the top of, by [`surface_liquid`], and
+/// then by its sheet: zones draw some of a surface with no liquid region
+/// under it (South Qeynos's canals at -20), so a level piece that is not
+/// solid, wears the same texture as a found surface and lies at that
+/// surface's height is the same water.
+pub(super) fn surface_liquids(
+    primitives: &[ZonePrimitive],
+    regions: &ZoneRegions,
+    solid: &HashSet<[i64; 3]>,
+) -> Vec<Option<Liquid>> {
+    let mut found: Vec<_> = primitives
+        .iter()
+        .map(|primitive| surface_liquid(primitive, regions, solid))
+        .collect();
+    let mut sheets = std::collections::HashMap::new();
+    for (primitive, liquid) in primitives.iter().zip(&found) {
+        if let (Some(texture), Some(liquid)) = (primitive.texture, liquid) {
+            for (_, centre) in level_triangles(primitive) {
+                sheets.insert((texture, height_key(centre.y)), *liquid);
+            }
+        }
+    }
+    for (primitive, liquid) in primitives.iter().zip(&mut found) {
+        let Some(texture) = primitive.texture else {
+            continue;
+        };
+        if liquid.is_some() {
+            continue;
+        }
+        let level: Vec<_> = level_triangles(primitive).collect();
+        let triangles = primitive.indices.len() / 3;
+        if level.is_empty() || level.len() * 2 < triangles {
+            continue;
+        }
+        let mut same = level.iter().map(|(_, centre)| {
+            (!solid.contains(&centroid_key(*centre)))
+                .then(|| sheets.get(&(texture, height_key(centre.y))).copied())
+                .flatten()
+        });
+        let first = same.next().flatten();
+        if first.is_some() && same.all(|other| other == first) {
+            *liquid = first;
+        }
+    }
+    found
+}
+
+/// A primitive's level triangles: their normals and centres.
+fn level_triangles(primitive: &ZonePrimitive) -> impl Iterator<Item = (Vec3, Vec3)> + '_ {
+    primitive
+        .indices
+        .as_chunks::<3>()
+        .0
+        .iter()
+        .filter_map(|triangle| {
+            let [a, b, c] = triangle.map(|index| primitive.positions.get(index as usize).copied());
+            let [a, b, c] = [Vec3::from(a?), Vec3::from(b?), Vec3::from(c?)];
+            let normal = (b - a).cross(c - a).normalize_or_zero();
+            (normal.y.abs() >= LEVEL).then_some((normal, (a + b + c) / 3.0))
+        })
+}
+
+#[allow(clippy::cast_possible_truncation)] // Zone heights are small.
+fn height_key(height: f32) -> i64 {
+    (height * 4.0).round() as i64
 }
 
 /// The zone's solid triangles by centroid, for [`surface_liquid`].
@@ -464,6 +531,7 @@ fn underwater(
     suns: Query<(&DirectionalLight, &GlobalTransform), With<crate::daylight::Sun>>,
     mut cameras: Query<Divers, With<crate::camera::OrbitCamera>>,
     mut saved: Local<Option<Before>>,
+    mut sunlit: Local<Option<SunlitGrid>>,
 ) {
     let Ok((camera, place, fog, viewed)) = cameras.single_mut() else {
         return;
@@ -538,8 +606,20 @@ fn underwater(
     let shafts = if lava || !outdoors {
         Vec4::ZERO
     } else {
-        // Shafts fade with depth and at night.
-        Vec4::new(0.55, 0.85, 0.8, 0.22 * (1.0 - down) * (0.25 + 0.75 * sun))
+        // Shafts fade with depth, and go with the sun at night.
+        Vec4::new(0.55, 0.85, 0.8, 0.15 * (1.0 - down) * sun)
+    };
+    // Where the surface overhead can see the sun: shafts fall only there.
+    let surface = at.y + depth;
+    let grid = match (world, shafts.w > 0.0) {
+        (Some(world), true) => {
+            let wanted = SunlitGrid::around(at, surface, toward);
+            if sunlit.as_ref().is_none_or(|grid| !grid.covers(&wanted)) {
+                *sunlit = Some(wanted.cast(world));
+            }
+            sunlit.as_ref()
+        }
+        _ => None,
     };
     commands.entity(camera).insert(UnderwaterView {
         shafts,
@@ -550,7 +630,78 @@ fn underwater(
             f32::from(u8::from(lava)),
             0.0,
         ),
+        grid: grid.map_or(Vec4::ZERO, SunlitGrid::placement),
+        open: grid.map_or([UVec4::ZERO; 32], |grid| grid.open),
     });
+}
+
+/// Which spots of the water's surface around the camera can see the sun,
+/// one bit for each [`SunlitGrid::CELL`]-wide square of a
+/// [`SunlitGrid::SIDE`]-square grid: a ray from each spot toward the sun
+/// that hits nothing solid lets light down there. Cast again when the
+/// camera has moved a good way, the sun has turned, or the surface changed.
+struct SunlitGrid {
+    /// The grid's corner (x, z), snapped so small moves keep it.
+    corner: Vec2,
+    surface: f32,
+    toward: Vec3,
+    open: [UVec4; 32],
+}
+
+impl SunlitGrid {
+    const SIDE: usize = 64;
+    const CELL: f32 = 4.0;
+    /// How far the corner snaps: the camera stays at least a quarter of the
+    /// grid from its edge.
+    const SNAP: f32 = 32.0;
+    /// How far toward the sun a spot looks for cover: far enough for roofs,
+    /// bridges, docks and tunnels over the water, short of the invisible
+    /// walls and ceilings zones close themselves in with.
+    const REACH: f32 = 50.0;
+
+    fn around(at: Vec3, surface: f32, toward: Vec3) -> Self {
+        #[allow(clippy::cast_precision_loss)] // A small constant.
+        let half = Self::SIDE as f32 * Self::CELL / 2.0;
+        let corner = (Vec2::new(at.x, at.z) / Self::SNAP).round() * Self::SNAP - Vec2::splat(half);
+        Self {
+            corner,
+            surface,
+            toward: Vec3::new(toward.x, toward.y.max(0.25), toward.z).normalize(),
+            open: [UVec4::ZERO; 32],
+        }
+    }
+
+    fn covers(&self, wanted: &Self) -> bool {
+        self.corner == wanted.corner
+            && (self.surface - wanted.surface).abs() < 1.0
+            && self.toward.dot(wanted.toward) > 0.9995
+    }
+
+    fn cast(mut self, world: &eq_client_core::movement::CollisionWorld) -> Self {
+        for index in 0..Self::SIDE * Self::SIDE {
+            #[allow(clippy::cast_precision_loss)] // Small grid indices.
+            let (x, z) = (
+                (index % Self::SIDE) as f32 + 0.5,
+                (index / Self::SIDE) as f32 + 0.5,
+            );
+            let spot = Vec3::new(
+                self.corner.x + x * Self::CELL,
+                self.surface + 0.3,
+                self.corner.y + z * Self::CELL,
+            );
+            if world.ray_distance(spot, self.toward, Self::REACH).is_none() {
+                let packed = index / 32;
+                self.open[packed / 4][packed % 4] |= 1 << (index % 32);
+            }
+        }
+        self
+    }
+
+    /// The grid's corner (xy) and cell size (z) for the shader, with w set
+    /// to say it is there.
+    fn placement(&self) -> Vec4 {
+        Vec4::new(self.corner.x, self.corner.y, Self::CELL, 1.0)
+    }
 }
 
 /// The way sunlight travels once it is in the water, for a sun in
@@ -625,6 +776,23 @@ mod tests {
                 .collect::<Vec<_>>(),
         );
         assert_eq!(surface_liquid(&floor, &regions, &solid), None);
+        // A piece of the sheet stored as a single triangle is still it.
+        let mut single = square(0.0, true);
+        single.indices.truncate(3);
+        assert_eq!(
+            surface_liquid(&single, &regions, &none),
+            Some(Liquid::Water)
+        );
+        // Pieces in the surface's texture count at its height, not at the
+        // floor's.
+        let textured = |height| ZonePrimitive {
+            texture: Some(3),
+            ..square(height, true)
+        };
+        assert_eq!(
+            surface_liquids(&[textured(0.0), textured(-5.0)], &regions, &none),
+            vec![Some(Liquid::Water), None]
+        );
         let lava = ZoneRegions::test_liquid_surface(0.0, Liquid::Lava);
         assert_eq!(
             surface_liquid(&square(0.0, true), &lava, &none),

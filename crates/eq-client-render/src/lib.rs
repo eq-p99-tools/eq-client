@@ -901,13 +901,14 @@ fn spawn_static_zone(
     let texture_images = create_texture_images(zone.textures, images);
     // Which drawn terrain is the top of water or lava, for Better Water.
     let solid = water::solid_centroids(&zone.collision);
+    let liquids = water::surface_liquids(&zone.primitives, &zone.regions, &solid);
     let surfaces: Vec<_> = zone
         .primitives
         .iter()
         .enumerate()
         .filter(|(_, primitive)| gpu_assets::drawn(primitive))
         .map(|(index, primitive)| {
-            water::surface_liquid(primitive, &zone.regions, &solid).map(|liquid| {
+            liquids[index].map(|liquid| {
                 let (frames, frame_millis) = gpu_assets::opaque_frames(
                     primitive.texture,
                     zone.terrain_materials.get(index),

@@ -58,6 +58,12 @@ pub(crate) struct UnderwaterView {
     /// Seconds on the wrapped clock (x), depth under the surface (y), and 1
     /// for lava (z).
     pub(crate) state: Vec4,
+    /// Where the sunlit grid lies: its corner (x and z in xy), its cell size
+    /// (z), and 1 when there is one (w).
+    pub(crate) grid: Vec4,
+    /// One bit for each cell of the grid, row by row: set where the surface
+    /// there can see the sun.
+    pub(crate) open: [UVec4; 32],
 }
 
 pub(super) fn register(app: &mut App) {

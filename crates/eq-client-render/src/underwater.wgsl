@@ -11,6 +11,8 @@ struct Underwater {
     shafts: vec4<f32>,
     light: vec4<f32>,
     state: vec4<f32>,
+    grid: vec4<f32>,
+    open: array<vec4<u32>, 32>,
 }
 
 @group(0) @binding(0) var screen_texture: texture_2d<f32>;
@@ -42,16 +44,44 @@ fn noise(p: vec2<f32>) -> f32 {
     );
 }
 
-// How much light comes down through the surface at a level point: bright
-// threads where the ripples focus it, drifting and changing as they move.
+// How much light comes down through the surface at a level point: a few
+// thin threads where the ripples focus it, drifting and changing as they
+// move, in patches with dark water between.
 fn through_surface(p: vec2<f32>, t: f32) -> f32 {
     let a = noise(p * 0.16 + vec2(t * 0.05, t * 0.03));
     let b = noise(p * 0.23 + vec2(-t * 0.04, t * 0.06) + 13.7);
-    let c = noise(p * 0.07 + vec2(t * 0.015, -t * 0.01) + 5.1);
-    // Ridges where two drifting fields cross make the threads; a slow
-    // field makes some stretches of the surface brighter than others.
+    let c = noise(p * 0.05 + vec2(t * 0.012, -t * 0.008) + 5.1);
+    // Ridges where two drifting fields cross make the threads; only the
+    // brightest are kept, and a slow field leaves most stretches dark.
     let ridge = 1.0 - abs(a + b - 1.0) * 2.0;
-    return pow(clamp(ridge, 0.0, 1.0), 4.0) * smoothstep(0.25, 0.75, c);
+    return pow(clamp(ridge, 0.0, 1.0), 8.0) * smoothstep(0.42, 0.8, c);
+}
+
+// Whether the surface at a level point can see the sun (1) or is shaded by
+// something overhead (0), from the grid the client casts around the
+// camera, blended between cells; outside the grid counts as open.
+fn open_cell(cell: vec2<f32>) -> f32 {
+    if any(cell < vec2(0.0)) || any(cell >= vec2(64.0)) {
+        return 1.0;
+    }
+    let index = u32(cell.y) * 64u + u32(cell.x);
+    let word = index / 32u;
+    let bits = settings.open[word / 4u][word % 4u];
+    return f32((bits >> (index % 32u)) & 1u);
+}
+
+fn sunlit(p: vec2<f32>) -> f32 {
+    if settings.grid.w < 0.5 {
+        return 1.0;
+    }
+    let local = (p - settings.grid.xy) / settings.grid.z - 0.5;
+    let base = floor(local);
+    let f = local - base;
+    return mix(
+        mix(open_cell(base), open_cell(base + vec2(1.0, 0.0)), f.x),
+        mix(open_cell(base + vec2(0.0, 1.0)), open_cell(base + vec2(1.0, 1.0)), f.x),
+        f.y,
+    );
 }
 
 fn scene_depth(coord: vec2<f32>) -> f32 {
@@ -106,9 +136,9 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             let entry = point.xz - down.xz * path;
             // Light thins on its way down and again on its way to the eye.
             let lost = exp(-path * 0.03 - along * 0.025);
-            gathered += through_surface(entry, t) * lost;
+            gathered += through_surface(entry, t) * sunlit(entry) * lost;
         }
-        gathered *= step * 1.0;
+        gathered *= step * 2.2;
         color += settings.shafts.rgb * gathered * strength;
     }
     return vec4(color, 1.0);
