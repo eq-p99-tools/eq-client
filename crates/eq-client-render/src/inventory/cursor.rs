@@ -89,7 +89,10 @@ pub(crate) fn update(
         return;
     };
     let inventory = online.world().inventory();
-    let item = inventory.items().get(&InventorySlot::CURSOR);
+    let item = inventory
+        .items()
+        .get(&InventorySlot::CURSOR)
+        .filter(|_| !state.cursor_drop_hidden(online.world()));
     let coins = crate::coins::on_cursor(online.world());
     // A spell from the skin's book rides the cursor while nothing else does.
     let spell = hand
@@ -128,7 +131,8 @@ pub(crate) fn update(
         }?;
         Some((pointer, window.size() / factor))
     });
-    let carried = item.is_some() || coins.is_some() || spell.is_some() || hotkey.is_some();
+    let carried = !state.cursor_drop_hidden(online.world())
+        && (item.is_some() || coins.is_some() || spell.is_some() || hotkey.is_some());
     if let Ok((entity, window)) = windows.single() {
         let icon = (!carried && window.focused)
             .then(|| drag.resize_cursor())

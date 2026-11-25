@@ -85,8 +85,16 @@ impl ClientWorld {
             "Finish the pending inventory move first"
         );
         ensure!(
+            self.camp().is_none() && !self.arrival_held(),
+            "Finish camping or carrier placement before dropping an item"
+        );
+        ensure!(
             self.carried_coin_count().is_some(),
             "A cursor drop needs current carried coin information"
+        );
+        ensure!(
+            self.movement_weight().is_ok(),
+            "A cursor drop needs current carried weight"
         );
         self.inventory().plan_ground_drop(request)?;
         Ok(())

@@ -2,6 +2,7 @@
 mod door_click;
 pub(super) mod marker;
 pub(super) mod picking;
+mod world_drop;
 use super::{entities::NearbyEntities, online::OnlineState};
 use crate::theme::{self, Size};
 use crate::{keys::Act, outbox::Outbox};
@@ -117,8 +118,13 @@ pub(super) fn input(
     mut scripted: ResMut<ScenePointer>,
     mut attempted: Local<bool>,
     mut door_clicks: Local<DoorClicks>,
+    mut world_drop: Local<world_drop::WorldDrop>,
     keys: super::keys::Keys,
     mouse: Res<ButtonInput<MouseButton>>,
+    (native, mut native_order): (
+        Option<Res<Messages<bevy::input::mouse::MouseButtonInput>>>,
+        Local<bevy::ecs::message::MessageCursor<bevy::input::mouse::MouseButtonInput>>,
+    ),
     windows: Query<&Window, With<PrimaryWindow>>,
     mut online: ResMut<OnlineState>,
     mut chat: ResMut<super::chat::ChatState>,
@@ -131,7 +137,22 @@ pub(super) fn input(
         Option<Res<super::hud::messages::Messages>>,
         Option<Res<crate::options::OptionsState>>,
     ),
+    (mut inventory, asked, look): (
+        ResMut<crate::inventory::InventoryState>,
+        Res<crate::confirm::Asked>,
+        Option<Res<crate::camera::MouseLook>>,
+    ),
 ) {
+    // Drain even while a question/UI owns input, so old native edges cannot
+    // return after ownership changes. Unlike ButtonInput, messages retain
+    // down/up and up/down order within one rendered frame.
+    let native_edges: Vec<_> = native.as_ref().map_or_else(Vec::new, |native| {
+        native_order
+            .read(native)
+            .filter(|event| windows.get(event.window).is_ok() && event.button == MouseButton::Left)
+            .map(|event| event.state.is_pressed())
+            .collect()
+    });
     let requested = chat.requested_target.take();
     // The server's answer to an assist names a spawn it knows near the one
     // assisted, which may lie past the drawn ones.
@@ -141,6 +162,12 @@ pub(super) fn input(
     // The world forgets the target when the connection drops or the player dies.
     if !online.world().connected() || online.world().is_dead() {
         door_clicks.cancel();
+        world_drop.cancel();
+        return;
+    }
+    if asked.question().is_some() || asked.has_pending_answer() {
+        door_clicks.cancel();
+        world_drop.cancel();
         return;
     }
     let settings = scene.settings.as_ref();
@@ -199,6 +226,93 @@ pub(super) fn input(
             && !keys.pressed(Act::Use)
     });
     let now = std::time::Instant::now();
+    let local_drop = scene.client() == InstalledClient::Titanium
+        && online
+            .world()
+            .can(eq_client_core::Capability::GroundDropping);
+    let cursor_gesture = local_drop
+        && online
+            .world()
+            .inventory()
+            .items()
+            .contains_key(&eq_client_core::inventory::InventorySlot::CURSOR);
+    let world_cursor = cursor.filter(|cursor| {
+        local_drop
+            && scene.in_view(*cursor)
+            && online.enabled
+            && online.in_world()
+            && keys.window_focused()
+            && !keys.input.just_pressed(KeyCode::Escape)
+            && !mouse.pressed(MouseButton::Right)
+            && !mouse.just_released(MouseButton::Right)
+            && !keys.pressed(Act::Use)
+            && look.as_ref().is_none_or(|look| !look.held && !look.left)
+            && asked.question().is_none()
+            && !asked.has_pending_answer()
+    });
+    let native_spawn = world_cursor
+        .and_then(|cursor| scene.pick(&online, cursor, false))
+        .map(|picked| choose(scene.client().spawn_pick(), &picked.spawns, None, None));
+    let identity = local_drop
+        .then(|| world_drop::Cursor::current(online.world()))
+        .flatten();
+    let mut edges = native_edges;
+    if request.is_some() || edges.is_empty() {
+        edges.clear();
+        if mouse.just_pressed(MouseButton::Left) {
+            edges.push(true);
+        }
+        if mouse.just_released(MouseButton::Left) {
+            edges.push(false);
+        }
+    }
+    let (owned, release) = world_drop.track(
+        world_cursor.is_some(),
+        request.is_some(),
+        identity,
+        &edges,
+        now,
+    );
+    if owned {
+        door_clicks.cancel();
+        if scripted.request.is_some() {
+            // Ownership lets the ordinary script release; this is not a
+            // submission or server-outcome receipt.
+            scripted.acted = true;
+        }
+        if !release {
+            return;
+        }
+        // Spawn priority is evaluated only after validating the captured
+        // cursor identity, and before its ground-drop eligibility.
+        if !matches!(native_spawn, Some(Choice::Spawn(..))) {
+            if let Ok(drop) = online.world().prepare_cursor_drop() {
+                // Conditional on unread0x5eccc0()==0 in the original. These
+                // three kinds remain conservatively unsupported here; this
+                // is not a universal item/worker predicate or named mapping.
+                if !matches!(drop.item.rules.item_type, 0x0c | 0x21 | 0x27) {
+                    inventory.request_world_drop(drop);
+                    if scripted.request.is_some() {
+                        scripted.acted = true;
+                    }
+                    return;
+                }
+            } else {
+                if scripted.request.is_some() {
+                    scripted.acted = true;
+                }
+                return;
+            }
+        }
+    }
+    if cursor_gesture {
+        door_clicks.cancel();
+    }
+    let left_click = if owned || cursor_gesture {
+        release
+    } else {
+        mouse.just_pressed(MouseButton::Left)
+    };
     let door_release = door_clicks.track(online.world().session_id(), door_cursor, &mouse, now);
     if let Some(name) = requested {
         let rule = settings.as_ref().map_or(TargetByName::Nearest, |s| {
@@ -251,7 +365,7 @@ pub(super) fn input(
             proposal = Some(Some(chosen));
         }
     } else if let Some(cursor) = cursor
-        && (door_release || mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]))
+        && (door_release || left_click || mouse.just_pressed(MouseButton::Right))
         && let Some(Picked {
             choice,
             spawns,
@@ -259,6 +373,14 @@ pub(super) fn input(
         }) = scene.pick(&online, cursor, door_cursor.is_some())
     {
         let client = scene.client();
+        let choice = if local_drop && release {
+            match choose(client.spawn_pick(), &spawns, None, None) {
+                spawn @ Choice::Spawn(..) => spawn,
+                _ => choice,
+            }
+        } else {
+            choice
+        };
         // A script's click acts only on what it named: anything else the
         // pick finds there now refuses it, and nothing is done.
         if let Some(wanted) = request.as_ref().map(|request| request.thing) {
@@ -282,11 +404,11 @@ pub(super) fn input(
         if mouse.just_pressed(MouseButton::Left) {
             door_clicks.press(picked_door, cursor, now);
         }
-        if mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]) {
+        if left_click || mouse.just_pressed(MouseButton::Right) {
             report_click(cursor, &spawns, choice);
             match choice {
                 // Clicking an item on the ground picks it up and keeps the target.
-                Choice::Item(drop_id) if mouse.just_pressed(MouseButton::Left) => {
+                Choice::Item(drop_id) if left_click => {
                     if let Some(line) = super::ground::use_object(drop_id, &mut online, &outbox) {
                         chat.history.push(super::chat::system_line(line));
                     }
@@ -312,7 +434,7 @@ pub(super) fn input(
                     }
                     proposal = Some(Some(id));
                 }
-                Choice::Nothing if mouse.just_pressed(MouseButton::Left) => {
+                Choice::Nothing if left_click => {
                     match client.click_miss() {
                         // Nothing is sent; a stale target is still dropped.
                         ClickMiss::KeepTarget => {}
@@ -455,6 +577,14 @@ struct Picked {
 }
 
 impl Scene<'_, '_> {
+    fn in_view(&self, point: Vec2) -> bool {
+        self.cameras
+            .single()
+            .ok()
+            .and_then(|(camera, _)| camera.logical_viewport_rect())
+            .is_some_and(|viewport| viewport.contains(point))
+    }
+
     fn client(&self) -> InstalledClient {
         self.settings
             .as_ref()
@@ -557,10 +687,14 @@ impl Scene<'_, '_> {
     /// on its drawn faces ([`super::doors::aim_points`]), projected. Empty
     /// when it isn't drawn; a point behind the camera is left out.
     fn aim(&self, thing: Thing) -> Vec<Vec2> {
+        if let Thing::World(x, y) = thing {
+            return vec![Vec2::new(f32::from(x), f32::from(y))];
+        }
         let Ok((camera, camera_transform)) = self.cameras.single() else {
             return Vec::new();
         };
         let points = match thing {
+            Thing::World(..) => unreachable!("world coordinates handled above"),
             Thing::Spawn(id) => self
                 .nearby
                 .rendered
@@ -658,6 +792,8 @@ impl Scene<'_, '_> {
 /// A thing in the scene a script names for a click (checklist 6.587).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Thing {
+    /// A logical window point, still subject to viewport, UI and scene input.
+    World(u16, u16),
     Spawn(u16),
     /// An object on the ground, by its drop id.
     Object(u32),
@@ -668,6 +804,7 @@ impl Thing {
     /// Whether a click's pick names this thing.
     const fn is(self, choice: Choice) -> bool {
         match (self, choice) {
+            (Self::World(..), _) => true,
             (Self::Spawn(wanted), Choice::Spawn(id, _)) => wanted == id,
             (Self::Object(wanted), Choice::Item(id)) => wanted == id,
             (Self::Door(wanted), Choice::Door(door)) => wanted == door.id,
@@ -678,6 +815,7 @@ impl Thing {
     /// Why a click can't name it from here.
     pub(crate) const fn covered(self) -> &'static str {
         match self {
+            Self::World(..) => "that world point is covered or off the view",
             Self::Spawn(_) => "that spawn is covered or off screen from here",
             Self::Object(_) => "that object is covered or off screen from here",
             Self::Door(_) => "that door is covered or off screen from here",
@@ -743,6 +881,9 @@ pub(super) fn aim(
                 "a window covers its middle at ({:.0}, {:.0})",
                 at.x, at.y
             ));
+        }
+        if !scene.in_view(at) {
+            return Some("the point is outside the 3D view".to_owned());
         }
         match scene.pick(&online, at, doors) {
             None => Some("the view casts no ray there".to_owned()),
@@ -1782,6 +1923,8 @@ mod tests {
             .init_resource::<super::super::escape::Escape>()
             .init_resource::<super::super::hud::hotbar::carry::Presses>()
             .init_resource::<super::ScenePointer>()
+            .init_resource::<crate::inventory::InventoryState>()
+            .init_resource::<crate::confirm::Asked>()
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .add_systems(Update, (input, update).chain());
         app.world_mut().spawn((
@@ -2058,6 +2201,377 @@ mod tests {
             mouse.release(MouseButton::Left);
         }
         app.update();
+    }
+
+    fn drop_scene(
+        mode: eq_client_core::options::NoSafeDrop,
+    ) -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
+        use crate::online::testing as session;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+        let (mut app, commands, ..) = target_app();
+        scene_camera(&mut app);
+        let mut item = crate::preview::items().remove(0);
+        item.slot = InventorySlot::CURSOR;
+        item.bag_slots = 0;
+        item.stack_count = None;
+        item.rules.item_type = 0;
+        item.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        session::empty_carried_coins(&mut online);
+        session::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+        drop(online);
+        app.init_resource::<crate::windows::Shown>()
+            .init_resource::<crate::clicks::LeftButton>()
+            .insert_resource(crate::options::OptionsState::new(
+                &eq_client_core::options::Options {
+                    no_safe_drop: mode,
+                    ..Default::default()
+                },
+            ))
+            .add_systems(Update, crate::inventory::ground_drop::input.after(input));
+        (app, commands)
+    }
+
+    #[test]
+    fn world_release_with_inventory_closed_uses_default_fast_and_never_modes() {
+        use eq_client_core::options::NoSafeDrop;
+        for mode in [NoSafeDrop::Ask, NoSafeDrop::Fast, NoSafeDrop::Never] {
+            let (mut app, commands) = drop_scene(mode);
+            let point = Some(Vec2::new(400.0, 300.0));
+            scripted_frame(&mut app, Thing::World(400, 300), point, true);
+            assert!(commands.try_recv().is_err());
+            scripted_frame(&mut app, Thing::World(400, 300), point, false);
+            assert!(
+                !app.world()
+                    .resource::<crate::windows::Shown>()
+                    .is_open(crate::windows::WindowId::Inventory)
+            );
+            if mode == NoSafeDrop::Ask {
+                assert!(
+                    app.world()
+                        .resource::<crate::confirm::Asked>()
+                        .question()
+                        .is_some()
+                );
+                assert!(commands.try_recv().is_err());
+                app.world_mut()
+                    .resource_mut::<crate::confirm::Asked>()
+                    .give(true);
+                app.update();
+            }
+            if mode == NoSafeDrop::Never {
+                assert!(commands.try_recv().is_err());
+                continue;
+            }
+            assert!(matches!(
+                commands.try_recv(),
+                Ok(ClientCommand::DropItem(_))
+            ));
+            assert!(
+                app.world()
+                    .resource::<crate::inventory::InventoryState>()
+                    .cursor_drop_hidden(app.world().resource::<OnlineState>().world())
+            );
+            assert!(
+                app.world()
+                    .resource::<OnlineState>()
+                    .world()
+                    .inventory()
+                    .items()
+                    .contains_key(&eq_client_core::inventory::InventorySlot::CURSOR)
+            );
+            scripted_frame(&mut app, Thing::World(400, 300), point, false);
+            assert!(commands.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn a_native_world_press_asks_only_after_release() {
+        let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(bevy::math::DVec2::new(400.0, 300.0)));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .press(MouseButton::Left);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<crate::confirm::Asked>()
+                .question()
+                .is_none()
+        );
+        let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+        mouse.clear();
+        mouse.release(MouseButton::Left);
+        drop(mouse);
+        app.update();
+        assert!(
+            app.world()
+                .resource::<crate::confirm::Asked>()
+                .question()
+                .is_some()
+        );
+        assert!(commands.try_recv().is_err());
+    }
+
+    fn native_drop_edges(app: &mut App, edges: &[bool]) {
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        app.world_mut()
+            .get_mut::<Window>(window)
+            .unwrap()
+            .set_physical_cursor_position(Some(bevy::math::DVec2::new(400.0, 300.0)));
+        for down in edges {
+            app.world_mut()
+                .write_message(bevy::input::mouse::MouseButtonInput {
+                    button: MouseButton::Left,
+                    state: if *down {
+                        bevy::input::ButtonState::Pressed
+                    } else {
+                        bevy::input::ButtonState::Released
+                    },
+                    window,
+                });
+        }
+        app.update();
+    }
+
+    #[test]
+    fn native_down_up_and_up_down_in_one_frame_use_their_own_press() {
+        let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+        app.add_plugins(bevy::input::InputPlugin);
+        native_drop_edges(&mut app, &[true, false]);
+        assert!(
+            app.world()
+                .resource::<crate::confirm::Asked>()
+                .question()
+                .is_some()
+        );
+        assert!(commands.try_recv().is_err());
+
+        let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+        app.add_plugins(bevy::input::InputPlugin);
+        native_drop_edges(&mut app, &[true]);
+        native_drop_edges(&mut app, &[false, true]);
+        assert!(
+            app.world()
+                .resource::<crate::confirm::Asked>()
+                .question()
+                .is_some()
+        );
+        assert!(commands.try_recv().is_err());
+        native_drop_edges(&mut app, &[false]);
+        assert!(
+            commands.try_recv().is_err(),
+            "the second press cannot answer or submit the first question"
+        );
+    }
+
+    #[test]
+    fn spawn_release_precedes_droppability_but_not_changed_cursor_identity() {
+        use crate::online::testing;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+        let point = Some(Vec2::new(400.0, 300.0));
+        for replacement in 0..3 {
+            let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+            let mut item = app
+                .world()
+                .resource::<OnlineState>()
+                .world()
+                .inventory()
+                .items()[&InventorySlot::CURSOR]
+                .clone();
+            item.rules.ground_drop_serial = None;
+            let original = item.clone();
+            testing::inventory(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                InventoryUpdate::Snapshot(vec![item.clone()]),
+            );
+            scripted_frame(&mut app, Thing::World(400, 300), point, true);
+            assert!(commands.try_recv().is_err());
+            if replacement != 0 {
+                item.details.id += 1;
+                testing::inventory(
+                    &mut app.world_mut().resource_mut::<OnlineState>(),
+                    InventoryUpdate::Set(vec![item]),
+                );
+                if replacement == 2 {
+                    testing::inventory(
+                        &mut app.world_mut().resource_mut::<OnlineState>(),
+                        InventoryUpdate::Set(vec![original]),
+                    );
+                }
+            }
+            body_at_origin(&mut app, 42, SpawnKind::Npc);
+            scripted_frame(&mut app, Thing::World(400, 300), point, false);
+            let sent: Vec<_> = commands.try_iter().collect();
+            assert_eq!(
+                sent.iter()
+                    .filter(|command| matches!(command, ClientCommand::OfferTrade { .. }))
+                    .count(),
+                usize::from(replacement == 0)
+            );
+            assert!(
+                sent.iter()
+                    .all(|command| !matches!(command, ClientCommand::DropItem(_)))
+            );
+            assert!(
+                app.world()
+                    .resource::<crate::confirm::Asked>()
+                    .question()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn unoffered_providers_keep_cursor_door_input_and_never_start_a_drop() {
+        use crate::online::testing;
+        use eq_client_core::{
+            Capability,
+            inventory::{InventorySlot, InventoryUpdate},
+        };
+        for (label, client) in [
+            ("P99", InstalledClient::Titanium),
+            ("remote EQEmu", InstalledClient::Titanium),
+            ("TAKP", InstalledClient::EqMac),
+            ("Quarm", InstalledClient::EqMac),
+        ] {
+            let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+            let mut settings = crate::ViewerSettings::default();
+            settings.0.installed_client = client;
+            app.insert_resource(settings);
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            let player = online.world().player().unwrap().clone();
+            let item = online.world().inventory().items()[&InventorySlot::CURSOR].clone();
+            testing::enter_with(
+                &mut online,
+                1,
+                player,
+                None,
+                Capability::ALL
+                    .iter()
+                    .copied()
+                    .filter(|capability| *capability != Capability::GroundDropping)
+                    .collect(),
+            );
+            testing::empty_carried_coins(&mut online);
+            testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+            drop(online);
+            door_scene(&mut app);
+            for down in [true, false, true, false] {
+                scripted_frame(
+                    &mut app,
+                    Thing::World(400, 300),
+                    Some(Vec2::new(400.0, 300.0)),
+                    down,
+                );
+            }
+            let sent: Vec<_> = commands.try_iter().collect();
+            assert!(
+                sent.iter()
+                    .any(|command| matches!(command, ClientCommand::ClickDoor { .. })),
+                "{label}: legacy door gesture lost"
+            );
+            assert!(
+                sent.iter()
+                    .all(|command| !matches!(command, ClientCommand::DropItem(_))),
+                "{label}"
+            );
+            assert!(
+                app.world()
+                    .resource::<crate::confirm::Asked>()
+                    .question()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn ui_ownership_before_or_during_a_world_press_cancels_the_drop() {
+        use bevy::ui::ComputedStackIndex;
+        for covers_press in [false, true] {
+            let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+            let point = Some(Vec2::new(400.0, 300.0));
+            let panel = app
+                .world_mut()
+                .spawn((
+                    crate::windows::Frame::default(),
+                    ComputedNode {
+                        size: if covers_press {
+                            Vec2::splat(200.0)
+                        } else {
+                            Vec2::ZERO
+                        },
+                        ..default()
+                    },
+                    UiGlobalTransform::from_translation(point.unwrap()),
+                    ComputedStackIndex(1),
+                    InheritedVisibility::VISIBLE,
+                ))
+                .id();
+            scripted_frame(&mut app, Thing::World(400, 300), point, true);
+            if covers_press {
+                app.world_mut().despawn(panel);
+            } else {
+                app.world_mut().get_mut::<ComputedNode>(panel).unwrap().size = Vec2::splat(200.0);
+            }
+            scripted_frame(&mut app, Thing::World(400, 300), point, false);
+            assert!(
+                app.world()
+                    .resource::<crate::confirm::Asked>()
+                    .question()
+                    .is_none()
+            );
+            assert!(commands.try_recv().is_err());
+        }
+    }
+
+    #[test]
+    fn a_spawn_wins_before_the_cursor_and_a_door_cannot_duplicate_the_drop() {
+        let point = Some(Vec2::new(400.0, 300.0));
+        let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+        body_at_origin(&mut app, 42, SpawnKind::Npc);
+        scripted_frame(&mut app, Thing::World(400, 300), point, true);
+        assert!(
+            commands.try_recv().is_err(),
+            "spawn action belongs to release"
+        );
+        scripted_frame(&mut app, Thing::World(400, 300), point, false);
+        assert!(
+            app.world()
+                .resource::<crate::confirm::Asked>()
+                .question()
+                .is_none()
+        );
+        assert!(
+            commands
+                .try_iter()
+                .all(|command| !matches!(command, ClientCommand::DropItem(_)))
+        );
+
+        let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+        door_scene(&mut app);
+        for down in [true, false, true, false] {
+            scripted_frame(&mut app, Thing::World(400, 300), point, down);
+        }
+        assert!(
+            app.world()
+                .resource::<crate::confirm::Asked>()
+                .question()
+                .is_some()
+        );
+        assert!(commands.try_recv().is_err());
     }
 
     #[test]

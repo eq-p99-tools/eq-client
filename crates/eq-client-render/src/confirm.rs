@@ -44,6 +44,7 @@ pub(crate) enum Question {
     },
     /// The exact cursor item selected for ground drop.
     DropItem {
+        request_id: u64,
         session_id: u64,
         revision: u64,
         item_id: u32,
@@ -110,13 +111,16 @@ impl Question {
                     String::new()
                 }
             }
-            Self::DropItem { session_id, revision, item_id } => {
+            Self::DropItem { session_id, revision, item_id, .. } => {
                 let inventory = online.world().inventory();
                 inventory.items().get(&eq_client_core::inventory::InventorySlot::CURSOR)
                     .filter(|item| online.world().session_id() == Some(session_id)
                         && inventory.revision() == revision && item.details.id == item_id)
-                    .map_or_else(String::new, |item| format!("Drop all {} of {} on the ground? Other players can pick it up.",
-                        item.stack_count.unwrap_or(1), item.details.name))
+                    .map_or_else(String::new, |item| {
+                        let fallback = format!("Drop {} on the ground?", item.details.name);
+                        messages.map_or_else(|| fallback.clone(), |messages|
+                            messages.official(0x2361, &[item.details.name.clone()], &fallback))
+                    })
             }
             Self::DeleteSpell { spell, .. } => {
                 format!(

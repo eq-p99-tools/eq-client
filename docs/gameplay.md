@@ -333,11 +333,15 @@ says the cursor holds more than one kind, the others stay shown there, as the
 server still holds them; the program would hide them (checklist 6.512c).
 Scripts use the same control and dialog.
 
-On local-only Titanium EQEmu, **Drop cursor item** in Inventory asks before dropping one
+On local-only Titanium EQEmu, release a short left click on the world view
+with an ordinary eligible item on the cursor to ask before dropping it.
+Visible UI and spawns take precedence. The fallback **Drop cursor item**
+button uses the same confirmation. It asks before dropping one
 ordinary, verified droppable item or whole stack. The server chooses the
 location. An item moved onto the cursor only by local prediction needs a
-received cursor update before it can be dropped. The last received item stays
-visible while custody is unresolved. A nearby object appearing does not
+received cursor update before it can be dropped. The cursor attachment clears
+after enqueue, while the received item stays in the custody model.
+A nearby object appearing does not
 identify the item that left the cursor. Use ordinary ground pickup with a
 known empty cursor. After submitting a drop, re-enter the world for a fresh
 inventory snapshot. A drop requires current item and carried coin information.
@@ -345,16 +349,13 @@ The hold pauses conflicting inventory actions. Movement
 can continue after the worker accepts a conservative carried-weight report.
 Falls use the retained weight bound when available. If a landing needs
 weight and the bound becomes unknown, the client shows that in chat.
-Choose **No**, press Escape or close Inventory to cancel before submitting.
-Typing `/fastdrop` turns the question off, so **Drop cursor item** drops at
-once through the same checks and the same one-at-a-time hold; typing it
-again brings the question back, and each says which way it now is. It is off
-at start, is not saved, and turns off at a world entry, a camp, a return to
-login or a lost link; a zone change keeps it. Only the item
-drop's question is skipped: destroying still asks. A social, a hotbutton or
-a script's `slash` turns it over as typing does (6.584). The program's handler (0x4685ba) is
-unread, so this behaviour and its lines are inferred (checklist 6.536,
-pending R49-6n).
+Choose **No**, press Escape or let the 20-second question expire to cancel.
+Closing Inventory also cancels a question started by its fallback button.
+Typing `/fastdrop on` turns the question off, so the world gesture drops at
+once through the same checks and the same one-at-a-time hold.
+`/fastdrop off` restores the question, and `/fastdrop never` refuses drops.
+The saved original option is `NoSafeDrop`, default 0 for the question,
+1 for fast drops, and -1 for refusal. Destroy still asks.
 
 Where the inventory policy supports it, **Destroy cursor item** asks before
 destroying the whole cursor item or stack. **No**, Escape, closing inventory,

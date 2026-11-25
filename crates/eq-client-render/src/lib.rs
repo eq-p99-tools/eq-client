@@ -436,6 +436,9 @@ fn seed_official_options(
         if let Some(on) = official.attack_on_assist {
             option_defaults.attack_on_assist = on;
         }
+        if let Some(value) = official.no_safe_drop {
+            option_defaults.no_safe_drop = eq_client_core::options::NoSafeDrop::from_saved(value);
+        }
         if let Some(sort) = official
             .track_sort
             .and_then(eq_client_core::track_options::TrackSort::saved)
