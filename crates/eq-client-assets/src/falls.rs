@@ -21,6 +21,11 @@
 /// elapsed milliseconds × 0.02 steps (the clock's unit is unsure, 6.161).
 pub const STEP_SECONDS: f32 = 0.05;
 
+/// The actor's unscaled jump strength, in world units a second (Titanium
+/// actor +0xbc, 0x4868ee; the Mac-era launch uses the same 1.35 a step).
+/// This is distinct from the launch speed, which includes the jump factor.
+pub const JUMP_STRENGTH: f32 = 1.35 / STEP_SECONDS;
+
 /// The frame rate this client takes for the programs' once-a-frame steps,
 /// the air's slowing and the turn keys' ramp: 60 frames a second, three a
 /// step (inferred, recording checklists 6.416 and 6.419).

@@ -1017,6 +1017,14 @@ Camp uses timed preparation and acknowledgement where offered. The local
 `--demo-trade` mode previews loot, merchant and trade UI.
 See the [policy matrix](../SUPPORT.md).
 
+Your own jump's pose follows local velocity at the point being drawn. A
+moving jump briefly uses its moving-rise clip, returns to the walk/run near
+the apex, and uses the fall clip on a sufficiently fast descent. A jump
+from still uses a different rise clip and thresholds. This changes only
+presentation; movement, jump requests and endurance actions are unchanged.
+The Titanium selector is read; EqMac and RoF2 follow it provisionally. See
+[own jump animation](own-jump-animation.md) for the rules and remaining reads.
+
 A boat carries whoever stands or jumps over its deck. As in the Titanium
 program, the floor under the feet links the player to the boat however far
 down it is, so a jump on a moving ferry comes down on the deck where it
