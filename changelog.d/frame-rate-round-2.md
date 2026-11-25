@@ -1,0 +1,2 @@
+- Drawn characters keep one box that every pose of their model fits, worked out once per model, instead of Bevy working each part's box from its joints every frame.
+- Spell effects skip bodies with nothing going instead of finding their hands and head every frame.
