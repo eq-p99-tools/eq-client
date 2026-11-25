@@ -50,7 +50,7 @@ struct Press {
 }
 
 #[derive(Default)]
-pub(super) struct WorldDrop {
+pub(crate) struct WorldDrop {
     pressed: Option<Press>,
 }
 

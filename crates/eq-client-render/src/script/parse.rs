@@ -299,7 +299,14 @@ impl MoveCommand {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum ClickTarget {
     /// A normal scene press/release at logical window coordinates.
-    World { admission: u64, x: u16, y: u16 },
+    World {
+        /// The admission whose world the script clicked.
+        admission: u64,
+        /// Horizontal logical window coordinate.
+        x: u16,
+        /// Vertical logical window coordinate.
+        y: u16,
+    },
     /// An inventory slot button by server slot number.
     Slot(i32),
     /// The spellbook's scribe-cursor-scroll button.
