@@ -80,6 +80,16 @@ pub enum Fix {
     /// stays off the view, and any rain or snow stays out of sight.
     /// Nothing the world sees changes.
     ClearView,
+    /// Lights every zone by this client's own look rather than the original
+    /// engine's: lamps and carried lights shine per pixel with a soft
+    /// falloff and a flame's flicker, the player's light and the nearest
+    /// lamps cast shadows, surfaces take a soft highlight and the camera a
+    /// soft glow. Without a sky, each room keeps its lamps' colours as a
+    /// smooth wash and a tone curve takes the place of clipped colours;
+    /// with one, the day is unchanged and the lamps and torches show by
+    /// night. Experimental (Adam's request of 11-24); off, every zone draws
+    /// as before.
+    RichLighting,
     /// Draws water and lava surfaces with a richer look than the official
     /// client's flat flipbook: smooth flowing motion, see-through surfaces
     /// that reflect the sky at a glance and glint in the sun, depth tint,
@@ -183,7 +193,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 36] = [
+    pub const ALL: [Self; 37] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -193,6 +203,7 @@ impl Fix {
         Self::LongChaseCamera,
         Self::FreeCamera,
         Self::ClearView,
+        Self::RichLighting,
         Self::BetterWater,
         Self::WalkWhileWinded,
         Self::MoveWhileFeigned,
@@ -240,6 +251,7 @@ impl Fix {
             Self::LongChaseCamera => "long_chase_camera",
             Self::FreeCamera => "free_camera",
             Self::ClearView => "clear_view",
+            Self::RichLighting => "rich_lighting",
             Self::BetterWater => "better_water",
             Self::WalkWhileWinded => "walk_while_winded",
             Self::MoveWhileFeigned => "move_while_feigned",
@@ -289,6 +301,7 @@ impl Fix {
             Self::LongChaseCamera => "Long Chase Camera",
             Self::FreeCamera => "Free Camera",
             Self::ClearView => "See the World Clearly",
+            Self::RichLighting => "Rich Lighting",
             Self::BetterWater => "Better Water",
             Self::WalkWhileWinded => "Walk While Winded",
             Self::MoveWhileFeigned => "Move While Feigned",
@@ -359,6 +372,9 @@ impl Fix {
             }
             Self::ClearView => {
                 "Light the night as if it were noon, brighten supported dark interiors, and hide distance fog, rain and snow in your view."
+            }
+            Self::RichLighting => {
+                "Light every zone with soft, flickering lamp and torch light, shadows from your own light and a gentle glow; outdoors the lamps show at night. Experimental: departs from the original client's look."
             }
             Self::BetterWater => {
                 "Draw water and lava with flowing motion, sky reflections, sun glints, depth tint and shoreline foam, and haze the view under the surface. Turn it off to keep the original client's flat water."
@@ -458,6 +474,7 @@ impl Fix {
             | Self::LongChaseCamera
             | Self::FreeCamera
             | Self::ClearView
+            | Self::RichLighting
             | Self::BetterWater
             | Self::ReadWhileStanding
             | Self::ShowInvisible
@@ -513,6 +530,7 @@ impl Fix {
             | Self::LongChaseCamera
             | Self::FreeCamera
             | Self::ClearView
+            | Self::RichLighting
             | Self::BetterWater
             | Self::ShowInvisible
             | Self::FloatingCombatText
@@ -556,6 +574,7 @@ impl Fix {
             Self::HiddenWindows
             | Self::ShowTimesInChat
             | Self::ClearView
+            | Self::RichLighting
             | Self::BetterWater
             | Self::WalkWhileWinded
             | Self::MoveWhileFeigned
@@ -713,6 +732,7 @@ mod tests {
                 Fix::LongChaseCamera,
                 Fix::FreeCamera,
                 Fix::ClearView,
+                Fix::RichLighting,
                 Fix::BetterWater,
                 Fix::WalkWhileWinded,
                 Fix::MoveWhileFeigned,
@@ -745,6 +765,7 @@ mod tests {
         let settings = Settings::default();
         for fix in [
             Fix::ClearView,
+            Fix::RichLighting,
             Fix::BetterWater,
             Fix::WalkWhileWinded,
             Fix::MoveWhileFeigned,

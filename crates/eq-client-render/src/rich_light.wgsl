@@ -1,0 +1,82 @@
+// Rich Lighting (rich_light.rs): a zone surface lit per pixel. The zone's
+// own light reaches the pixel as the vertex colour (the base), which the
+// unlit draw would multiply the texture by. Bevy's point lights (the zone's
+// lamps, carried lights) are worked out on a white surface, softly capped,
+// and added to the base before the texture multiplies both.
+#import bevy_pbr::{
+    mesh_bindings::mesh,
+    mesh_view_bindings::view,
+    pbr_fragment::pbr_input_from_standard_material,
+    pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
+    forward_io::{VertexOutput, FragmentOutput},
+}
+
+// The material's own values (BaseLightUniform in rich_light.rs).
+struct BaseLight {
+    // The base light's tint, white unless the client asks otherwise.
+    tint: vec4<f32>,
+    // x: the soft ceiling on the lights' own brightness; y: 1 outdoors,
+    // where it rises as the night's grading darkens the frame.
+    limits: vec4<f32>,
+}
+
+#ifdef BINDLESS
+// Bindless: every surface's values in one array, found through the
+// material's slot, so the surfaces draw in batches.
+struct BaseLightIndices {
+    material: u32,
+}
+@group(#{MATERIAL_BIND_GROUP}) @binding(100) var<storage> base_light_indices: array<BaseLightIndices>;
+@group(#{MATERIAL_BIND_GROUP}) @binding(101) var<storage> base_lights: array<BaseLight>;
+#else
+@group(#{MATERIAL_BIND_GROUP}) @binding(50) var<uniform> base_light: BaseLight;
+#endif
+
+fn own_light(in: VertexOutput) -> BaseLight {
+#ifdef BINDLESS
+    let slot = mesh[in.instance_index].material_and_lightmap_bind_group_slot & 0xffffu;
+    return base_lights[base_light_indices[slot].material];
+#else
+    return base_light;
+#endif
+}
+
+@fragment
+fn fragment(
+    vertex_output: VertexOutput,
+    @builtin(front_facing) is_front: bool,
+) -> FragmentOutput {
+    var in = vertex_output;
+    let own = own_light(in);
+    let base_tint = own.tint;
+    let limits = own.limits;
+#ifdef VERTEX_COLORS
+    let base = in.color.rgb * base_tint.rgb;
+    // The texture alone, as the surface's colour under the lights.
+    in.color = vec4<f32>(1.0, 1.0, 1.0, in.color.a);
+#else
+    let base = base_tint.rgb;
+#endif
+    var pbr_input = pbr_input_from_standard_material(in, is_front);
+    let surface = alpha_discard(pbr_input.material, pbr_input.material.base_color);
+    // The lights alone, on a white surface; the base holds the zone's
+    // ambient, so no ambient or environment light.
+    pbr_input.material.base_color = vec4<f32>(1.0, 1.0, 1.0, surface.a);
+    pbr_input.material.emissive = vec4<f32>(0.0);
+    pbr_input.diffuse_occlusion = vec3<f32>(0.0);
+    pbr_input.specular_occlusion = 0.0;
+    let lit = apply_pbr_lighting(pbr_input);
+    // A soft ceiling by luminance, which keeps the light's hue.
+    let luminance = dot(lit.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
+    // Outdoors the night's grading (exposure in stops, below 0 at night)
+    // darkens the frame afterwards, so the ceiling rises to hold once graded.
+    let night = min(view.color_grading.exposure, 0.0);
+    let cap = limits.x * select(1.0, exp2(-night), limits.y > 0.5);
+    let light = lit.rgb / (1.0 + luminance / max(cap, 0.0001));
+
+    var out: FragmentOutput;
+    pbr_input.material.base_color = surface;
+    out.color = vec4<f32>(surface.rgb * (base + light), lit.a);
+    out.color = main_pass_post_lighting_processing(pbr_input, out.color);
+    return out;
+}

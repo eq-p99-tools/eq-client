@@ -81,6 +81,7 @@ pub(crate) fn update(
     player: Query<Entity, With<crate::Player>>,
     roots: Query<(&Transform, &Overhead)>,
     cameras: Query<(&Camera, &Transform, Option<&Projection>), With<crate::OrbitCamera>>,
+    views: Query<(&crate::OrbitCamera, Has<crate::camera::FreeCamera>)>,
     mut tags: Query<(&mut Node, &mut Text, &mut TextColor, &mut Visibility), With<NameTag>>,
 ) {
     let world = online.world();
@@ -102,6 +103,7 @@ pub(crate) fn update(
     let me = eq_client_core::SpawnKind::Player;
     if let (Ok(root), Some(player)) = (player.single(), world.player())
         && shown(me)
+        && !own_hidden(&views)
     {
         let said = words(&player.name, me, &player.name_parts, &player.listing);
         let drawn = painter.paint(player.spawn_id, true, player.race, &player.listing);
@@ -188,6 +190,15 @@ pub(crate) fn update(
         }
         visibility.set_if_neq(Visibility::Inherited);
     }
+}
+
+/// Matches the local model's attached first-person visibility. Pitch and
+/// collision pull-in do not choose the mode; a detached camera still
+/// shows the player it can look back at (inferred, checklist 6.662).
+fn own_hidden(views: &Query<(&crate::OrbitCamera, Has<crate::camera::FreeCamera>)>) -> bool {
+    views
+        .single()
+        .is_ok_and(|(view, free)| !free && view.is_first_person())
 }
 
 /// What colours the names this frame: the installed client's rule, the
@@ -406,6 +417,123 @@ mod tests {
             shown(&mut app),
             [everyone[0], everyone[1], everyone[2], everyone[4]]
         );
+    }
+
+    #[test]
+    fn first_person_omits_only_the_own_name_at_every_pitch() {
+        use eq_client_assets::ui::InstalledClient;
+        for client in [
+            InstalledClient::Titanium,
+            InstalledClient::EqMac,
+            InstalledClient::Rof2,
+        ] {
+            let mut app = app();
+            app.world_mut()
+                .resource_mut::<crate::ViewerSettings>()
+                .0
+                .installed_client = client;
+            let camera = app
+                .world_mut()
+                .spawn(crate::OrbitCamera {
+                    focus: Vec3::ZERO,
+                    radius: 20.0,
+                    yaw: 0.0,
+                    pitch: 0.0,
+                    // A wall pulling chase to the eye is still third person.
+                    pulled: Some(0.0),
+                    view: default(),
+                    look: 0.0,
+                })
+                .id();
+            app.update();
+            let everyone = shown(&mut app);
+            let others: Vec<_> = everyone
+                .iter()
+                .filter(|name| !name.starts_with("Example\n"))
+                .cloned()
+                .collect();
+            let other_tags: Vec<_> = app
+                .world()
+                .resource::<NameTags>()
+                .0
+                .iter()
+                .filter(|(root, _)| !app.world().entity(**root).contains::<crate::Player>())
+                .map(|(root, tag)| (*root, *tag))
+                .collect();
+            for degrees in [-90.0_f32, -45.0, 0.0, 45.0, 90.0] {
+                {
+                    let mut view = app
+                        .world_mut()
+                        .get_mut::<crate::OrbitCamera>(camera)
+                        .unwrap();
+                    view.look_first_person_for_test();
+                    view.look = degrees.to_radians();
+                    view.pitch = view.look;
+                }
+                app.update();
+                assert_eq!(shown(&mut app), others, "{client:?}, pitch {degrees}");
+                for (root, tag) in &other_tags {
+                    assert_eq!(app.world().resource::<NameTags>().0.get(root), Some(tag));
+                }
+                // Leaving first person recreates the own label with the
+                // existing wording/options while keeping every other tag.
+                app.world_mut()
+                    .get_mut::<crate::OrbitCamera>(camera)
+                    .unwrap()
+                    .reset_view();
+                app.update();
+                assert_eq!(shown(&mut app), everyone, "{client:?}, pitch {degrees}");
+            }
+        }
+    }
+
+    #[test]
+    fn detaching_from_first_person_keeps_the_own_name_available() {
+        use bevy::ecs::system::RunSystemOnce;
+        let mut app = app();
+        crate::keys::testing::install(&mut app);
+        crate::keys::testing::bind(
+            &mut app,
+            crate::keys::Act::FreeCamera,
+            crate::keys::Chord::key(KeyCode::F9),
+        );
+        let everyone = shown(&mut app);
+        let mut view = crate::OrbitCamera {
+            focus: Vec3::ZERO,
+            radius: 20.0,
+            yaw: 0.0,
+            pitch: 0.0,
+            pulled: None,
+            view: default(),
+            look: 0.0,
+        };
+        view.look_first_person_for_test();
+        let camera = app.world_mut().spawn((view, Transform::default())).id();
+        app.update();
+        assert!(
+            !shown(&mut app)
+                .iter()
+                .any(|name| name.starts_with("Example\n"))
+        );
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .press(KeyCode::F9);
+        app.world_mut()
+            .run_system_once(crate::camera::toggle_free)
+            .unwrap();
+        assert!(
+            app.world()
+                .entity(camera)
+                .contains::<crate::camera::FreeCamera>()
+        );
+        assert!(
+            app.world()
+                .get::<crate::OrbitCamera>(camera)
+                .unwrap()
+                .is_first_person()
+        );
+        app.update();
+        assert_eq!(shown(&mut app), everyone);
     }
 
     #[test]

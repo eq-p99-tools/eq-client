@@ -118,6 +118,7 @@ mod report_windows;
 mod reports;
 mod resources;
 mod resurrection;
+mod rich_light;
 pub mod script;
 mod script_workbench;
 mod select_preview;
@@ -626,7 +627,11 @@ pub(crate) mod testing {
                 .disable::<bevy::audio::AudioPlugin>(),
         )
         .insert_resource(bevy::winit::WinitSettings::continuous());
-        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_secs(
+                std::env::var("EQ_PROBE_DEADLINE")
+                    .map_or(20, |seconds| seconds.parse().unwrap_or(20)),
+            );
         app.add_systems(Update, move |mut exit: MessageWriter<AppExit>| {
             if std::time::Instant::now() >= deadline {
                 error!("Hidden graphics probe timed out");
@@ -1055,6 +1060,8 @@ fn spawn_static_zone(
                         placed_at,
                         additive: false,
                     });
+                } else {
+                    lights.plain.push(mesh.id());
                 }
                 (SceneEntity, Mesh3d(mesh), MeshMaterial3d(material))
             })

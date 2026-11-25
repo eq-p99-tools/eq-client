@@ -27,6 +27,19 @@ pub(super) struct TerrainAnimation {
 }
 
 impl TerrainAnimation {
+    /// An animation through `frames`, a frame each second.
+    #[cfg(test)]
+    pub(super) fn testing(frames: Vec<Handle<Image>>) -> Self {
+        Self {
+            frames,
+            frame_millis: std::num::NonZeroU32::new(1000).unwrap(),
+            elapsed: std::time::Duration::ZERO,
+            next_frame_millis: 1000,
+            skip_frames: false,
+            frame: 0,
+        }
+    }
+
     fn advance(&mut self, delta: std::time::Duration) -> Option<Handle<Image>> {
         self.elapsed = self.elapsed.saturating_add(delta);
         let now = self.elapsed.as_millis();
@@ -139,6 +152,13 @@ pub(super) fn create_terrain_primitives(
         .collect()
 }
 
+/// An animated surface's plain material: drawn, or parked while Rich
+/// Lighting draws the surface.
+type AnimatedSurface = AnyOf<(
+    &'static MeshMaterial3d<StandardMaterial>,
+    &'static crate::rich_light::Parked,
+)>;
+
 /// Realizes the complete sequence in the draw's blend mode and starts at its
 /// first frame. Missing images keep the existing still material.
 fn material_animation(
@@ -213,12 +233,20 @@ pub(super) fn opaque_frames(
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(super) fn animate_terrain(
     time: Res<Time>,
-    mut terrain: Query<(&MeshMaterial3d<StandardMaterial>, &mut TerrainAnimation)>,
+    mut terrain: Query<(AnimatedSurface, &mut TerrainAnimation)>,
     mut materials: ResMut<Assets<StandardMaterial>>,
 ) {
-    for (handle, mut animation) in &mut terrain {
+    for ((drawn, parked), mut animation) in &mut terrain {
+        // A surface Rich Lighting draws keeps its plain material parked,
+        // which its rich one follows.
+        let Some(handle) = drawn
+            .map(|drawn| &drawn.0)
+            .or(parked.map(|parked| &parked.0))
+        else {
+            continue;
+        };
         if let Some(image) = animation.advance(time.delta())
-            && let Some(mut material) = materials.get_mut(&handle.0)
+            && let Some(mut material) = materials.get_mut(handle)
         {
             material.base_color_texture = Some(image);
         }
