@@ -8,6 +8,12 @@ use std::time::{Duration, Instant};
 
 const CLICK_LIMIT: Duration = Duration::from_millis(750);
 
+/// Titanium 0x4a91a4 falls through to 0x49812e only for these common-item
+/// types. Containers/books are not excluded by their type byte (read 178).
+pub(super) fn plain_world(item: &InventoryItem) -> bool {
+    item.rules.titanium_item_class == Some(0) && matches!(item.rules.item_type, 0x0c | 0x21 | 0x27)
+}
+
 /// Capturing a click must not require a droppable item: a spawn wins first.
 #[derive(Clone, PartialEq)]
 pub(super) struct Cursor {
@@ -97,6 +103,17 @@ impl WorldDrop {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn type_exclusions_apply_only_to_known_common_items() {
+        let mut item = crate::preview::items().remove(0);
+        for class in [None, Some(0), Some(1), Some(2)] {
+            item.rules.titanium_item_class = class;
+            for kind in [0, 0x0c, 0x21, 0x27] {
+                item.rules.item_type = kind;
+                assert_eq!(plain_world(&item), class == Some(0) && kind != 0);
+            }
+        }
+    }
     fn cursor() -> Cursor {
         Cursor {
             session: 7,

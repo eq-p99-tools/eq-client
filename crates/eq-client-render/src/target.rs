@@ -256,6 +256,13 @@ pub(super) fn input(
     let identity = local_drop
         .then(|| world_drop::Cursor::current(online.world()))
         .flatten();
+    // The native type fallthrough follows the droppability test. Keep the
+    // ordinary door press alive until release chooses a spawn or the world.
+    let plain_world = local_drop
+        && online
+            .world()
+            .prepare_cursor_drop()
+            .is_ok_and(|drop| world_drop::plain_world(&drop.item));
     let mut edges = native_edges;
     if request.is_some() || edges.is_empty() {
         edges.clear();
@@ -274,23 +281,23 @@ pub(super) fn input(
         now,
     );
     if owned {
-        door_clicks.cancel();
+        if !plain_world {
+            door_clicks.cancel();
+        }
         if scripted.request.is_some() {
             // Ownership lets the ordinary script release; this is not a
             // submission or server-outcome receipt.
             scripted.acted = true;
         }
-        if !release {
+        if !release && (!plain_world || edges.contains(&false)) {
+            door_clicks.cancel();
             return;
         }
         // Spawn priority is evaluated only after validating the captured
         // cursor identity, and before its ground-drop eligibility.
-        if !matches!(native_spawn, Some(Choice::Spawn(..))) {
+        if release && !matches!(native_spawn, Some(Choice::Spawn(..))) {
             if let Ok(drop) = online.world().prepare_cursor_drop() {
-                // Conditional on unread0x5eccc0()==0 in the original. These
-                // three kinds remain conservatively unsupported here; this
-                // is not a universal item/worker predicate or named mapping.
-                if !matches!(drop.item.rules.item_type, 0x0c | 0x21 | 0x27) {
+                if !world_drop::plain_world(&drop.item) {
                     inventory.request_world_drop(drop);
                     if scripted.request.is_some() {
                         scripted.acted = true;
@@ -303,9 +310,11 @@ pub(super) fn input(
                 }
                 return;
             }
+        } else if release {
+            door_clicks.cancel();
         }
     }
-    if cursor_gesture {
+    if cursor_gesture && !plain_world {
         door_clicks.cancel();
     }
     let left_click = if owned || cursor_gesture {
@@ -365,7 +374,10 @@ pub(super) fn input(
             proposal = Some(Some(chosen));
         }
     } else if let Some(cursor) = cursor
-        && (door_release || left_click || mouse.just_pressed(MouseButton::Right))
+        && (door_release
+            || left_click
+            || plain_world && mouse.just_pressed(MouseButton::Left)
+            || mouse.just_pressed(MouseButton::Right))
         && let Some(Picked {
             choice,
             spawns,
@@ -2003,6 +2015,10 @@ mod tests {
             mouse.reset(MouseButton::Left);
             mouse.press(MouseButton::Left);
             app.update();
+            let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+            mouse.clear();
+            mouse.release(MouseButton::Left);
+            app.update();
         };
 
         // The existing target is unchanged, so only the offer enters the queue.
@@ -2215,6 +2231,7 @@ mod tests {
         item.bag_slots = 0;
         item.stack_count = None;
         item.rules.item_type = 0;
+        item.rules.titanium_item_class = Some(0);
         item.rules.ground_drop_serial = std::num::NonZeroU32::new(17);
         let mut online = app.world_mut().resource_mut::<OnlineState>();
         session::empty_carried_coins(&mut online);
@@ -2487,6 +2504,53 @@ mod tests {
                 sent.iter()
                     .all(|command| !matches!(command, ClientCommand::DropItem(_))),
                 "{label}"
+            );
+            assert!(
+                app.world()
+                    .resource::<crate::confirm::Asked>()
+                    .question()
+                    .is_none()
+            );
+        }
+    }
+
+    #[test]
+    fn excluded_common_types_keep_plain_world_door_dispatch() {
+        use crate::online::testing;
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+        for kind in [0x0c, 0x21, 0x27] {
+            let (mut app, commands) = drop_scene(eq_client_core::options::NoSafeDrop::Ask);
+            let mut item = app
+                .world()
+                .resource::<OnlineState>()
+                .world()
+                .inventory()
+                .items()[&InventorySlot::CURSOR]
+                .clone();
+            item.rules.item_type = kind;
+            testing::inventory(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                InventoryUpdate::Snapshot(vec![item]),
+            );
+            door_scene(&mut app);
+            for down in [true, false, true, false] {
+                scripted_frame(
+                    &mut app,
+                    Thing::World(400, 300),
+                    Some(Vec2::new(400.0, 300.0)),
+                    down,
+                );
+            }
+            let sent: Vec<_> = commands.try_iter().collect();
+            assert_eq!(
+                sent.iter()
+                    .filter(|command| matches!(command, ClientCommand::ClickDoor { .. }))
+                    .count(),
+                1
+            );
+            assert!(
+                sent.iter()
+                    .all(|command| !matches!(command, ClientCommand::DropItem(_)))
             );
             assert!(
                 app.world()
