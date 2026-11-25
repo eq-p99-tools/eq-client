@@ -397,8 +397,6 @@ pub(super) fn spawn_on_layers(
     hang(commands, parent, prepared, (feet_offset, 1.0), layers);
 }
 
-/// Hangs the model under `parent` with its soles `feet_offset` under it, in
-/// the parent's units, drawn at `scale` times its authored size.
 /// A box every pose of the model stays inside, about its origin: the
 /// farthest any joint reaches in any clip, sampled fifteen times a second,
 /// plus the farthest any vertex sits from its bone, with a tenth to spare
@@ -441,6 +439,8 @@ fn posed_bounds(asset: &CharacterAsset) -> Aabb {
     Aabb::from_min_max(Vec3::splat(-farthest), Vec3::splat(farthest))
 }
 
+/// Hangs the model under `parent` with its soles `feet_offset` under it, in
+/// the parent's units, drawn at `scale` times its authored size.
 fn hang(
     commands: &mut Commands,
     parent: Entity,

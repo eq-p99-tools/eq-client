@@ -301,9 +301,9 @@ pub(super) fn register(app: &mut App) {
 
 /// Clusters the lights on the CPU. Bevy's GPU clustering builds and uploads
 /// its slice and index lists for the camera every frame, sized by their
-/// capacity whatever the lights: 1.5 ms a frame on a fast PC with no light at
-/// all (Qeynos, 11-25), while the client draws a few dozen lights at most.
-/// The CPU path costs next to nothing without lights, and grows its lists
+/// capacity whatever the lights, while the client draws a few dozen lights
+/// at most. Against it, the CPU path saved about 0.1 ms a frame with no
+/// light in view (Qeynos, 11-25: 160 to 163 fps). It grows its lists
 /// itself, so a zone's lamps never overflow them. `EQ_GPU_CLUSTERING=1`
 /// keeps Bevy's GPU path, to compare.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
