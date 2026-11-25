@@ -4,6 +4,8 @@ mod belongings_tests;
 #[cfg(test)]
 mod boat_pace_tests;
 mod boats;
+#[cfg(test)]
+mod latency_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
 mod placement;
@@ -107,6 +109,15 @@ pub(super) struct Controls {
     placement: placement::Check,
     taps: TapBuffer,
     visual: Option<VisualMotion>,
+    /// A submitted, collision-checked dry-ground endpoint may be shown before
+    /// its local worker result. It never changes the observed world position.
+    preview: Option<Preview>,
+    /// A withdrawn preview must return to the current observed placement.
+    restore_preview: bool,
+    /// Private timing probes compare the unchanged accepted-only path in the
+    /// same binary. This switch is absent from production builds.
+    #[cfg(test)]
+    suppress_submitted_preview: bool,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
@@ -190,6 +201,13 @@ struct Pending {
     kind: PendingKind,
 }
 
+#[derive(Clone, Copy)]
+struct Preview {
+    session_id: u64,
+    created: Instant,
+    position: eq_client_core::WorldPosition,
+}
+
 /// Whether local liquid checks have a worker position on which to base a sample.
 #[derive(Clone, Copy, Eq, PartialEq)]
 pub(super) enum LiquidBasis {
@@ -267,6 +285,10 @@ impl Default for Controls {
             placement: placement::Check::default(),
             taps: TapBuffer::default(),
             visual: None,
+            preview: None,
+            restore_preview: false,
+            #[cfg(test)]
+            suppress_submitted_preview: false,
             airborne: None,
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
@@ -378,12 +400,79 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
-    /// Shows a locally accepted sample without changing the simulation
-    /// position: the model plays the accepted samples back in order, each
-    /// over the time of play it covers, so it passes at the pace sent and
-    /// never ahead of the newest accepted position. A sample accepted while
-    /// the last still plays waits its turn; when none is left the model
-    /// stands at the newest until the next is accepted. Display only;
+    /// Starts only the exact endpoint already accepted by the local command
+    /// queue and collision sweep. The worker remains authoritative for the
+    /// simulation, permission checks and the next movement sample's basis.
+    fn preview_sample(
+        &mut self,
+        session_id: Option<u64>,
+        created: Instant,
+        from: Transform,
+        position: eq_client_core::WorldPosition,
+    ) {
+        #[cfg(test)]
+        if self.suppress_submitted_preview {
+            return;
+        }
+        let Some(session_id) = session_id else { return };
+        // Only a matching worker result can retire the immediately shown
+        // mouse heading. Doing so while queuing a preview restores old yaw.
+        let mouse_heading = self.mouse_heading;
+        self.display_in_frame(from, position, self.facing);
+        self.mouse_heading = mouse_heading;
+        self.preview = Some(Preview {
+            session_id,
+            created,
+            position,
+        });
+    }
+
+    /// A matching result settles the preview once. Acceptance cannot replay
+    /// its distance; a refusal or changed endpoint replaces it with the
+    /// worker's observed placement, never a second provisional segment.
+    pub(super) fn reconcile_preview(
+        &mut self,
+        session_id: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: bool,
+    ) -> bool {
+        let Some(preview) = self
+            .preview
+            .filter(|preview| Some(preview.session_id) == session_id && preview.created == created)
+        else {
+            return false;
+        };
+        self.preview = None;
+        if refused
+            || self
+                .mouse_heading
+                .is_some_and(|heading| arc(heading, position.heading) == 0.0)
+        {
+            self.mouse_heading = None;
+        }
+        if refused || preview.position != position {
+            self.visual = Some(VisualMotion::at(position));
+        }
+        true
+    }
+
+    fn restore_observed_preview(&mut self, world: &ClientWorld) {
+        if std::mem::take(&mut self.restore_preview) {
+            self.preview = None;
+            self.visual = world
+                .player()
+                .map(|player| VisualMotion::at(player.position));
+        }
+    }
+
+    /// Queues a locally accepted sample without changing the simulation
+    /// position. Samples play in order over their own spans. A dry-ground
+    /// submission may already be playing through `preview_sample`; its exact
+    /// result is settled by `reconcile_preview` rather than queued twice.
+    /// No playback advances beyond its submitted, collision-checked endpoint.
+    /// A sample accepted while the last still plays waits its turn; when
+    /// none is left the model stands at the newest endpoint. Display only;
     /// inferred, recording checklist 6.340 (the official client moves its
     /// own player every frame).
     ///
@@ -669,8 +758,10 @@ impl Controls {
     /// it around the call.
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
+        let restore_preview = self.restore_preview || self.preview.is_some();
         *self = Self {
             speed,
+            restore_preview,
             last_sent: self.last_sent,
             last_answer: self.last_answer,
             last_jump: self.last_jump,
@@ -725,6 +816,7 @@ impl Controls {
         }
         if changed && revision.is_some() {
             self.moving = false;
+            self.restore_preview |= self.preview.take().is_some();
         }
         self.stunned
     }
@@ -735,6 +827,7 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
+        self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         if previous.fly != options.fly {
             self.airborne = self
@@ -759,6 +852,7 @@ impl Controls {
     /// Stops prediction without revoking the session's calibration. A pending
     /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
+        self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         self.moving = false;
         self.visual = None;
@@ -1104,6 +1198,7 @@ impl Controls {
 
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
         if self.is_pending_move(session_id, created) {
+            self.restore_preview |= self.preview.take().is_some();
             self.resolve_carrier(created, true);
             self.finish();
             self.resolve_water_entry(true);
@@ -1846,7 +1941,7 @@ pub(super) fn input(
             return;
         }
     }
-    let (Ok((body, _)), Ok((camera, _)), Some(world), Some(accepted)) = (
+    let (Ok((body, drawn)), Ok((camera, _)), Some(world), Some(accepted)) = (
         players.single(),
         cameras.single(),
         moving_world,
@@ -2858,6 +2953,29 @@ pub(super) fn input(
     // Until the heading sent reaches the facing, the model shows the facing.
     controls.facing = (arc(heading, facing).abs() > 0.01).then_some(facing);
     controls.wait_for(session_id, created, PendingKind::Move);
+    // First-frame feedback uses the same resolved endpoint as the queued
+    // request. Keep special transport/support frames on their existing
+    // accepted-only path; none of their custody or physics is predicted here.
+    if !placement_blocked
+        && !swimming
+        && !entering
+        && !flying
+        && boat_sample.is_none()
+        && support.is_none()
+        && controls.visual_boat.is_none()
+        && controls.boat.is_none()
+        && controls.riding.is_none()
+        && matches!(
+            mode,
+            MovementMode::Forward
+                | MovementMode::Backward
+                | MovementMode::Walk
+                | MovementMode::Strafe(_)
+                | MovementMode::GroundedDiagonal(_)
+        )
+    {
+        controls.preview_sample(session_id, created, *drawn, position_sent);
+    }
 }
 
 /// How the lift the last sample stood on moved the feet since that sample.
@@ -3383,8 +3501,9 @@ struct Segment {
     follow_heading: bool,
 }
 
-/// The accepted samples the model plays back, one after another, each over
-/// its own span; never past the newest accepted position.
+/// Local samples played in order over their own spans. A marked dry-ground
+/// submission may play before its worker result, never beyond its exact
+/// collision-checked endpoint; acceptance does not queue it again.
 struct VisualMotion {
     from: Transform,
     to: Transform,
@@ -3396,6 +3515,24 @@ struct VisualMotion {
 }
 
 impl VisualMotion {
+    fn at(position: eq_client_core::WorldPosition) -> Self {
+        let transform = Transform::from_translation(Vec3::from_array(
+            eq_client_core::render_position(position),
+        ))
+        .with_rotation(Quat::from_rotation_y(eq_client_core::render_heading(
+            position.heading,
+        )));
+        Self::start(
+            transform,
+            Segment {
+                to: transform,
+                span: 0.0,
+                snap: false,
+                follow_heading: false,
+            },
+        )
+    }
+
     /// Plays `segment` from where the model is shown now.
     fn start(from: Transform, segment: Segment) -> Self {
         Self {
@@ -3465,7 +3602,7 @@ impl VisualMotion {
     }
 }
 
-/// Advances the player and follow camera every rendered frame between network
+/// Advances the player and follow camera every rendered frame between movement
 /// samples. With `eq_client_render::motion::pace` logging at debug, each
 /// frame says how fast the model was shown moving, for a sitting's numbers.
 #[allow(clippy::needless_pass_by_value)]
@@ -3477,6 +3614,7 @@ pub(super) fn interpolate(
     mut cameras: Query<(&mut OrbitCamera, Has<crate::camera::FreeCamera>)>,
     mut displayed_mouse: Local<Option<Entity>>,
 ) {
+    controls.restore_observed_preview(online.world());
     let preview = controls.mouse_heading;
     if controls.visual.is_none()
         && preview.is_none()
@@ -7509,8 +7647,12 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
+        let previewed =
+            controls.reconcile_preview(Some(request.session_id), created, request.position, false);
         assert!(controls.moved(Some(request.session_id), created));
-        controls.display_sample(drawn, request.position);
+        if !previewed {
+            controls.display_sample(drawn, request.position);
+        }
         controls.resolve_water_entry(false);
     }
 
@@ -9941,8 +10083,12 @@ pub(super) mod tests {
         let mut players = world.query_filtered::<&Transform, With<Player>>();
         let drawn = *players.single(world).unwrap();
         let mut controls = app.world_mut().resource_mut::<Controls>();
+        let previewed =
+            controls.reconcile_preview(Some(request.session_id), created, request.position, false);
         assert!(controls.moved(Some(request.session_id), created));
-        controls.display_sample(drawn, request.position);
+        if !previewed {
+            controls.display_sample(drawn, request.position);
+        }
         controls.last_accepted = Instant::now()
             .checked_sub(Duration::from_millis(100))
             .unwrap();
@@ -10522,22 +10668,44 @@ pub(super) mod tests {
         assert!(receiver.try_recv().is_err(), "another sample is in flight");
         assert_eq!(
             app.world().get::<Transform>(player).unwrap().translation,
-            Vec3::new(0.0, 3.0, 0.0)
+            Vec3::from_array(eq_client_core::render_position(old.position))
+        );
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            world_position([0.0, 3.0, 0.0], 0.0),
+            "a drawn preview must not advance the observed position",
         );
         accept(&mut app, &old);
         app.update();
         assert_attached_heading(&app, camera, player, 256.0);
         let old_point = Vec3::from_array(eq_client_core::render_position(old.position));
+        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
+            panic!("expected a forward step after reversing");
+        };
         assert!(
             app.world()
                 .get::<Transform>(player)
                 .unwrap()
                 .translation
-                .abs_diff_eq(old_point, 0.001)
+                .abs_diff_eq(
+                    Vec3::from_array(eq_client_core::render_position(reversed.position)),
+                    0.001
+                )
         );
-        let ClientCommand::Move(reversed) = receiver.try_recv().unwrap() else {
-            panic!("expected a forward step after reversing");
-        };
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position,
+            old.position
+        );
         assert_eq!(reversed.heading, HeadingUpdate::Snapshot);
         let displacement =
             Vec3::from_array(eq_client_core::render_position(reversed.position)) - old_point;
@@ -11079,7 +11247,7 @@ pub(super) mod tests {
                         .unwrap()
                         .translation
                         .abs_diff_eq(
-                            Vec3::from_array(eq_client_core::render_position(chord.position)),
+                            Vec3::from_array(eq_client_core::render_position(released.position)),
                             0.001,
                         )
                 );
