@@ -247,6 +247,7 @@ pub(super) fn state(
         ?held_spells,
         ?items,
         inventory_predicted = online.world().inventory().predicted(),
+        inventory_drop_projected = online.world().inventory().ground_drop_projected(),
         inventory_stale = online.world().inventory().stale(),
         inventory_equipment_uncertain = online.world().inventory().equipment_stats_uncertain(),
         inventory_prediction_inputs = ?prediction_inputs,

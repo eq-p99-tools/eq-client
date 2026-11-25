@@ -1177,7 +1177,12 @@ fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
                     session_id: 1,
                     revision,
                     sequence: None,
-                    update: Some(InventoryUpdate::GroundDropPending(serial)),
+                    update: Some(InventoryUpdate::GroundDropProjected(
+                        eq_client_core::inventory::InventoryDropProjection {
+                            revision,
+                            item: Box::new(original.clone()),
+                        },
+                    )),
                     error: None,
                 },
                 WorldEvent::Inventory(InventoryUpdate::Cursor(vec![heavier.clone()])),
@@ -1185,18 +1190,18 @@ fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
         );
         let world = online.world();
         assert!(!world.worker_inventory().stale());
-        assert!(world.worker_inventory().ground_drop_pending());
-        assert_eq!(world.worker_inventory().queued().count(), 1);
+        assert!(world.worker_inventory().ground_drop_projected());
+        assert_eq!(world.worker_inventory().queued().count(), 0);
         assert_eq!(
             world.worker_inventory().items().get(&InventorySlot::CURSOR),
-            Some(&original)
+            Some(&heavier)
         );
-        assert_eq!(world.movement_weight(), Ok(1_500));
-        assert!((world.fall_weight().unwrap() - 150.0).abs() < f32::EPSILON);
+        assert_eq!(world.movement_weight(), Ok(1_550));
+        assert!((world.fall_weight().unwrap() - 155.0).abs() < f32::EPSILON);
     }
     app.update();
     let bounded = receipt(&rx.try_recv().unwrap(), true);
-    assert_eq!(bounded.inputs.weight, 150);
+    assert_eq!(bounded.inputs.weight, 155);
     testing::news(
         &mut app.world_mut().resource_mut::<OnlineState>(),
         [
@@ -1229,14 +1234,14 @@ fn pending_drop_keeps_movement_bounded_until_inventory_is_invalidated() {
         [motion_state(None)],
     );
     app.update();
-    assert!(movement_notice(&app).contains("fresh inventory snapshot"));
+    assert!(movement_notice(&app).contains("current inventory weight"));
     let retained = app
         .world()
         .resource::<OnlineState>()
         .world()
         .fall_weight()
         .unwrap();
-    assert!((retained - 150.0).abs() < f32::EPSILON);
+    assert!((retained - 155.0).abs() < f32::EPSILON);
 
     testing::inventory(
         &mut app.world_mut().resource_mut::<OnlineState>(),
