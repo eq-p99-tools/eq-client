@@ -5,6 +5,7 @@
 // and added to the base before the texture multiplies both.
 #import bevy_pbr::{
     mesh_bindings::mesh,
+    mesh_view_bindings::view,
     pbr_fragment::pbr_input_from_standard_material,
     pbr_functions::{alpha_discard, apply_pbr_lighting, main_pass_post_lighting_processing},
     forward_io::{VertexOutput, FragmentOutput},
@@ -14,7 +15,8 @@
 struct BaseLight {
     // The base light's tint, white unless the client asks otherwise.
     tint: vec4<f32>,
-    // x: the soft ceiling on the lights' own brightness.
+    // x: the soft ceiling on the lights' own brightness; y: 1 outdoors,
+    // where it rises as the night's grading darkens the frame.
     limits: vec4<f32>,
 }
 
@@ -66,7 +68,11 @@ fn fragment(
     let lit = apply_pbr_lighting(pbr_input);
     // A soft ceiling by luminance, which keeps the light's hue.
     let luminance = dot(lit.rgb, vec3<f32>(0.2126, 0.7152, 0.0722));
-    let light = lit.rgb / (1.0 + luminance / max(limits.x, 0.0001));
+    // Outdoors the night's grading (exposure in stops, below 0 at night)
+    // darkens the frame afterwards, so the ceiling rises to hold once graded.
+    let night = min(view.color_grading.exposure, 0.0);
+    let cap = limits.x * select(1.0, exp2(-night), limits.y > 0.5);
+    let light = lit.rgb / (1.0 + luminance / max(cap, 0.0001));
 
     var out: FragmentOutput;
     pbr_input.material.base_color = surface;

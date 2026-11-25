@@ -368,3 +368,44 @@ fn outdoors_rich_lighting_keeps_the_plain_day_and_adds_the_lamps() {
     assert_eq!(*shown, Visibility::Hidden);
     assert_eq!(world.query::<&Carried>().iter(world).count(), 0);
 }
+
+#[test]
+fn night_falling_outdoors_leaves_the_materials_alone() {
+    let (mut app, _, _) = zone(1);
+    set(&mut app, true);
+    app.update();
+    app.update();
+    let limits = |app: &mut App| {
+        let world = app.world_mut();
+        let handle = world
+            .query::<&MeshMaterial3d<RichMaterial>>()
+            .single(world)
+            .unwrap()
+            .0
+            .clone();
+        world
+            .resource::<Assets<RichMaterial>>()
+            .get(&handle)
+            .unwrap()
+            .extension
+            .limits
+    };
+    let day = limits(&mut app);
+    assert!((day.x - Tuning::default().light_cap).abs() < f32::EPSILON);
+    assert!((day.y - 1.0).abs() < f32::EPSILON, "outdoors: {day}");
+    // Night: the grading darkens the frame. The shader raises the ceiling
+    // from the view's exposure; no material changes (swap writes them only
+    // when their limits change), so none is prepared again: all of them at
+    // once stalled the frame.
+    let mut grading = bevy::render::view::ColorGrading::default();
+    grading.global.exposure = -2.0;
+    let world = app.world_mut();
+    let camera = world
+        .query_filtered::<Entity, With<OrbitCamera>>()
+        .single(world)
+        .unwrap();
+    world.entity_mut(camera).insert(grading);
+    app.update();
+    app.update();
+    assert_eq!(limits(&mut app), day);
+}

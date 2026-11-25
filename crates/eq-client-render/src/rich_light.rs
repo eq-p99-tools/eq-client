@@ -153,7 +153,11 @@ pub(super) struct BaseLight {
     tint: LinearRgba,
     /// x: how far the lights' own brightness may go, softly: a light is
     /// drawn as L / (1 + L / x) by its luminance, so a torch against a wall
-    /// brightens the wall without washing its texture out.
+    /// brightens the wall without washing its texture out. y: 1 outdoors,
+    /// where the shader raises x as the night's grading darkens the frame
+    /// (the view's exposure), so the ceiling holds once graded. The
+    /// materials never change with the sky: a change to all of them at once
+    /// stalls the frame while the renderer prepares them again.
     limits: Vec4,
 }
 
@@ -208,11 +212,10 @@ pub(super) struct RichState {
     carried: Vec<PassLight>,
     /// The player's height, for the own light's shadow.
     own_height: f32,
-    /// The lights' soft ceiling now, and as the materials were last given
-    /// it: outdoors it rises as the night's grading darkens the frame, so
-    /// the ceiling holds once graded.
-    cap: f32,
-    applied_cap: f32,
+    /// The materials' limits ([`BaseLight::limits`]) now, and as they were
+    /// last given them.
+    limits: Vec4,
+    applied_limits: Vec4,
 }
 
 impl Tuning {
@@ -411,7 +414,6 @@ pub(super) fn gather(
     scene: Option<Res<SceneLights>>,
     nearby: Res<NearbyEntities>,
     (eye, player, transforms): Positions,
-    grading: Query<&bevy::render::view::ColorGrading, With<OrbitCamera>>,
     tuning: Res<Tuning>,
     mut state: ResMut<RichState>,
 ) {
@@ -423,14 +425,8 @@ pub(super) fn gather(
         && qol.on(eq_client_core::qol::Fix::RichLighting)
         && lighting::in_scene(scene.as_deref(), world);
     state.interior = state.active && world.sky().is_some_and(|sky| sky.sky == 0);
-    let night = grading
-        .single()
-        .map_or(0.0, |grading| grading.global.exposure.min(0.0));
-    state.cap = if state.interior {
-        tuning.light_cap
-    } else {
-        tuning.light_cap * night.neg().exp2()
-    };
+    let outdoors = if state.interior { 0.0 } else { 1.0 };
+    state.limits = Vec4::new(tuning.light_cap, outdoors, 0.0, 0.0);
     let zone = scene.as_ref().map_or("", |scene| scene.zone.as_str());
     if state.zone != zone {
         zone.clone_into(&mut state.zone);
@@ -492,11 +488,12 @@ pub(super) fn swap(
         return;
     }
     let state = &mut *state;
-    if (state.cap - state.applied_cap).abs() > state.cap * 0.02 {
-        state.applied_cap = state.cap;
+    // Only when the zone or the tuning changes them, never with the sky.
+    if state.limits != state.applied_limits {
+        state.applied_limits = state.limits;
         for handle in state.materials.values() {
             if let Some(mut material) = rich.get_mut(handle) {
-                material.extension.limits.x = state.cap;
+                material.extension.limits = state.limits;
             }
         }
     }
@@ -521,7 +518,7 @@ pub(super) fn swap(
                     },
                     extension: BaseLight {
                         tint: LinearRgba::WHITE,
-                        limits: Vec4::new(state.cap, 0.0, 0.0, 0.0),
+                        limits: state.limits,
                     },
                 });
                 state.materials.insert(material.id(), handle.clone());
