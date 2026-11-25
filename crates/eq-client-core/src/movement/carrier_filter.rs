@@ -1,8 +1,9 @@
 //! Titanium's walking object filter is distinct from floor and headroom.
-use super::{CAPSULE_RADIUS, CollisionInstance, CollisionWorld, LIFT, SKIN};
+use super::{CAPSULE_RADIUS, CollisionInstance, CollisionWorld, LIFT, SKIN, Surface};
 use eq_network_game::world::SpawnKind;
 use glam::Vec3;
 use parry3d::{
+    bounding_volume::Aabb,
     math::{Pose, Vector},
     query::{ShapeCastOptions, cast_shapes},
     shape::Ball,
@@ -37,32 +38,56 @@ impl CollisionWorld {
         // the same body volume, approached vertically instead of sideways.
         // A mast is not made a wall again by a stationary overlap test.
         let height = self.collision_height.unwrap_or(height);
-        let pose = Pose::translation(feet.x, feet.y + LIFT + CAPSULE_RADIUS, feet.z);
-        let ball = Ball::new(CAPSULE_RADIUS);
-        let rise = Vector::Y * (height - 2.0 * CAPSULE_RADIUS);
-        let options = ShapeCastOptions {
-            max_time_of_impact: 1.0,
-            target_distance: SKIN,
-            stop_at_penetration: false,
-            compute_impact_geometry_on_penetration: true,
-        };
         self.spawn_obstacles
             .iter()
             .filter(|(_, instance)| instance.spawn_kind == Some(SpawnKind::Npc))
-            .all(|(_, instance)| {
-                let mesh = instance.surface();
-                matches!(
-                    cast_shapes(
-                        &pose,
-                        rise,
-                        &ball,
-                        &mesh.pose,
-                        Vector::ZERO,
-                        mesh.mesh,
-                        options
-                    ),
-                    Ok(None)
-                )
-            })
+            .all(|(_, instance)| headroom(instance.surface(), feet, height))
     }
+}
+
+fn headroom(surface: Surface<'_>, feet: Vec3, height: f32) -> bool {
+    let start = Vector::from_array((feet + Vec3::Y * (LIFT + CAPSULE_RADIUS)).to_array());
+    let begin = surface.pose.inverse_transform_point(start);
+    let rise = surface.pose.rotation.inverse() * Vector::Y * (height - 2.0 * CAPSULE_RADIUS);
+    let end = begin + rise;
+    let margin = Vector::splat(CAPSULE_RADIUS + SKIN);
+    let bounds = Aabb::new(begin.min(end) - margin, begin.max(end) + margin);
+    let pose = Pose::translation(begin.x, begin.y, begin.z);
+    let ball = Ball::new(CAPSULE_RADIUS);
+    let options = ShapeCastOptions {
+        max_time_of_impact: 1.0,
+        target_distance: SKIN,
+        stop_at_penetration: false,
+        compute_impact_geometry_on_penetration: true,
+    };
+    surface.mesh.bvh().intersect_aabb(&bounds).all(|index| {
+        let triangle = surface.mesh.triangle(index);
+        if let Some(mut normal) = triangle.normal() {
+            let mut distance = (begin - triangle.a).dot(normal);
+            if distance < 0.0 {
+                normal = -normal;
+                distance = -distance;
+            }
+            // As in flight_sweep, a separating plane stays separating for
+            // this whole linear move when it is nonclosing. This avoids a
+            // numerically unstable zero-distance contact beside a mast;
+            // overlapping planes still receive the ordinary edge query.
+            let roundoff = height * f32::EPSILON * 4.0;
+            if distance - CAPSULE_RADIUS >= -roundoff && rise.dot(normal) >= 0.0 {
+                return true;
+            }
+        }
+        matches!(
+            cast_shapes(
+                &pose,
+                rise,
+                &ball,
+                &Pose::IDENTITY,
+                Vector::ZERO,
+                &triangle,
+                options
+            ),
+            Ok(None)
+        )
+    })
 }

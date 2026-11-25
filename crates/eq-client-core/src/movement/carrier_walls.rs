@@ -48,11 +48,10 @@ fn carrier_walls_npc_walk_crosses_still_and_moved_partition_with_deck_support() 
         assert_eq!(world.ground_spawn(end, 0.01, 0.05), Some(8));
         // A fresh press from inside the rigging must also get out.
         let overlap = origin - rotation * Vec3::X * 0.1;
+        let escaped = world.step(overlap, rotation * Vec3::X, 3.0);
         assert!(
-            world
-                .step(overlap, rotation * Vec3::X, 3.0)
-                .distance(overlap)
-                > 0.99
+            escaped.distance(overlap) > 0.99,
+            "{origin:?}: {overlap:?} -> {escaped:?}"
         );
     }
 }

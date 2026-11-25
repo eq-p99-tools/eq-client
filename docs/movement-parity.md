@@ -42,7 +42,7 @@ this physical arc comparison.
 ## H2 — fall start across a same-zone pad
 
 [R] Pad placement keeps actor `+0x4c`, the fall-start height; landing clears
-it (`eqgame.exe` `0x48c285`, `0x48b6c5`). The client keeps the old peak through
+it (`eqgame.exe` `0x48aaa6`, `0x48b6c5`). The client keeps the old peak through
 placement and clears it when the first-step landing is consumed. A landing
 below the soles keeps the previous fall until an actual landing. This
 matches the original; no new jump or fall-height adjustment is implied.
