@@ -343,8 +343,8 @@ pub(super) fn base(
                 .sum();
             let fade = (1.0 - squared / (span * span)).max(0.0).powi(2);
             weight += fade;
-            for channel in 0..3 {
-                wash[channel] += light.rgb[channel] * fade;
+            for (wash, rgb) in wash.iter_mut().zip(light.rgb) {
+                *wash += rgb * fade;
             }
         }
     }
