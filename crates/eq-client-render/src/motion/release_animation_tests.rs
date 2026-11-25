@@ -41,7 +41,7 @@ fn tick(app: &mut App, base: Instant, frame: usize) {
     app.update();
 }
 
-fn answer(news: &mpsc::Sender<eq_client_core::WorldUpdate>, request: MovementRequest) {
+fn answer(news: &mpsc::Sender<eq_client_core::WorldUpdate>, request: &MovementRequest) {
     news.send(eq_client_core::WorldUpdate::Game(
         eq_client_core::WorldEvent::MotionSent {
             session_id: request.session_id,
@@ -70,12 +70,12 @@ struct Replay {
     clips: Vec<&'static str>,
     phases: Vec<f32>,
     commands: Vec<String>,
-    exhausted_held_frames: usize,
+    repress_gap_frames: usize,
     used_release: bool,
     used_repress: bool,
 }
 
-fn observe(app: &App, root: Entity, result: &mut Replay) {
+fn observe(app: &App, root: Entity, awaiting_sample: bool, result: &mut Replay) {
     let controls = app.world().resource::<Controls>();
     if let Some(playhead) = controls
         .visual
@@ -89,8 +89,8 @@ fn observe(app: &App, root: Entity, result: &mut Replay) {
             .pressed(KeyCode::KeyW)
         {
             result.used_repress |= !playhead.rested();
-            if playhead.finished() && !playhead.rested() {
-                result.exhausted_held_frames += 1;
+            if awaiting_sample && playhead.finished() && !playhead.rested() {
+                result.repress_gap_frames += 1;
             }
         }
     }
@@ -124,14 +124,15 @@ fn replay(walking: bool, delay: usize, baseline: bool, base: Instant) -> Replay 
         clips: vec![],
         phases: vec![],
         commands: vec![],
-        exhausted_held_frames: 0,
+        repress_gap_frames: 0,
         used_release: false,
         used_repress: false,
     };
     let mut replies: VecDeque<(usize, MovementRequest)> = VecDeque::new();
+    let mut awaiting_sample = true;
     for frame in 0..45 {
         while replies.front().is_some_and(|(due, _)| *due <= frame) {
-            answer(&news, replies.pop_front().unwrap().1);
+            answer(&news, &replies.pop_front().unwrap().1);
         }
         if frame == 5 {
             // A continuing legal sample can cover up to 250 ms. Its ordinary
@@ -140,24 +141,27 @@ fn replay(walking: bool, delay: usize, baseline: bool, base: Instant) -> Replay 
             {
                 let mut controls = app.world_mut().resource_mut::<Controls>();
                 controls.moving = true;
-                controls.last_sent = Some(base - Duration::from_millis(250));
+                controls.last_sent = Some(base.checked_sub(Duration::from_millis(250)).unwrap());
             }
             key(&mut app, KeyCode::KeyW, true);
         }
         if frame == 8 {
             key(&mut app, KeyCode::KeyW, false);
         }
-        if frame == 11 {
+        if frame == 12 {
             key(&mut app, KeyCode::KeyW, true);
         }
         tick(&mut app, base, frame);
         for command in requests.try_iter() {
             result.commands.push(format!("{command:?}"));
             if let ClientCommand::Move(request) = command {
+                if frame >= 12 {
+                    awaiting_sample = false;
+                }
                 replies.push_back((frame + 1 + delay, request));
             }
         }
-        observe(&app, root, &mut result);
+        observe(&app, root, frame >= 12 && awaiting_sample, &mut result);
     }
     result
 }
@@ -174,14 +178,15 @@ fn release_repress_keeps_walk_and_run_phase_through_one_and_three_late_frames() 
                 "animation changed commands"
             );
             assert!(fixed.used_release && fixed.used_repress);
-            assert!(fixed.exhausted_held_frames >= delay);
+            assert_eq!(fixed.repress_gap_frames, delay);
             let moving = if walking { "L01" } else { "L02" };
-            // Allow the ordinary 30 Hz pose opportunity after re-press, then
-            // inspect every rendered frame, including exhausted-cursor gaps.
-            assert!(fixed.clips[14..].iter().all(|clip| *clip == moving));
-            assert!(fixed.phases[14..].windows(2).all(|pair| pair[1] > pair[0]));
-            assert!(before.clips[14..].contains(&"P01"));
-            assert!(before.phases[14..].windows(2).any(|pair| pair[1] < pair[0]));
+            // Re-press coincides with the ordinary 30 Hz pose opportunity.
+            // Inspect every rendered frame thereafter, including the exact
+            // one/three exhausted-cursor frames before the next legal sample.
+            assert!(fixed.clips[12..].iter().all(|clip| *clip == moving));
+            assert!(fixed.phases[12..].windows(2).all(|pair| pair[1] > pair[0]));
+            assert!(before.clips[12..].contains(&"P01"));
+            assert!(before.phases[12..].windows(2).any(|pair| pair[1] < pair[0]));
         }
     }
 }
