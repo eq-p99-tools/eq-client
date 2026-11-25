@@ -13658,8 +13658,7 @@ pub(super) mod tests {
     )]
     fn pad_first_step_precedes_input_gate_and_retries_the_same_probe() {
         let (mut app, _) = app();
-        let floor =
-            |height| CollisionWorld::new(flat_surface(height).map(|[a, b, c]| [a, c, b])).unwrap();
+        let floor = |height| CollisionWorld::new(flat_surface(height)).unwrap();
         let (sender, receiver) = mpsc::sync_channel(1);
         sender
             .try_send(ClientCommand::CrossZoneLine {
