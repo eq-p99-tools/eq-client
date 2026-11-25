@@ -7,8 +7,8 @@ offline comparison. Offline results do not establish live compatibility.
 
 [R] Titanium's ordinary walking move (`eqgame.exe` `0x48acef`) uses object
 filter `0x42cf6e`, which skips NPC spawns before testing their faces. The
-ship is therefore floor and headroom, through `0x42d05f`, but not a lateral
-body wall. Ordinary boarding uses actor `+0x158`; it does not set `+0x160`,
+ship is therefore not a lateral body wall; floor filter `0x42d05f` retains
+it. Ordinary boarding uses actor `+0x158`; it does not set `+0x160`,
 the mount/rider link managed by `0x483958`. Walking off the deck edge is
 expected once floor support ends.
 
@@ -18,8 +18,10 @@ rays and other movement modes retain the geometry. Doors and placements
 are unchanged. Player and unknown-kind carriers retain their prior body
 collision; their qualification is a separate gap below.
 
-[I] The collider and drawing share the current rest pose and rigid carrier
-transform. Native membership of every authored face, and animated rigging
+[I] The separate upward headroom query retains the client's body dimensions
+and authored facing; its shape remains an approximation. The collider and
+drawing share the current rest pose and rigid carrier transform. Native
+membership of every authored face, and animated rigging
 floor poses, remain unconfirmed. Rope or sail support still depends on
 floor winding and step reach. EqMac and RoF2 retain their previous behavior;
 the Titanium walking rule has not been read for those programs. A local
@@ -43,8 +45,8 @@ this physical arc comparison.
 
 [R] Pad placement keeps actor `+0x4c`, the fall-start height; landing clears
 it (`eqgame.exe` `0x48aaa6`, `0x48b6c5`). The client keeps the old peak through
-placement and clears it when the first-step landing is consumed. A landing
-below the soles keeps the previous fall until an actual landing. This
+placement and clears it when the first-step landing is consumed. A floor
+at or below the soles keeps the previous fall until an actual landing. This
 matches the original; no new jump or fall-height adjustment is implied.
 
 ## 6.664 — door types 50 and 51

@@ -33,7 +33,8 @@ impl CollisionWorld {
         if !self.titanium_walking {
             return true;
         }
-        // [R] The NPC remains in the floor/headroom query (0x42d05f).
+        // [R] The NPC remains in the floor query (0x42d05f). Preserve
+        // separate headroom geometry while changing the walking filter.
         // [I] Sweep the capsule's radius upward through its existing height:
         // the same body volume, approached vertically instead of sideways.
         // A mast is not made a wall again by a stationary overlap test.
@@ -62,6 +63,12 @@ fn headroom(surface: Surface<'_>, feet: Vec3, height: f32) -> bool {
     };
     surface.mesh.bvh().intersect_aabb(&bounds).all(|index| {
         let triangle = surface.mesh.triangle(index);
+        // Use authored facing for this upward query, just as a floor query
+        // keeps the upward-facing side. Drawing both sides of a material
+        // does not make a floor's back face a ceiling (0x101875c0).
+        if triangle.scaled_normal().dot(rise) > 0.0 {
+            return true;
+        }
         if let Some(mut normal) = triangle.normal() {
             let mut distance = (begin - triangle.a).dot(normal);
             if distance < 0.0 {
@@ -72,7 +79,12 @@ fn headroom(surface: Surface<'_>, feet: Vec3, height: f32) -> bool {
             // this whole linear move when it is nonclosing. This avoids a
             // numerically unstable zero-distance contact beside a mast;
             // overlapping planes still receive the ordinary edge query.
-            let roundoff = height * f32::EPSILON * 4.0;
+            // Include the world-to-model subtraction in the error bound:
+            // a scaled/translated actor otherwise turns exact tangency
+            // into a tiny overlap and reports a false upward contact.
+            let magnitude =
+                start.abs().max_element() + surface.pose.translation.abs().max_element() + height;
+            let roundoff = magnitude.max(1.0) * f32::EPSILON * 8.0;
             if distance - CAPSULE_RADIUS >= -roundoff && rise.dot(normal) >= 0.0 {
                 return true;
             }
