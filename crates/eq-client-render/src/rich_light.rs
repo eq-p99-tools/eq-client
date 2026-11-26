@@ -11,7 +11,8 @@
 //!   list, with a smooth falloff, so a lamp's pool follows the floor rather
 //!   than the edges of its triangles. The nearest are drawn, two of them
 //!   casting shadows.
-//! - The carried lights follow their bearers, the first casting shadows.
+//! - The carried lights follow their bearers, the first casting shadows when
+//!   the player asks for them (`Fix::TorchShadows`).
 //! - Warm lights flicker a little, as a flame does.
 //! - The camera draws in high dynamic range with a soft glow.
 //!
@@ -219,6 +220,9 @@ pub(super) struct RichState {
     carried: Vec<PassLight>,
     /// The player's height, for the own light's shadow.
     own_height: f32,
+    /// Whether the player asked for their own light's shadows
+    /// ([`Fix::TorchShadows`](eq_client_core::qol::Fix::TorchShadows)).
+    torch_shadows: bool,
     /// The materials' limits ([`BaseLight::limits`]) now, and as they were
     /// last given them.
     limits: Vec4,
@@ -433,6 +437,7 @@ pub(super) fn gather(
         && qol.on(eq_client_core::qol::Fix::RichLighting)
         && lighting::in_scene(scene.as_deref(), world);
     state.interior = state.active && world.sky().is_some_and(|sky| sky.sky == 0);
+    state.torch_shadows = qol.on(eq_client_core::qol::Fix::TorchShadows);
     let outdoors = if state.interior { 0.0 } else { 1.0 };
     state.limits = Vec4::new(tuning.light_cap, outdoors, 0.0, 0.0);
     let zone = scene.as_ref().map_or("", |scene| scene.zone.as_str());
@@ -720,7 +725,7 @@ pub(super) fn lamps(
     let mut slots = Vec::with_capacity(state.carried.len() + 1);
     let carried_now = if lit { state.carried.as_slice() } else { &[] };
     for (index, pass) in carried_now.iter().enumerate() {
-        if index == 0 && tuning.own_shadow {
+        if index == 0 && tuning.own_shadow && state.torch_shadows {
             slots.push((pass, index, tuning.shadow_strength, true));
             slots.push((pass, index, 1.0 - tuning.shadow_strength, false));
         } else {
