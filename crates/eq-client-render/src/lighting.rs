@@ -80,6 +80,12 @@ pub(super) struct SceneLights {
     applied: Option<Colouring>,
     /// The carried lights the meshes were last coloured with.
     carried: Vec<PassLight>,
+    /// For a look that reworks the colours after they are written (Better
+    /// Water's even light on water): whether every mesh was coloured
+    /// afresh, and each part written since, by mesh, start and length.
+    /// That look takes them each frame.
+    pub(super) fresh: bool,
+    pub(super) written: Vec<(AssetId<Mesh>, usize, usize)>,
 }
 
 impl SceneLights {
@@ -93,7 +99,15 @@ impl SceneLights {
             worked: Vec::new(),
             applied: None,
             carried: Vec::new(),
+            fresh: false,
+            written: Vec::new(),
         }
+    }
+
+    /// Writes every mesh's colours afresh on the next update, as when a
+    /// look that reworked some of them is put away.
+    pub(super) fn recolour(&mut self) {
+        self.applied = None;
     }
 }
 
@@ -627,9 +641,14 @@ pub(super) fn update(
         }
         worked.assigned = assigned;
         if let Some(mut mesh) = meshes.get_mut(&lit.mesh) {
-            write_colours(&mut mesh, lit.offset, colours(lit, worked));
+            let colours = colours(lit, worked);
+            scene
+                .written
+                .push((lit.mesh.id(), lit.offset, colours.len()));
+            write_colours(&mut mesh, lit.offset, colours);
         }
     }
+    scene.fresh |= refresh;
     scene.applied = Some(colouring);
     scene.carried = carried;
 }
