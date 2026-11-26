@@ -182,10 +182,7 @@ fn automatic_return_checks_the_next_floor_before_standing_at_the_bank_boundary()
         controls.test_span = Some(0.05);
         controls.airborne = Some(AirborneController::default());
         controls.climb_sent = None;
-        let mut speed = controls.speed.unwrap();
-        speed.units_per_second = 120.0;
-        speed.walk_units_per_second = Some(120.0);
-        controls.speed = Some(speed);
+        controls.speed = Some(120.0);
     });
     posture(&mut app, PostureState::Ducking);
     app.update();
