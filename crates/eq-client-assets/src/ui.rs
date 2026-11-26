@@ -167,9 +167,8 @@ pub const SKIN_KEY: [u8; 4] = [255, 0, 255, 255];
 /// without alpha, as in a BMP, reads as opaque (program read R30 (b), (c)).
 /// Cursors are not keyed: the program loads them as cursor files (0x5acde0).
 fn skin_pixels(path: PathBuf) -> Result<image::RgbaImage, UiLayoutError> {
-    let mut pixels = image::open(&path)
-        .map_err(|source| UiLayoutError::Image { path, source })?
-        .into_rgba8();
+    let mut pixels =
+        crate::dds::open_image(&path).map_err(|source| UiLayoutError::Image { path, source })?;
     for pixel in pixels.pixels_mut() {
         if pixel.0 == SKIN_KEY {
             pixel.0 = [0; 4];
@@ -1003,9 +1002,7 @@ impl LoadingScreen {
             .picture
             .iter()
             .fold(eq_directory.to_path_buf(), |path, part| path.join(part));
-        Ok(image::open(&path)
-            .map_err(|source| UiLayoutError::Image { path, source })?
-            .into_rgba8())
+        crate::dds::open_image(&path).map_err(|source| UiLayoutError::Image { path, source })
     }
 }
 

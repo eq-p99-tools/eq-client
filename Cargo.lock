@@ -3699,7 +3699,7 @@ checksum = "3eaf3ede3fee6db1a4c2ee091bf8a8b4dccdc6d17f656fb07896ee72867612f2"
 [[package]]
 name = "libeq"
 version = "0.5.0"
-source = "git+https://github.com/eq-p99-tools/libeq?rev=e0e5a4e65c170272035a8beb65bda048f7a60a01#e0e5a4e65c170272035a8beb65bda048f7a60a01"
+source = "git+https://github.com/eq-p99-tools/libeq?rev=36d7e4f52f24c3f9ddbf7fd8597722de56011c34#36d7e4f52f24c3f9ddbf7fd8597722de56011c34"
 dependencies = [
  "libeq_pfs",
  "libeq_wld",
@@ -3716,7 +3716,7 @@ dependencies = [
 [[package]]
 name = "libeq_pfs"
 version = "0.5.0"
-source = "git+https://github.com/eq-p99-tools/libeq?rev=e0e5a4e65c170272035a8beb65bda048f7a60a01#e0e5a4e65c170272035a8beb65bda048f7a60a01"
+source = "git+https://github.com/eq-p99-tools/libeq?rev=36d7e4f52f24c3f9ddbf7fd8597722de56011c34#36d7e4f52f24c3f9ddbf7fd8597722de56011c34"
 dependencies = [
  "flate2",
  "thiserror 2.0.20",
@@ -3725,7 +3725,7 @@ dependencies = [
 [[package]]
 name = "libeq_wld"
 version = "0.5.0"
-source = "git+https://github.com/eq-p99-tools/libeq?rev=e0e5a4e65c170272035a8beb65bda048f7a60a01#e0e5a4e65c170272035a8beb65bda048f7a60a01"
+source = "git+https://github.com/eq-p99-tools/libeq?rev=36d7e4f52f24c3f9ddbf7fd8597722de56011c34#36d7e4f52f24c3f9ddbf7fd8597722de56011c34"
 dependencies = [
  "encoding_rs",
  "itertools 0.14.0",

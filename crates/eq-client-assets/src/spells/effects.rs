@@ -231,10 +231,7 @@ pub fn effect_image(eq_directory: &Path, name: &str) -> Result<image::RgbaImage,
         return Err(EffectsError::InvalidImage(name.to_owned()));
     }
     let path = eq_directory.join("SpellEffects").join(name);
-    // By path, so the extension names the format: TGA has no magic bytes.
-    image::open(&path)
-        .map(image::DynamicImage::into_rgba8)
-        .map_err(|source| EffectsError::Image { path, source })
+    crate::dds::open_image(&path).map_err(|source| EffectsError::Image { path, source })
 }
 
 /// A NUL-ended name in a fixed field; text past the NUL is an editor's
