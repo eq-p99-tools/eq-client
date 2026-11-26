@@ -1129,7 +1129,9 @@ fn surface_ordinary_turn_strafe_pitch_and_autorun_keep_the_clock() {
             "walk" => f.app.world_mut().resource_mut::<Controls>().walking = true,
             _ => unreachable!(),
         }
-        for ms in [117, 167, 100] {
+        // Whole physical-frame intervals isolate input eligibility. A
+        // genuine short strafe partial keeps its owner veto below.
+        for ms in [100, 150, 250] {
             let (request, _) = f.step(ms);
             assert_ordinary_input(action, f.app.world().resource::<Controls>());
             assert!(
@@ -1154,6 +1156,48 @@ fn surface_ordinary_turn_strafe_pitch_and_autorun_keep_the_clock() {
                 > updates
         );
     }
+}
+
+#[test]
+fn surface_short_strafe_partial_keeps_the_ordinary_owner() {
+    let base = Instant::now();
+    let mut continued = Native::new(15_f32.to_radians(), -0.1, false, base);
+    let mut ordinary = Native::new(15_f32.to_radians(), -0.1, false, base);
+    for f in [&mut continued, &mut ordinary] {
+        crate::keys::testing::bind(
+            &mut f.app,
+            Act::StrafeLeft,
+            crate::keys::Chord::key(KeyCode::KeyZ),
+        );
+        let (first, _) = f.step(100);
+        f.accept(&first);
+        let mut keys = f.app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.release(KeyCode::KeyW);
+        keys.press(KeyCode::KeyZ);
+    }
+    ordinary
+        .app
+        .world_mut()
+        .resource_mut::<Controls>()
+        .suppress_surface = true;
+    let (attempted, attempted_packet) = continued.step(117);
+    let (direct, direct_packet) = ordinary.step(117);
+    let controls = continued.app.world().resource::<Controls>();
+    assert_ordinary_input("strafe", controls);
+    assert_eq!(
+        controls.surface.last_decline,
+        Some(eq_client_core::movement::SurfaceDecline::Shortened)
+    );
+    assert!(!controls.surface.pending());
+    assert_eq!(attempted.position, direct.position);
+    assert_eq!(attempted.mode, direct.mode);
+    assert_eq!(attempted_packet, direct_packet);
+    continued.accept(&attempted);
+    ordinary.accept(&direct);
+    assert_eq!(
+        continued.app.world().resource::<Controls>().wet,
+        ordinary.app.world().resource::<Controls>().wet
+    );
 }
 
 #[test]
