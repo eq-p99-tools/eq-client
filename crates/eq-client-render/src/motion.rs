@@ -20,7 +20,22 @@ mod pad;
 mod placement;
 pub(super) mod pose;
 mod shoreline;
+mod surface;
+#[cfg(test)]
+mod surface_cost_tests;
+#[cfg(test)]
+mod surface_tail_tests;
+#[cfg(test)]
+mod surface_tests;
 mod translation;
+
+struct SurfaceRollback {
+    wet: eq_client_core::movement::water::WetVelocity,
+    airborne: Option<eq_client_core::movement::AirborneController>,
+    hop: Option<std::time::Instant>,
+    hop_applied: Option<std::time::Instant>,
+    water_jump: Option<std::time::Instant>,
+}
 
 use super::{
     Collision, OrbitCamera, Player, PlayerBody,
@@ -147,15 +162,23 @@ pub(super) struct Controls {
     test_span: Option<f32>,
     #[cfg(test)]
     suppress_release_catchup: bool,
+    #[cfg(test)]
+    suppress_surface: bool,
     /// Deterministic frame clock for the command-parity fixture only.
     #[cfg(test)]
     test_now: Option<Instant>,
+    #[cfg(test)]
+    test_proposal_path: Option<f64>,
+    #[cfg(test)]
+    test_motion_intent: Option<(MovementMode, Vec3, f32, f32, bool)>,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
     /// Dry-side momentum to keep if the session refuses a proposed water entry.
     water_entry_rollback: Option<AirborneController>,
     shoreline: shoreline::Control,
+    surface: surface::Control,
+    surface_rollback: Option<SurfaceRollback>,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
     /// When a jump was pressed since the last sample; only where falls are simulated.
@@ -211,6 +234,8 @@ pub(super) struct Controls {
     water_jump: Option<Instant>,
     /// When the next surface hop may come (actor +0x6c, read R33b 3).
     surface_hop: Option<Instant>,
+    /// A real shoreline hop, distinct from its attempted-probe cooldown.
+    surface_hop_applied: Option<Instant>,
     /// The wet body's velocity between samples (0x4bfe0f; reads R33 and
     /// R41). A correction, placement or admission starts it at rest.
     wet: eq_client_core::movement::water::WetVelocity,
@@ -333,10 +358,18 @@ impl Default for Controls {
             #[cfg(test)]
             suppress_release_catchup: false,
             #[cfg(test)]
+            suppress_surface: false,
+            #[cfg(test)]
             test_now: None,
+            #[cfg(test)]
+            test_proposal_path: None,
+            #[cfg(test)]
+            test_motion_intent: None,
             airborne: None,
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
+            surface: surface::Control::default(),
+            surface_rollback: None,
             refused: None,
             jump: None,
             last_jump: None,
@@ -359,6 +392,7 @@ impl Default for Controls {
             stun_active: false,
             water_jump: None,
             surface_hop: None,
+            surface_hop_applied: None,
             wet: eq_client_core::movement::water::WetVelocity::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
@@ -922,6 +956,8 @@ impl Controls {
             #[cfg(test)]
             suppress_release_catchup: self.suppress_release_catchup,
             #[cfg(test)]
+            suppress_surface: self.suppress_surface,
+            #[cfg(test)]
             test_now: self.test_now,
             #[cfg(test)]
             last_accepted: self.now(),
@@ -1015,6 +1051,8 @@ impl Controls {
     /// Stops prediction without revoking the session's calibration. A pending
     /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
+        self.restore_surface_trial();
+        self.surface.pause();
         self.restore_translation |= self.has_translation_playhead();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
@@ -1035,10 +1073,21 @@ impl Controls {
     /// A full queue sent nothing and can be retried with a fresh bounded sample.
     /// Other refusals invalidate the admission/capability as before.
     fn send_failed(&mut self, reason: crate::outbox::Refusal) {
+        self.restore_surface_trial();
         if reason == crate::outbox::Refusal::Busy {
             self.pause_prediction();
         } else {
             self.reset(None);
+        }
+    }
+
+    fn restore_surface_trial(&mut self) {
+        if let Some(before) = self.surface_rollback.take() {
+            self.wet = before.wet;
+            self.airborne = before.airborne;
+            self.surface_hop = before.hop;
+            self.surface_hop_applied = before.hop_applied;
+            self.water_jump = before.water_jump;
         }
     }
     /// Continuous motion covers the time since the previous sample went
@@ -1238,6 +1287,11 @@ impl Controls {
 
     /// The speeds of a grant, and nothing else.
     fn set_speeds(&mut self, grant: eq_client_core::world::MotionGrant) {
+        if self.swim != grant.swim {
+            // A queued endpoint still belongs to its ordinary result slot,
+            // but old calibration cannot commit a continuation snapshot.
+            self.surface = surface::Control::default();
+        }
         self.speed = grant.units_per_second;
         self.backward_speed = grant.backward_units_per_second;
         self.walk_speed = grant.walk_units_per_second;
@@ -1330,6 +1384,13 @@ impl Controls {
         self.riding.map(|(door, _, _)| door)
     }
 
+    pub(crate) fn surface_report(&self) -> serde_json::Value {
+        serde_json::json!({"active":self.surface.active(),"tracked":self.surface.prior().is_some(),
+            "pending_local_result":self.surface.pending(),"last_decline":self.surface.last_decline.map(|r|format!("{r:?}")),
+            "physical_pieces":self.surface.pieces,"numeric_tails":self.surface.tails,"owner_checks":self.surface.checks,
+            "frame":self.surface.prior().and_then(|c|c.velocity().frame_phase()).map(|p|serde_json::json!({"remaining_seconds":p.remaining_seconds,"at_boundary":p.at_boundary}))})
+    }
+
     /// Whether a jump in water strokes up this frame, given whether the jump
     /// key is `held` now. The program strokes up for 500 ms from a jump
     /// request in water (0x4ac9f3-0x4acbac, read R39 B); a key still held
@@ -1371,6 +1432,7 @@ impl Controls {
 
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
         if self.is_pending_move(session_id, created) {
+            self.surface.refuse(session_id, created);
             self.restore_preview |= self.preview.take().is_some();
             self.resolve_carrier(created, true);
             self.finish();
@@ -1394,6 +1456,28 @@ impl Controls {
             && refused
         {
             self.airborne = Some(previous);
+        }
+    }
+
+    pub(super) fn resolve_surface(
+        &mut self,
+        session: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: bool,
+    ) {
+        if let Some(transfer) = self.surface.resolved(session, created, position, refused) {
+            self.wet = transfer.velocity;
+            if let Some(air) = self.airborne.as_mut() {
+                if transfer.medium == eq_client_core::movement::SurfaceRegion::Air {
+                    let ([x, z], y) = transfer.velocity.units_per_second();
+                    if let Some(peak) = transfer.dry_peak {
+                        air.carry_surface_exit(y, Vec3::new(x, 0., z), transfer.feet.y, peak);
+                    }
+                } else {
+                    air.reset();
+                }
+            }
         }
     }
 
@@ -1698,6 +1782,26 @@ fn stroke_pitch(
     Some((pitch, !backing && pitch > 0.0))
 }
 
+/// Both owners use the ordinary calibrated wet input, including the
+/// existing walking/ducking share of a strafe. Turning changes the input
+/// axes, not this rate or the frame clock.
+fn wet_stroke_rate(
+    swim: eq_client_core::movement::SwimCalibration,
+    mode: MovementMode,
+    speed: f32,
+    walking: bool,
+    strafe_speed: Option<f32>,
+) -> f32 {
+    match mode {
+        MovementMode::Backward => swim.backward,
+        MovementMode::Strafe(_) => {
+            swim.strafe * (speed / strafe_speed.unwrap_or(speed).max(f32::EPSILON))
+        }
+        _ if walking => swim.walk,
+        _ => swim.forward,
+    }
+}
+
 /// The mouse's look and aim, and the spell names a root is read by.
 type Pointing<'w> = (
     Option<Res<'w, MouseLook>>,
@@ -1807,7 +1911,7 @@ pub(super) fn input(
         controls.following = None;
     }
     // An arrival aboard holds the player until the session places them
-    // (read R36 §3): no frames run in the program meanwhile.
+    // (read R36 Â§3): no frames run in the program meanwhile.
     if !online.enabled
         || !online.world().connected()
         || online.world().is_dead()
@@ -1997,6 +2101,7 @@ pub(super) fn input(
         controls.autorun = false;
     }
     let now = controls.now();
+    controls.restore_surface_trial();
     controls.settle(now);
     let water_enabled = match client {
         InstalledClient::Titanium => true,
@@ -2209,6 +2314,26 @@ pub(super) fn input(
             });
     if let Some(visual) = controls.visual.as_mut() {
         visual.release_translation(released);
+    }
+    let held_surface = map.holding(&keyboard, scripted);
+    let surface_input = (controls.autorun
+        || look.as_ref().is_some_and(|look| look.held && look.left)
+        || [
+            Act::Forward,
+            Act::Back,
+            Act::StrafeLeft,
+            Act::StrafeRight,
+            Act::CameraForward,
+            Act::CameraBack,
+            Act::CameraLeft,
+            Act::CameraRight,
+        ]
+        .into_iter()
+        .any(|act| held_surface.held(act)))
+        && !held_surface.held(Act::Jump)
+        && !held_surface.held(Act::Duck);
+    if !water_enabled || !focused || !standing || controls.stun_active || !surface_input {
+        controls.surface.pause();
     }
     let mut movement_keys = map.movement_keys();
     if flying {
@@ -2528,6 +2653,113 @@ pub(super) fn input(
         mut preserve_facing,
         diagonal,
     } = intent;
+    #[cfg(test)]
+    {
+        controls.test_motion_intent = Some((mode, direction, speed, turn, preserve_facing));
+    }
+    let surface_before_wet = controls.wet;
+    let surface_before_airborne = controls.airborne.clone();
+    let surface_before_hop = controls.surface_hop;
+    let surface_before_water_jump = controls.water_jump;
+    let mut surface_plan = None;
+    let surface_eligible = water_enabled
+        && focused
+        && standing
+        && surface_input
+        && !stunned
+        && !placement_blocked
+        && !flying
+        && matches!(
+            mode,
+            MovementMode::Forward
+                | MovementMode::Backward
+                | MovementMode::Walk
+                | MovementMode::Strafe(_)
+        )
+        && direction != Vec3::ZERO
+        && follow_step.is_none()
+        && controls.following.is_none()
+        && !keys.script_routing()
+        && controls.jump.is_none()
+        && controls.crouch.is_none()
+        && controls.boat.is_none()
+        && controls.visual_boat.is_none()
+        && controls.riding.is_none()
+        && !controls.shoreline.active()
+        && controls
+            .water_jump
+            .is_none_or(|at| now.saturating_duration_since(at) >= WATER_JUMP)
+        && controls
+            .surface_hop_applied
+            .is_none_or(|at| now.saturating_duration_since(at) >= SURFACE_HOP_INTERVAL)
+        && controls.movement_options.run_speed_multiplier
+            == eq_client_core::movement::RunSpeedMultiplier::NORMAL
+        && !(options.options.qol.on(Fix::JesusMode)
+            && online.world().can(Capability::GameplayDepartures));
+    #[cfg(test)]
+    let surface_eligible = surface_eligible && !controls.suppress_surface;
+    if surface_eligible && let Some(swim) = controls.swim {
+        let radians = eq_client_core::render_heading(current_heading);
+        let ahead = Vec3::new(radians.sin(), 0., radians.cos());
+        let pitch = stroke_pitch(
+            direction,
+            mode,
+            (map, &sampled, scripted),
+            (camera, look.as_deref()),
+            controls.autorun,
+        )
+        .map_or(0., |(pitch, _)| pitch);
+        if swimming && pitch > 0. && surface_hop_ground(world, feet, body.feet_offset, ahead) {
+            controls
+                .surface
+                .declined(eq_client_core::movement::SurfaceDecline::Contact);
+        } else {
+            let rate = wet_stroke_rate(swim, mode, speed, controls.walking, controls.strafe_speed);
+            let flat = Vec2::new(direction.x, direction.z).normalize_or_zero() * rate;
+            let seed = controls.wet;
+            let mut ordinary_seed = seed;
+            ordinary_seed.clamp(swim.caps());
+            // Take the actual snapshot as is. If ordinary ownership still
+            // owes its next-stroke clamp, let that unchanged path do it.
+            let trial = if controls.surface.prior().is_none() && ordinary_seed != seed {
+                Err(eq_client_core::movement::SurfaceDecline::Context)
+            } else {
+                eq_client_core::movement::SurfaceClock::plan(
+                    controls.surface.prior(),
+                    world,
+                    feet,
+                    seed,
+                    eq_client_core::movement::SurfaceStroke {
+                        set: swim.set_for(world.wet_kind(feet, body.height)),
+                        input: eq_client_core::movement::water::WetInput {
+                            horizontal: [flat.x, flat.y],
+                            vertical: rate * pitch.sin(),
+                            jump: false,
+                        },
+                        seconds: span,
+                        height: body.height,
+                    },
+                )
+            };
+            match trial {
+                Ok(plan) => {
+                    if plan.active {
+                        controls.surface_rollback = Some(SurfaceRollback {
+                            wet: surface_before_wet,
+                            airborne: surface_before_airborne.clone(),
+                            hop: surface_before_hop,
+                            hop_applied: controls.surface_hop_applied,
+                            water_jump: surface_before_water_jump,
+                        });
+                    }
+                    surface_plan = Some(plan);
+                }
+                Err(reason) => controls.surface.declined(reason),
+            }
+        }
+    } else {
+        controls.surface.pause();
+    }
     // The program's wet step for this sample, where the grant reads the
     // generation's water: the travel it gives, before collision.
     let mut wet_travel = None;
@@ -2538,14 +2770,7 @@ pub(super) fn input(
         let caps = swim.caps();
         // The water leaves a strafe as on land, so its input keeps the
         // walking and ducking shares the grant gave the strafe (R28, R33).
-        let input = match mode {
-            MovementMode::Backward => swim.backward,
-            MovementMode::Strafe(_) => {
-                swim.strafe * (speed / controls.strafe_speed.unwrap_or(speed).max(f32::EPSILON))
-            }
-            _ if controls.walking => swim.walk,
-            _ => swim.forward,
-        };
+        let input = wet_stroke_rate(swim, mode, speed, controls.walking, controls.strafe_speed);
         let mut horizontal = Vec3::ZERO;
         let mut vertical = 0.0;
         let mut jump = false;
@@ -2582,6 +2807,7 @@ pub(super) fn input(
             let heading = eq_client_core::render_heading(current_heading);
             let facing = Vec3::new(heading.sin(), 0.0, heading.cos());
             if surface_hop_ground(world, feet, body.feet_offset, facing) {
+                controls.surface_hop_applied = Some(now);
                 let ([x, z], y) = controls.wet.units_per_second();
                 let push = facing * SURFACE_HOP_PUSH / PROGRAM_TICK_SECONDS;
                 let lift = SURFACE_HOP_RISE * controls.jump_factor / PROGRAM_TICK_SECONDS;
@@ -2974,7 +3200,7 @@ pub(super) fn input(
             .then_some((landing, trial, intent.request, displacement))
         });
     let mut poses = pose::Path::default();
-    let (landing, mut mode, jumped) = if placement_blocked {
+    let (mut landing, mut mode, mut jumped) = if placement_blocked {
         (feet, MovementMode::Forward, false)
     } else if let Some(plan) = &shore {
         (plan.feet, MovementMode::Shoreline(plan.trace), false)
@@ -3028,6 +3254,42 @@ pub(super) fn input(
             None => (world.step(feet, delta, body.height), mode, false),
         }
     };
+    let surface_clipped = surface_plan.as_ref().is_some_and(|plan| {
+        plan.active
+            && (shore.is_some()
+                || stop_at_zone_line(
+                    &online.regions,
+                    origin,
+                    plan.feet + Vec3::Y * body.feet_offset,
+                ) != plan.feet + Vec3::Y * body.feet_offset)
+    });
+    if surface_clipped {
+        controls.surface_rollback = None;
+        surface_plan = None;
+        controls
+            .surface
+            .declined(eq_client_core::movement::SurfaceDecline::Region);
+    }
+    let surface_selected = surface_plan.as_ref().is_some_and(|p| p.active);
+    if let Some(plan) = surface_plan.as_ref().filter(|p| p.active) {
+        // Both plans were disposable. Keep the ordinary accepted raw state
+        // until the exact local result settles this continuation once.
+        controls.wet = surface_before_wet;
+        controls.airborne.clone_from(&surface_before_airborne);
+        controls.surface_hop = surface_before_hop;
+        if let Some(before) = controls.surface_rollback.as_ref() {
+            controls.surface_hop_applied = before.hop_applied;
+        }
+        controls.water_jump = surface_before_water_jump;
+        landing = plan.feet;
+        mode = if plan.wet {
+            MovementMode::Swim
+        } else {
+            MovementMode::Fall
+        };
+        jumped = false;
+        delta = landing - feet;
+    }
     // The server charges the jump's endurance; the arc travels in position
     // updates.
     if jumped
@@ -3067,6 +3329,7 @@ pub(super) fn input(
         mode = MovementMode::Shoreline(plan.trace);
     }
     let entering = !placement_blocked
+        && !surface_selected
         && water_enabled
         && !swimming
         && world.in_swimmable_water(position - Vec3::Y * body.feet_offset, body.height);
@@ -3108,7 +3371,7 @@ pub(super) fn input(
     // The sample names the lift that carried the origin, or the one under
     // the landing; only the one under the landing carries the next pass.
     let (support, under) = request_support(ride, world, lifts.as_deref(), landing);
-    let boat_under = if placement_blocked || flying || swimming {
+    let boat_under = if placement_blocked || flying || swimming || surface_selected {
         None
     } else {
         boats::under(world, online.world().carriers(), landing, linked, now)
@@ -3118,7 +3381,12 @@ pub(super) fn input(
     let boat_sample = boat
         .map(|riding| riding.sample)
         .or(boat_under.map(|(sample, _)| sample));
-    let vertical_speed = if placement_blocked || flying || swimming || shore.is_some() {
+    let vertical_speed = if surface_selected {
+        surface_plan
+            .as_ref()
+            .filter(|p| !p.wet)
+            .map(|p| p.clock.velocity().units_per_second().1)
+    } else if placement_blocked || flying || swimming || shore.is_some() {
         None
     } else {
         own_vertical_speed(controls.airborne.as_ref())
@@ -3127,7 +3395,7 @@ pub(super) fn input(
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
         // request must budget from that same tick, even if planning was slow.
-        created = if boat_sample.is_some() {
+        created = if surface_selected || boat_sample.is_some() {
             now
         } else {
             shore.as_ref().map_or(stamp.created, |plan| plan.created)
@@ -3145,12 +3413,34 @@ pub(super) fn input(
         })
     });
     if let Err(reason) = sent {
-        controls.airborne = previous_airborne;
+        controls.airborne = if surface_selected {
+            surface_before_airborne.clone()
+        } else {
+            previous_airborne
+        };
+        if surface_selected {
+            controls.wet = surface_before_wet;
+        }
         controls.send_failed(reason);
         controls.held = Some(Held::Refused);
         return;
     }
-    let dry_pose = shore.is_none();
+    #[cfg(test)]
+    {
+        controls.test_proposal_path = Some(if surface_selected {
+            surface_plan.as_ref().expect("selected surface plan").path
+        } else if !poses.1.is_empty() {
+            poses
+                .1
+                .iter()
+                .map(|(from, to)| (*to - *from).as_dvec3().length())
+                .sum()
+        } else {
+            (landing - feet).as_dvec3().length()
+        });
+    }
+    let dry_pose = shore.is_none() && !surface_selected;
+    controls.surface_rollback = None;
     controls.shoreline.sent(mode, shore, created);
     if entering {
         controls.water_entry_rollback = previous_airborne;
@@ -3163,13 +3453,14 @@ pub(super) fn input(
         .as_ref()
         .filter(|airborne| airborne.velocity() != 0.0 || airborne.drift() != Vec3::ZERO)
         .map(|airborne| (airborne.drift(), airborne.velocity()));
-    if !placement_blocked
+    if !surface_selected
+        && !placement_blocked
         && (entering || swimming || matches!(mode, MovementMode::Shoreline(_)))
         && let Some(airborne) = controls.airborne.as_mut()
     {
         airborne.reset();
     }
-    if entering {
+    if !surface_selected && entering {
         // The program keeps the velocity a body enters water with and damps
         // it (read R33): a falling body brings its fall's velocity in, so a
         // wall that stopped the move doesn't stop it; otherwise this
@@ -3182,7 +3473,8 @@ pub(super) fn input(
             [across.x, across.z],
             up,
         );
-    } else if swimming
+    } else if !surface_selected
+        && swimming
         && wet_travel.is_some()
         && !placement_blocked
         && !world.in_swimmable_water(landing, body.height)
@@ -3199,6 +3491,26 @@ pub(super) fn input(
     // The host's movement session budgets each sample from the previous
     // request's stamp to this one's, so the next span runs from the stamp.
     controls.last_sent = Some(created);
+    if let Some(mut plan) = surface_plan {
+        // Passive whole-wet tracking must match the untouched ordinary API
+        // state exactly; its command and follow-up remain the old path.
+        if (surface_selected || plan.clock.ordinary_velocity(controls.wet))
+            && let Some(id) = session_id
+        {
+            controls.surface.sent(
+                id,
+                created,
+                position_sent,
+                body.feet_offset,
+                plan,
+                surface_selected,
+            );
+        } else {
+            controls
+                .surface
+                .declined(eq_client_core::movement::SurfaceDecline::Context);
+        }
+    }
     controls.sent_span = span;
     controls.sample_pose = (!placement_blocked
         && !flying
@@ -3256,6 +3568,7 @@ pub(super) fn input(
     // request. Keep special transport/support frames on their existing
     // accepted-only path; none of their custody or physics is predicted here.
     let preview_eligible = !placement_blocked
+        && !surface_selected
         && !swimming
         && !entering
         && !flying
@@ -3508,6 +3821,8 @@ fn fall_step_observed(
             break;
         }
         if let Some(poses) = poses.as_deref_mut() {
+            #[cfg(test)]
+            poses.1.push((position, next));
             let horizontal = Vec2::new(next.x - position.x, next.z - position.z)
                 / step.seconds.max(f32::EPSILON);
             // Observe the launch speed before this slice's gravity. Reading
@@ -5552,7 +5867,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_goto_just_over_a_steep_face_stands_up_and_climbs_it() {
-        // Live's look (11-01, 85b9d33d): a goto 1 u over a 50° face, then
+        // Live's look (11-01, 85b9d33d): a goto 1 u over a 50Â° face, then
         // a run and a walk up it, moved 0.0 on every sample. Each sample
         // now stands up and climbs, and never rises past the reach the
         // session's guard allows it.
@@ -5595,7 +5910,7 @@ pub(super) mod tests {
                         HUMAN.height,
                         false,
                     );
-                    let case = format!("{degrees}° at {speed}: {feet} to {next}");
+                    let case = format!("{degrees}Â° at {speed}: {feet} to {next}");
                     assert!(
                         next.y - feet.y <= climb_reach(titanium.climb, program_steps(0.1)) + 0.001,
                         "{case}"
@@ -5605,11 +5920,11 @@ pub(super) mod tests {
                     feet = next;
                 }
                 // A walk keeps its pace up both; a run up them goes as far as the reach lets it.
-                assert!(moved > 0.5 * speed, "{degrees}° at {speed}: moved {moved}");
+                assert!(moved > 0.5 * speed, "{degrees}Â° at {speed}: moved {moved}");
                 if speed < 20.0 {
                     assert!(
                         moved > 0.95 * speed - 0.7,
-                        "{degrees}° at {speed}: moved {moved}"
+                        "{degrees}Â° at {speed}: moved {moved}"
                     );
                 }
             }
@@ -6264,7 +6579,7 @@ pub(super) mod tests {
             6.0,
             true,
         );
-        // At 44.55 u/s under 160 u/s², three 50 ms steps climb well past a
+        // At 44.55 u/s under 160 u/sÂ², three 50 ms steps climb well past a
         // riser (1.81 + 1.40 + 0.99), and no farther than the guard grants
         // after the notice.
         let granted = MAX_GROUNDED_STEP + super::jump_rise(44.55, titanium.gravity, 0.15);
@@ -8135,7 +8450,7 @@ pub(super) mod tests {
         Ok(seen)
     }
 
-    fn accept_now(app: &mut App, request: &MovementRequest) {
+    pub(super) fn accept_now(app: &mut App, request: &MovementRequest) {
         let created = app.world().resource::<Controls>().pending.unwrap().created;
         crate::online::testing::news(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
@@ -8153,6 +8468,7 @@ pub(super) mod tests {
         let previewed =
             controls.reconcile_preview(Some(request.session_id), created, request.position, false);
         assert!(controls.moved(Some(request.session_id), created));
+        controls.resolve_surface(Some(request.session_id), created, request.position, false);
         if !previewed {
             controls.display_sample(drawn, request.position);
         }
@@ -13206,7 +13522,7 @@ pub(super) mod tests {
         // Safe Fall is announced where the player has it.
         for (safe_fall, amount, used) in [
             // About 7 units a step at touchdown, the per-frame fall's from
-            // 100 units up (R49-24 b): trunc(10 × (v − 4)²).
+            // 100 units up (R49-24 b): trunc(10 Ã— (v âˆ’ 4)Â²).
             (None, 89, false),
             (Some(0), 89, false),
             // The skill takes off all of it, and is still announced.

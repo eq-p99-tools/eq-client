@@ -56,6 +56,12 @@ impl CollisionInstance {
         self
     }
 
+    pub(super) fn same_placement(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.mesh, &other.mesh)
+            && self.pose == other.pose
+            && self.spawn_kind == other.spawn_kind
+    }
+
     pub(super) fn surface(&self) -> Surface<'_> {
         Surface {
             mesh: &self.mesh.mesh,

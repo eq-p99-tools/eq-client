@@ -286,6 +286,18 @@ impl AirborneController {
         }
     }
 
+    /// The existing full water-exit conversion with the actual surface
+    /// dry-span history. This applies no update or travel. Old exit callers
+    /// keep their unchanged conversion; surface ownership supplies the
+    /// highest original-owner feet point since its last wet frame.
+    pub fn carry_surface_exit(&mut self, vertical: f32, drift: Vec3, feet_height: f32, peak: f32) {
+        if peak.is_finite() && vertical.is_finite() && drift.is_finite() && feet_height.is_finite()
+        {
+            self.carry_from_water(vertical, drift, feet_height);
+            self.peak = Some(peak.max(feet_height));
+        }
+    }
+
     /// Resets momentum after a correction, teleport, or a new admission.
     pub fn reset(&mut self) {
         *self = Self::default();
@@ -481,6 +493,9 @@ impl AirborneController {
         } else {
             None
         };
+        if held.is_some() {
+            world.observe_liquid_stop();
+        }
         let target = held.unwrap_or(target);
         let distance = target.y - position.y;
         if distance.abs() < 0.000_001 {
