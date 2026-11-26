@@ -31,6 +31,13 @@ struct Row {
     accepted: eq_client_core::WorldPosition,
 }
 
+struct ResultNews {
+    due: u32,
+    created: Instant,
+    position: eq_client_core::WorldPosition,
+    refused: Option<String>,
+}
+
 struct Scene {
     app: App,
     commands: mpsc::Receiver<ClientCommand>,
@@ -39,10 +46,12 @@ struct Scene {
     base: Instant,
     frame: u32,
     delay: u32,
-    replies: VecDeque<(u32, Instant, eq_client_core::WorldPosition)>,
+    replies: VecDeque<ResultNews>,
     packets: Vec<(Instant, eq_client_core::WorldPosition, i16)>,
     observations: usize,
     admissions: usize,
+    refusals: usize,
+    early_refuse: bool,
 }
 
 impl Scene {
@@ -114,6 +123,8 @@ impl Scene {
             packets: Vec::new(),
             observations: 0,
             admissions: 0,
+            refusals: 0,
+            early_refuse: false,
         };
         scene.step(false);
         scene
@@ -123,9 +134,30 @@ impl Scene {
         self.base + Duration::from_nanos(u64::from(self.frame) * 16_666_667)
     }
 
+    fn reply(&mut self, created: Instant, refused: Option<String>) {
+        self.replies.push_back(ResultNews {
+            due: self.frame + self.delay + 1,
+            created,
+            position: self.owner.position(),
+            refused,
+        });
+    }
+
     fn publish(&mut self, command: ClientCommand, now: Instant) {
         match command {
             ClientCommand::GroundFrame { request, state } => {
+                if self.early_refuse {
+                    self.news
+                        .send(eq_client_core::WorldUpdate::Game(
+                            eq_client_core::WorldEvent::MotionRefused {
+                                session_id: 11,
+                                created: request.created,
+                                reason: "outside action admission".into(),
+                            },
+                        ))
+                        .unwrap();
+                    return;
+                }
                 self.observations += 1;
                 let packets = &mut self.packets;
                 let result = self
@@ -133,9 +165,8 @@ impl Scene {
                     .try_send_ground_sample(&request, state, now, |packet| {
                         packets.push((now, packet.position, packet.animation));
                         Ok(())
-                    })
-                    .unwrap();
-                if result == GroundSampleResult::WaitingForInterval {
+                    });
+                if matches!(result, Ok(GroundSampleResult::WaitingForInterval)) {
                     self.owner
                         .observe_ground_input(
                             request.session_id,
@@ -144,13 +175,12 @@ impl Scene {
                             now,
                         )
                         .unwrap();
+                } else if let Err(error) = result {
+                    self.refusals += 1;
+                    self.reply(request.created, Some(error.to_string()));
                 } else {
                     self.admissions += 1;
-                    self.replies.push_back((
-                        self.frame + self.delay + 1,
-                        request.created,
-                        self.owner.position(),
-                    ));
+                    self.reply(request.created, None);
                 }
             }
             ClientCommand::Move(request) => {
@@ -161,11 +191,7 @@ impl Scene {
                         Ok(())
                     })
                     .unwrap();
-                self.replies.push_back((
-                    self.frame + self.delay + 1,
-                    request.created,
-                    self.owner.position(),
-                ));
+                self.reply(request.created, None);
             }
             _ => (),
         }
@@ -177,16 +203,16 @@ impl Scene {
         while self
             .replies
             .front()
-            .is_some_and(|(due, _, _)| *due <= self.frame)
+            .is_some_and(|reply| reply.due <= self.frame)
         {
-            let (_, created, position) = self.replies.pop_front().unwrap();
+            let reply = self.replies.pop_front().unwrap();
             self.news
                 .send(eq_client_core::WorldUpdate::Game(
                     eq_client_core::WorldEvent::MotionSent {
                         session_id: 11,
-                        created,
-                        position,
-                        refused: None,
+                        created: reply.created,
+                        position: reply.position,
+                        refused: reply.refused,
                     },
                 ))
                 .unwrap();
@@ -448,4 +474,37 @@ fn native_ground_a_full_command_queue_restores_the_genuinely_accepted_pose() {
             .is_none()
     );
     assert!(scene.app.world().resource::<Controls>().preview.is_none());
+}
+
+#[test]
+fn native_ground_guard_and_pre_admission_refusals_restore_observed_state() {
+    for early in [false, true] {
+        let mut scene = Scene::new(0, true);
+        let before = latency_tests::shown(&mut scene.app).0;
+        scene.step(true);
+        if early {
+            scene.early_refuse = true;
+        } else {
+            scene
+                .owner
+                .set_hold(eq_network_game::movement::Hold::Stunned);
+        }
+        scene.step(false);
+        let row = scene.step(false);
+        assert_eq!(row.shown, before);
+        assert_eq!(row.focus, before);
+        assert!(
+            scene
+                .app
+                .world()
+                .resource::<Controls>()
+                .ground
+                .current
+                .is_none()
+        );
+        assert!(scene.app.world().resource::<Controls>().refused.is_some());
+        if !early {
+            assert_eq!(scene.refusals, 1);
+        }
+    }
 }
