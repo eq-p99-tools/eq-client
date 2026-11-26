@@ -234,7 +234,7 @@ fn automatic_return_checks_the_next_floor_before_standing_at_the_bank_boundary()
 }
 
 #[test]
-fn automatic_return_does_not_run_without_a_movement_candidate() {
+fn automatic_return_preserves_the_existing_idle_origin_test() {
     let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
     app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
@@ -253,7 +253,7 @@ fn automatic_return_does_not_run_without_a_movement_candidate() {
         });
     posture(&mut app, PostureState::Ducking);
     app.update();
-    assert_eq!(commands(&receiver), Vec::<Posture>::new());
+    assert_eq!(commands(&receiver), vec![Posture::Standing]);
 }
 
 #[test]
@@ -347,6 +347,20 @@ fn gallery_jumps_launch_after_windup_even_when_the_optional_stand_is_refused() {
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
             world_position([0.0, floor + 3.75, 0.0], 0.0),
         );
+        // An expired automatic cycle must not stand from this origin before
+        // the pressed jump reaches its independent grounded-launch test.
+        let now = Instant::now();
+        app.world_mut()
+            .resource_scope(|world, mut controls: Mut<Controls>| {
+                controls.headroom.refused(
+                    InstalledClient::Titanium,
+                    world.resource::<online::OnlineState>().world(),
+                    Some(PostureState::Standing),
+                    true,
+                    now - Duration::from_millis(2_001),
+                );
+                controls.test_now = Some(now);
+            });
         posture(&mut app, PostureState::Ducking);
         {
             let mut controls = app.world_mut().resource_mut::<Controls>();

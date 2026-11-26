@@ -3054,6 +3054,32 @@ pub(super) fn input(
         && diagonal.is_none()
         && follow_heading.is_none_or(|heading| arc(current_heading, heading) == 0.0)
     {
+        // Preserve idle return at its unchanged origin. Native zero-delta
+        // call frequency is unread; it is not a reason to remove this host
+        // behavior. A move or jump above never takes this idle branch.
+        if !placement_blocked && !flying && !swimming {
+            match controls.headroom.drive(
+                client,
+                online.world(),
+                world,
+                body,
+                crate::posture::on_mount(online.world(), spells.as_deref()),
+                &outbox,
+                now,
+                Some(origin),
+            ) {
+                Ok(true) => {
+                    controls.held = Some(Held::Waiting);
+                    return;
+                }
+                Err(reason) => {
+                    controls.send_failed(reason);
+                    controls.held = Some(Held::Refused);
+                    return;
+                }
+                Ok(false) => (),
+            }
+        }
         // Even without voluntary input, refresh the ordinary floor sweep's
         // carrier link and submit its world pose through the existing gate.
         if !placement_blocked
