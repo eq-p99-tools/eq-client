@@ -348,7 +348,7 @@ fn gallery_jumps_launch_after_windup_even_when_the_optional_stand_is_refused() {
             world_position([0.0, floor + 3.75, 0.0], 0.0),
         );
         // An expired automatic cycle must not stand from this origin before
-        // the pressed jump reaches its independent grounded-launch test.
+        // the finished windup reaches its independent grounded-launch test.
         let now = Instant::now();
         app.world_mut()
             .resource_scope(|world, mut controls: Mut<Controls>| {
@@ -364,7 +364,7 @@ fn gallery_jumps_launch_after_windup_even_when_the_optional_stand_is_refused() {
         posture(&mut app, PostureState::Ducking);
         {
             let mut controls = app.world_mut().resource_mut::<Controls>();
-            controls.crouch = Some(crate::motion::Crouch::Over);
+            controls.crouch = Some(crate::motion::Crouch::Until(now));
             controls.airborne = Some(AirborneController::default());
             controls.climb_sent = None;
         }
@@ -392,8 +392,10 @@ fn a_jump_without_starting_floor_is_silent_without_a_headroom_refusal() {
         world_position([0.0, 4.75, 0.0], 0.0),
     );
     {
+        let now = Instant::now();
         let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.crouch = Some(crate::motion::Crouch::Over);
+        controls.test_now = Some(now);
+        controls.crouch = Some(crate::motion::Crouch::Until(now));
         controls.airborne = Some(AirborneController::default());
         controls.climb_sent = None;
     }
