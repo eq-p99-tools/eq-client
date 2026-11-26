@@ -270,7 +270,7 @@ pub(super) fn reconcile(
                     &model,
                     &transform,
                 ) {
-                    colliders.push((id, instance));
+                    colliders.push((id, instance.with_spawn_kind(spawn.kind)));
                 }
             }
             let Some(root) = root.filter(|_| !model.primitives.is_empty()) else {
