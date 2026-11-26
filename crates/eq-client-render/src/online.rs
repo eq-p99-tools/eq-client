@@ -663,6 +663,14 @@ impl Panels<'_> {
             "Current-admission movement worker result; no server acknowledgment implied"
         );
 
+        if self.motion.ground_result(
+            admission_id,
+            moved.created,
+            moved.position,
+            moved.refused.as_ref(),
+        ) {
+            return;
+        }
         let previewed = self.motion.reconcile_preview(
             admission_id,
             moved.created,

@@ -141,6 +141,9 @@ pub(crate) const fn is_chat(command: &ClientCommand) -> bool {
 }
 
 fn interrupts_apply(command: &ClientCommand) -> bool {
+    if let ClientCommand::GroundFrame { state, .. } = command {
+        return state.forward() || state.velocity().iter().any(|value| *value != 0.);
+    }
     matches!(
         command,
         ClientCommand::Move(_)

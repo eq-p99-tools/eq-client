@@ -1,0 +1,1 @@
+- Ordinary forward running on verified flat dry ground now accelerates and glides from frame-observed input, removing the extra projected movement after a short tap without increasing position-report cadence.

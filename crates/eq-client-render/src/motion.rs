@@ -20,6 +20,9 @@ mod release_tests;
 mod rider_animation_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod ground;
+#[cfg(test)]
+mod ground_tests;
 mod pad;
 mod placement;
 pub(super) mod pose;
@@ -264,6 +267,7 @@ pub(super) struct Controls {
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
     following: Option<follow::Following>,
+    ground: ground::Control,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -420,6 +424,7 @@ impl Default for Controls {
             wet: eq_client_core::movement::water::WetVelocity::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
+            ground: ground::Control::default(),
         }
     }
 }
@@ -957,10 +962,14 @@ impl Controls {
     /// it around the call.
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
-        let restore_preview = self.restore_preview || self.preview.is_some();
+        let mut ground = std::mem::take(&mut self.ground);
+        let native = ground.active();
+        ground.retire();
+        let restore_preview = self.restore_preview || self.preview.is_some() || native;
         let restore_translation = self.restore_translation
             || self.restored_translation.is_some()
-            || self.has_translation_playhead();
+            || self.has_translation_playhead()
+            || native;
         *self = Self {
             speed,
             restore_preview,
@@ -975,6 +984,7 @@ impl Controls {
             // A correction or a server's move keeps following, which then
             // ends by its own rules; a new admission ends it in `input`.
             following: self.following.take(),
+            ground,
             movement_options: self.movement_options,
             // A grant or correction resets prediction, but the same worker
             // can still consume a move that was already queued.
@@ -1040,7 +1050,9 @@ impl Controls {
         }
         if changed && revision.is_some() {
             self.moving = false;
-            self.restore_translation |= self.has_translation_playhead();
+            self.restore_preview |= self.ground.active();
+            self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+            self.ground.retire();
             self.restore_preview |= self.preview.take().is_some();
         }
         self.stunned
@@ -1052,7 +1064,9 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
-        self.restore_translation |= self.has_translation_playhead();
+        self.restore_preview |= self.ground.active();
+        self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+        self.ground.retire();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         if previous.fly != options.fly {
@@ -1081,7 +1095,9 @@ impl Controls {
     fn pause_prediction(&mut self) {
         self.restore_surface_trial();
         self.surface.pause();
-        self.restore_translation |= self.has_translation_playhead();
+        self.restore_preview |= self.ground.active();
+        self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+        self.ground.retire();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         self.moving = false;
@@ -1152,6 +1168,11 @@ impl Controls {
         grant: eq_client_core::world::MotionGrant,
         root: eq_client_core::RootRules,
     ) {
+        if self.ground.active() {
+            self.restore_translation = true;
+            self.restore_preview = true;
+            self.ground.retire();
+        }
         // Rooted is granted too, at no speed: the program zeroes the speed
         // once and blocks nothing else, so input goes on and the player
         // turns (reads R18, R22).
@@ -1384,6 +1405,41 @@ impl Controls {
         false
     }
 
+    /// Native current-state receipts retire observation identities only.
+    /// Their already drawn distance never becomes a playback segment.
+    pub(super) fn ground_result(
+        &mut self,
+        session: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: Option<&String>,
+    ) -> bool {
+        if !self
+            .ground
+            .reconcile(session, created, position, refused.is_some())
+        {
+            return false;
+        }
+        self.last_answer = Some(self.now());
+        self.refused = refused.cloned();
+        if refused.is_some()
+            || self
+                .mouse_heading
+                .is_some_and(|heading| arc(heading, position.heading) == 0.)
+        {
+            self.mouse_heading = None;
+        }
+        if let Some(restore) = self.ground.restore.take() {
+            self.restored_translation =
+                Some(Vec3::from_array(eq_client_core::render_position(restore)));
+            self.visual = Some(VisualMotion::at(restore));
+            self.preview = None;
+            self.clear_poses();
+            self.moving = false;
+        }
+        true
+    }
+
     /// Settles only the matching proposed carrier link. A rejection retains
     /// the previously accepted frame, which the carrier may still carry.
     pub(super) fn resolve_carrier(&mut self, created: Instant, refused: bool) {
@@ -1545,11 +1601,14 @@ impl Controls {
     }
 
     /// Whether a movement or crossing request still owns the slot.
-    pub const fn waiting(&self) -> bool {
-        self.pending.is_some()
+    pub fn waiting(&self) -> bool {
+        self.pending.is_some() || self.ground.active() && !self.ground.settled()
     }
 
     pub(super) fn liquid_basis(&self, session_id: Option<u64>, now: Instant) -> LiquidBasis {
+        if let Some(basis) = self.ground.basis(session_id, now) {
+            return basis;
+        }
         match self
             .pending
             .filter(|pending| Some(pending.session_id) == session_id)
@@ -1914,6 +1973,7 @@ pub(super) fn stop_autorun_after_failed_script(
 )]
 pub(super) fn input(
     keys: crate::keys::Keys,
+    time: Option<Res<Time>>,
     navigation: Res<super::navigation::NavigationKeys>,
     online: Res<online::OnlineState>,
     collision: Res<Collision>,
@@ -2401,6 +2461,88 @@ pub(super) fn input(
     controls
         .taps
         .observe(&keyboard, &movement_keys, focused, now);
+    // A completed-frame producer runs before the legacy future-endpoint gates.
+    // Its input sample deliberately excludes the tap buffer and press-only
+    // edges: no duration is invented for a tap absent from an observed frame.
+    if let (Ok((body, drawn)), Ok((camera, _)), Some(world), Some(player)) = (
+        players.single(),
+        cameras.single(),
+        moving_world,
+        online.world().player(),
+    ) {
+        let mut physical = keyboard.clone();
+        physical.clear();
+        let heading = controls
+            .ground
+            .current
+            .map_or(player.position.heading, |frame| frame.facing);
+        let heading = controls
+            .mouse_heading
+            .or(controls.facing)
+            .unwrap_or(heading);
+        let yaw = controls.mouse_heading.map_or(camera.yaw, |heading| {
+            crate::camera::behind(eq_client_core::render_heading(heading))
+        });
+        let intent = controls.intent(
+            &physical,
+            map,
+            scripted,
+            focused,
+            (yaw, heading),
+            look.as_deref(),
+        );
+        let eligible = time.is_some()
+            && client == InstalledClient::Titanium
+            && focused
+            && standing
+            && !lying
+            && !flying
+            && !swimming
+            && !shoreline_active
+            && !controls.stun_active
+            && controls.straddle.is_none()
+            && controls.following.is_none()
+            && !keys.script_routing()
+            && scripted.is_empty()
+            && scripted_facing.is_none()
+            && controls.unreported.is_none()
+            && controls.jump.is_none()
+            && controls.crouch.is_none()
+            && controls.pad.is_none()
+            && controls.riding.is_none()
+            && controls.boat.is_none()
+            && controls.boat_pending.is_none()
+            && controls.visual_boat.is_none()
+            && controls
+                .airborne
+                .as_ref()
+                .is_none_or(|airborne| airborne.velocity() == 0. && airborne.peak().is_none())
+            && controls.movement_options.run_speed_multiplier
+                == eq_client_core::movement::RunSpeedMultiplier::NORMAL;
+        let first_span = time
+            .as_deref()
+            .map_or(Duration::ZERO, Time::delta)
+            .min(now.saturating_duration_since(controls.last_accepted));
+        let mouse_heading = controls.mouse_heading;
+        let walking_world = carrier_walking_world(world, client, body.feet_offset, false, false);
+        if ground::input(
+            &mut controls,
+            ground::Context {
+                online: &online,
+                world: walking_world.as_ref().unwrap_or(world),
+                body,
+                drawn,
+                outbox: &outbox,
+                now,
+                first_span,
+                eligible,
+                mouse_heading,
+            },
+            intent,
+        ) {
+            return;
+        }
+    }
     if controls.pending.is_some() {
         if controls.liquid_basis(session_id, now) == LiquidBasis::Unconfirmed {
             controls.pause_prediction();
@@ -4494,6 +4636,20 @@ pub(super) fn interpolate(
 ) {
     controls.restore_observed_preview(online.world());
     controls.prepare_translation_restore(online.world());
+    if let Some(frame) = controls.ground.current {
+        if let Ok((_, mut transform)) = players.single_mut() {
+            controls.apply_translation_restore(&mut transform);
+            *transform = frame.drawn;
+            controls.drawn_pose = Some(frame.pose);
+            for (mut camera, free) in &mut cameras {
+                camera.focus = transform.translation;
+                if frame.follows && !free {
+                    crate::camera::start_behind(&mut camera, &transform);
+                }
+            }
+        }
+        return;
+    }
     let preview = controls.mouse_heading;
     if controls.visual.is_none()
         && preview.is_none()

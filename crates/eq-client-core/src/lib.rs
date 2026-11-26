@@ -77,10 +77,10 @@ pub use eq_network_game::loot;
 pub use eq_network_game::merchant;
 pub use eq_network_game::money;
 pub use eq_network_game::movement::{
-    BackwardCalibration, DiagonalAlong, DiagonalRates, EqMacFatigueInputs, GroundedDiagonal,
-    HeadingUpdate, MotionCalibration, MovementMode, MovementRequest, Pace, SpeedInputAcceptance,
-    SpeedInputState, SpeedInputUnavailable, SpeedInputs, StrafeCalibration, StrafeSide, Support,
-    WalkCalibration,
+    BackwardCalibration, DiagonalAlong, DiagonalRates, EqMacFatigueInputs, GroundState,
+    GroundedDiagonal, HeadingUpdate, MotionCalibration, MovementMode, MovementRequest, Pace,
+    SpeedInputAcceptance, SpeedInputState, SpeedInputUnavailable, SpeedInputs, StrafeCalibration,
+    StrafeSide, Support, WalkCalibration,
 };
 pub use eq_network_game::pets;
 pub use eq_network_game::poisons;
