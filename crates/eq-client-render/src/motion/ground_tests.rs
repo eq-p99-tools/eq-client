@@ -123,6 +123,54 @@ impl Scene {
         self.base + Duration::from_nanos(u64::from(self.frame) * 16_666_667)
     }
 
+    fn publish(&mut self, command: ClientCommand, now: Instant) {
+        match command {
+            ClientCommand::GroundFrame { request, state } => {
+                self.observations += 1;
+                let packets = &mut self.packets;
+                let result = self
+                    .owner
+                    .try_send_ground_sample(&request, state, now, |packet| {
+                        packets.push((now, packet.position, packet.animation));
+                        Ok(())
+                    })
+                    .unwrap();
+                if result == GroundSampleResult::WaitingForInterval {
+                    self.owner
+                        .observe_ground_input(
+                            request.session_id,
+                            request.created,
+                            state.forward(),
+                            now,
+                        )
+                        .unwrap();
+                } else {
+                    self.admissions += 1;
+                    self.replies.push_back((
+                        self.frame + self.delay + 1,
+                        request.created,
+                        self.owner.position(),
+                    ));
+                }
+            }
+            ClientCommand::Move(request) => {
+                let packets = &mut self.packets;
+                self.owner
+                    .send_move_sample(&request, now, |packet| {
+                        packets.push((now, packet.position, packet.animation));
+                        Ok(())
+                    })
+                    .unwrap();
+                self.replies.push_back((
+                    self.frame + self.delay + 1,
+                    request.created,
+                    self.owner.position(),
+                ));
+            }
+            _ => (),
+        }
+    }
+
     fn step(&mut self, held: bool) -> Row {
         self.frame += 1;
         let now = self.now();
@@ -162,51 +210,7 @@ impl Scene {
             .advance_by(Duration::from_nanos(16_666_667));
         self.app.update();
         while let Ok(command) = self.commands.try_recv() {
-            match command {
-                ClientCommand::GroundFrame { request, state } => {
-                    self.observations += 1;
-                    let packets = &mut self.packets;
-                    let result = self
-                        .owner
-                        .try_send_ground_sample(&request, state, now, |packet| {
-                            packets.push((now, packet.position, packet.animation));
-                            Ok(())
-                        })
-                        .unwrap();
-                    if result == GroundSampleResult::WaitingForInterval {
-                        self.owner
-                            .observe_ground_input(
-                                request.session_id,
-                                request.created,
-                                state.forward(),
-                                now,
-                            )
-                            .unwrap();
-                    } else {
-                        self.admissions += 1;
-                        self.replies.push_back((
-                            self.frame + self.delay + 1,
-                            request.created,
-                            self.owner.position(),
-                        ));
-                    }
-                }
-                ClientCommand::Move(request) => {
-                    let packets = &mut self.packets;
-                    self.owner
-                        .send_move_sample(&request, now, |packet| {
-                            packets.push((now, packet.position, packet.animation));
-                            Ok(())
-                        })
-                        .unwrap();
-                    self.replies.push_back((
-                        self.frame + self.delay + 1,
-                        request.created,
-                        self.owner.position(),
-                    ));
-                }
-                _ => (),
-            }
+            self.publish(command, now);
         }
         let packets = &mut self.packets;
         self.owner
