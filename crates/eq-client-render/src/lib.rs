@@ -573,8 +573,15 @@ pub fn run(
         info!(build, "Client build identity");
     }
     theme::install_font(&mut app, installed_client);
-    app.add_systems(Startup, (setup_scene, navmesh_prebuild::offer))
-        .add_systems(Update, exit_log::close_requests);
+    app.add_systems(
+        Startup,
+        (
+            setup_scene,
+            navmesh_prebuild::offer,
+            gpu_assets::note_compressed_support,
+        ),
+    )
+    .add_systems(Update, exit_log::close_requests);
     schedule(&mut app);
     navigation::install(&mut app);
     zone_navmesh::install(&mut app, navmesh);

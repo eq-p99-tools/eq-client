@@ -60,6 +60,32 @@ pub struct ZoneTexture {
     pub rgba8: Vec<u8>,
     /// RGB palette entry treated as transparent by masked classic materials.
     pub color_key: Option<[u8; 3]>,
+    /// The file's own block-compressed top level, when it is a DXT1/DXT3/DXT5
+    /// DDS whose sides are multiples of four: a renderer can draw these blocks
+    /// as they are instead of `rgba8`, which holds the same texels decoded.
+    /// Anything that changes `rgba8` must clear it.
+    pub compressed: Option<CompressedTexture>,
+}
+
+/// A texture's top level as GPU block-compressed data (BC1-BC3, the formats
+/// DDS files call DXT1, DXT3 and DXT5).
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CompressedTexture {
+    /// The block format.
+    pub format: BlockFormat,
+    /// The 4x4 blocks, row by row: 8 bytes each for BC1, 16 for BC2 and BC3.
+    pub blocks: Vec<u8>,
+}
+
+/// GPU block-compression formats a DDS texture can carry.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum BlockFormat {
+    /// DXT1: colour with 1-bit alpha.
+    Bc1,
+    /// DXT3: colour with explicit 4-bit alpha.
+    Bc2,
+    /// DXT5: colour with interpolated alpha.
+    Bc3,
 }
 
 /// One draw call from a classic WLD zone.
@@ -1437,6 +1463,7 @@ fn load_texture(
         height: rgba.height(),
         rgba8: rgba.into_raw(),
         color_key: bmp_color_key(&bytes),
+        compressed: dds::compressed(&bytes),
     });
     indices.insert(name.to_owned(), index);
     Ok(Some(index))
