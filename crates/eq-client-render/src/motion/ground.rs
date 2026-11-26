@@ -83,6 +83,7 @@ pub(super) struct Control {
     admitted: Option<Instant>,
     epoch: Option<Instant>,
     retired: Option<Frame>,
+    pub cold_handback: bool,
 }
 
 impl Control {
@@ -99,6 +100,7 @@ impl Control {
         self.admitted = None;
         self.epoch = Some(rest.at);
         self.retired = None;
+        self.cold_handback = false;
     }
 
     /// Retire presentation on a correction/control seam; pending identities
@@ -108,6 +110,7 @@ impl Control {
         self.accepted = None;
         self.last_posted = None;
         self.retired = None;
+        self.cold_handback = false;
     }
 
     pub fn active(&self) -> bool {
@@ -132,6 +135,7 @@ impl Control {
         let checkpoint = self.current;
         self.retire();
         self.retired = checkpoint;
+        self.cold_handback = true;
     }
 
     pub fn basis(&self, session: Option<u64>, now: Instant) -> Option<LiquidBasis> {
@@ -443,7 +447,6 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         }
         // No frozen interval becomes a catch-up sample. The existing cold
         // span is bounded by time since every queued native observation.
-        controls.moving = false;
         controls.clear_poses();
         return false;
     }

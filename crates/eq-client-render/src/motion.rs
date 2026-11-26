@@ -1147,7 +1147,7 @@ impl Controls {
     }
 
     fn span_limit(&self) -> Duration {
-        if self.moving {
+        if self.moving && !self.ground.cold_handback {
             MAX_CYCLE_DURATION
         } else {
             START_CYCLE_DURATION
@@ -1399,6 +1399,7 @@ impl Controls {
 
     pub(super) fn moved(&mut self, session_id: Option<u64>, created: Instant) -> bool {
         if self.is_pending_move(session_id, created) {
+            self.ground.cold_handback = false;
             self.finish();
             return true;
         }

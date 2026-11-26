@@ -52,6 +52,7 @@ struct Scene {
     admissions: usize,
     refusals: usize,
     early_refuse: bool,
+    ordinary_stops: usize,
 }
 
 impl Scene {
@@ -125,6 +126,7 @@ impl Scene {
             admissions: 0,
             refusals: 0,
             early_refuse: false,
+            ordinary_stops: 0,
         };
         scene.step(false);
         scene
@@ -185,6 +187,7 @@ impl Scene {
                 }
             }
             ClientCommand::Move(request) => {
+                self.ordinary_stops += usize::from(request.position == self.owner.position());
                 let packets = &mut self.packets;
                 self.owner
                     .send_move_sample(&request, now, |packet| {
@@ -267,6 +270,20 @@ impl Scene {
             println!("land-frame frame={} held={held} {row:?}", self.frame);
         }
         row
+    }
+
+    fn forget_contact(&mut self) {
+        self.app.insert_resource(Collision(Some(
+            CollisionWorld::new([
+                [
+                    [-2000., 0., -2000.],
+                    [-2000., 0., 2000.],
+                    [2000., 0., -2000.],
+                ],
+                [[2000., 0., -2000.], [-2000., 0., 2000.], [2000., 0., 2000.]],
+            ])
+            .unwrap(),
+        )));
     }
 }
 
@@ -658,5 +675,26 @@ fn native_ground_unknown_contact_hands_back_only_after_the_observed_prefix_is_ad
             "unknown-contact delay={delay} handback_frames={frames} pause_ms={}",
             f64::from(frames) * 1000. / 60.
         );
+    }
+}
+
+#[test]
+fn native_ground_unknown_contact_hands_idle_momentum_to_the_existing_stop_path() {
+    for delay in [0, 6] {
+        let mut scene = Scene::new(delay, true);
+        for _ in 0..8 {
+            scene.step(true);
+        }
+        scene.forget_contact();
+        let before = latency_tests::shown(&mut scene.app).0;
+        for _ in 0..40 {
+            scene.step(false);
+        }
+        assert!(
+            scene.ordinary_stops > 0,
+            "handback stranded raw moving state without an ordinary stop"
+        );
+        assert_eq!(latency_tests::shown(&mut scene.app).0, before);
+        assert_eq!(scene.refusals, 0);
     }
 }
