@@ -14,6 +14,7 @@ use std::sync::Arc;
 pub struct CollisionInstance {
     mesh: Arc<CollisionMesh>,
     pose: Pose,
+    pub(super) spawn_kind: Option<eq_network_game::world::SpawnKind>,
 }
 
 impl CollisionInstance {
@@ -31,6 +32,7 @@ impl CollisionInstance {
         }
         Ok(Self {
             mesh,
+            spawn_kind: None,
             pose: Pose::from_parts(
                 Vector::from_array(translation.to_array()),
                 Rotation::from_array(rotation.to_array()),
@@ -42,7 +44,16 @@ impl CollisionInstance {
         Self {
             mesh,
             pose: Pose::IDENTITY,
+            spawn_kind: None,
         }
+    }
+
+    /// Retains the received kind of a spawned carrier independently of its
+    /// model or race. Unclassified instances retain their existing solidity.
+    #[must_use]
+    pub fn with_spawn_kind(mut self, kind: eq_network_game::world::SpawnKind) -> Self {
+        self.spawn_kind = Some(kind);
+        self
     }
 
     pub(super) fn surface(&self) -> Surface<'_> {

@@ -1,6 +1,10 @@
 //! Conservative ground locomotion and continuous collision queries.
 
 mod airborne;
+mod carrier_filter;
+use carrier_filter::SweepPurpose;
+#[cfg(test)]
+mod carrier_walls;
 mod choices;
 mod falls;
 mod flight;
@@ -220,6 +224,7 @@ pub struct CollisionWorld {
     /// A per-move shape override; liquid probes still receive their original
     /// body height and origin. Never part of the static navigation world.
     collision_height: Option<f32>,
+    titanium_walking_origin: Option<f32>,
 }
 
 impl CollisionWorld {
@@ -237,6 +242,7 @@ impl CollisionWorld {
             liquid_support: false,
             swim_origin: None,
             collision_height: None,
+            titanium_walking_origin: None,
         })
     }
 
@@ -246,6 +252,17 @@ impl CollisionWorld {
     #[must_use]
     pub fn with_collision_height(mut self, height: f32) -> Self {
         self.collision_height = (height.is_finite() && height >= 1.0).then_some(height);
+        self
+    }
+
+    /// Uses Titanium's ordinary walking object filter for lateral strides.
+    /// The caller keeps this view local to its dry walking move and supplies
+    /// the actor origin above its feet for the separate ceiling query.
+    /// An invalid offset keeps NPC carrier walls enabled.
+    #[must_use]
+    pub fn with_titanium_walking(mut self, feet_offset: f32) -> Self {
+        self.titanium_walking_origin =
+            (feet_offset.is_finite() && feet_offset >= 0.0).then_some(feet_offset);
         self
     }
 
@@ -319,6 +336,7 @@ impl CollisionWorld {
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
             collision_height: self.collision_height,
+            titanium_walking_origin: self.titanium_walking_origin,
         }
     }
 
@@ -348,6 +366,7 @@ impl CollisionWorld {
             liquid_support: self.liquid_support,
             swim_origin: self.swim_origin,
             collision_height: self.collision_height,
+            titanium_walking_origin: self.titanium_walking_origin,
         }
     }
 
@@ -492,6 +511,13 @@ impl CollisionWorld {
 
     /// The walls, each with what it belongs to.
     fn labelled_wall_meshes(&self) -> impl Iterator<Item = (Obstacle, Surface<'_>)> {
+        self.labelled_wall_meshes_for(SweepPurpose::Body)
+    }
+
+    fn labelled_wall_meshes_for(
+        &self,
+        purpose: SweepPurpose,
+    ) -> impl Iterator<Item = (Obstacle, Surface<'_>)> {
         std::iter::once((Obstacle::Terrain, Surface::identity(&self.terrain)))
             .chain(
                 self.obstacles
@@ -507,6 +533,7 @@ impl CollisionWorld {
             .chain(
                 self.spawn_obstacles
                     .iter()
+                    .filter(move |(_, instance)| self.carrier_blocks(purpose, instance))
                     .map(|(id, instance)| (Obstacle::Carrier(*id), instance.surface())),
             )
     }
@@ -875,6 +902,11 @@ impl CollisionWorld {
             if held > limit + 0.001 {
                 break;
             }
+            // Lateral NPC walls and overhead support are separate queries.
+            // Keep the last good stride when the body's headroom is refused.
+            if !self.carrier_headroom(next, height) {
+                break;
+            }
             let moved = next.distance_squared(position) > 1e-10;
             position = next;
             if !moved
@@ -914,6 +946,11 @@ impl CollisionWorld {
         };
         let mut position = feet;
         let mut remaining = Vec3::new(displacement.x, 0.0, displacement.z);
+        let purpose = if matches!(support, Support::Airborne { .. }) {
+            SweepPurpose::Body
+        } else {
+            SweepPurpose::Walking
+        };
         for _ in 0..3 {
             let desired = position + remaining;
             // Sliding shares one height budget with the original proposal. Re-basing
@@ -985,7 +1022,7 @@ impl CollisionWorld {
                 }
                 break;
             }
-            match self.sweep(position, delta, height) {
+            match self.sweep_for(position, delta, height, purpose) {
                 Ok(None) => {
                     let swept = position + delta;
                     if let Some(water) = entry(position, swept)? {
@@ -1010,7 +1047,7 @@ impl CollisionWorld {
                             .filter(|top| *top > position.y + 0.001)
                     {
                         let onto = Vec3::new(target.x, top, target.z);
-                        if self.can_step_up(position, onto, height) {
+                        if self.can_step_up(position, onto, height, purpose) {
                             let lifted = Vec3::new(position.x, top, position.z);
                             if let Some(water) = entry(position, lifted)? {
                                 return Ok(water);
@@ -1020,7 +1057,7 @@ impl CollisionWorld {
                     }
                     if !matches!(support, Support::Airborne { .. })
                         && target.y > position.y
-                        && self.can_step_up(position, target, height)
+                        && self.can_step_up(position, target, height, purpose)
                     {
                         let lifted = Vec3::new(position.x, target.y, position.z);
                         if let Some(water) = entry(position, lifted)? {
@@ -1081,11 +1118,11 @@ impl CollisionWorld {
     }
 
     /// Clears a stair riser by checking both the upward and elevated horizontal sweeps.
-    fn can_step_up(&self, feet: Vec3, target: Vec3, height: f32) -> bool {
+    fn can_step_up(&self, feet: Vec3, target: Vec3, height: f32, purpose: SweepPurpose) -> bool {
         let lift = Vec3::Y * (target.y - feet.y);
         matches!(self.sweep(feet, lift, height), Ok(None))
             && matches!(
-                self.sweep(feet + lift, target - feet - lift, height),
+                self.sweep_for(feet + lift, target - feet - lift, height, purpose),
                 Ok(None)
             )
     }
@@ -1126,8 +1163,18 @@ impl CollisionWorld {
         delta: Vec3,
         height: f32,
     ) -> Result<Option<parry3d::query::ShapeCastHit>, parry3d::query::Unsupported> {
+        self.sweep_for(feet, delta, height, SweepPurpose::Body)
+    }
+
+    fn sweep_for(
+        &self,
+        feet: Vec3,
+        delta: Vec3,
+        height: f32,
+        purpose: SweepPurpose,
+    ) -> Result<Option<parry3d::query::ShapeCastHit>, parry3d::query::Unsupported> {
         Ok(self
-            .labelled_sweep(feet, delta, height)?
+            .labelled_sweep_for(feet, delta, height, purpose)?
             .map(|(_, hit)| hit))
     }
 
@@ -1137,6 +1184,16 @@ impl CollisionWorld {
         feet: Vec3,
         delta: Vec3,
         height: f32,
+    ) -> Result<Option<(Obstacle, parry3d::query::ShapeCastHit)>, parry3d::query::Unsupported> {
+        self.labelled_sweep_for(feet, delta, height, SweepPurpose::Body)
+    }
+
+    fn labelled_sweep_for(
+        &self,
+        feet: Vec3,
+        delta: Vec3,
+        height: f32,
+        purpose: SweepPurpose,
     ) -> Result<Option<(Obstacle, parry3d::query::ShapeCastHit)>, parry3d::query::Unsupported> {
         // A sweep that starts inside the margin (or overlapping) is refused only when it
         // goes deeper; one that stops there would pin the character in every direction.
@@ -1148,7 +1205,7 @@ impl CollisionWorld {
         };
         let (pose, capsule) = body(feet, self.collision_height.unwrap_or(height));
         let mut nearest: Option<(Obstacle, parry3d::query::ShapeCastHit)> = None;
-        for (obstacle, mesh) in self.labelled_wall_meshes() {
+        for (obstacle, mesh) in self.labelled_wall_meshes_for(purpose) {
             let hit = cast_shapes(
                 &pose,
                 Vector::from_array(delta.to_array()),

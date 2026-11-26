@@ -5,6 +5,8 @@ mod belongings_tests;
 mod boat_pace_tests;
 mod boats;
 #[cfg(test)]
+mod carrier_walls;
+#[cfg(test)]
 mod latency_tests;
 #[cfg(test)]
 mod release_animation_tests;
@@ -2902,6 +2904,8 @@ pub(super) fn input(
     let jumping_world = (jump_posture == JumpPosture::StandIfDucked)
         .then(|| world.clone().with_collision_height(body.height));
     let world = jumping_world.as_ref().unwrap_or(world);
+    let walking_world = carrier_walking_world(world, client, body.feet_offset, flying, swimming);
+    let world = walking_world.as_ref().unwrap_or(world);
     let diagonal_heading = mouse_snapshot.unwrap_or(current_heading);
     // A combined input keeps one body heading and both signed component
     // budgets. Run the usual sweep on a copy before selecting that sample.
@@ -3631,6 +3635,20 @@ pub(super) fn walking(
             ..physics
         }
     })
+}
+
+fn carrier_walking_world(
+    world: &CollisionWorld,
+    client: InstalledClient,
+    feet_offset: f32,
+    flying: bool,
+    swimming: bool,
+) -> Option<CollisionWorld> {
+    let titanium = match client {
+        InstalledClient::Titanium => true,
+        InstalledClient::EqMac | InstalledClient::Rof2 => false,
+    };
+    (titanium && !flying && !swimming).then(|| world.clone().with_titanium_walking(feet_offset))
 }
 
 /// Whether the player's walk is swept raised over the origin, so it climbs

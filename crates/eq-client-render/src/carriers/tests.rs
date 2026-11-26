@@ -499,3 +499,84 @@ fn a_failed_collider_is_counted_once_per_incarnation_tag_and_scale() {
     // frames keep its failed result; each changed cache key tries once more.
     assert_eq!(gap.count, 4);
 }
+
+#[test]
+fn carrier_walls_registration_keeps_received_kind() {
+    use eq_client_core::SpawnKind;
+    for kind in [SpawnKind::Npc, SpawnKind::Player, SpawnKind::Unknown(9)] {
+        let (mut app, mut model) = fixture(2, false);
+        let mut spawn = app
+            .world()
+            .resource::<OnlineState>()
+            .world()
+            .spawn(8)
+            .unwrap()
+            .state
+            .clone();
+        spawn.kind = kind;
+        let mut carriers = app
+            .world()
+            .resource::<OnlineState>()
+            .world()
+            .carriers()
+            .clone();
+        let event = WorldEvent::Spawns(vec![spawn.clone()]);
+        let reports = carriers.observe(&event, GameDialect::Titanium, Instant::now());
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [event, WorldEvent::Carriers(reports)],
+        );
+        model.collision = Arc::new(vec![
+            [
+                [-100.0, 0.0, -100.0],
+                [100.0, 0.0, 100.0],
+                [100.0, 0.0, -100.0],
+            ],
+            [
+                [-100.0, 0.0, -100.0],
+                [-100.0, 0.0, 100.0],
+                [100.0, 0.0, 100.0],
+            ],
+            [
+                [0.0, 0.0, -100.0],
+                [0.0, 100.0, -100.0],
+                [0.0, 100.0, 100.0],
+            ],
+            [[0.0, 0.0, -100.0], [0.0, 100.0, 100.0], [0.0, 0.0, 100.0]],
+        ]);
+        app.world_mut()
+            .resource_mut::<Scene>()
+            .models
+            .insert("BOAT", Some(model));
+        app.update();
+        let drawn = Drawn::of(
+            app.world().resource::<ViewerSettings>().0.installed_client,
+            app.world().resource::<OnlineState>().world(),
+            (spawn.race, spawn.gender, spawn.size),
+        );
+        let origin = Vec3::from_array(eq_client_core::render_position(spawn.position));
+        let rotation = Quat::from_rotation_y(eq_client_core::static_yaw(spawn.position.heading));
+        let world = app
+            .world()
+            .resource::<crate::Collision>()
+            .0
+            .as_ref()
+            .unwrap()
+            .clone()
+            .with_titanium_walking(1.5 * drawn.scale);
+        assert!(world.has_spawn(8));
+        let start = origin - rotation * Vec3::X * (20.0 * drawn.scale);
+        let end = world.step(
+            start,
+            rotation * Vec3::X * (40.0 * drawn.scale),
+            (3.0 * drawn.scale).max(1.0),
+        );
+        let local = rotation.inverse() * (end - origin) / drawn.scale;
+        assert_eq!(
+            local.x > 19.99,
+            kind == SpawnKind::Npc,
+            "{kind:?}: {local:?}"
+        );
+        assert_eq!(world.ground_spawn(end, 0.01, 0.05), Some(8));
+    }
+}
