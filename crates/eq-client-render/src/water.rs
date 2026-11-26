@@ -366,23 +366,60 @@ fn even_colours(meshes: &[Evened<'_>]) -> Vec<Vec<[f32; 4]>> {
         .collect()
 }
 
+/// A mesh's positions, normals and colours, copied out; no colours when it
+/// has none for each position.
+fn taken(mesh: Option<&Mesh>) -> Taken {
+    let positions = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION)) {
+        Some(bevy::mesh::VertexAttributeValues::Float32x3(all)) => all.clone(),
+        _ => Vec::new(),
+    };
+    let normals = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_NORMAL)) {
+        Some(bevy::mesh::VertexAttributeValues::Float32x3(all)) if all.len() == positions.len() => {
+            all.clone()
+        }
+        _ => vec![[0.0, 1.0, 0.0]; positions.len()],
+    };
+    let colours = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_COLOR)) {
+        Some(bevy::mesh::VertexAttributeValues::Float32x4(all)) if all.len() == positions.len() => {
+            all.clone()
+        }
+        _ => Vec::new(),
+    };
+    (positions, normals, colours)
+}
+
+/// What evening the light last changed in each water mesh: the change
+/// to each vertex's colour, and how many meshes there were.
+struct Evening {
+    changes: HashMap<AssetId<Mesh>, Vec<[f32; 4]>>,
+    meshes: usize,
+}
+
 /// While Better Water is on, evens the zone light across each liquid
-/// surface ([`even_colours`]) whenever the light writes new colours, and
-/// has the light write them afresh when it is turned off.
+/// surface ([`even_colours`]), and has the light write the zone's own
+/// colours afresh when it is turned off.
+///
+/// The whole of it is worked out when the zone light colours every mesh
+/// afresh (a new zone, the hour, the setting turned on). The light a torch
+/// carries rewrites only the parts near it, often as its bearer walks, and
+/// changes smoothly from one piece to the next, so those parts take the
+/// same change as before rather than the whole sea being worked again.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 fn even_light(
     options: Res<crate::options::OptionsState>,
     scene: Option<ResMut<crate::lighting::SceneLights>>,
     surfaces: Query<&Mesh3d, With<WaterSurface>>,
     mut meshes: ResMut<Assets<Mesh>>,
-    mut evened: Local<Option<(u64, usize)>>,
+    mut evening: Local<Option<Evening>>,
 ) {
     let Some(mut scene) = scene else {
-        *evened = None;
+        *evening = None;
         return;
     };
+    let fresh = std::mem::take(&mut scene.fresh);
+    let written = std::mem::take(&mut scene.written);
     if !better(&options) {
-        if evened.take().is_some() {
+        if evening.take().is_some() {
             scene.recolour();
         }
         return;
@@ -392,41 +429,40 @@ fn even_light(
         surfaces
             .iter()
             .filter(|mesh| seen.insert(mesh.0.id()))
-            .map(|mesh| mesh.0.clone())
+            .map(|mesh| mesh.0.id())
             .collect()
     };
-    let now = (scene.writes, handles.len());
-    if *evened == Some(now) {
+    let whole = fresh
+        || evening
+            .as_ref()
+            .is_none_or(|evening| evening.meshes != handles.len());
+    if !whole {
+        let Some(evening) = evening.as_ref() else {
+            return;
+        };
+        for (id, start, count) in written {
+            let Some(change) = evening
+                .changes
+                .get(&id)
+                .and_then(|change| change.get(start..start + count))
+            else {
+                continue;
+            };
+            if let Some(mut mesh) = meshes.get_mut(id)
+                && let Some(bevy::mesh::VertexAttributeValues::Float32x4(all)) =
+                    mesh.attribute_mut(Mesh::ATTRIBUTE_COLOR)
+                && let Some(part) = all.get_mut(start..start + count)
+            {
+                for (colour, by) in part.iter_mut().zip(change) {
+                    for (channel, by) in colour.iter_mut().zip(by) {
+                        *channel += by;
+                    }
+                }
+            }
+        }
         return;
     }
-    *evened = Some(now);
-    let taken: Vec<Taken> = handles
-        .iter()
-        .map(|handle| {
-            let mesh = meshes.get(handle);
-            let positions = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION)) {
-                Some(bevy::mesh::VertexAttributeValues::Float32x3(all)) => all.clone(),
-                _ => Vec::new(),
-            };
-            let normals = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_NORMAL)) {
-                Some(bevy::mesh::VertexAttributeValues::Float32x3(all))
-                    if all.len() == positions.len() =>
-                {
-                    all.clone()
-                }
-                _ => vec![[0.0, 1.0, 0.0]; positions.len()],
-            };
-            let colours = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_COLOR)) {
-                Some(bevy::mesh::VertexAttributeValues::Float32x4(all))
-                    if all.len() == positions.len() =>
-                {
-                    all.clone()
-                }
-                _ => Vec::new(),
-            };
-            (positions, normals, colours)
-        })
-        .collect();
+    let taken: Vec<Taken> = handles.iter().map(|id| taken(meshes.get(*id))).collect();
     let views: Vec<Evened<'_>> = taken
         .iter()
         .filter(|(_, _, colours)| !colours.is_empty())
@@ -435,14 +471,28 @@ fn even_light(
         })
         .collect();
     let mut even = even_colours(&views).into_iter();
-    for (handle, (_, _, colours)) in handles.iter().zip(&taken) {
+    let mut changes = HashMap::new();
+    for (id, (_, _, colours)) in handles.iter().zip(&taken) {
         if colours.is_empty() {
             continue;
         }
-        if let (Some(colours), Some(mut mesh)) = (even.next(), meshes.get_mut(handle)) {
-            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+        let Some(evened) = even.next() else {
+            break;
+        };
+        let change = evened
+            .iter()
+            .zip(colours)
+            .map(|(evened, own)| std::array::from_fn(|channel| evened[channel] - own[channel]))
+            .collect();
+        changes.insert(*id, change);
+        if let Some(mut mesh) = meshes.get_mut(*id) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, evened);
         }
     }
+    *evening = Some(Evening {
+        changes,
+        meshes: handles.len(),
+    });
 }
 
 /// A surface with whichever material it wears now.
