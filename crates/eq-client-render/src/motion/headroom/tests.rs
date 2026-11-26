@@ -116,7 +116,10 @@ fn accepted_commands(app: &mut App, receiver: &mpsc::Receiver<ClientCommand>) ->
                 );
                 let mut controls = app.world_mut().resource_mut::<Controls>();
                 assert!(controls.moved(Some(request.session_id), request.created));
-                controls.last_accepted = controls.now() - Duration::from_millis(100);
+                controls.last_accepted = controls
+                    .now()
+                    .checked_sub(Duration::from_millis(100))
+                    .unwrap();
             }
             _ => (),
         }
@@ -357,7 +360,7 @@ fn gallery_jumps_launch_after_windup_even_when_the_optional_stand_is_refused() {
                     world.resource::<online::OnlineState>().world(),
                     Some(PostureState::Standing),
                     true,
-                    now - Duration::from_millis(2_001),
+                    now.checked_sub(Duration::from_millis(2_001)).unwrap(),
                 );
                 controls.test_now = Some(now);
             });
@@ -564,6 +567,9 @@ fn a_launch_stand_report_precedes_automatic_duck() {
 
 #[test]
 fn the_bank_sill_is_tested_after_stepping_and_restores_the_airborne_snapshot() {
+    // Synthetic boundary from the measured floor4 / underside12 counter.
+    // 12.1 is an invented just-over control, not another measured doorway
+    // or an official-client traversal. The fast grant isolates gate order.
     for span in [0.01, 1.0 / 60.0, 0.05] {
         for ceiling in [12.0, 12.1] {
             let (mut app, receiver) = app(InstalledClient::Titanium, ceiling);
