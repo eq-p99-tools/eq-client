@@ -16,11 +16,11 @@ fn controller_floor_records_the_deep_sweep_at_carried_feet_and_clears_on_reset()
     let mut admitted = online::testing::player(4);
     admitted.position = player;
     online::testing::admit(&mut online, 11, admitted);
-    let mut carrier = online::testing::pet(8, 4);
-    carrier.race = 72;
-    carrier.gender = 2;
-    carrier.position = WorldPosition::default();
-    let spawned = WorldEvent::Spawns(vec![carrier]);
+    let mut ship = online::testing::pet(8, 4);
+    ship.race = 72;
+    ship.gender = 2;
+    ship.position = WorldPosition::default();
+    let spawned = WorldEvent::Spawns(vec![ship]);
     let mut carriers = Carriers::default();
     let initial = carriers.observe(&spawned, GameDialect::Titanium, now);
     let accepted = boats::Riding {
@@ -51,12 +51,12 @@ fn controller_floor_records_the_deep_sweep_at_carried_feet_and_clears_on_reset()
         boat: Some(accepted),
         ..default()
     };
-    let carried = controls
+    let rider = controls
         .boat
         .unwrap()
         .carried(online.world().carriers(), now)
         .unwrap();
-    let feet = Vec3::from_array(eq_client_core::render_position(carried.position)) - Vec3::Y * 3.0;
+    let feet = Vec3::from_array(eq_client_core::render_position(rider.position)) - Vec3::Y * 3.0;
     let deck = Arc::new(
         CollisionMesh::new([
             [[-2.0, 0.0, -2.0], [2.0, 0.0, 2.0], [2.0, 0.0, -2.0]],
