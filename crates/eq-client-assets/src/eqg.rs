@@ -25,7 +25,7 @@ use libeq_eqg::zone;
 
 use crate::{
     LoadError, MaterialMode, ObjectMaterial, TerrainMaterial, ZoneAsset, ZoneModel, ZoneObject,
-    ZonePrimitive, ZoneTexture, guarded, load_texture, zone_name,
+    ZonePrimitive, ZoneTexture, guarded, load_texture_as_stored, zone_name,
 };
 
 /// A triangle the zone's solids leave out: walked and seen through
@@ -258,7 +258,8 @@ impl Staged {
                 continue;
             };
             if let Some(name) = diffuse(mesh, material)? {
-                primitive.texture = load_texture(archive, &name, textures, texture_indices)?;
+                primitive.texture =
+                    load_texture_as_stored(archive, &name, textures, texture_indices)?;
             }
             primitives.push(primitive);
         }

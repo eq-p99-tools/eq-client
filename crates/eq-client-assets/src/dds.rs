@@ -84,6 +84,58 @@ pub(crate) fn compressed(bytes: &[u8]) -> Option<crate::CompressedTexture> {
     Some(crate::CompressedTexture { format, blocks })
 }
 
+/// Turns block-compressed texels top to bottom, as
+/// `image::imageops::flip_vertical` turns decoded ones: the rows of blocks
+/// in reverse order, and within each block its four rows of colour and
+/// alpha indices reversed. `width` and `height` are multiples of four, as
+/// [`compressed`] keeps only such textures.
+pub(crate) fn flip_blocks(texture: &mut crate::CompressedTexture, width: u32, height: u32) {
+    let block = match texture.format {
+        crate::BlockFormat::Bc1 => 8,
+        crate::BlockFormat::Bc2 | crate::BlockFormat::Bc3 => 16,
+    };
+    let row_bytes = (width / 4) as usize * block;
+    let rows = (height / 4) as usize;
+    let mut flipped = Vec::with_capacity(texture.blocks.len());
+    for row in (0..rows).rev() {
+        let start = row * row_bytes;
+        for bytes in texture.blocks[start..start + row_bytes].chunks_exact(block) {
+            let mut bytes = bytes.to_vec();
+            let colour = bytes.len() - 8;
+            // Colour indices: one byte per row of four texels.
+            bytes[colour + 4..colour + 8].reverse();
+            match texture.format {
+                crate::BlockFormat::Bc1 => {}
+                // Explicit alpha: two bytes per row.
+                crate::BlockFormat::Bc2 => {
+                    let mut rows = [[0_u8; 2]; 4];
+                    for (row, pair) in rows
+                        .iter_mut()
+                        .zip(bytes[..8].as_chunks::<2>().0.iter().rev())
+                    {
+                        *row = *pair;
+                    }
+                    bytes[..8].copy_from_slice(rows.as_flattened());
+                }
+                // Interpolated alpha: twelve bits of indices per row.
+                crate::BlockFormat::Bc3 => {
+                    let mut bits = [0_u8; 8];
+                    bits[..6].copy_from_slice(&bytes[2..8]);
+                    let bits = u64::from_le_bytes(bits);
+                    let mut turned = 0_u64;
+                    for row in 0..4 {
+                        let line = (bits >> (row * 12)) & 0xfff;
+                        turned |= line << ((3 - row) * 12);
+                    }
+                    bytes[2..8].copy_from_slice(&turned.to_le_bytes()[..6]);
+                }
+            }
+            flipped.extend_from_slice(&bytes);
+        }
+    }
+    texture.blocks = flipped;
+}
+
 /// Decodes the top level of a DDS file to RGBA.
 ///
 /// # Errors
@@ -453,6 +505,55 @@ mod tests {
             super::compressed(&header(4, 4, 0x4, *b"DXT3", [0; 5])),
             None
         );
+    }
+
+    #[test]
+    fn flipping_blocks_matches_flipping_decoded_texels() {
+        // Two blocks wide, two high, with varied endpoints and indices.
+        let colour = |seed: u8| {
+            [
+                0x1f ^ seed,
+                0xf8,
+                seed,
+                0x07,
+                0x1b ^ seed,
+                0xe4 ^ seed,
+                0x93,
+                0x4e ^ seed,
+            ]
+        };
+        for (four_cc, format, alpha) in [
+            (*b"DXT1", crate::BlockFormat::Bc1, None),
+            (
+                *b"DXT3",
+                crate::BlockFormat::Bc2,
+                Some([0x10, 0x32, 0x54, 0x76, 0x98, 0xba, 0xdc, 0xfe]),
+            ),
+            (
+                *b"DXT5",
+                crate::BlockFormat::Bc3,
+                Some([200, 40, 0x88, 0xc6, 0xfa, 0x05, 0x39, 0x77]),
+            ),
+        ] {
+            let mut file = header(8, 8, 0x4, four_cc, [0; 5]);
+            for seed in 0..4_u8 {
+                if let Some(alpha) = alpha {
+                    file.extend(alpha.map(|byte: u8| byte.rotate_left(u32::from(seed))));
+                }
+                file.extend(colour(seed));
+            }
+            let mut blocks = super::compressed(&file).unwrap();
+            assert_eq!(blocks.format, format);
+            super::flip_blocks(&mut blocks, 8, 8);
+            let mut flipped_file = header(8, 8, 0x4, four_cc, [0; 5]);
+            flipped_file.extend(&blocks.blocks);
+            assert_eq!(
+                decode(&flipped_file).unwrap(),
+                image::imageops::flip_vertical(&decode(&file).unwrap()),
+                "{}",
+                String::from_utf8_lossy(&four_cc)
+            );
+        }
     }
 
     #[test]

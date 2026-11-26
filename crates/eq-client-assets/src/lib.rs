@@ -1440,11 +1440,38 @@ fn nonzero_scale(value: f32) -> f32 {
     }
 }
 
+/// Reads a texture a WLD (S3D) material names. WLD texture coordinates
+/// address a DDS file's rows bottom-up, the opposite of a BMP's: the
+/// Titanium program draws a DDS packed under a BMP's name (as HD texture
+/// packs ship them, stored upside down against the stock BMP) the right way
+/// up, and Luclin's own `.dds` textures likewise. So any DDS content is
+/// turned top to bottom here, whatever its name.
 fn load_texture(
     archive: &mut PfsReader<File>,
     name: &str,
     textures: &mut Vec<ZoneTexture>,
     indices: &mut HashMap<String, usize>,
+) -> Result<Option<usize>, LoadError> {
+    load_texture_rows(archive, name, textures, indices, true)
+}
+
+/// Reads a texture with its rows as the file stores them, DDS included (EQG
+/// models, whose coordinates aren't WLD's).
+fn load_texture_as_stored(
+    archive: &mut PfsReader<File>,
+    name: &str,
+    textures: &mut Vec<ZoneTexture>,
+    indices: &mut HashMap<String, usize>,
+) -> Result<Option<usize>, LoadError> {
+    load_texture_rows(archive, name, textures, indices, false)
+}
+
+fn load_texture_rows(
+    archive: &mut PfsReader<File>,
+    name: &str,
+    textures: &mut Vec<ZoneTexture>,
+    indices: &mut HashMap<String, usize>,
+    flip_dds: bool,
 ) -> Result<Option<usize>, LoadError> {
     if let Some(index) = indices.get(name) {
         return Ok(Some(*index));
@@ -1452,10 +1479,17 @@ fn load_texture(
     let Some(bytes) = archive.get(name)? else {
         return Ok(None);
     };
-    let rgba = dds::decode_image(&bytes).map_err(|source| LoadError::DecodeTexture {
+    let mut rgba = dds::decode_image(&bytes).map_err(|source| LoadError::DecodeTexture {
         name: name.to_owned(),
         source,
     })?;
+    let mut compressed = dds::compressed(&bytes);
+    if flip_dds && dds::is_dds(&bytes) {
+        image::imageops::flip_vertical_in_place(&mut rgba);
+        if let Some(compressed) = &mut compressed {
+            dds::flip_blocks(compressed, rgba.width(), rgba.height());
+        }
+    }
     let index = textures.len();
     textures.push(ZoneTexture {
         name: name.to_owned(),
@@ -1463,7 +1497,7 @@ fn load_texture(
         height: rgba.height(),
         rgba8: rgba.into_raw(),
         color_key: bmp_color_key(&bytes),
-        compressed: dds::compressed(&bytes),
+        compressed,
     });
     indices.insert(name.to_owned(), index);
     Ok(Some(index))

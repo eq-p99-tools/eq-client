@@ -173,21 +173,8 @@ fn load_luclin(
     apply_layers(&mut asset, directory, look)?;
     apply_eyes(&mut asset, directory, look)?;
     apply_attachments(&mut asset, directory, look)?;
-    // Luclin WLD UVs address DDS rows bottom-up. Decode/composite first,
-    // then orient the finished textures for the renderer's top-down images.
-    for texture in &mut asset.textures {
-        if texture.name.to_ascii_lowercase().ends_with(".dds") {
-            let mut image = image::RgbaImage::from_raw(
-                texture.width,
-                texture.height,
-                std::mem::take(&mut texture.rgba8),
-            )
-            .ok_or_else(|| invalid("appearance texture dimensions"))?;
-            image::imageops::flip_vertical_in_place(&mut image);
-            texture.rgba8 = image.into_raw();
-            texture.compressed = None;
-        }
-    }
+    // Luclin's DDS textures come out of `load_texture` already turned the
+    // right way up for WLD coordinates, layers included.
     asset.set_luclin(true);
     Ok(asset)
 }
