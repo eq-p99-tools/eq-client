@@ -35,6 +35,9 @@ pub(crate) struct OptionsState {
     /// character's saved mask when their options load, then as
     /// `/trackfilter` toggles it, never saved (read R49-30 e).
     pub(crate) track_filter: eq_client_core::track_options::TrackFilter,
+    /// Quality-of-life settings this run keeps on for every character,
+    /// whatever their saved choice (`--force-qol`, for test runs).
+    forced_qol: Vec<eq_client_core::qol::Fix>,
 }
 
 impl Default for OptionsState {
@@ -55,7 +58,29 @@ impl OptionsState {
             filters: None,
             chosen: None,
             track_filter: defaults.track_filter,
+            forced_qol: Vec::new(),
         }
+    }
+
+    /// These options, with `fixes` kept on for every character whatever
+    /// their saved choice.
+    pub(crate) fn forcing(mut self, fixes: &[eq_client_core::qol::Fix]) -> Self {
+        self.forced_qol = fixes.to_vec();
+        self.options = self.with_forced(self.options);
+        self
+    }
+
+    /// Options read from a character's saved `text` over the defaults, with
+    /// the run's forced settings on.
+    fn read(&self, text: &str) -> Options {
+        self.with_forced(Options::read(text, self.defaults))
+    }
+
+    fn with_forced(&self, mut options: Options) -> Options {
+        for fix in &self.forced_qol {
+            options.qol.set(*fix, true);
+        }
+        options
     }
 
     /// For a test: the options in effect are `profile`'s, as after their
@@ -85,7 +110,7 @@ impl OptionsState {
             .read(&file_name(profile))
             .or_else(|| self.store.read(SHARED))
             .unwrap_or_default();
-        Options::read(&text, self.defaults)
+        self.read(&text)
     }
 
     /// Notes the server filters given at the character list for the
@@ -261,7 +286,7 @@ pub(crate) fn persist(
         .read(&file_name(state.store.profile.as_ref()))
         .or_else(|| state.store.read(SHARED))
         .unwrap_or_default();
-    state.options = Options::read(&text, state.defaults);
+    state.options = state.read(&text);
     state.track_filter = state.options.track_filter;
     state.store.loaded_text(state.options.text());
 }
@@ -371,6 +396,23 @@ fn tell_filters(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_forced_setting_stays_on_over_a_saved_choice() {
+        use eq_client_core::qol::Fix;
+        let mut saved = super::Options::default();
+        saved.qol.set(Fix::BetterWater, false);
+        saved.qol.set(Fix::RichLighting, false);
+        let state = super::OptionsState::new(&super::Options::default())
+            .forcing(&[Fix::BetterWater, Fix::RichLighting]);
+        assert!(state.options.qol.on(Fix::BetterWater));
+        let read = state.read(&saved.text());
+        assert!(read.qol.on(Fix::BetterWater));
+        assert!(read.qol.on(Fix::RichLighting));
+        // Nothing forced: the saved choice stands.
+        let plain = super::OptionsState::new(&super::Options::default());
+        assert!(!plain.read(&saved.text()).qol.on(Fix::BetterWater));
+    }
+
     use super::*;
     use crate::online::{OnlineState, testing};
 

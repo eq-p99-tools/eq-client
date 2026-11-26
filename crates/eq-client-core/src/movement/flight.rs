@@ -5,8 +5,11 @@ use glam::Vec3;
 use parry3d::{
     bounding_volume::Aabb,
     math::{Pose, Vector},
-    query::{Ray, RayCast, ShapeCastHit, ShapeCastOptions, Unsupported, cast_shapes},
-    shape::Shape,
+    query::{
+        PointQuery, PointQueryWithLocation, Ray, RayCast, ShapeCastHit, ShapeCastOptions,
+        ShapeCastStatus, Unsupported, cast_shapes,
+    },
+    shape::{Shape, Triangle, TrianglePointLocation},
 };
 use std::cell::RefCell;
 
@@ -103,6 +106,14 @@ impl CollisionWorld {
                                 return None;
                             }
                         }
+                        if nonclosing_cap(&triangle, &pose, velocity, height) {
+                            return None;
+                        }
+                        match face_sweep(&triangle, &pose, velocity, height, best) {
+                            FaceSweep::Clear => return None,
+                            FaceSweep::Hit(hit) => return Some(hit),
+                            FaceSweep::Cast => {}
+                        }
                         let options = ShapeCastOptions {
                             max_time_of_impact: best,
                             target_distance: SKIN,
@@ -141,6 +152,99 @@ impl CollisionWorld {
         }
         Ok(nearest)
     }
+}
+
+/// At a capsule end, a triangle's exact closest point also gives the whole
+/// capsule's separation when that point is beyond the end of its spine.
+/// Retire only an existing contact moving tangent/away. This covers the
+/// adjacent triangle at a floor seam without skipping an approaching edge.
+fn nonclosing_cap(triangle: &Triangle, pose: &Pose, velocity: Vector, height: f32) -> bool {
+    let roundoff = height * f32::EPSILON * 4.0;
+    for end in [-1.0, 1.0] {
+        let center = pose.translation + Vector::Y * ((height * 0.5 - CAPSULE_RADIUS) * end);
+        let relative = Triangle::new(
+            triangle.a - center,
+            triangle.b - center,
+            triangle.c - center,
+        );
+        let separation = -relative.project_local_point(Vector::ZERO, false).point;
+        let distance = separation.length();
+        if separation.y * end <= 0.0
+            && distance > roundoff
+            && distance <= CAPSULE_RADIUS + SKIN
+            && velocity.dot(separation) >= -roundoff * distance
+        {
+            return true;
+        }
+    }
+    false
+}
+
+enum FaceSweep {
+    Cast,
+    Clear,
+    Hit(ShapeCastHit),
+}
+
+/// An interior face contact has an exact plane normal. GJK at a touching
+/// triangle can tilt that normal, so the projected swim slide closes again
+/// and stops at time zero. Keep the ordinary cast for edge/vertex approaches.
+fn face_sweep(
+    triangle: &Triangle,
+    pose: &Pose,
+    velocity: Vector,
+    height: f32,
+    best: f32,
+) -> FaceSweep {
+    let triangle = Triangle::new(
+        triangle.a - pose.translation,
+        triangle.b - pose.translation,
+        triangle.c - pose.translation,
+    );
+    let Some(mut face) = triangle.normal() else {
+        return FaceSweep::Cast;
+    };
+    if (-triangle.a).dot(face) < 0.0 {
+        face = -face;
+    }
+    let support =
+        -face * CAPSULE_RADIUS - Vector::Y * (height * 0.5 - CAPSULE_RADIUS) * face.y.signum();
+    let start = support;
+    let gap = (start - triangle.a).dot(face);
+    let closing = velocity.dot(face);
+    let roundoff = height * f32::EPSILON * 4.0;
+    let time = if closing >= -roundoff {
+        0.0
+    } else {
+        ((gap - SKIN) / -closing).max(0.0)
+    };
+    if time > best {
+        return FaceSweep::Clear;
+    }
+    let witness = start + velocity * time - face * (gap + closing * time);
+    let (projection, location) = triangle.project_local_point_and_get_location(witness, false);
+    if !matches!(location, TrianglePointLocation::OnFace(..))
+        && (projection.point - witness).length_squared() > roundoff * roundoff
+    {
+        return FaceSweep::Cast;
+    }
+    // The current capsule already reaches this face. Moving tangentially or
+    // away cannot deepen that contact; a different face/edge is still swept.
+    if closing >= -roundoff {
+        return FaceSweep::Clear;
+    }
+    FaceSweep::Hit(ShapeCastHit {
+        time_of_impact: time,
+        witness1: support,
+        witness2: witness + pose.translation,
+        normal1: -face,
+        normal2: face,
+        status: if time == 0.0 {
+            ShapeCastStatus::PenetratingOrWithinTargetDist
+        } else {
+            ShapeCastStatus::Converged
+        },
+    })
 }
 
 #[cfg(test)]
