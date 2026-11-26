@@ -1,4 +1,5 @@
 //! Actual outbox commands, typed updates, core replies and rendered notices.
+mod presentation;
 use super::*;
 use crate::trade::{Action, TradeState};
 use bevy::{mesh::skinning::SkinnedMeshInverseBindposes, prelude::*};

@@ -132,7 +132,7 @@ impl CollisionWorld {
             })
     }
 
-    fn swim_probe(&self, height: f32) -> Vec3 {
+    pub(super) fn swim_probe(&self, height: f32) -> Vec3 {
         Vec3::Y * self.swim_origin.unwrap_or(height * 0.5)
     }
 

@@ -14,6 +14,9 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct Loot {
     /// The corpse.
     pub corpse_id: u16,
+    /// Whether the server granted this corpse's opening request. This does
+    /// not require an item or a completed listing, and proves no delivery.
+    pub granted: bool,
     /// Its items, by their place on the corpse, from 0.
     pub items: BTreeMap<u16, InventoryItem>,
     /// Whether the server has listed every item.
@@ -187,7 +190,9 @@ impl Trade {
         };
         match update {
             LootUpdate::Opened { response, .. } => {
-                if !matches!(response, LootResponse::Normal) {
+                if matches!(response, LootResponse::Normal) {
+                    loot.granted = true;
+                } else {
                     self.loot = None;
                 }
             }

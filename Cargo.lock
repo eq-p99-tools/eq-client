@@ -2634,6 +2634,7 @@ dependencies = [
  "rodio",
  "rustysynth",
  "serde_json",
+ "texpresso",
  "url",
  "webbrowser",
  "zeroize",
@@ -2642,7 +2643,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=9ad41bc97d15a7b3b58cfdf1e39e34c65c0d8770#9ad41bc97d15a7b3b58cfdf1e39e34c65c0d8770"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=03ea298527f8d9c332bbff62d9a9f943e1894077#03ea298527f8d9c332bbff62d9a9f943e1894077"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -2661,7 +2662,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=9ad41bc97d15a7b3b58cfdf1e39e34c65c0d8770#9ad41bc97d15a7b3b58cfdf1e39e34c65c0d8770"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=03ea298527f8d9c332bbff62d9a9f943e1894077#03ea298527f8d9c332bbff62d9a9f943e1894077"
 dependencies = [
  "anyhow",
  "hex",
@@ -2676,7 +2677,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=9ad41bc97d15a7b3b58cfdf1e39e34c65c0d8770#9ad41bc97d15a7b3b58cfdf1e39e34c65c0d8770"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=03ea298527f8d9c332bbff62d9a9f943e1894077#03ea298527f8d9c332bbff62d9a9f943e1894077"
 dependencies = [
  "cbc",
  "cipher",
@@ -2689,7 +2690,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=9ad41bc97d15a7b3b58cfdf1e39e34c65c0d8770#9ad41bc97d15a7b3b58cfdf1e39e34c65c0d8770"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=03ea298527f8d9c332bbff62d9a9f943e1894077#03ea298527f8d9c332bbff62d9a9f943e1894077"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -5567,6 +5568,15 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "06794f8f6c5c898b3275aebefa6b8a1cb24cd2c6c79397ab15774837a0bc5755"
 dependencies = [
  "winapi-util",
+]
+
+[[package]]
+name = "texpresso"
+version = "2.0.2"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "8550677e2259d675a7841cb1403db35f330cc9e58674c8c5caa12dd12c51dc71"
+dependencies = [
+ "libm",
 ]
 
 [[package]]

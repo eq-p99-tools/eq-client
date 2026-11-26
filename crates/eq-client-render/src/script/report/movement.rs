@@ -67,6 +67,7 @@ pub(in crate::script) fn report(
             .last_local_pad()
             .filter(|pad| Some(pad.session_id) == admission)
     );
+    movement_state["surface_clock"] = observed.4.surface_report();
     movement_state["settings"] = json!(observed.14.as_ref().zip(observed.9.as_ref()).map(
         |(sync, state)| {
             let wanted = eq_client_core::movement::offered_options(&state.options.qol, world);

@@ -1,14 +1,19 @@
 //! Converts decoded asset data into Bevy images, meshes and materials.
 use bevy::asset::RenderAssetUsages;
-use bevy::image::{ImageAddressMode, ImageSampler, ImageSamplerDescriptor};
+use bevy::image::{
+    CompressedImageFormatSupport, CompressedImageFormats, ImageAddressMode, ImageSampler,
+    ImageSamplerDescriptor,
+};
 use bevy::mesh::{Indices, PrimitiveTopology};
 use bevy::prelude::*;
 use bevy::render::render_resource::{Extent3d, Face, TextureDimension, TextureFormat};
 use eq_client_assets::{
-    BlendOpacity, MaterialMode, ObjectMaterial, TerrainMaterial, TextureAnimation, ZonePrimitive,
+    BlendOpacity, BlockFormat, MaterialMode, ObjectMaterial, TerrainMaterial, TextureAnimation,
+    ZonePrimitive,
 };
 use image::{RgbaImage, imageops::FilterType};
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicBool, Ordering};
 pub(super) struct TextureImages {
     opaque: Handle<Image>,
     masked: Handle<Image>,
@@ -507,22 +512,187 @@ pub(super) fn create_texture_images(
     textures: Vec<eq_client_assets::ZoneTexture>,
     images: &mut Assets<Image>,
 ) -> Vec<TextureImages> {
-    textures
-        .into_iter()
-        .map(|texture| {
-            let mut masked_pixels = texture.rgba8.clone();
-            let color_key = texture.color_key.unwrap_or([0, 0, 0]);
-            for pixel in masked_pixels.as_chunks_mut::<4>().0 {
-                if pixel[..3] == color_key {
+    create_texture_images_masking(textures, None, images)
+}
+
+/// Which textures a masked or additive draw shows, directly or as a frame
+/// of its texture animation: the only ones whose masked image is ever drawn.
+pub(super) fn masked_texture_use<'a>(
+    texture_count: usize,
+    draws: impl IntoIterator<Item = (&'a ZonePrimitive, Option<&'a TextureAnimation>)>,
+) -> Vec<bool> {
+    let mut used = vec![false; texture_count];
+    for (primitive, animation) in draws {
+        if !matches!(
+            primitive.material_mode,
+            MaterialMode::Masked | MaterialMode::Additive
+        ) {
+            continue;
+        }
+        let frames = animation.map(|animation| animation.frames.as_slice());
+        for index in primitive.texture.iter().chain(frames.unwrap_or_default()) {
+            if let Some(used) = used.get_mut(*index) {
+                *used = true;
+            }
+        }
+    }
+    used
+}
+
+/// As [`create_texture_images`], but a texture that `masked_use` marks as
+/// never drawn masked shares its drawn image as its masked one.
+pub(super) fn create_texture_images_masking(
+    textures: Vec<eq_client_assets::ZoneTexture>,
+    masked_use: Option<&[bool]>,
+    images: &mut Assets<Image>,
+) -> Vec<TextureImages> {
+    // Zone textures that came as DXT blocks go to the GPU as blocks, a
+    // quarter to an eighth of their decoded size, when it takes BC.
+    let use_blocks = masked_use.is_some() && BC_TEXTURES.load(Ordering::Relaxed);
+    // Mip chains (and encoding them) are most of a zone's load time with an
+    // HD pack, and each texture's is its own, so they're built in parallel;
+    // only adding them to the assets stays on this thread.
+    let built = map_in_parallel(textures, |index, texture| {
+        // A texture without a key (every DDS, most BMPs) masks by its
+        // own alpha alone, so its masked image is its drawn one.
+        let keyed = |pixel: &[u8; 4]| {
+            texture.color_key.is_some_and(|key| pixel[..3] == key) && pixel[3] != 0
+        };
+        // A zone draws only a few dozen of its hundreds of textures masked,
+        // and many textures have no texel the key would clear. The rest
+        // draw the same either way, so one image serves both and the
+        // texture's memory isn't paid twice.
+        let drawn_masked = masked_use.is_none_or(|used| used.get(index).copied().unwrap_or(true));
+        let needs_mask = drawn_masked && texture.rgba8.as_chunks::<4>().0.iter().any(keyed);
+        let masked_pixels = needs_mask.then(|| {
+            let mut pixels = texture.rgba8.clone();
+            for pixel in pixels.as_chunks_mut::<4>().0 {
+                if keyed(pixel) {
                     pixel[3] = 0;
                 }
             }
-            TextureImages {
-                opaque: images.add(create_image(texture.width, texture.height, texture.rgba8)),
-                masked: images.add(create_image(texture.width, texture.height, masked_pixels)),
-            }
+            pixels
+        });
+        let masked =
+            masked_pixels.map(|pixels| create_image(texture.width, texture.height, pixels));
+        let opaque = match texture.compressed.as_ref().filter(|_| use_blocks) {
+            Some(compressed) => create_compressed_image(&texture, compressed),
+            None => create_image(texture.width, texture.height, texture.rgba8),
+        };
+        (opaque, masked)
+    });
+    built
+        .into_iter()
+        .map(|(opaque, masked)| {
+            let opaque = images.add(opaque);
+            let masked = masked.map_or_else(|| opaque.clone(), |masked| images.add(masked));
+            TextureImages { opaque, masked }
         })
         .collect()
+}
+
+/// `work` over `items` with their indices, on as many threads as the machine
+/// has, keeping the items' order.
+fn map_in_parallel<T: Send, U: Send>(items: Vec<T>, work: impl Fn(usize, T) -> U + Sync) -> Vec<U> {
+    let threads = std::thread::available_parallelism()
+        .map_or(1, std::num::NonZeroUsize::get)
+        .min(items.len());
+    if threads <= 1 {
+        return items
+            .into_iter()
+            .enumerate()
+            .map(|(index, item)| work(index, item))
+            .collect();
+    }
+    let per_thread = items.len().div_ceil(threads);
+    let mut shares: Vec<Vec<(usize, T)>> = (0..threads).map(|_| Vec::new()).collect();
+    for (index, item) in items.into_iter().enumerate() {
+        shares[index / per_thread].push((index, item));
+    }
+    let work = &work;
+    std::thread::scope(|scope| {
+        let workers: Vec<_> = shares
+            .into_iter()
+            .map(|share| {
+                scope.spawn(move || {
+                    share
+                        .into_iter()
+                        .map(|(index, item)| work(index, item))
+                        .collect::<Vec<_>>()
+                })
+            })
+            .collect();
+        workers
+            .into_iter()
+            .flat_map(|worker| worker.join().expect("a texture worker panicked"))
+            .collect()
+    })
+}
+
+/// Whether the GPU takes BC (DXT) textures, from Bevy's
+/// `CompressedImageFormatSupport` at startup. Off until then, so tests and
+/// windowless runs keep the decoded path.
+static BC_TEXTURES: AtomicBool = AtomicBool::new(false);
+
+/// Notes whether the device takes BC textures (a startup system).
+pub(super) fn note_compressed_support(support: Option<Res<CompressedImageFormatSupport>>) {
+    let bc = support.is_some_and(|support| support.0.contains(CompressedImageFormats::BC));
+    BC_TEXTURES.store(bc, Ordering::Relaxed);
+}
+
+/// An image of a texture's own BC blocks. The file's top level is used as it
+/// is; the smaller levels, which HD packs don't ship, are made from the
+/// decoded pixels as [`create_image`] makes them and encoded to the same
+/// format.
+fn create_compressed_image(
+    texture: &eq_client_assets::ZoneTexture,
+    compressed: &eq_client_assets::CompressedTexture,
+) -> Image {
+    let (format, encoder) = match compressed.format {
+        BlockFormat::Bc1 => (TextureFormat::Bc1RgbaUnormSrgb, texpresso::Format::Bc1),
+        BlockFormat::Bc2 => (TextureFormat::Bc2RgbaUnormSrgb, texpresso::Format::Bc2),
+        BlockFormat::Bc3 => (TextureFormat::Bc3RgbaUnormSrgb, texpresso::Format::Bc3),
+    };
+    let (chain, level_count) =
+        generate_mip_chain(texture.width, texture.height, texture.rgba8.clone());
+    let params = texpresso::Params {
+        algorithm: texpresso::Algorithm::RangeFit,
+        ..texpresso::Params::default()
+    };
+    let mut data = compressed.blocks.clone();
+    let (mut width, mut height) = (texture.width as usize, texture.height as usize);
+    let mut offset = width * height * 4;
+    for _ in 1..level_count {
+        width = (width / 2).max(1);
+        height = (height / 2).max(1);
+        let level = &chain[offset..offset + width * height * 4];
+        offset += width * height * 4;
+        let start = data.len();
+        data.resize(start + encoder.compressed_size(width, height), 0);
+        encoder.compress(level, width, height, params, &mut data[start..]);
+    }
+    let mut image = Image::new_uninit(
+        Extent3d {
+            width: texture.width,
+            height: texture.height,
+            depth_or_array_layers: 1,
+        },
+        TextureDimension::D2,
+        format,
+        RenderAssetUsages::RENDER_WORLD,
+    );
+    image.data = Some(data);
+    image.texture_descriptor.mip_level_count = level_count;
+    image.sampler = repeat_sampler();
+    image
+}
+
+fn repeat_sampler() -> ImageSampler {
+    ImageSampler::Descriptor(ImageSamplerDescriptor {
+        address_mode_u: ImageAddressMode::Repeat,
+        address_mode_v: ImageAddressMode::Repeat,
+        ..ImageSamplerDescriptor::linear()
+    })
 }
 
 pub(super) fn create_image(width: u32, height: u32, pixels: Vec<u8>) -> Image {
@@ -541,11 +711,7 @@ pub(super) fn create_image(width: u32, height: u32, pixels: Vec<u8>) -> Image {
     );
     image.data = Some(pixels);
     image.texture_descriptor.mip_level_count = mip_level_count;
-    image.sampler = ImageSampler::Descriptor(ImageSamplerDescriptor {
-        address_mode_u: ImageAddressMode::Repeat,
-        address_mode_v: ImageAddressMode::Repeat,
-        ..ImageSamplerDescriptor::linear()
-    });
+    image.sampler = repeat_sampler();
     image
 }
 
@@ -776,10 +942,118 @@ mod terrain_tests {
                     height: 1,
                     rgba8: vec![rgb[0], rgb[1], rgb[2], 255],
                     color_key: Some(rgb),
+                    compressed: None,
                 })
                 .collect(),
             images,
         )
+    }
+
+    #[test]
+    fn shares_one_image_when_the_key_clears_nothing() {
+        let mut images = Assets::<Image>::default();
+        let texture = |rgba8: Vec<u8>, color_key| eq_client_assets::ZoneTexture {
+            name: "synthetic.dds".to_owned(),
+            width: 2,
+            height: 1,
+            rgba8,
+            color_key,
+            compressed: None,
+        };
+        let made = create_texture_images(
+            vec![
+                // No texel matches the key: one image for both.
+                texture(vec![9, 9, 9, 255, 1, 2, 3, 255], Some([0, 0, 0])),
+                // A keyed texel that is already clear changes nothing either.
+                texture(vec![0, 0, 0, 0, 1, 2, 3, 255], Some([0, 0, 0])),
+                // A visible keyed texel needs its own masked image.
+                texture(vec![0, 0, 0, 255, 1, 2, 3, 255], Some([0, 0, 0])),
+                // Without a key (a DDS), black is just black.
+                texture(vec![0, 0, 0, 255, 1, 2, 3, 255], None),
+            ],
+            &mut images,
+        );
+        assert_eq!(made[0].opaque, made[0].masked);
+        assert_eq!(made[1].opaque, made[1].masked);
+        assert_ne!(made[2].opaque, made[2].masked);
+        assert_eq!(made[3].opaque, made[3].masked);
+        assert_eq!(images.len(), 5);
+        let masked = images.get(&made[2].masked).unwrap().data.as_ref().unwrap();
+        assert_eq!(&masked[..8], &[0, 0, 0, 0, 1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn a_compressed_texture_keeps_its_blocks_and_gains_encoded_mips() {
+        let texture = eq_client_assets::ZoneTexture {
+            name: "synthetic.dds".to_owned(),
+            width: 8,
+            height: 4,
+            rgba8: [255, 0, 0, 255].repeat(32),
+            color_key: None,
+            compressed: Some(eq_client_assets::CompressedTexture {
+                format: BlockFormat::Bc1,
+                blocks: vec![9; 16],
+            }),
+        };
+        let image = create_compressed_image(&texture, texture.compressed.as_ref().unwrap());
+        assert_eq!(
+            image.texture_descriptor.format,
+            TextureFormat::Bc1RgbaUnormSrgb
+        );
+        // 8x4, 4x2, 2x1 and 1x1: the file's two blocks, then one block each.
+        assert_eq!(image.texture_descriptor.mip_level_count, 4);
+        let data = image.data.as_ref().unwrap();
+        assert_eq!(data.len(), 16 + 3 * 8);
+        assert_eq!(&data[..16], &[9; 16]);
+        // The encoded levels are the decoded red, not the file's bytes.
+        assert_ne!(&data[16..24], &[9; 8]);
+    }
+
+    #[test]
+    fn masks_only_textures_a_masked_or_additive_draw_shows() {
+        let draw = |texture, mode| ZonePrimitive {
+            texture: Some(texture),
+            ..primitive(mode)
+        };
+        let animation = TextureAnimation {
+            frames: vec![4, 5],
+            frame_millis: NonZeroU32::new(100).unwrap(),
+            skip_frames: false,
+        };
+        let opaque = draw(0, MaterialMode::Opaque);
+        let blended = draw(1, MaterialMode::Blended(BlendOpacity::Half));
+        let masked = draw(2, MaterialMode::Masked);
+        let additive = draw(3, MaterialMode::Additive);
+        let animated = draw(4, MaterialMode::Masked);
+        let used = masked_texture_use(
+            7,
+            [
+                (&opaque, None),
+                (&blended, None),
+                (&masked, None),
+                (&additive, None),
+                (&animated, Some(&animation)),
+            ],
+        );
+        assert_eq!(used, [false, false, true, true, true, true, false]);
+
+        // A texture no masked draw shows keeps one image, keyed texel or not.
+        let mut images = Assets::<Image>::default();
+        let keyed = || eq_client_assets::ZoneTexture {
+            name: "synthetic.bmp".to_owned(),
+            width: 1,
+            height: 1,
+            rgba8: vec![0, 0, 0, 255],
+            color_key: Some([0, 0, 0]),
+            compressed: None,
+        };
+        let made = create_texture_images_masking(
+            vec![keyed(), keyed()],
+            Some(&[false, true]),
+            &mut images,
+        );
+        assert_eq!(made[0].opaque, made[0].masked);
+        assert_ne!(made[1].opaque, made[1].masked);
     }
 
     fn authored(double_sided: bool) -> TerrainMaterial {

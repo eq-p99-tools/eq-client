@@ -670,6 +670,12 @@ impl Panels<'_> {
             moved.refused.is_some(),
         );
         if self.motion.moved(admission_id, moved.created) {
+            self.motion.resolve_surface(
+                admission_id,
+                moved.created,
+                moved.position,
+                moved.refused.is_some(),
+            );
             self.motion
                 .resolve_carrier(moved.created, moved.refused.is_some());
             self.motion.resolve_water_entry(moved.refused.is_some());

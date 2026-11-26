@@ -24,8 +24,51 @@ pub enum Liquid {
     Lava,
 }
 
+/// Immutable, resolved region evidence for ordinary surface swimming.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum SurfaceRegion {
+    /// Known air, without a zone line.
+    Air,
+    /// Titanium `WT`, kind 5.
+    Water,
+    /// Titanium `W2`, kind 9.
+    Water2,
+    /// Titanium `W3`, kind 10.
+    Water3,
+}
+
 /// The zone's liquids, by point in the renderer's frame.
 pub trait Liquids: Send + Sync {
+    /// Original provider's immutable water-region identity at this point.
+    /// It is local to this provider; a water kind alone is not an identity.
+    fn surface_water_identity(&self, _origin: Vec3) -> Option<usize> {
+        None
+    }
+    /// Positive authored evidence of this exact water kind below known air.
+    /// The bound is the original collision domain, never a height envelope.
+    /// Unknown, a route or another kind before the water must return None.
+    fn surface_water_below(
+        &self,
+        _origin: Vec3,
+        _bottom: f32,
+        _water: SurfaceRegion,
+        _region: usize,
+    ) -> Option<f32> {
+        None
+    }
+    /// Resolved air/ordinary water from an immutable provider, without a
+    /// zone line. Mutable, unknown or unsupported providers must return None.
+    fn surface_region(&self, _at: Vec3) -> Option<SurfaceRegion> {
+        None
+    }
+
+    /// Continuous evidence from that same immutable provider: only known
+    /// air and this exact water kind fill the whole segment. No sampled
+    /// endpoint inference, other kind, zone line or unknown span is allowed.
+    fn surface_segment(&self, _from: Vec3, _to: Vec3, _water: SurfaceRegion) -> bool {
+        false
+    }
+
     /// Stable identity of all data and lookup rules that affect these liquids.
     /// Returning None disables persistent navigation caching for this provider.
     /// Implementations must change the identity whenever their answers change.
@@ -227,6 +270,7 @@ impl CollisionWorld {
                 guard,
                 guarded && self.liquid_support,
             )
+            .inspect_err(|_| self.observe_liquid_stop())
             .ok()?;
         let dry = !guarded
             || if self.liquid_support {
@@ -235,6 +279,9 @@ impl CollisionWorld {
             } else {
                 self.clear_move(feet, next, height, guard)
             };
+        if !dry {
+            self.observe_liquid_stop();
+        }
         dry.then_some(next)
     }
 
