@@ -186,6 +186,7 @@ fn dangerous_section_groups_the_existing_choices_and_run_speed() {
         Fix::WalkWhileWinded,
         Fix::MoveWhileFeigned,
         Fix::StandWhenHit,
+        Fix::MeleePositioning,
         Fix::MemorizeWhileStanding,
         Fix::TakeEnvironmentalDamage,
         Fix::GillsForDays,
