@@ -260,8 +260,8 @@ or occluded. The counters are independent of damage and inventory.
   on each side of an open exchange. Check the ordinary report's item and
   purse fields for delivery and final balances.
   The `Script movement report` logs a small `movement_state` object. Its
-  `session_position` is the working position used for collision (including
-  local proposals); `rendered_position` is the drawn avatar;
+  `session_position` is the stored working position (including local proposals)
+  before the next carrier displacement; `rendered_position` is the drawn avatar;
   `last_server_placement` is the last admission or received placement in
   the current admission. None of these identifies a server acknowledgement
   for a particular proposal. `settings` reports the requested, applied and

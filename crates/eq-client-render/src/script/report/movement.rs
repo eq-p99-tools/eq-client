@@ -13,9 +13,8 @@ use std::time::Instant;
 
 use super::Observed;
 
-/// A bounded observation. The session position is the basis for local physics
-/// and can include locally accepted samples held for pacing. The renderer
-/// interpolates separately.
+/// A bounded observation of stored session position, separate rendered motion
+/// and the controller's last floor sweep after carrying or resolving movement.
 pub(in crate::script) fn report(
     label: &str,
     online: &OnlineState,
