@@ -1,0 +1,1 @@
+- Open the loot window only after the server grants access to the corpse.
