@@ -115,6 +115,15 @@ impl WaterSurface {
     }
 }
 
+/// Which kind of terrain a liquid's surface merges as, never 0 (ordinary
+/// terrain): water only with water, lava only with lava.
+pub(super) fn merge_kind(liquid: Liquid) -> u8 {
+    match liquid {
+        Liquid::Water => 1,
+        Liquid::Lava => 2,
+    }
+}
+
 /// The plain material a surface wears while the look is off.
 #[derive(Component)]
 struct Parked(Handle<StandardMaterial>);
