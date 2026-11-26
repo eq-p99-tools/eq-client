@@ -10,5 +10,7 @@
   twice), reflections slide instead of popping, and far glints no longer
   sparkle on and off. Water pieces stored as a single triangle, and pieces
   of a surface with no water region under them (South Qeynos's canals),
-  now get the look too. The offline viewer's `--start-heading` now faces
+  now get the look too. Seen from above, water takes red first, then green,
+  so deeper or farther water turns teal, then blue, then dark instead of
+  looking like grey glass over sand. The offline viewer's `--start-heading` now faces
   the camera that way.

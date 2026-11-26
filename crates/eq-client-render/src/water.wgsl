@@ -206,13 +206,17 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let c2 = noised(behind_at.xz * 0.47 + vec2(-t * 0.17, t * 0.19) + 7.3).yz;
         let caustic = pow(clamp(1.0 - length(c1 + c2) * 0.42, 0.0, 1.0), 6.0);
         var seen = behind + behind * caustic * caustic_depth * 0.9 * (0.3 + 0.7 * sun.w);
+        // Water takes red first, then green: what lies under it turns
+        // teal, then blue, then dark the more water the light crosses, so
+        // a sandy shelf reads as sea and not as sand under glass.
+        seen *= exp(-thickness * vec3(0.14, 0.05, 0.035));
 
         // The water between: clear when thin, tinted and then dark when deep.
         let absorbed = 1.0 - exp(-thickness * water.deep.a);
         let deep_body = water.deep.rgb * max(light, vec3(0.35)) * (0.6 + 0.8 * luminance(albedo));
         var body = mix(albedo * water.shallow.rgb * light, deep_body, absorbed * 0.85);
         body *= 0.85 + 0.3 * crest;
-        opacity = mix(0.18, 0.92, absorbed);
+        opacity = mix(0.3, 0.92, absorbed);
         water_layer = body;
 
         // Reflections: trace the mirrored ray through what is on screen,
