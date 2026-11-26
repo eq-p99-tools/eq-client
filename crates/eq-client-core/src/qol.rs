@@ -538,8 +538,8 @@ impl Fix {
             | Self::JesusMode
             | Self::GillsForDays
             | Self::MemorizeWhileStanding
-            | Self::ZoneAnywhere => Some(Capability::GameplayDepartures),
-            Self::MeleePositioning => Some(Capability::GameplayDepartures),
+            | Self::ZoneAnywhere
+            | Self::MeleePositioning => Some(Capability::GameplayDepartures),
             // A server with no looting has no corpse to open by itself.
             Self::AutoLoot => Some(Capability::Looting),
             Self::AnswerListPolls => Some(Capability::AnsweringListPolls),
