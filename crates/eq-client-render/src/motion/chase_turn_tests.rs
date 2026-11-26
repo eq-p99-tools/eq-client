@@ -20,7 +20,7 @@ struct Rig {
 impl Rig {
     fn new(heading: f32, delay: usize) -> Self {
         let (mut app, requests, news) = timing_app();
-        // Restore the installed-generation fallback map after timing_app's camera-key assignments.
+        // Restore Titanium's arrow/numpad defaults after timing_app's camera-key assignments.
         app.insert_resource(crate::keys::KeyMap::default())
             .add_message::<bevy::window::WindowFocused>()
             .add_systems(
@@ -153,52 +153,81 @@ impl Rig {
     }
 }
 
+fn turn_case(heading: f32, code: KeyCode, moving: bool, delay: usize, old_tag: bool) -> Vec<Value> {
+    let mut rig = Rig::new(heading, delay);
+    if old_tag {
+        // Exact pre-fix presentation identity. Set it after submission, before
+        // Present and the following Receive; turn math and commands stay intact.
+        rig.app.add_systems(
+            Update,
+            (|mut controls: ResMut<Controls>| controls.sent_yaw = SentYaw::Ordinary)
+                .after(input)
+                .before(interpolate)
+                .in_set(crate::systems::Stage::Input),
+        );
+    }
+    let initial = rig.rows.last().unwrap().clone();
+    rig.key(code, true);
+    if moving {
+        rig.key(KeyCode::ArrowUp, true);
+    }
+    for frame in 5..85 {
+        if frame == 35 {
+            rig.key(code, false);
+        }
+        if frame == 50 {
+            rig.key(KeyCode::ArrowUp, false);
+        }
+        let row = rig.tick();
+        assert_eq!(row["pitch"], initial["pitch"]);
+        assert_eq!(row["radius"], initial["radius"]);
+    }
+    assert!(
+        rig.rows.iter().skip(5).any(|row| {
+            row["actor_forward"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .zip(initial["actor_forward"].as_array().unwrap())
+                .map(|(a, b)| (a.as_f64().unwrap() - b.as_f64().unwrap()).powi(2))
+                .sum::<f64>()
+                > 0.000_1
+        }),
+        "mapped key failed to turn the actor"
+    );
+    if moving {
+        assert_ne!(rig.rows.last().unwrap()["root"], initial["root"]);
+    }
+    println!(
+        "CHASE_TURN {}",
+        json!({"heading":heading,"key":format!("{code:?}"),"moving":moving,"delay":delay,"old_tag":old_tag,"rows":rig.rows})
+    );
+    rig.rows
+}
+
 #[test]
 fn chase_follows_mapped_turn_keys_while_standing_moving_and_releasing() {
     let mut failures = Vec::new();
     for heading in [0., 128., 511.5] {
-        for code in [KeyCode::KeyA, KeyCode::KeyD] {
+        for code in [KeyCode::ArrowLeft, KeyCode::ArrowRight] {
             for moving in [false, true] {
                 for delay in [0, 2] {
-                    let mut rig = Rig::new(heading, delay);
-                    let initial = rig.rows.last().unwrap().clone();
-                    rig.key(code, true);
-                    if moving {
-                        rig.key(KeyCode::KeyW, true);
-                    }
-                    for frame in 5..85 {
-                        if frame == 35 {
-                            rig.key(code, false);
+                    let rows = turn_case(heading, code, moving, delay, false);
+                    let old = turn_case(heading, code, moving, delay, true);
+                    assert!(
+                        old.iter()
+                            .any(|row| row["facing_error"].as_f64().unwrap() > 0.01)
+                    );
+                    for (row, prior) in rows.iter().zip(old) {
+                        for field in ["frame", "root", "rotation", "actor_forward", "commands"] {
+                            assert_eq!(row[field], prior[field], "presentation changed {field}");
                         }
-                        if frame == 50 {
-                            rig.key(KeyCode::KeyW, false);
-                        }
-                        let row = rig.tick();
-                        assert_eq!(row["pitch"], initial["pitch"]);
-                        assert_eq!(row["radius"], initial["radius"]);
                         if row["facing_error"].as_f64().unwrap() > 0.000_1
                             || row["behind_error"].as_f64().unwrap() > 0.001
                         {
-                            failures.push((heading, code, moving, delay, frame));
+                            failures.push((heading, code, moving, delay, row["frame"].clone()));
                         }
                     }
-                    assert!(
-                        rig.rows.iter().skip(5).any(|row| {
-                            row["actor_forward"]
-                                .as_array()
-                                .unwrap()
-                                .iter()
-                                .zip(initial["actor_forward"].as_array().unwrap())
-                                .map(|(a, b)| (a.as_f64().unwrap() - b.as_f64().unwrap()).powi(2))
-                                .sum::<f64>()
-                                > 0.000_1
-                        }),
-                        "mapped key failed to turn the actor"
-                    );
-                    println!(
-                        "CHASE_TURN {}",
-                        json!({"heading":heading,"key":format!("{code:?}"),"moving":moving,"delay":delay,"rows":rig.rows})
-                    );
                 }
             }
         }
@@ -219,13 +248,14 @@ fn chase_keeps_deliberate_orbit_for_forward_translation_without_turning() {
         .unwrap()
         .yaw += 0.63;
     let before = rig.tick();
-    rig.key(KeyCode::KeyW, true);
+    rig.key(KeyCode::ArrowUp, true);
     for _ in 0..30 {
         let row = rig.tick();
         assert_eq!(row["yaw"], before["yaw"]);
         assert_eq!(row["pitch"], before["pitch"]);
         assert_eq!(row["radius"], before["radius"]);
     }
+    assert_ne!(rig.rows.last().unwrap()["root"], before["root"]);
 }
 
 #[test]
@@ -244,7 +274,7 @@ fn chase_keeps_orbit_when_camera_relative_direction_owns_the_facing() {
         .yaw += 0.13;
     let before = rig.tick();
     rig.key(KeyCode::KeyT, true);
-    rig.key(KeyCode::KeyA, true);
+    rig.key(KeyCode::ArrowLeft, true);
     for _ in 0..30 {
         let row = rig.tick();
         assert_eq!(row["yaw"], before["yaw"]);
@@ -255,7 +285,7 @@ fn chase_keeps_orbit_when_camera_relative_direction_owns_the_facing() {
 
 #[test]
 fn chase_rmb_acquisition_preserves_existing_view_and_turn_keys_only_strafe() {
-    for code in [KeyCode::KeyA, KeyCode::KeyD] {
+    for code in [KeyCode::ArrowLeft, KeyCode::ArrowRight] {
         let mut rig = Rig::new(128., 0);
         rig.app
             .world_mut()
@@ -287,7 +317,7 @@ fn chase_leaves_detached_camera_under_its_own_turn_controls() {
     let before = rig.tick();
     assert_eq!(before["free"], true);
     rig.key(KeyCode::F9, false);
-    rig.key(KeyCode::KeyA, true);
+    rig.key(KeyCode::ArrowLeft, true);
     for _ in 0..12 {
         let row = rig.tick();
         assert_eq!(row["free"], true);
