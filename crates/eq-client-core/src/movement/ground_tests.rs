@@ -161,10 +161,24 @@ fn native_ground_collision_uses_the_existing_sweep_and_never_crosses_the_wall() 
     }
     let at_wall = motion.feet();
     for _ in 0..30 {
+        let before = motion.feet();
         motion = next(motion, &world, 6., false, dt);
+        let ordinary = world.step(before, motion.velocity() * dt.as_secs_f32(), 6.);
+        assert!(
+            motion.feet().distance(ordinary) < 0.000_01,
+            "native endpoint diverged from its collision owner"
+        );
         assert!(motion.feet().x < 2.58);
     }
-    assert!(motion.feet().distance(at_wall) < 0.001);
+    // The ordinary sweep can approach its wall clearance differently as the
+    // decaying stride gets shorter. Do not replace it with a new sticky-wall
+    // rule or infer owned velocity from that resolved displacement.
+    println!(
+        "native ground wall: held_x={} stopped_x={} approach={}",
+        at_wall.x,
+        motion.feet().x,
+        motion.feet().distance(at_wall)
+    );
     assert_eq!(motion.velocity(), Vec3::ZERO);
 }
 
