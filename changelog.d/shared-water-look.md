@@ -1,0 +1,1 @@
+- Better Water no longer collapses in big seas: water surfaces that look alike share one material. In Timorous Deep with Rich Lighting and Better Water, the zone-in went from 3 fps to 120.
