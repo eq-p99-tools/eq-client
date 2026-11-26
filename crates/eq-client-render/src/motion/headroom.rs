@@ -161,8 +161,8 @@ impl State {
             let Some(origin) = candidate else {
                 return Ok(false);
             };
-            // Titanium 0x48be0d uses jbe: exactly now+2000 still waits.
-            // Mac's exact timer endpoint remains unread.
+            // Titanium 0x48be0d and Mac 0x504680 use jbe: exactly
+            // now+2000 still waits on both generations.
             let room = match client {
                 InstalledClient::EqMac => rule.room(stand, false, false),
                 InstalledClient::Titanium | InstalledClient::Rof2 => {
