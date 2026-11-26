@@ -168,6 +168,8 @@ pub(super) struct Controls {
     preview: Option<Preview>,
     /// A withdrawn preview must return to the current observed placement.
     restore_preview: bool,
+    /// A transported server chase frame retires the previous mouse-display basis.
+    pub(super) server_chase_placed: bool,
     /// Accepted catch-up restores translation alone on interruption. Rotation
     /// keeps the existing playback and authority rules.
     restore_translation: bool,
@@ -374,6 +376,7 @@ impl Default for Controls {
             drawn_pose: None,
             preview: None,
             restore_preview: false,
+            server_chase_placed: false,
             restore_translation: false,
             restored_translation: None,
             release_sample: false,
@@ -966,6 +969,7 @@ impl Controls {
         *self = Self {
             speed,
             restore_preview,
+            server_chase_placed: self.server_chase_placed,
             restore_translation,
             last_sent: self.last_sent,
             last_answer: self.last_answer,
@@ -4494,6 +4498,9 @@ pub(super) fn interpolate(
     mut cameras: Query<(&mut OrbitCamera, Has<crate::camera::FreeCamera>)>,
     mut displayed_mouse: Local<Option<Entity>>,
 ) {
+    if std::mem::take(&mut controls.server_chase_placed) {
+        *displayed_mouse = None;
+    }
     controls.restore_observed_preview(online.world());
     controls.prepare_translation_restore(online.world());
     let preview = controls.mouse_heading;

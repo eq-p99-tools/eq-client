@@ -453,7 +453,8 @@ impl Scene<'_, '_> {
 
     /// Carries a chase orbit with server-set facing, preserving its offset
     /// from the last drawn actor rather than the older accepted heading.
-    pub(super) fn place_server(&mut self, commands: &mut Commands, placed: Transform) {
+    pub(super) fn place_server(&mut self, commands: &mut Commands, placed: Transform) -> bool {
+        let mut carried = false;
         if let Some(previous) = self.player() {
             let from = previous.rotation.to_euler(EulerRot::YXZ).0;
             let to = placed.rotation.to_euler(EulerRot::YXZ).0;
@@ -468,10 +469,12 @@ impl Scene<'_, '_> {
                 });
                 if perspective && !camera.is_first_person() {
                     camera.yaw += turn;
+                    carried = true;
                 }
             }
         }
         self.place(commands, placed, None);
+        carried
     }
 
     /// Places the player without changing the view's yaw; `entered` is a player

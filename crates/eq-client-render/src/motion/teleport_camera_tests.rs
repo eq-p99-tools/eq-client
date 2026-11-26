@@ -196,6 +196,40 @@ fn batched_server_placements_keep_one_relative_orbit_offset() {
 }
 
 #[test]
+fn stale_mouse_display_cannot_erase_the_transported_orbit() {
+    // Test-only negative control reproduces the old presenter's stale follow
+    // after the yaw transport; the positive row retires that old basis.
+    fn forget_placement(mut controls: ResMut<Controls>) {
+        controls.server_chase_placed = false;
+    }
+    for negative in [true, false] {
+        let mut rig = Rig::new(0., 128., 0.);
+        rig.app.world_mut().resource_mut::<Controls>().mouse_heading = Some(128.);
+        rig.tick();
+        {
+            let world = rig.app.world_mut();
+            let pose = {
+                let mut camera = world.get_mut::<OrbitCamera>(rig.camera).unwrap();
+                camera.yaw += 0.8;
+                crate::camera::orbit_transform(&camera)
+            };
+            *world.get_mut::<Transform>(rig.camera).unwrap() = pose;
+        }
+        if negative {
+            rig.app.add_systems(
+                Update,
+                forget_placement
+                    .before(interpolate)
+                    .in_set(crate::systems::Stage::Present),
+            );
+        }
+        rig.placement(0., true);
+        rig.tick();
+        rig.assert_chase(0., if negative { 0. } else { 0.8 });
+    }
+}
+
+#[test]
 fn unchanged_server_heading_and_remote_spawn_do_not_rotate_chase() {
     let mut rig = Rig::new(83., 83., 0.7);
     let before = rig.orbit().yaw;
