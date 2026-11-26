@@ -101,7 +101,7 @@ impl Path {
         &self,
         from: eq_client_core::WorldPosition,
         to: eq_client_core::WorldPosition,
-    ) -> Option<eq_network_game::movement::MovementPath> {
+    ) -> Option<eq_client_core::movement::MovementPath> {
         if !self.has_positions() {
             return None;
         }
@@ -109,7 +109,7 @@ impl Path {
             .positions
             .iter()
             .map(
-                |&(seconds, position)| eq_network_game::movement::MovementPoint {
+                |&(seconds, position)| eq_client_core::movement::MovementPoint {
                     elapsed: std::time::Duration::from_secs_f32(seconds),
                     position: crate::world_position(position.to_array(), to.heading),
                 },
@@ -117,7 +117,7 @@ impl Path {
             .collect();
         points.first_mut()?.position = from;
         points.last_mut()?.position = to;
-        eq_network_game::movement::MovementPath::new(points).ok()
+        eq_client_core::movement::MovementPath::new(points).ok()
     }
 }
 
@@ -272,7 +272,7 @@ mod tests {
                 assert!(
                     measurements[1].2 - measurements[1].1 <= measurements[0].2 - measurements[0].1
                 );
-                if cadence[0] == 0.1 && cadence.len() > 1 {
+                if cadence.len() > 1 {
                     assert!(
                         measurements[1].0 > measurements[0].0 + 0.1,
                         "endpoint chord still cuts the apex"
