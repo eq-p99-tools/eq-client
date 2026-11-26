@@ -1,5 +1,6 @@
-//! Local velocity snapshots played with the sample whose position is drawn.
-//! They never feed movement, permissions, or outgoing commands.
+//! Observed motion played with its accepted sample. Velocity selects poses;
+//! positions preserve the traversed arc and optionally describe frame history.
+//! Neither changes the physics, permissions or position-update schedule.
 
 use bevy::prelude::*;
 
@@ -14,16 +15,20 @@ pub(crate) struct Snapshot {
 /// snapshots preserves a short rising pose even when the sample's endpoint
 /// has already passed it. No animation event or minimum hold is introduced.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Path(Vec<(f32, Snapshot)>);
+pub(super) struct Path {
+    velocities: Vec<(f32, Snapshot)>,
+    positions: Vec<(f32, Vec3)>,
+    airborne: bool,
+}
 
 impl Path {
     pub(super) fn push(&mut self, seconds: f32, snapshot: Snapshot) {
-        self.0.push((seconds, snapshot));
+        self.velocities.push((seconds, snapshot));
     }
 
     pub(super) fn at(&self, seconds: f32) -> Option<Snapshot> {
-        let &(mut before, mut snapshot) = self.0.first()?;
-        for &(after, next) in self.0.iter().skip(1) {
+        let &(mut before, mut snapshot) = self.velocities.first()?;
+        for &(after, next) in self.velocities.iter().skip(1) {
             if seconds < after {
                 let share = ((seconds - before) / (after - before)).clamp(0.0, 1.0);
                 return Some(Snapshot {
@@ -35,6 +40,84 @@ impl Path {
             snapshot = next;
         }
         Some(snapshot)
+    }
+
+    pub(super) fn position(&mut self, seconds: f32, position: Vec3, airborne: bool) {
+        self.positions.push((seconds, position));
+        self.airborne |= airborne;
+    }
+
+    /// Convert measured feet to the actor origin once, keeping the exact
+    /// accepted endpoints. A clipped zone-line endpoint drops this path.
+    pub(super) fn origins(&mut self, offset: f32, from: Vec3, to: Vec3, span: f32) {
+        for (_, position) in &mut self.positions {
+            position.y += offset;
+        }
+        if let Some(first) = self.positions.first_mut() {
+            first.1 = from;
+        }
+        if let Some(&(at, last)) = self.positions.last() {
+            if at < span {
+                self.positions.push((span, last));
+            }
+            if let Some(last) = self.positions.last_mut() {
+                *last = (span, to);
+            }
+        }
+    }
+
+    pub(super) fn has_positions(&self) -> bool {
+        self.airborne && self.positions.len() >= 2
+    }
+
+    pub(super) fn clear_positions(&mut self) {
+        self.positions.clear();
+        self.airborne = false;
+    }
+
+    pub(super) fn position_at(&self, seconds: f32, from: Vec3, to: Vec3) -> Option<Vec3> {
+        if !self.has_positions()
+            || self.positions.first()?.1 != from
+            || self.positions.last()?.1 != to
+        {
+            return None;
+        }
+        for pair in self.positions.windows(2) {
+            if seconds < pair[1].0 {
+                let share = ((seconds - pair[0].0) / (pair[1].0 - pair[0].0)).clamp(0.0, 1.0);
+                return Some(pair[0].1.lerp(pair[1].1, share));
+            }
+        }
+        Some(to)
+    }
+
+    pub(super) fn map_positions(&mut self, mut map: impl FnMut(Vec3) -> Vec3) {
+        for (_, position) in &mut self.positions {
+            *position = map(*position);
+        }
+    }
+
+    pub(super) fn history(
+        &self,
+        from: eq_client_core::WorldPosition,
+        to: eq_client_core::WorldPosition,
+    ) -> Option<eq_network_game::movement::MovementPath> {
+        if !self.has_positions() {
+            return None;
+        }
+        let mut points: Vec<_> = self
+            .positions
+            .iter()
+            .map(
+                |&(seconds, position)| eq_network_game::movement::MovementPoint {
+                    elapsed: std::time::Duration::from_secs_f32(seconds),
+                    position: crate::world_position(position.to_array(), to.heading),
+                },
+            )
+            .collect();
+        points.first_mut()?.position = from;
+        points.last_mut()?.position = to;
+        eq_network_game::movement::MovementPath::new(points).ok()
     }
 }
 
@@ -95,6 +178,160 @@ mod tests {
         let root = crate::character::testing::drawn(app.world_mut(), &prepared);
         app.world_mut().entity_mut(root).insert(Player);
         (app, root)
+    }
+
+    fn jump_segments(cadence: &[f32]) -> (Vec<(Path, Vec3, f32)>, f32) {
+        let world = floor();
+        let mut controller = AirborneController::default();
+        let mut feet = Vec3::ZERO;
+        let mut peak = 0.0_f32;
+        let mut paths = Vec::new();
+        for batch in 0..16 {
+            let span = cadence[batch % cadence.len()];
+            let mut path = Path::default();
+            let next = fall_step_observed(
+                &mut controller,
+                &world,
+                physics(InstalledClient::Titanium, None),
+                None,
+                feet,
+                Vec3::ZERO,
+                span,
+                6.0,
+                batch == 0,
+                false,
+                Some(&mut path),
+            );
+            peak = path.positions.iter().map(|(_, p)| p.y).fold(peak, f32::max);
+            path.origins(0.0, feet, next, span);
+            let _ = controller.take_jump();
+            let _ = controller.take_landing();
+            paths.push((path, next, span));
+            feet = next;
+        }
+        (paths, peak)
+    }
+
+    #[test]
+    fn observed_jump_positions_reach_the_measured_apex_without_a_longer_geometric_flight() {
+        for cadence in [
+            vec![0.1, 0.138, 0.138, 0.138, 0.138],
+            vec![0.05],
+            vec![0.1],
+            vec![0.15],
+            vec![0.25],
+        ] {
+            let (segments, physical_peak) = jump_segments(&cadence);
+            for fps in [30_u32, 60, 100] {
+                let mut measurements = Vec::new();
+                for observed in [false, true] {
+                    let mut paths = segments.clone();
+                    if !observed {
+                        for (path, _, _) in &mut paths {
+                            path.clear_positions();
+                        }
+                    }
+                    let (first, to, span) = paths.remove(0);
+                    let (mut app, root) = render_app(first, to, span);
+                    for (path, to, span) in paths {
+                        let mut controls = app.world_mut().resource_mut::<Controls>();
+                        controls.sample_pose = Some(path);
+                        controls.sent_span = span;
+                        controls.display_sample(
+                            Transform::IDENTITY,
+                            crate::world_position(to.to_array(), 0.0),
+                        );
+                    }
+                    let mut peak = 0.0_f32;
+                    let mut off = None;
+                    let mut down = None;
+                    for frame in 1..=fps * 4 {
+                        app.world_mut()
+                            .resource_mut::<Time>()
+                            .advance_by(Duration::from_secs_f64(1.0 / f64::from(fps)));
+                        app.update();
+                        let y = app.world().get::<Transform>(root).unwrap().translation.y;
+                        peak = peak.max(y);
+                        if y > 1e-6 {
+                            off.get_or_insert(frame);
+                        } else if off.is_some() {
+                            down.get_or_insert(frame);
+                        }
+                    }
+                    assert!(peak <= physical_peak + 1e-4, "drawing exceeds real arc");
+                    measurements.push((peak, off.unwrap(), down.unwrap()));
+                }
+                assert!(
+                    measurements[1].1 >= measurements[0].1,
+                    "no earlier geometric takeoff"
+                );
+                assert!(
+                    measurements[1].2 <= measurements[0].2,
+                    "no later geometric landing"
+                );
+                assert!(
+                    measurements[1].2 - measurements[1].1 <= measurements[0].2 - measurements[0].1
+                );
+                if cadence[0] == 0.1 && cadence.len() > 1 {
+                    assert!(
+                        measurements[1].0 > measurements[0].0 + 0.1,
+                        "endpoint chord still cuts the apex"
+                    );
+                }
+                println!(
+                    "observed_jump fps={fps} cadence={cadence:?} physical_peak={physical_peak} baseline={:?} observed={:?}",
+                    measurements[0], measurements[1]
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn observed_jump_path_cannot_be_drained_as_a_flat_release_or_survive_refusal() {
+        let mut path = Path::default();
+        path.position(0.0, Vec3::ZERO, false);
+        path.position(0.05, Vec3::Y, true);
+        path.position(0.1, Vec3::ZERO, false);
+        let (mut app, root) = render_app(path, Vec3::ZERO, 0.1);
+        let created = app.world().resource::<Controls>().preview.unwrap().created;
+        app.world_mut()
+            .resource_mut::<Controls>()
+            .visual
+            .as_mut()
+            .unwrap()
+            .release_translation(true);
+        assert!(
+            app.world()
+                .resource::<Controls>()
+                .visual
+                .as_ref()
+                .unwrap()
+                .translation
+                .is_none()
+        );
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(50));
+        app.update();
+        assert!((app.world().get::<Transform>(root).unwrap().translation.y - 1.0).abs() < 1e-5);
+        assert!(
+            app.world_mut()
+                .resource_mut::<Controls>()
+                .reconcile_preview(
+                    Some(11),
+                    created,
+                    eq_client_core::WorldPosition::default(),
+                    true
+                )
+        );
+        app.world_mut()
+            .resource_mut::<Time>()
+            .advance_by(Duration::from_millis(50));
+        app.update();
+        assert_eq!(
+            app.world().get::<Transform>(root).unwrap().translation,
+            Vec3::ZERO
+        );
     }
 
     #[test]

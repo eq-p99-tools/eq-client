@@ -50,6 +50,43 @@ while the client stays at 5.245: a labelled frame-rate difference, up to
 0.2 units in these rows. Drawn and reported sampling remain separate from
 this physical arc comparison.
 
+## 6.657 and 6.659 — drawn and recorded jump positions
+
+Ordinary unsupported dry samples retain their collision-resolved position
+slices with the same relative times as the local velocity/pose snapshots.
+Drawing follows those vertices instead of the single chord to the last
+endpoint. Queued samples keep their own paths; refusal/reset discards them.
+Clipped zone-line, water, flight and moving-support samples keep their existing
+paths. The release translation cursor cannot accelerate an airborne path.
+
+The same bounded actor-origin trace accompanies the ordinary movement request.
+After the existing endpoint guard accepts it, the session checks its anchors,
+span and vertices against the proposal's existing budgets. Accepted cause-1
+history frames sample the trace on the existing counter clock. No higher arc,
+extra airborne hold, packet cause, update counter rate or extra apex update is
+introduced. The final actor position, `0x14cb` packet fields and eligibility
+gate stay unchanged; `0x6a1b` frame positions and duplicate suppression may
+change because the missing intermediate positions are now present. A transport
+failure or rejected request commits neither movement nor its path.
+
+[R] Native motion runs once per rendered frame using whole elapsed milliseconds,
+with per-step drag and a capped timestep; this does not establish a fixed
+native 60 Hz tick. [I] The current port still groups airborne physics in 50 ms
+steps with three assumed damping frames. This change records/draws that existing
+trajectory; it does not change launch, gravity or the shared controller.
+
+## 6.666 — grouped-clock diagnostic retained
+
+[I, offline diagnostic] Three 1/60-second dry slices produced a 0.000424-unit
+horizontal lead over the per-slice reference. A separate steep-exit handoff
+after a 217 ms prefix produced a 1.7815865-unit endpoint 3D displacement over
+the following 100 ms, versus a 1.5383435-unit continuous checked path. The
+approximately 0.24324-unit difference is mostly vertical; it is not a measured
+standing-jump height or complete-jump result. The endpoint-versus-full-path
+metric distinction and inferred reference rate matter. Neither short interval
+alone establishes a whole-move tolerance result. These are known controller
+diagnostics; presentation/history changes do not tune or conceal them.
+
 ## H2 — fall start across a same-zone pad
 
 [R] Pad placement keeps actor `+0x4c`, the fall-start height; landing clears
