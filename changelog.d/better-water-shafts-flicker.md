@@ -1,8 +1,8 @@
 - Better Water: light shafts under water now fall through the world from
   the sun, bent at the surface, so they slant with the sun, stay put as the
   camera turns, slide past while swimming and end on the floor and walls.
-  They are a few slim, soft, faint shafts that keep shifting with the
-  surface, fall only where the surface above can see the
+  They are thin, faint wisps spread evenly, each fading in and out on its
+  own, fall only where the surface above can see the
   sun (none under roofs, docks, bridges or in tunnels), follow the sun's
   strength at night, and never show in zones without a sky. Water surfaces
   no longer flicker as the camera moves (each side of the surface was drawn

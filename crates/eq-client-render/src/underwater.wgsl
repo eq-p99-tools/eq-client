@@ -44,19 +44,38 @@ fn noise(p: vec2<f32>) -> f32 {
     );
 }
 
-// How much light comes down through the surface at a level point: narrow
-// spots where the ripples gather it, each the meeting of two noise fields
-// drifting different ways, so the spots keep changing shape, splitting and
-// fading even while the camera holds still; and only within slow drifting
-// patches, so a few slim shafts come and go rather than a dense comb. The
-// pattern is turned off the world's axes so it never lines up in rows.
-fn through_surface(p: vec2<f32>, t: f32) -> f32 {
-    let q = mat2x2<f32>(0.8, 0.6, -0.6, 0.8) * p;
-    let a = noise(q * 0.6 + vec2(t * 0.42, -t * 0.27));
-    let b = noise(q * 0.78 + vec2(-t * 0.31, t * 0.38) + 13.1);
-    let spot = smoothstep(0.6, 0.78, 0.5 * (a + b));
-    let gate = smoothstep(0.58, 0.78, noise(q * 0.05 + vec2(t * 0.03, -t * 0.022) + 31.7));
-    return spot * gate;
+// How much light comes down through the surface at a level point. The
+// surface is split into cells about seven units across, each with one
+// thin spot of light wandering about it that brightens and fades on its
+// own slow beat, so the shafts are slim, spread evenly rather than in
+// clumps, and each comes and goes by itself even while the camera holds
+// still. The cells are turned off the world's axes so they never line up.
+fn through_surface(p: vec2<f32>, under: f32, t: f32) -> f32 {
+    let cell = 7.0;
+    let q = mat2x2<f32>(0.8, 0.6, -0.6, 0.8) * p / cell;
+    let i = floor(q);
+    let f = q - i;
+    var light = 0.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let g = vec2(f32(x), f32(y));
+            let h1 = hash(i + g);
+            let h2 = hash(i + g + vec2(37.0, 17.0));
+            let h3 = hash(i + g + vec2(11.0, 53.0));
+            // Lit about a fifth of the time, each on its own beat.
+            let beat = sin(t * (0.3 + 0.25 * h3) + 6.2831 * h1) * 0.5 + 0.5;
+            let lit = smoothstep(0.72, 0.95, beat);
+            let centre = g + 0.5 + 0.35 * sin(t * vec2(0.23, 0.31) + 6.2831 * vec2(h1, h2));
+            let away = length(centre - f) * cell;
+            let width = 0.45 + 0.35 * h2;
+            let shimmer = 0.7 + 0.3 * sin(t * 2.3 + 9.0 * h3);
+            // Brighter and fainter down its length, so each reads as a
+            // wisp rather than a rod.
+            let wisp = 0.5 + 0.5 * sin(under * 0.22 + 6.2831 * h3 - t * 0.5);
+            light += lit * shimmer * wisp * (1.0 - smoothstep(0.0, width, away));
+        }
+    }
+    return light;
 }
 
 // Whether the surface at a level point can see the sun (1) or is shaded by
@@ -116,12 +135,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let far_point = view.world_from_clip * vec4(ndc, max(depth, 0.00001), 1.0);
         let eye = view.world_position;
         let toward = far_point.xyz / far_point.w - eye;
-        let reach = min(length(toward), 60.0);
+        let reach = min(length(toward), 50.0);
         let ray = normalize(toward);
 
         let down = settings.light.xyz;
         let surface = eye.y + settings.light.w;
-        let steps = 40;
+        let steps = 48;
         let step = reach / f32(steps);
         // A fixed per-pixel offset hides the steps as soft grain.
         let jitter = fract(52.9829189 * fract(dot(coord, vec2(0.06711056, 0.00583715))));
@@ -138,9 +157,9 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             let entry = point.xz - down.xz * path;
             // Light thins on its way down and again on its way to the eye.
             let lost = exp(-path * 0.03 - along * 0.025);
-            gathered += through_surface(entry, t) * sunlit(entry) * lost;
+            gathered += through_surface(entry, under, t) * sunlit(entry) * lost;
         }
-        gathered *= step * 2.0;
+        gathered *= step * 4.0;
         color += settings.shafts.rgb * gathered * strength;
     }
     return vec4(color, 1.0);
