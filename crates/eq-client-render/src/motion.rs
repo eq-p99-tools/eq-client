@@ -3635,7 +3635,6 @@ pub(super) fn input(
         && !jumped
         && refused.is_none()
         && posture == Some(eq_client_core::PostureState::Ducking)
-        && position.distance_squared(origin) > 1e-10
         && let Err(reason) = controls.headroom.drive(
             client,
             online.world(),
