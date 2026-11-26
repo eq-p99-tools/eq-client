@@ -1150,7 +1150,7 @@ impl Controls {
         if self.moving {
             MAX_CYCLE_DURATION
         } else {
-            Duration::from_millis(100)
+            START_CYCLE_DURATION
         }
     }
     /// Takes the session's word on how the player may move. A new speed
@@ -1652,6 +1652,7 @@ impl Controls {
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE_DURATION: Duration = Duration::from_millis(250);
 const MAX_CYCLE: f32 = MAX_CYCLE_DURATION.as_secs_f32();
+const START_CYCLE_DURATION: Duration = Duration::from_millis(100);
 
 /// The lower of each speed of two grants, as the sample that straddles a
 /// change made in place may ask (`Controls::grant`). A mode either grant
@@ -2551,7 +2552,7 @@ pub(super) fn input(
         return;
     }
     let elapsed = now.duration_since(controls.last_accepted);
-    if elapsed < Duration::from_millis(100) {
+    if elapsed < START_CYCLE_DURATION {
         controls.held = Some(Held::Gate);
         return;
     }

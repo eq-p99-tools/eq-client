@@ -82,6 +82,7 @@ pub(super) struct Control {
     pub blocked: bool,
     admitted: Option<Instant>,
     epoch: Option<Instant>,
+    retired: Option<Frame>,
 }
 
 impl Control {
@@ -97,6 +98,7 @@ impl Control {
         self.last_posted = None;
         self.admitted = None;
         self.epoch = Some(rest.at);
+        self.retired = None;
     }
 
     /// Retire presentation on a correction/control seam; pending identities
@@ -105,6 +107,7 @@ impl Control {
         self.current = None;
         self.accepted = None;
         self.last_posted = None;
+        self.retired = None;
     }
 
     pub fn active(&self) -> bool {
@@ -113,6 +116,22 @@ impl Control {
 
     pub fn admitted(&self) -> Option<Instant> {
         self.admitted
+    }
+
+    pub fn handback_ready(&self, now: Instant) -> bool {
+        // Every native request already queued has a genuine creation stamp
+        // no later than last_posted. A normal cold span is therefore safe
+        // after this interval even if a redundant receipt is still delayed.
+        self.settled()
+            && self
+                .last_posted
+                .is_none_or(|at| now.saturating_duration_since(at) >= START_CYCLE_DURATION)
+    }
+
+    fn handback(&mut self) {
+        let checkpoint = self.current;
+        self.retire();
+        self.retired = checkpoint;
     }
 
     pub fn basis(&self, session: Option<u64>, now: Instant) -> Option<LiquidBasis> {
@@ -210,6 +229,18 @@ impl Control {
         };
         let sent = self.sent[index];
         self.sent.drain(..=index);
+        if !refused
+            && position == sent.frame.position
+            && self.current.is_none()
+            && self
+                .retired
+                .is_some_and(|retired| retired.same_state(sent.frame))
+        {
+            // These exact facts were admitted before handback. A redundant
+            // late receipt cannot overwrite a new legacy preview or replay.
+            self.admitted = Some(created);
+            return true;
+        }
         let current_owner =
             self.current.is_some() && self.epoch.is_some_and(|epoch| sent.frame.at >= epoch);
         if refused || position != sent.frame.position || !current_owner {
@@ -401,15 +432,18 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         controls.held = None;
         return true;
     }
-    if controls.ground.settled() {
+    if controls.ground.handback_ready(now) {
         let admitted = controls.ground.admitted();
-        controls.ground.retire();
+        controls.ground.handback();
         if let Some(admitted) = admitted {
             // This is an actual admitted creation time, never a fabricated
             // interval and never the time a delayed receipt arrived.
             controls.last_accepted = admitted;
             controls.last_sent = Some(admitted);
         }
+        // No frozen interval becomes a catch-up sample. The existing cold
+        // span is bounded by time since every queued native observation.
+        controls.moving = false;
         controls.clear_poses();
         return false;
     }
