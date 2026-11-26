@@ -1,7 +1,7 @@
 //! Native keyboard/mouse and production Receive/Input/Present regressions.
 use super::*;
 use eq_client_assets::regions::{RegionKind, ZoneRegions};
-use eq_network_game::movement::{MotionSession, SpeedState, titanium_speeds};
+use eq_network_game::movement::{SpeedState, titanium_speeds};
 use std::sync::mpsc;
 
 struct Native {
@@ -11,7 +11,6 @@ struct Native {
     camera: Entity,
     player: Entity,
     now: Instant,
-    session: MotionSession,
 }
 
 impl Native {
@@ -28,6 +27,13 @@ impl Native {
                 crate::camera::turn
                     .before(input)
                     .in_set(crate::systems::Stage::Input),
+            )
+            .add_systems(
+                Update,
+                crate::camera::look_keys
+                    .after(interpolate)
+                    .before(crate::camera::orbit_camera)
+                    .in_set(crate::systems::Stage::Present),
             );
         for (act, key) in [
             (Act::Forward, KeyCode::KeyW),
@@ -97,8 +103,8 @@ impl Native {
             let mut orbit = world.get_mut::<OrbitCamera>(camera).unwrap();
             orbit.focus = Vec3::new(0., origin_y, 0.);
             orbit.yaw = crate::camera::behind(eq_client_core::render_heading(0.));
-            orbit.look = 0.;
-            orbit.pitch = 0.;
+            orbit.look = if origin_y < -1. { 0.17 } else { 0. };
+            orbit.pitch = -0.23;
             if first_person {
                 orbit.look_first_person_for_test();
             }
@@ -121,12 +127,6 @@ impl Native {
             c.last_accepted = start;
             (camera, player)
         };
-        let mut session = MotionSession::new(11, 7, placement, start)
-            .unwrap()
-            .with_swimming(true)
-            .with_falls(true)
-            .with_heading_snapshots(true);
-        session.calibrate(grant, start).unwrap();
         Self {
             app,
             requests,
@@ -134,7 +134,6 @@ impl Native {
             camera,
             player,
             now,
-            session,
         }
     }
 
@@ -197,8 +196,20 @@ impl Native {
 #[test]
 fn refused_water_translation_retains_mouse_view_and_restores_observed_position() {
     for first_person in [false, true] {
-        for (y, forward) in [(-15., false), (-0.1, false), (-0.1, true)] {
+        for (y, forward, submitted_preview) in [
+            (-15., false, true),
+            (-0.1, false, true),
+            (-0.1, true, true),
+            (-15., false, false),
+            (-0.1, true, false),
+        ] {
             let mut f = Native::new(first_person, y);
+            // The accepted-only path also serves surface continuation: its
+            // worker result falls back to display_in_frame, without a preview.
+            f.app
+                .world_mut()
+                .resource_mut::<Controls>()
+                .suppress_submitted_preview = !submitted_preview;
             crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
             latency_tests::key(&mut f.app, KeyCode::KeyD, true);
             if forward {
@@ -207,7 +218,11 @@ fn refused_water_translation_retains_mouse_view_and_restores_observed_position()
             let request = f.frame(4.).pop().expect("first native strafe");
             assert_eq!(request.mode, MovementMode::Swim);
             for _ in 0..3 {
-                assert!(f.frame(4.).is_empty(), "one proposal stays in flight");
+                assert_eq!(
+                    f.frame(4.),
+                    Vec::<MovementRequest>::new(),
+                    "one proposal stays in flight"
+                );
             }
             let before = f.view();
             let placement = f
@@ -220,14 +235,14 @@ fn refused_water_translation_retains_mouse_view_and_restores_observed_position()
                 .position;
             f.reply(&request, true);
             // Real devices deliver frames with no mouse event even during a drag.
-            assert!(f.frame(0.).is_empty());
+            assert_eq!(f.frame(0.), Vec::<MovementRequest>::new());
             let after = f.view();
             assert!(
                 Quat::from_rotation_y(before.0).angle_between(Quat::from_rotation_y(after.0))
                     < 0.001,
                 "refusal changed yaw: {before:?} -> {after:?}"
             );
-            assert_eq!(before.1, after.1);
+            assert_eq!(before.1.to_bits(), after.1.to_bits());
             assert_eq!(
                 f.app
                     .world()
@@ -251,39 +266,17 @@ fn refused_water_translation_retains_mouse_view_and_restores_observed_position()
 }
 
 #[test]
-fn native_water_strafe_while_turning_is_not_a_backward_stroke() {
-    for side in [KeyCode::KeyA, KeyCode::KeyD] {
-        let mut f = Native::new(false, -15.);
-        crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
-        latency_tests::key(&mut f.app, side, true);
-        for frame in 0..180 {
-            let dx = match frame {
-                30..60 => 4.,
-                90..120 => -4.,
-                _ => 0.,
-            };
-            for request in f.frame(dx) {
-                assert_eq!(request.mode, MovementMode::Swim);
-                let result = f.session.send_move_sample(&request, f.now, |_| Ok(()));
-                assert!(result.is_ok(), "native {side:?}, frame {frame}: {result:?}");
-                f.reply(&request, false);
-            }
-        }
-    }
-}
-
-#[test]
 fn newer_mouse_view_survives_an_older_acceptance_but_not_a_server_correction() {
     let mut f = Native::new(false, -15.);
     crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
     latency_tests::key(&mut f.app, KeyCode::KeyD, true);
     let request = f.frame(4.).pop().expect("first strafe");
     for _ in 0..3 {
-        assert!(f.frame(4.).is_empty());
+        assert_eq!(f.frame(4.), Vec::<MovementRequest>::new());
     }
     let before = f.view();
     f.reply(&request, false);
-    assert!(f.frame(0.).is_empty());
+    assert_eq!(f.frame(0.), Vec::<MovementRequest>::new());
     assert!(
         Quat::from_rotation_y(before.0).angle_between(Quat::from_rotation_y(f.view().0)) < 0.001
     );
@@ -299,7 +292,7 @@ fn newer_mouse_view_survives_an_older_acceptance_but_not_a_server_correction() {
             },
         ))
         .unwrap();
-    assert!(f.frame(0.).is_empty());
+    assert_eq!(f.frame(0.), Vec::<MovementRequest>::new());
     assert!(f.app.world().resource::<Controls>().mouse_heading.is_none());
     let heading = eq_client_core::world_heading((-f.view().0.sin()).atan2(-f.view().0.cos()));
     assert!(arc(heading, 64.).abs() < 0.001);

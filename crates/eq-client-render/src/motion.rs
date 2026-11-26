@@ -551,8 +551,11 @@ impl Controls {
             return false;
         };
         self.preview = None;
-        if refused
-            || self
+        // A local translation refusal never withdraws the player's mouse
+        // orientation. Only its matching accepted heading retires that
+        // preview; a genuine server placement still resets the controls.
+        if !refused
+            && self
                 .mouse_heading
                 .is_some_and(|heading| arc(heading, position.heading) == 0.0)
         {
@@ -708,10 +711,9 @@ impl Controls {
         if let Some(position) = self.restored_translation {
             from.translation = self.translation_basis(position);
         }
-        if self.refused.is_some()
-            || self
-                .mouse_heading
-                .is_some_and(|heading| arc(heading, position.heading) == 0.0)
+        if self
+            .mouse_heading
+            .is_some_and(|heading| arc(heading, position.heading) == 0.0)
         {
             self.mouse_heading = None;
         }
