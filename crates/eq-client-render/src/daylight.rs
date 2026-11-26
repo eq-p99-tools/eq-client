@@ -385,7 +385,7 @@ mod tests {
             let expected = if installed == eq_client_assets::ui::InstalledClient::Titanium {
                 fog.color
             } else {
-                Color::BLACK
+                color([0.0; 3])
             };
             assert_eq!(app.world().resource::<ClearColor>().0, expected);
         }
@@ -429,7 +429,7 @@ mod tests {
             );
             app.update();
             assert!(app.world().get::<DistanceFog>(camera).is_none());
-            assert_eq!(app.world().resource::<ClearColor>().0, Color::BLACK);
+            assert_eq!(app.world().resource::<ClearColor>().0, color([0.0; 3]));
         }
     }
 
