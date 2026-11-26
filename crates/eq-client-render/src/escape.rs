@@ -92,6 +92,9 @@ pub(super) fn route(
         _ if inventory.action_under_way() => Escape::Inventory,
         _ => match frontmost(&stack, &frames) {
             Some(id) => Escape::Close(id),
+            // An opening corpse has no frame until the server grants it.
+            // Escape can still cancel that request before clearing the target.
+            None if online.world().loot().is_some() => Escape::Close(WindowId::Loot),
             // Character select goes back to the login screen, as its Quit
             // does, until Enter World is asked; a run without a login screen,
             // such as the offline preview, has nowhere to go back to.

@@ -173,20 +173,8 @@ fn load_luclin(
     apply_layers(&mut asset, directory, look)?;
     apply_eyes(&mut asset, directory, look)?;
     apply_attachments(&mut asset, directory, look)?;
-    // Luclin WLD UVs address DDS rows bottom-up. Decode/composite first,
-    // then orient the finished textures for the renderer's top-down images.
-    for texture in &mut asset.textures {
-        if texture.name.to_ascii_lowercase().ends_with(".dds") {
-            let mut image = image::RgbaImage::from_raw(
-                texture.width,
-                texture.height,
-                std::mem::take(&mut texture.rgba8),
-            )
-            .ok_or_else(|| invalid("appearance texture dimensions"))?;
-            image::imageops::flip_vertical_in_place(&mut image);
-            texture.rgba8 = image.into_raw();
-        }
-    }
+    // Luclin's DDS textures come out of `load_texture` already turned the
+    // right way up for WLD coordinates, layers included.
     asset.set_luclin(true);
     Ok(asset)
 }
@@ -260,6 +248,8 @@ fn apply_layers(
 }
 
 fn composite(base: &mut ZoneTexture, layer: &ZoneTexture, color: [u8; 3]) -> Result<(), LoadError> {
+    // The decoded pixels change, so the file's own blocks no longer match.
+    base.compressed = None;
     let image = image::RgbaImage::from_raw(layer.width, layer.height, layer.rgba8.clone())
         .ok_or_else(|| invalid("appearance layer dimensions"))?;
     let layer = image::imageops::resize(
@@ -459,6 +449,7 @@ fn apply_attachments(
 }
 
 fn tint(texture: &mut ZoneTexture, color: [u8; 3]) {
+    texture.compressed = None;
     let channel = |value: u8, color: u8| {
         u8::try_from(u16::from(value) * u16::from(color) / 255).unwrap_or(255)
     };
@@ -557,6 +548,7 @@ mod tests {
             height: 1,
             rgba8: vec![200, 150, 100, 255, 200, 150, 100, 255, 200, 150, 100, 255],
             color_key: None,
+            compressed: None,
         };
         let beard = ZoneTexture {
             name: "beard".into(),
@@ -564,6 +556,7 @@ mod tests {
             height: 1,
             rgba8: vec![255, 255, 255, 0, 255, 255, 255, 255, 255, 255, 255, 128],
             color_key: None,
+            compressed: None,
         };
         composite(&mut skin, &beard, [40, 30, 20]).unwrap();
         assert_eq!(&skin.rgba8[..4], &[200, 150, 100, 255]);

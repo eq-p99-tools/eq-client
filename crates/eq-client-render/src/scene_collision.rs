@@ -19,6 +19,57 @@ pub(super) fn object_transform(object: &eq_client_assets::ZoneObject) -> Transfo
 pub(super) struct ZoneLiquids(pub(super) eq_client_assets::regions::ZoneRegions);
 
 impl eq_client_core::movement::Liquids for ZoneLiquids {
+    fn surface_water_identity(&self, origin: Vec3) -> Option<usize> {
+        self.0.surface_motion_water_identity(origin.to_array())
+    }
+    fn surface_water_below(
+        &self,
+        origin: Vec3,
+        bottom: f32,
+        water: eq_client_core::movement::SurfaceRegion,
+        region: usize,
+    ) -> Option<f32> {
+        use eq_client_assets::regions::RegionKind;
+        use eq_client_core::movement::SurfaceRegion;
+        let kind = match water {
+            SurfaceRegion::Air => return None,
+            SurfaceRegion::Water => RegionKind::WATER,
+            SurfaceRegion::Water2 => RegionKind::WATER_2,
+            SurfaceRegion::Water3 => RegionKind::WATER_3,
+        };
+        self.0
+            .surface_motion_water_below(origin.to_array(), bottom, kind, region)
+    }
+    fn surface_region(&self, at: Vec3) -> Option<eq_client_core::movement::SurfaceRegion> {
+        use eq_client_assets::regions::RegionKind;
+        use eq_client_core::movement::SurfaceRegion;
+        match self.0.surface_motion_region(at.to_array())? {
+            RegionKind::DRY => Some(SurfaceRegion::Air),
+            RegionKind::WATER => Some(SurfaceRegion::Water),
+            RegionKind::WATER_2 => Some(SurfaceRegion::Water2),
+            RegionKind::WATER_3 => Some(SurfaceRegion::Water3),
+            _ => None,
+        }
+    }
+
+    fn surface_segment(
+        &self,
+        from: Vec3,
+        to: Vec3,
+        water: eq_client_core::movement::SurfaceRegion,
+    ) -> bool {
+        use eq_client_assets::regions::RegionKind;
+        use eq_client_core::movement::SurfaceRegion;
+        let kind = match water {
+            SurfaceRegion::Air => return false,
+            SurfaceRegion::Water => RegionKind::WATER,
+            SurfaceRegion::Water2 => RegionKind::WATER_2,
+            SurfaceRegion::Water3 => RegionKind::WATER_3,
+        };
+        self.0
+            .surface_motion_segment(from.to_array(), to.to_array(), kind)
+    }
+
     fn cache_fingerprint(&self) -> Option<u64> {
         Some(self.0.liquid_fingerprint())
     }

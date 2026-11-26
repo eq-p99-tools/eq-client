@@ -985,8 +985,12 @@ pub(super) fn present(
             .position(|(shown, _)| *shown == kind)
             .map(|index| open.swap_remove(index).1)
     };
-    // A window shows while both the player and the world have it open.
-    let loot = trade.loot.as_ref().zip(online.world().loot());
+    // A local request keeps its cancellation state without drawing a window.
+    // The received grant opens even an empty corpse or a delayed item list.
+    let loot = trade
+        .loot
+        .as_ref()
+        .zip(online.world().loot().filter(|loot| loot.granted));
     let merchant = trade.merchant.as_ref().zip(online.world().merchant());
     let (loot_frame, merchant_frame) = (
         loot.and_then(|_| frame(Rows::Loot)),
@@ -1431,6 +1435,10 @@ mod tests {
         let mut news = Vec::new();
         if let Some(corpse_id) = corpse {
             online.open_loot(corpse_id);
+            news.push(WorldEvent::Loot(LootUpdate::Opened {
+                response: eq_client_core::loot::LootResponse::Normal,
+                coins: eq_client_core::Coins::default(),
+            }));
             news.push(WorldEvent::Loot(LootUpdate::Listed { corpse_id }));
         }
         if let Some((merchant_id, stock)) = merchant {

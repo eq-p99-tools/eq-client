@@ -19,6 +19,8 @@ pub(super) struct Path {
     velocities: Vec<(f32, Snapshot)>,
     positions: Vec<(f32, Vec3)>,
     airborne: bool,
+    #[cfg(test)]
+    pub(super) test_steps: Vec<(Vec3, Vec3)>,
 }
 
 impl Path {

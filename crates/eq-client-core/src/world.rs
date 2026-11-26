@@ -618,6 +618,7 @@ impl ClientWorld {
     pub fn open_loot(&mut self, corpse_id: u16) {
         self.zone.trade.loot = Some(Loot {
             corpse_id,
+            granted: false,
             items: BTreeMap::new(),
             listed: false,
         });

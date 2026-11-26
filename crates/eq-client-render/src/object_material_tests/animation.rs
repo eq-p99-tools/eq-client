@@ -37,6 +37,7 @@ fn zone() -> ZoneAsset {
                 height: 1,
                 rgba8: color.to_vec(),
                 color_key: None,
+                compressed: None,
             })
             .collect(),
         models: vec![ZoneModel {

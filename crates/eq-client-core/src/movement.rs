@@ -14,11 +14,14 @@ pub use instances::CollisionInstance;
 use instances::Surface;
 mod liquids;
 mod navigator;
+mod observations;
+pub use observations::{ContactReport, MotionObservation};
 pub mod navmesh;
 mod pace;
 mod pad;
 mod path;
 mod route;
+mod surface;
 mod swimming;
 pub use airborne::{AirborneController, Landing, MotionStep, PROVISIONAL_PHYSICS, VerticalPhysics};
 pub use choices::{offered_options, options};
@@ -33,7 +36,7 @@ pub use eq_network_game::movement::{
 };
 pub use falls::{HARMLESS_DROP, fall_damage};
 use liquids::LiquidGuard;
-pub use liquids::{GuardView, Liquid, Liquids};
+pub use liquids::{GuardView, Liquid, Liquids, SurfaceRegion};
 pub use navigator::{
     Fallback, GridNavigator, Navigator, Planned, Refusals, RouteSearch, Scope, SearchRequest,
 };
@@ -41,6 +44,7 @@ pub use pace::{ANIMATION_UNITS_PER_SECOND, record_speed, runs};
 pub use pad::PadArrival;
 pub use path::{PathProgress, PathSearch};
 pub use route::{Background, Route, RouteStep, SearchTiming};
+pub use surface::{SurfaceClock, SurfaceDecline, SurfacePlan, SurfaceStroke};
 pub use swimming::{LiquidContact, ShorelineStep, SwimDepth};
 
 #[derive(Clone, Copy)]
@@ -207,6 +211,8 @@ type Obstruction = (Option<u8>, Arc<CollisionMesh>, Solidity);
 /// snapshot for another thread costs a few reference counts.
 #[derive(Clone)]
 pub struct CollisionWorld {
+    /// Optional, per-trial observations; never part of geometry or movement rules.
+    observation: Option<MotionObservation>,
     terrain: Arc<CollisionMesh>,
     /// Each obstacle with the door it belongs to, if any, and whether it
     /// holds the player up and stops them walking.
@@ -243,6 +249,7 @@ impl CollisionWorld {
             swim_origin: None,
             collision_height: None,
             titanium_walking_origin: None,
+            observation: None,
         })
     }
 
@@ -337,6 +344,7 @@ impl CollisionWorld {
             swim_origin: self.swim_origin,
             collision_height: self.collision_height,
             titanium_walking_origin: self.titanium_walking_origin,
+            observation: self.observation.clone(),
         }
     }
 
@@ -367,6 +375,7 @@ impl CollisionWorld {
             swim_origin: self.swim_origin,
             collision_height: self.collision_height,
             titanium_walking_origin: self.titanium_walking_origin,
+            observation: self.observation.clone(),
         }
     }
 
@@ -775,14 +784,30 @@ impl CollisionWorld {
             || !range.is_finite()
             || range < 0.0
         {
+            self.observe_unknown();
             return None;
         }
-        let (pose, capsule) = body(feet, self.collision_height.unwrap_or(height));
+        self.capsule_clearance(feet, self.collision_height.unwrap_or(height), range)
+    }
+
+    /// Contact at the exact swimming/flight capsule, with no walk lift or
+    /// posture override. Unsupported queries remain visible to a trial token.
+    #[must_use]
+    pub fn swim_clearance(&self, feet: Vec3, height: f32) -> Option<f32> {
+        if !feet.is_finite() || !height.is_finite() || height < 1.0 {
+            self.observe_unknown();
+            return None;
+        }
+        self.capsule_clearance(feet - Vec3::Y * LIFT, height, 0.0)
+    }
+
+    fn capsule_clearance(&self, feet: Vec3, height: f32, range: f32) -> Option<f32> {
+        let (pose, capsule) = body(feet, height);
         self.wall_meshes()
             .filter_map(|mesh| {
-                contact(&pose, &capsule, &mesh.pose, mesh.mesh, range)
-                    .ok()
-                    .flatten()
+                let result = contact(&pose, &capsule, &mesh.pose, mesh.mesh, range);
+                self.observe_sweep(&result);
+                result.ok().flatten()
             })
             .map(|contact| contact.dist)
             .min_by(f32::total_cmp)
@@ -846,10 +871,12 @@ impl CollisionWorld {
 
     /// Samples support under the capsule footprint, including contact before its center reaches a stair.
     fn support_height(&self, position: Vec3, step_up: f32, drop: f32) -> Option<f32> {
-        SUPPORT_OFFSETS
+        let floor = SUPPORT_OFFSETS
             .into_iter()
             .filter_map(|(x, z)| self.ground(position + Vec3::new(x, 0.0, z), step_up, drop))
-            .max_by(f32::total_cmp)
+            .max_by(f32::total_cmp);
+        self.observe_support(floor.is_some());
+        floor
     }
 
     /// Walks a displacement in strides shorter than a stair tread, so a sample that
@@ -1189,6 +1216,18 @@ impl CollisionWorld {
     }
 
     fn labelled_sweep_for(
+        &self,
+        feet: Vec3,
+        delta: Vec3,
+        height: f32,
+        purpose: SweepPurpose,
+    ) -> Result<Option<(Obstacle, parry3d::query::ShapeCastHit)>, parry3d::query::Unsupported> {
+        let result = self.labelled_sweep_inner(feet, delta, height, purpose);
+        self.observe_sweep(&result);
+        result
+    }
+
+    fn labelled_sweep_inner(
         &self,
         feet: Vec3,
         delta: Vec3,
