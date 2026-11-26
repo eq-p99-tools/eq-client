@@ -11,6 +11,8 @@ mod carrier_walls;
 #[cfg(test)]
 mod chase_turn_tests;
 #[cfg(test)]
+mod teleport_camera_tests;
+#[cfg(test)]
 mod latency_tests;
 #[cfg(test)]
 mod release_animation_tests;
