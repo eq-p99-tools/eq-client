@@ -510,17 +510,27 @@ pub(super) fn create_texture_images(
     textures
         .into_iter()
         .map(|texture| {
-            let mut masked_pixels = texture.rgba8.clone();
             let color_key = texture.color_key.unwrap_or([0, 0, 0]);
-            for pixel in masked_pixels.as_chunks_mut::<4>().0 {
-                if pixel[..3] == color_key {
-                    pixel[3] = 0;
+            let keyed = |pixel: &[u8; 4]| pixel[..3] == color_key && pixel[3] != 0;
+            // Many textures, and nearly all of an HD pack's, have no texel the
+            // key would clear. Those draw the same either way, so one image
+            // serves both and the texture's memory isn't paid twice.
+            let needs_mask = texture.rgba8.as_chunks::<4>().0.iter().any(keyed);
+            let masked_pixels = needs_mask.then(|| {
+                let mut pixels = texture.rgba8.clone();
+                for pixel in pixels.as_chunks_mut::<4>().0 {
+                    if keyed(pixel) {
+                        pixel[3] = 0;
+                    }
                 }
-            }
-            TextureImages {
-                opaque: images.add(create_image(texture.width, texture.height, texture.rgba8)),
-                masked: images.add(create_image(texture.width, texture.height, masked_pixels)),
-            }
+                pixels
+            });
+            let opaque = images.add(create_image(texture.width, texture.height, texture.rgba8));
+            let masked = match masked_pixels {
+                Some(pixels) => images.add(create_image(texture.width, texture.height, pixels)),
+                None => opaque.clone(),
+            };
+            TextureImages { opaque, masked }
         })
         .collect()
 }
@@ -780,6 +790,35 @@ mod terrain_tests {
                 .collect(),
             images,
         )
+    }
+
+    #[test]
+    fn shares_one_image_when_the_key_clears_nothing() {
+        let mut images = Assets::<Image>::default();
+        let texture = |rgba8: Vec<u8>, color_key| eq_client_assets::ZoneTexture {
+            name: "synthetic.dds".to_owned(),
+            width: 2,
+            height: 1,
+            rgba8,
+            color_key,
+        };
+        let made = create_texture_images(
+            vec![
+                // No texel matches the key: one image for both.
+                texture(vec![9, 9, 9, 255, 1, 2, 3, 255], Some([0, 0, 0])),
+                // A keyed texel that is already clear changes nothing either.
+                texture(vec![0, 0, 0, 0, 1, 2, 3, 255], None),
+                // A visible keyed texel needs its own masked image.
+                texture(vec![0, 0, 0, 255, 1, 2, 3, 255], None),
+            ],
+            &mut images,
+        );
+        assert_eq!(made[0].opaque, made[0].masked);
+        assert_eq!(made[1].opaque, made[1].masked);
+        assert_ne!(made[2].opaque, made[2].masked);
+        assert_eq!(images.len(), 4);
+        let masked = images.get(&made[2].masked).unwrap().data.as_ref().unwrap();
+        assert_eq!(&masked[..8], &[0, 0, 0, 0, 1, 2, 3, 255]);
     }
 
     fn authored(double_sided: bool) -> TerrainMaterial {
