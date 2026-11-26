@@ -351,6 +351,19 @@ fn native_ground_repress_retains_only_owned_velocity_and_new_actual_input() {
 }
 
 #[test]
+fn native_ground_a_subframe_tap_never_invents_held_duration() {
+    let mut scene = Scene::new(0, true);
+    let before = latency_tests::shown(&mut scene.app).0;
+    latency_tests::key(&mut scene.app, KeyCode::ArrowUp, true);
+    latency_tests::key(&mut scene.app, KeyCode::ArrowUp, false);
+    let row = scene.step(false);
+    assert_eq!(row.shown, before);
+    assert_eq!(row.owned, Vec3::ZERO);
+    assert!(!row.forward);
+    assert_eq!(scene.observations, 0);
+}
+
+#[test]
 fn native_ground_ten_seconds_keeps_held_travel_and_ordinary_report_cadence() {
     let mut scene = Scene::new(0, true);
     let before = latency_tests::shown(&mut scene.app).0;
