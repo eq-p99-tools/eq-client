@@ -761,14 +761,21 @@ impl CollisionWorld {
             return None;
         }
         let floor = self.solid_ground(origin, 0.0, REACH)?;
+        let ceiling = self.ceiling(origin)?;
+        (ceiling > floor).then_some((floor, ceiling))
+    }
+
+    /// Shared by movement and ordinary posture, including the latter's
+    /// extra ceiling-minus-origin test. Titanium 0x43a0a0 keeps carrier
+    /// fronts and excludes doors; the same eligibility on Mac is inferred.
+    fn ceiling(&self, origin: Vec3) -> Option<f32> {
+        const REACH: f32 = 32_767.0;
         let up = Ray::new(Vector::from_array(origin.to_array()), Vector::Y);
-        let ceiling = self
-            .labelled_wall_meshes()
+        self.labelled_wall_meshes()
             .filter(|(obstacle, _)| !matches!(obstacle, Obstacle::Door(_)))
             .filter_map(|(_, mesh)| mesh.cast_ceiling(&up, REACH))
             .min_by(f32::total_cmp)
-            .map(|distance| origin.y + distance)?;
-        (ceiling > floor).then_some((floor, ceiling))
+            .map(|distance| origin.y + distance)
     }
 
     /// Strict floor-to-ceiling room at a movement candidate. A missing or
@@ -791,14 +798,7 @@ impl CollisionWorld {
         if !origin.is_finite() || !stand_height.is_finite() || !room.is_finite() {
             return false;
         }
-        let up = Ray::new(Vector::from_array(origin.to_array()), Vector::Y);
-        let ceiling = self
-            .labelled_wall_meshes()
-            .filter(|(obstacle, _)| !matches!(obstacle, Obstacle::Carrier(_)))
-            .filter_map(|(_, mesh)| mesh.cast_ray(&up, REACH, false))
-            .min_by(f32::total_cmp)
-            .map(|distance| origin.y + distance);
-        let Some(ceiling) = ceiling else {
+        let Some(ceiling) = self.ceiling(origin) else {
             return true;
         };
         let fits = self
@@ -1368,8 +1368,13 @@ mod tests {
 
     #[test]
     fn manual_posture_clearance_is_strict_and_also_checks_room_above_the_origin() {
-        let make =
-            |ceiling| CollisionWorld::new(floor(0.0).into_iter().chain(floor(ceiling))).unwrap();
+        let make = |ceiling| {
+            CollisionWorld::new(floor(0.0).into_iter().chain(floor(ceiling).map(|mut face| {
+                face.swap(1, 2);
+                face
+            })))
+            .unwrap()
+        };
         assert!(!make(8.0).posture_clearance(Vec3::Y * 3.75, 3.75, 8.0));
         assert!(make(8.001).posture_clearance(Vec3::Y * 3.75, 3.75, 8.0));
         // The total gap passes, but less than S remains above this origin.

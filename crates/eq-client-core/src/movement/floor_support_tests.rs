@@ -103,6 +103,7 @@ fn movement_ceilings_keep_rotated_carriers_and_exclude_doors() {
     // Walking skips NPC lateral walls, but its ceiling query still keeps them.
     let world = world.with_titanium_walking(3.75);
     assert!(!world.headroom(Vec3::Y * 3.75, 8.001));
+    assert!(!world.posture_clearance(Vec3::Y * 6.0, 3.75, 7.9));
     let mut doors = CollisionWorld::new(plane(0.0, true)).unwrap();
     doors.set_door_obstacles(vec![(
         7,
