@@ -128,8 +128,9 @@ pub(super) struct TerrainDraw {
 /// surface; a smaller cell keeps the mesh a carried light rewrites small.
 pub(super) const TERRAIN_CELL: f32 = 256.0;
 
-/// The surfaces a merged mesh holds: one material in one cell.
-type Group = (AssetId<StandardMaterial>, i32, i32);
+/// The surfaces a merged mesh holds: one material, one kind (see
+/// [`create_merged_terrain`]), one animation and one cell.
+type Group = (AssetId<StandardMaterial>, u8, u64, i32, i32);
 
 /// Terrain materials by what makes one: the blend, the texture and, when
 /// authored, the sides. Surfaces alike share a material, as do the frames
@@ -164,16 +165,22 @@ enum Geometry {
     Part(Group, usize),
 }
 
-/// Builds terrain using the material's own sidedness, merging the still,
-/// opaque or masked surfaces of one material in each `cell` into one mesh.
-/// `apart[i]` keeps primitive `i` in a mesh of its own, as Better Water
-/// dresses a water surface alone. Blended and additive surfaces stay apart
-/// too: they are sorted by distance, and a merged mesh would sort as one.
+/// Builds terrain using the material's own sidedness, merging the opaque or
+/// masked surfaces of one material and one animation in each `cell` into
+/// one mesh: surfaces that flip through the same frames at the same pace
+/// stay in step, so one of them can animate them all.
+///
+/// `kinds[i]` is 0 for ordinary terrain; any other value marks primitive
+/// `i` as the top of a liquid (Better Water dresses each kind alike), which
+/// merges only with surfaces of its own kind, in any blend. Other blended
+/// and additive surfaces stay apart: they are sorted by distance, and a
+/// merged mesh sorts as one. A liquid's sheets in a cell lie level side by
+/// side, so sorting them as one changes nothing seen.
 /// The draws come back one per drawn primitive, in order.
 pub(super) fn create_merged_terrain(
     primitives: Vec<ZonePrimitive>,
     authored: &[TerrainMaterial],
-    (apart, cell): (&[bool], Option<f32>),
+    (kinds, cell): (&[u8], Option<f32>),
     texture_images: &[TextureImages],
     (meshes, materials): (&mut Assets<Mesh>, &mut Assets<StandardMaterial>),
 ) -> Vec<TerrainDraw> {
@@ -220,11 +227,10 @@ pub(super) fn create_merged_terrain(
                 || material(mode, texture, sides),
                 |animation| animation.materials[0].clone(),
             );
+            let kind = kinds.get(index).copied().unwrap_or(0);
             let group = cell
                 .filter(|_| {
-                    animation.is_none()
-                        && !apart.get(index).copied().unwrap_or(false)
-                        && matches!(mode, MaterialMode::Opaque | MaterialMode::Masked)
+                    (kind != 0 || matches!(mode, MaterialMode::Opaque | MaterialMode::Masked))
                         && primitive.normals.len() == primitive.positions.len()
                         && primitive.texture_coordinates.len() == primitive.positions.len()
                 })
@@ -232,7 +238,8 @@ pub(super) fn create_merged_terrain(
                     let (x, z) = centre(&primitive.positions);
                     #[allow(clippy::cast_possible_truncation)] // Zone coordinates.
                     let at = ((x / cell).floor() as i32, (z / cell).floor() as i32);
-                    (material.id(), at.0, at.1)
+                    let motion = animation.as_ref().map_or(0, TerrainAnimation::pace);
+                    (material.id(), kind, motion, at.0, at.1)
                 });
             (primitive, material, animation, group)
         })
@@ -369,6 +376,20 @@ fn frame_images(
 
 impl TerrainAnimation {
     /// The sequence's clock at its first frame, with no frames yet.
+    /// What keeps two animated surfaces in step: their frames' materials,
+    /// how long each frame shows and whether frames are skipped; never 0,
+    /// which is a still surface's.
+    fn pace(&self) -> u64 {
+        use std::hash::{Hash, Hasher};
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        for material in &self.materials {
+            material.id().hash(&mut hasher);
+        }
+        self.frame_millis.hash(&mut hasher);
+        self.skip_frames.hash(&mut hasher);
+        hasher.finish().max(1)
+    }
+
     fn starting(source: &TextureAnimation) -> Self {
         Self {
             frames: Vec::new(),
@@ -926,7 +947,7 @@ mod terrain_tests {
                 moved(MaterialMode::Opaque, 0.0),
                 moved(MaterialMode::Blended(BlendOpacity::Half), 0.0),
                 moved(MaterialMode::Opaque, 10.0),
-                // Water, kept apart.
+                // Water, the only surface of its kind.
                 moved(MaterialMode::Opaque, 20.0),
                 // Another cell.
                 moved(MaterialMode::Opaque, 300.0),
@@ -943,7 +964,7 @@ mod terrain_tests {
                 authored(false),
                 still,
             ],
-            (&[false, false, false, true], Some(TERRAIN_CELL)),
+            (&[0, 0, 0, 1], Some(TERRAIN_CELL)),
             &textures,
             (&mut meshes, &mut materials),
         );
@@ -978,6 +999,77 @@ mod terrain_tests {
             panic!("indices");
         };
         assert_eq!(indices[6..12], [3, 4, 5, 5, 4, 3]);
+        // Five meshes for seven surfaces.
+        assert_eq!(meshes.len(), 5);
+    }
+
+    #[test]
+    fn liquid_surfaces_merge_by_kind_in_any_blend_and_animated_ones_by_pace() {
+        let mut images = Assets::<Image>::default();
+        let textures = textures(&mut images);
+        let mut meshes = Assets::<Mesh>::default();
+        let mut materials = Assets::<StandardMaterial>::default();
+        let moved = |mode, x: f32| {
+            let mut primitive = primitive(mode);
+            for position in &mut primitive.positions {
+                position[0] += x;
+            }
+            primitive
+        };
+        let half = MaterialMode::Blended(BlendOpacity::Half);
+        let still = TerrainMaterial {
+            double_sided: false,
+            animation: None,
+        };
+        let mut slower = authored(false);
+        slower.animation.as_mut().unwrap().frame_millis = NonZeroU32::new(200).unwrap();
+        let draws = create_merged_terrain(
+            vec![
+                // Two blended water sheets merge; a blended sheet of
+                // ordinary terrain does not.
+                moved(half, 0.0),
+                moved(half, 10.0),
+                moved(half, 20.0),
+                // Lava of the same look keeps to itself.
+                moved(half, 30.0),
+                // Two animated water sheets in step merge; a slower one
+                // stays alone.
+                moved(MaterialMode::Opaque, 40.0),
+                moved(MaterialMode::Opaque, 50.0),
+                moved(MaterialMode::Opaque, 60.0),
+            ],
+            &[
+                still.clone(),
+                still.clone(),
+                still.clone(),
+                still,
+                authored(false),
+                authored(false),
+                slower,
+            ],
+            (&[1, 1, 0, 2, 1, 1, 1], Some(TERRAIN_CELL)),
+            &textures,
+            (&mut meshes, &mut materials),
+        );
+        let parts: Vec<_> = draws
+            .iter()
+            .map(|draw| (draw.offset, draw.spawn, draw.animation.is_some()))
+            .collect();
+        assert_eq!(
+            parts,
+            [
+                (0, true, false),
+                (3, false, false),
+                (0, true, false),
+                (0, true, false),
+                (0, true, true),
+                (3, false, true),
+                (0, true, true),
+            ]
+        );
+        assert_eq!(draws[0].mesh, draws[1].mesh);
+        assert_eq!(draws[4].mesh, draws[5].mesh);
+        assert_ne!(draws[0].mesh, draws[4].mesh);
         // Five meshes for seven surfaces.
         assert_eq!(meshes.len(), 5);
     }

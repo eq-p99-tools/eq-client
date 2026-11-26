@@ -112,6 +112,15 @@ impl WaterSurface {
     }
 }
 
+/// Which kind of terrain a liquid's surface merges as, never 0 (ordinary
+/// terrain): water only with water, lava only with lava.
+pub(super) fn merge_kind(liquid: Liquid) -> u8 {
+    match liquid {
+        Liquid::Water => 1,
+        Liquid::Lava => 2,
+    }
+}
+
 /// The plain material a surface wears while the look is off.
 #[derive(Component)]
 struct Parked(Handle<StandardMaterial>);
@@ -279,8 +288,33 @@ type Wearers = (
     Option<&'static Parked>,
 );
 
+/// What makes two surfaces' looks the same: the liquid, the frames it
+/// flips through and how fast, and which side it hides. Surfaces alike
+/// wear one look, so they draw together and the look changes once a frame
+/// tick for all of them.
+#[derive(Clone, PartialEq, Eq, Hash)]
+struct Alike {
+    lava: bool,
+    frames: Vec<AssetId<Image>>,
+    frame_secs: u32,
+    cull: Option<Face>,
+}
+
+impl Alike {
+    fn of(surface: &WaterSurface, plain: Option<&StandardMaterial>) -> Self {
+        let lava = surface.liquid == Liquid::Lava;
+        Self {
+            lava,
+            frames: surface.frames.iter().map(Handle::id).collect(),
+            frame_secs: surface.frame_secs.to_bits(),
+            cull: plain.and_then(|plain| plain.cull_mode),
+        }
+    }
+}
+
 /// Puts the look on each surface while the setting is on, and the plain
-/// material back when it is off.
+/// material back when it is off. The looks made are remembered weakly, so
+/// a look goes once no surface wears it.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 fn wear(
     mut commands: Commands,
@@ -288,13 +322,23 @@ fn wear(
     mut surfaces: Query<Wearers>,
     plain: Res<Assets<StandardMaterial>>,
     mut looks: ResMut<Assets<WaterMaterial>>,
+    mut made: Local<std::collections::HashMap<Alike, AssetId<WaterMaterial>>>,
 ) {
     let on = better(&options);
     for (entity, mut surface, material, parked) in &mut surfaces {
         match (on, material, parked) {
             (true, Some(material), None) => {
                 let look = surface.look.clone().unwrap_or_else(|| {
-                    let look = looks.add(new_look(&surface, plain.get(&material.0)));
+                    let plain = plain.get(&material.0);
+                    let alike = Alike::of(&surface, plain);
+                    let look = made
+                        .get(&alike)
+                        .and_then(|id| looks.get_strong_handle(*id))
+                        .unwrap_or_else(|| {
+                            let look = looks.add(new_look(&surface, plain));
+                            made.insert(alike, look.id());
+                            look
+                        });
                     surface.look = Some(look.clone());
                     look
                 });
@@ -313,6 +357,7 @@ fn wear(
             _ => {}
         }
     }
+    made.retain(|_, id| looks.contains(*id));
 }
 
 fn new_look(surface: &WaterSurface, plain: Option<&StandardMaterial>) -> WaterMaterial {
@@ -393,11 +438,17 @@ fn animate(
     // The shader's clock is the same wrapped time.
     let now = time.elapsed_secs_wrapped();
     let deep = f32::from(u8::from(cameras.iter().any(|has| has)));
+    // Surfaces alike share a look: the first of them moves it.
+    let mut moved = HashSet::new();
     for (mut surface, material) in &mut surfaces {
         let count = surface.frames.len().max(1) as u64;
         #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
         let tick = (now / surface.frame_secs).floor().max(0.0) as u64;
         if surface.shown == Some(tick) {
+            continue;
+        }
+        if !moved.insert(material.0.id()) {
+            surface.shown = Some(tick);
             continue;
         }
         let Some(mut look) = looks.get_mut(&material.0) else {
@@ -468,8 +519,9 @@ fn weather(
         return;
     }
     *last = Some(now);
-    for material in &surfaces {
-        if let Some(mut look) = looks.get_mut(&material.0) {
+    let looks_worn: HashSet<_> = surfaces.iter().map(|material| material.0.id()).collect();
+    for id in looks_worn {
+        if let Some(mut look) = looks.get_mut(id) {
             let params = &mut look.extension.params;
             params.sky = sky;
             params.sun_direction = sun_direction;
@@ -798,5 +850,86 @@ mod tests {
             surface_liquid(&square(0.0, true), &lava, &none),
             Some(Liquid::Lava)
         );
+    }
+
+    #[test]
+    fn surfaces_alike_wear_one_look_and_it_moves_once_a_tick() {
+        let mut app = App::new();
+        app.init_resource::<crate::options::OptionsState>()
+            .init_resource::<Time>()
+            .insert_resource(Assets::<StandardMaterial>::default())
+            .insert_resource(Assets::<WaterMaterial>::default())
+            .insert_resource(Assets::<Image>::default())
+            .add_systems(Update, (wear, animate).chain());
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::BetterWater, true);
+        let (ripple, swell) = {
+            let mut images = app.world_mut().resource_mut::<Assets<Image>>();
+            (images.add(Image::default()), images.add(Image::default()))
+        };
+        let plain = app
+            .world_mut()
+            .resource_mut::<Assets<StandardMaterial>>()
+            .add(StandardMaterial::default());
+        let frames = vec![ripple.clone(), swell.clone()];
+        let millis = std::num::NonZeroU32::new(250);
+        let surfaces = [
+            WaterSurface::new(Liquid::Water, frames.clone(), millis),
+            WaterSurface::new(Liquid::Water, frames.clone(), millis),
+            WaterSurface::new(Liquid::Water, frames.clone(), millis),
+            WaterSurface::new(Liquid::Lava, frames, millis),
+            WaterSurface::new(Liquid::Water, vec![swell], millis),
+        ]
+        .map(|surface| {
+            app.world_mut()
+                .spawn((surface, MeshMaterial3d(plain.clone())))
+                .id()
+        });
+        app.update();
+        app.update();
+        let worn: Vec<_> = surfaces
+            .iter()
+            .map(|&surface| {
+                app.world()
+                    .get::<MeshMaterial3d<WaterMaterial>>(surface)
+                    .expect("wears the look")
+                    .0
+                    .id()
+            })
+            .collect();
+        // The three alike share one; lava and other frames have their own.
+        assert_eq!(worn[0], worn[1]);
+        assert_eq!(worn[0], worn[2]);
+        assert_ne!(worn[0], worn[3]);
+        assert_ne!(worn[0], worn[4]);
+        assert_ne!(worn[3], worn[4]);
+        assert_eq!(app.world().resource::<Assets<WaterMaterial>>().len(), 3);
+        // Each surface has the tick shown, though only the first moved it.
+        for &surface in &surfaces {
+            assert!(
+                app.world()
+                    .get::<WaterSurface>(surface)
+                    .unwrap()
+                    .shown
+                    .is_some()
+            );
+        }
+        // Off, every surface wears the plain material again.
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .qol
+            .set(Fix::BetterWater, false);
+        app.update();
+        for &surface in &surfaces {
+            assert!(
+                app.world()
+                    .get::<MeshMaterial3d<StandardMaterial>>(surface)
+                    .is_some()
+            );
+        }
     }
 }

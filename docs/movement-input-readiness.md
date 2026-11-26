@@ -48,14 +48,18 @@ report is unavailable. A known current weight or slowing effect still applies.
 Inventory actions retain their own guards, and neither silence nor a movement
 grant confirms an inventory update.
 
-After a ground drop, the server may already hold a queued arrival as its
-current cursor item. Take the heaviest possible current cursor group and
-count the rest of the carried inventory once. The worker checks that bound
-independently and raises an understated report to it. Without a current bound,
-it refuses a new grant; an active grant can continue with its weight retained
-as a floor while usable reported terms apply. If inventory state cannot recover,
-re-enter for a fresh snapshot. A cursor resync can leave the separate landing
-bound usable even when inventory actions remain held.
+After a local EQEmu ground-drop submission, cursor removal is a local projection,
+not a received inventory update. Keep each distinct submitted instance's whole
+mass in addition to the projected inventory, with coins counted once. A later
+cursor group can still be queued on the server; the bound includes the heaviest
+possible group and retains locally removed instances until covering received
+records or a full snapshot replaces them. This can deliberately read heavy.
+Ordinary silence settlement does not retire drop mass. The worker checks the
+bound independently and raises an understated report to it. Without a current
+bound it refuses a new grant; an active grant can continue with its weight
+retained as a floor while usable reported terms apply. A slot-only reduction
+can leave the last proved landing bound usable while inventory readiness is
+withdrawn. An unbounded update withdraws that landing bound too.
 Recalibration preserves an in-progress descent and pending fall report.
 
 The session owns HP/sneak speed adjustments, movement caps and permission. A new
