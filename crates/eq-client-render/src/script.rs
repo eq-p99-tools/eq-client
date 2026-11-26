@@ -831,7 +831,7 @@ impl Script {
         }
     }
 
-    /// Returns whether another action may start; every caller has released input.
+    /// Returns whether another action may start, after transient step cleanup.
     fn advance(&mut self, now: Duration) -> bool {
         match self.mode {
             RunMode::Continuous => true,

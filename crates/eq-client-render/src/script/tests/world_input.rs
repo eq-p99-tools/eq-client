@@ -132,10 +132,15 @@ fn explicit_key_hold_spans_wait_and_world_rmb_look_until_key_up() {
 #[test]
 fn explicit_holds_release_on_completion_stop_pause_and_native_takeover_error() {
     for ending in 0..4 {
-        let (mut app, window, _) = fixture(vec![
+        let mut steps = vec![
             Step::KeyDown(vec![KeyCode::KeyA]),
             look(if matches!(ending, 0 | 3) { 30 } else { 1000 }),
-        ]);
+        ];
+        if ending == 3 {
+            // Pause at the next action; the last action instead completes.
+            steps.push(Step::Wait(Duration::from_secs(1)));
+        }
+        let (mut app, window, _) = fixture(steps);
         for ms in [0, 10, 20] {
             frame(&mut app, ms);
         }
@@ -177,6 +182,31 @@ fn explicit_holds_release_on_completion_stop_pause_and_native_takeover_error() {
             }
         );
     }
+}
+
+#[test]
+fn explicit_hold_cleanup_preserves_a_native_hold_of_the_same_key() {
+    let (mut app, window, _) = fixture(vec![
+        Step::KeyDown(vec![KeyCode::KeyA]),
+        Step::Wait(Duration::from_secs(1)),
+    ]);
+    frame(&mut app, 0);
+    set_focus(&mut app, window, true);
+    native_key(&mut app, window, KeyCode::KeyA, true);
+    frame(&mut app, 10);
+    assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+    assert!(
+        app.world()
+            .resource::<ButtonInput<KeyCode>>()
+            .pressed(KeyCode::KeyA)
+    );
+    assert!(
+        app.world()
+            .resource::<SeenKeys>()
+            .0
+            .iter()
+            .all(|event| event.state.is_pressed())
+    );
 }
 
 #[test]
