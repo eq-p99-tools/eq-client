@@ -201,7 +201,7 @@ fn target(
 fn reach(own: abilities::Body, mut target: abilities::Body) -> f32 {
     let (mut low, mut high) = (0., MAX_DISTANCE);
     for _ in 0..16 {
-        let middle = (low + high) * 0.5;
+        let middle = f32::midpoint(low, high);
         target.x = middle;
         if abilities::in_melee_range(own, target) {
             low = middle;

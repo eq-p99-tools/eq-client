@@ -238,12 +238,13 @@ fn runtime() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
         .reset_all();
     crate::clicks::testing::install(&mut app);
     let now = Instant::now();
-    let mut controls = app.world_mut().resource_mut::<motion::Controls>();
-    controls.test_now = Some(now);
-    controls.test_span = Some(0.1);
-    controls.walk_speed = Some(3.);
-    controls.last_accepted = now - Duration::from_millis(100);
-    drop(controls);
+    {
+        let mut controls = app.world_mut().resource_mut::<motion::Controls>();
+        controls.test_now = Some(now);
+        controls.test_span = Some(0.1);
+        controls.walk_speed = Some(3.);
+        controls.last_accepted = now.checked_sub(Duration::from_millis(100)).unwrap();
+    }
     app.world_mut()
         .resource_mut::<crate::outbox::Outbox>()
         .set_test_time(now);
@@ -430,7 +431,7 @@ fn melee_received_target_loss_attack_off_death_zone_and_option_off_stop_new_samp
         let mut now = Instant::now();
         {
             let mut controls = app.world_mut().resource_mut::<motion::Controls>();
-            controls.last_accepted = now - Duration::from_millis(100);
+            controls.last_accepted = now.checked_sub(Duration::from_millis(100)).unwrap();
             controls.last_sent = None;
             controls.test_span = Some(0.1);
             controls.walk_speed = Some(3.);
