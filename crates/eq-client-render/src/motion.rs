@@ -1422,8 +1422,8 @@ impl Controls {
         }
         self.last_answer = Some(self.now());
         self.refused = refused.cloned();
-        if refused.is_some()
-            || self
+        if refused.is_none()
+            && self
                 .mouse_heading
                 .is_some_and(|heading| arc(heading, position.heading) == 0.)
         {
