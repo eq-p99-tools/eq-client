@@ -2503,8 +2503,11 @@ pub(super) fn input(
             look.as_deref(),
         );
         let eligible = time.is_some()
-            && client == InstalledClient::Titanium
-            && online.world().generation() == eq_client_core::GameDialect::Titanium
+            && client.owns_ground_frames()
+            && match online.world().generation() {
+                eq_client_core::GameDialect::Titanium => true,
+                eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+            }
             && focused
             && standing
             && !lying
@@ -2536,6 +2539,19 @@ pub(super) fn input(
             .map_or(Duration::ZERO, Time::delta)
             .min(now.saturating_duration_since(controls.last_accepted));
         let mouse_heading = controls.mouse_heading;
+        let feet = controls
+            .ground
+            .current
+            .map_or(drawn.translation - Vec3::Y * body.feet_offset, |frame| {
+                frame.motion.feet()
+            });
+        let physics = walking(
+            physics(client, online.world().zone_gravity()),
+            client,
+            body,
+            player.race,
+            (raised_walk(world, feet, body.height, posture), false),
+        );
         let walking_world = carrier_walking_world(world, client, body.feet_offset, false, false);
         if ground::input(
             &mut controls,
@@ -2547,6 +2563,7 @@ pub(super) fn input(
                 outbox: &outbox,
                 now,
                 first_span,
+                physics,
                 eligible,
                 mouse_heading,
             },
@@ -7913,7 +7930,7 @@ pub(super) mod tests {
     }
 
     /// The fixture body's Titanium walk climb: a human standing 3 high.
-    fn fixture_climb() -> f32 {
+    pub(super) fn fixture_climb() -> f32 {
         eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
             race: 1,
             stand_height: 3.0,

@@ -53,6 +53,7 @@ struct Scene {
     refusals: usize,
     early_refuse: bool,
     ordinary_stops: usize,
+    ordinary_modes: Vec<MovementMode>,
 }
 
 // Each piece meets its neighbour exactly; the collision owner's capsule,
@@ -142,14 +143,139 @@ fn native_ground_blocked_at_a_ramp_boundary_does_not_restart_while_forward_is_he
     }
 }
 
+#[test]
+fn native_ground_running_key_turn_retains_owner_and_ordinary_path_distance() {
+    for speed in [6., 29.866_667] {
+        for turn in [Act::TurnLeft, Act::TurnRight] {
+            let mut distances = Vec::new();
+            for native in [false, true] {
+                let mut scene = Scene::with_speed(0, native, speed);
+                crate::keys::testing::bind(
+                    &mut scene.app,
+                    turn,
+                    crate::keys::Chord::key(KeyCode::ArrowLeft),
+                );
+                for _ in 0..90 {
+                    scene.step(true);
+                }
+                latency_tests::key(&mut scene.app, KeyCode::ArrowLeft, true);
+                let mut previous = latency_tests::shown(&mut scene.app).0;
+                let mut distance = 0.;
+                let mut handovers = 0;
+                for _ in 0..60 {
+                    let row = scene.step(true);
+                    distance += row.shown.distance(previous);
+                    handovers += usize::from(
+                        native && !scene.app.world().resource::<Controls>().ground.active(),
+                    );
+                    previous = row.shown;
+                }
+                latency_tests::key(&mut scene.app, KeyCode::ArrowLeft, false);
+                for _ in 0..12 {
+                    scene.step(true);
+                }
+                assert_eq!(handovers, 0);
+                assert_eq!(scene.refusals, 0);
+                for pair in scene.packets.windows(2) {
+                    assert!(pair[1].0.duration_since(pair[0].0) > TITANIUM_FLAGS.spacing);
+                }
+                println!(
+                    "key-turn native={native} speed={speed} turn={turn:?} path={distance} packets={}",
+                    scene.packets.len()
+                );
+                distances.push(distance);
+            }
+            assert!(
+                (distances[1] - distances[0]).abs() / distances[0] < 0.01,
+                "key turn lost travel versus ordinary path: {distances:?}"
+            );
+        }
+    }
+}
+
+#[test]
+fn native_ground_granted_strafe_and_diagonal_stay_on_the_ordinary_owner() {
+    for diagonal in [false, true] {
+        let mut scene = Scene::with_rates(0, true, 6., true);
+        crate::keys::testing::bind(
+            &mut scene.app,
+            Act::StrafeRight,
+            crate::keys::Chord::key(KeyCode::KeyL),
+        );
+        latency_tests::key(&mut scene.app, KeyCode::KeyL, true);
+        let before = latency_tests::shown(&mut scene.app).0;
+        for _ in 0..120 {
+            scene.step(diagonal);
+        }
+        let after = latency_tests::shown(&mut scene.app).0;
+        let expected = if diagonal {
+            MovementMode::GroundedDiagonal(GroundedDiagonal {
+                along: DiagonalAlong::Run,
+                side: StrafeSide::Right,
+            })
+        } else {
+            MovementMode::Strafe(Pace::Run)
+        };
+        assert!(scene.ordinary_modes.iter().all(|mode| *mode == expected));
+        assert!(!scene.ordinary_modes.is_empty());
+        assert_eq!(
+            scene.observations, 0,
+            "lateral movement was submitted as native Forward"
+        );
+        assert!(!scene.app.world().resource::<Controls>().ground.active());
+        assert_eq!(scene.refusals, 0);
+        // Components keep their independent ordinary rates. No radial
+        // normalisation or Forward-rate substitution is introduced here.
+        assert!(((after.z - before.z).abs() - 6.).abs() < 0.02);
+        assert!(((after.x - before.x).abs() - if diagonal { 12. } else { 0. }).abs() < 0.02);
+        println!(
+            "lateral diagonal={diagonal} displacement={:?} ordinary={}",
+            after - before,
+            scene.ordinary_modes.len()
+        );
+    }
+}
+
+#[test]
+fn native_ground_an_unobserved_press_release_has_no_input_or_forced_stop_report() {
+    let mut scene = Scene::new(0, true);
+    let before = latency_tests::shown(&mut scene.app).0;
+    let packets = scene.packets.len();
+    latency_tests::key(&mut scene.app, KeyCode::ArrowUp, true);
+    latency_tests::key(&mut scene.app, KeyCode::ArrowUp, false);
+    for _ in 0..10 {
+        assert_eq!(scene.step(false).shown, before);
+    }
+    assert_eq!(scene.observations, 0);
+    assert_eq!(scene.ordinary_stops, 0);
+    assert_eq!(scene.packets.len(), packets);
+}
+
 impl Scene {
     fn new(delay: u32, known: bool) -> Self {
         Self::with_speed(delay, known, 6.)
     }
 
     fn with_speed(delay: u32, known: bool, speed: f32) -> Self {
+        Self::with_rates(delay, known, speed, false)
+    }
+
+    fn with_rates(delay: u32, known: bool, speed: f32, lateral: bool) -> Self {
         let (mut app, commands, news) = latency_tests::timing_app();
         app.world_mut().resource_mut::<Controls>().speed = Some(speed);
+        let diagonal = if lateral {
+            DiagonalRates {
+                run: Some(3.),
+                walk: None,
+            }
+        } else {
+            DiagonalRates::default()
+        };
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.strafe_speed = lateral.then_some(3.);
+            controls.diagonal_rates = diagonal;
+        }
         // Physical Forward deliberately differs from the fixture's camera-W.
         crate::keys::testing::bind(
             &mut app,
@@ -196,14 +322,20 @@ impl Scene {
                     animation: 12,
                     swim: None,
                     swim_backward_units_per_second: None,
-                    diagonal: DiagonalRates::default(),
-                    strafe: None,
+                    diagonal,
+                    strafe: lateral.then_some(eq_network_game::movement::StrafeCalibration {
+                        units_per_second: 3.,
+                        velocity_scale: 1.,
+                        animation: 8,
+                        walk_units_per_second: None,
+                    }),
                     walk: None,
                     backward: None,
                 },
                 start,
             )
             .unwrap();
+        owner.set_climb(super::tests::fixture_climb());
         let mut scene = Self {
             app,
             commands,
@@ -219,6 +351,7 @@ impl Scene {
             refusals: 0,
             early_refuse: false,
             ordinary_stops: 0,
+            ordinary_modes: Vec::new(),
         };
         scene.step(false);
         scene
@@ -279,6 +412,7 @@ impl Scene {
                 }
             }
             ClientCommand::Move(request) => {
+                self.ordinary_modes.push(request.mode);
                 self.ordinary_stops += usize::from(request.position == self.owner.position());
                 let packets = &mut self.packets;
                 self.owner
@@ -289,6 +423,7 @@ impl Scene {
                     .unwrap();
                 self.reply(request.created, None);
             }
+            ClientCommand::ClimbReach { per_step, .. } => self.owner.set_climb(per_step),
             _ => (),
         }
     }

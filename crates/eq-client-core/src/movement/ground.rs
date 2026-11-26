@@ -1,5 +1,8 @@
 //! Ordinary dry velocity belongs to observed frames, never to a future sample.
-use super::{CollisionWorld, Liquid, LiquidContact, PROGRAM_STEP_SECONDS, SUPPORT_OFFSETS};
+use super::{
+    AirborneController, CollisionWorld, Liquid, LiquidContact, MAX_GROUNDED_STEP, MotionStep,
+    PROGRAM_STEP_SECONDS, SUPPORT_OFFSETS, VerticalPhysics,
+};
 use glam::{DVec3, Vec3};
 use std::time::Duration;
 
@@ -25,7 +28,7 @@ pub struct GroundMotion {
 
 impl GroundMotion {
     /// Begins at an observed, stationary placement. The first step still has
-    /// to establish its dry, static, level support from the real collision owner.
+    /// to establish its dry, static, grounded support from the real collision owner.
     #[must_use]
     pub fn new(feet: Vec3) -> Option<Self> {
         feet.is_finite().then_some(Self {
@@ -54,7 +57,7 @@ impl GroundMotion {
     /// remains owned state when collision stops a position; it is not rebuilt
     /// from interval travel. No native stationary-delta inference is added.
     ///
-    /// None changes nothing. Unknown liquid, moving support, a slope/edge or
+    /// None changes nothing. Unknown liquid, moving support, an unsupported edge or
     /// an invalid body/control keeps the existing ordinary movement path.
     #[must_use]
     pub fn frame(
@@ -66,13 +69,57 @@ impl GroundMotion {
         forward: bool,
         elapsed: Duration,
     ) -> Option<Self> {
+        self.frame_using(world, height, direction, speed, forward, elapsed, None)
+    }
+
+    /// Uses the same grounded body physics as the ordinary walking controller.
+    /// An airborne result declines; no new vertical velocity owner is created.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn frame_with_physics(
+        self,
+        world: &CollisionWorld,
+        height: f32,
+        direction: Vec3,
+        speed: f32,
+        forward: bool,
+        elapsed: Duration,
+        physics: VerticalPhysics,
+    ) -> Option<Self> {
+        self.frame_using(
+            world,
+            height,
+            direction,
+            speed,
+            forward,
+            elapsed,
+            Some(physics),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn frame_using(
+        self,
+        world: &CollisionWorld,
+        height: f32,
+        direction: Vec3,
+        speed: f32,
+        forward: bool,
+        elapsed: Duration,
+        physics: Option<VerticalPhysics>,
+    ) -> Option<Self> {
+        let climb = physics.map_or(MAX_GROUNDED_STEP, |physics| physics.reach());
+        if !climb.is_finite() || climb <= 0.0 {
+            return None;
+        }
         let feet = self.feet();
         if !speed.is_finite()
             || speed <= 0.0
             || !direction.is_finite()
             || !height.is_finite()
             || height < 1.0
-            || !world.plain_ground(feet, height)
+            || world.support(feet).is_none()
+            || !world.plain_ground(feet, height, climb)
         {
             return None;
         }
@@ -104,14 +151,39 @@ impl GroundMotion {
         let seconds = elapsed.as_secs_f32().min(FRAME_CAP);
         let proposed = self.position + (velocity * seconds).as_dvec3();
         let target = proposed.as_vec3();
-        if !world.plain_ground(target, height) || !world.plain_ground_segment(feet, target, height)
+        // Keep the ordinary water-entry handback: a grounded sweep can stop
+        // at a dry prefix, which must not strand this owner at the shoreline.
+        if !world.plain_ground_segment(feet, target, height)
+            || !matches!(world.liquid_contact(target, height), LiquidContact::Unmarked)
         {
             return None;
         }
         // The existing ordinary sweep is the collision owner. Its diagnostic
         // first-contact query is deliberately not used as movement evidence.
-        let landed = world.step(feet, target - feet, height);
-        if !world.plain_ground(landed, height) {
+        let landed = if let Some(physics) = physics {
+            let mut airborne = AirborneController::default();
+            let landed = airborne.step(
+                world,
+                feet,
+                physics,
+                MotionStep {
+                    horizontal: target - feet,
+                    jump: false,
+                    seconds,
+                    height,
+                },
+            );
+            if airborne.velocity() != 0.0 || airborne.peak().is_some() {
+                return None;
+            }
+            landed
+        } else {
+            world.step(feet, target - feet, height)
+        };
+        if world.support(landed).is_none()
+            || !world.plain_ground(landed, height, climb)
+            || !world.plain_ground_segment(feet, landed, height)
+        {
             return None;
         }
         let position = if (landed.x, landed.z) == (target.x, target.z) {
@@ -126,7 +198,7 @@ impl GroundMotion {
 impl CollisionWorld {
     /// Positive footprint evidence from this same geometry; virtual liquid
     /// floors and transient door/carrier coordinates never qualify it.
-    fn plain_ground(&self, feet: Vec3, height: f32) -> bool {
+    fn plain_ground(&self, feet: Vec3, height: f32, climb: f32) -> bool {
         if self.liquid_support
             || !matches!(self.liquid_contact(feet, height), LiquidContact::Unmarked)
         {
@@ -136,20 +208,22 @@ impl CollisionWorld {
         let mut high = f32::NEG_INFINITY;
         for (x, z) in SUPPORT_OFFSETS {
             let point = feet + Vec3::new(x, 0., z);
-            let Some(floor) = self.solid_ground(point, 0.01, 0.05) else {
+            let Some(floor) = self.solid_ground(point, climb, MAX_GROUNDED_STEP) else {
                 return false;
             };
-            if self.ground_door(point, 0.01, 0.05).is_some()
-                || self.ground_spawn(point, 0.01, 0.05).is_some()
+            if self.ground_door(point, climb, MAX_GROUNDED_STEP).is_some()
+                || self.ground_spawn(point, climb, MAX_GROUNDED_STEP).is_some()
             {
                 return false;
             }
             low = low.min(floor);
             high = high.max(floor);
         }
-        // The normal support probe already uses a 0.01 upward window. This
-        // eligibility is narrower than ordinary walking; it changes no sweep.
-        high - low <= 0.01
+        // Use the ordinary walk's existing rise/drop budget for the footprint,
+        // not a flatness test. The caller separately requires actual narrow
+        // support at the starting and resolved feet: this wider lookahead can
+        // never acquire an airborne body. world.step still owns every move.
+        high - low <= climb.max(MAX_GROUNDED_STEP)
     }
 
     fn plain_ground_segment(&self, from: Vec3, to: Vec3, height: f32) -> bool {

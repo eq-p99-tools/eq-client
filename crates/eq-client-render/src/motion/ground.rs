@@ -7,7 +7,10 @@ use super::{
 use bevy::prelude::{Entity, Has, Quat, Query, Transform, Vec2, Vec3, With};
 use eq_client_core::{
     ClientCommand, GroundState, HeadingUpdate, MovementMode, MovementRequest, WorldPosition,
-    movement::{CollisionWorld, GroundMotion},
+    movement::{
+        CollisionWorld, GroundMotion, MAX_GROUNDED_STEP, VerticalPhysics, climb_reach,
+        program_steps,
+    },
     world::ClientWorld,
     world_position,
 };
@@ -281,6 +284,7 @@ pub(super) struct Context<'a> {
     pub outbox: &'a crate::outbox::Outbox,
     pub now: Instant,
     pub first_span: Duration,
+    pub physics: VerticalPhysics,
     pub eligible: bool,
     pub mouse_heading: Option<f32>,
 }
@@ -328,12 +332,28 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         outbox,
         now,
         first_span,
+        physics,
         eligible,
         mouse_heading,
     } = context;
     if controls.ground.blocked {
         controls.ground.blocked = false;
         return true;
+    }
+    if eligible
+        && let Some(session) = online.world().session_id()
+        && controls.climb_sent != Some((session, physics.reach()))
+    {
+        let per_step = physics.reach();
+        if let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::ClimbReach {
+            session_id: stamp.session_id,
+            per_step,
+        }) {
+            controls.send_failed(reason);
+            controls.held = Some(Held::Refused);
+            return true;
+        }
+        controls.climb_sent = Some((session, per_step));
     }
     match controls.ground.report(online.world(), outbox) {
         Ok(Some(created)) => {
@@ -373,13 +393,14 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
             return false;
         };
         // Establish the same positive geometry evidence even on an idle frame.
-        let Some(motion) = motion.frame(
+        let Some(motion) = motion.frame_with_physics(
             world,
             body.height,
             Vec3::ZERO,
             intent.speed,
             false,
             Duration::ZERO,
+            physics,
         ) else {
             return false;
         };
@@ -435,20 +456,28 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
     };
     let trial = eligible
         .then(|| {
-            current.motion.frame(
+            current.motion.frame_with_physics(
                 world,
                 body.height,
                 direction,
                 intent.speed,
                 forward,
                 seconds,
+                physics,
             )
         })
         .flatten();
     let trial = trial.and_then(|motion| {
         let origin = motion.feet() + Vec3::Y * body.feet_offset;
         let before = Vec3::from_array(eq_client_core::render_position(current.position));
-        (stop_at_zone_line(&online.regions, before, origin) == origin).then_some(motion)
+        let within_height = controls.ground.accepted.is_some_and(|accepted| {
+            let elapsed = now.saturating_duration_since(accepted.at).as_secs_f32();
+            let rise = climb_reach(physics.reach(), program_steps(elapsed));
+            let delta = origin.y - accepted.drawn.translation.y;
+            delta <= rise && -delta <= MAX_GROUNDED_STEP
+        });
+        (within_height && stop_at_zone_line(&online.regions, before, origin) == origin)
+            .then_some(motion)
     });
     if let Some(trial) = trial.filter(|_| !controls.ground.timed_out(now)) {
         let Some(frame) = Frame::observed(

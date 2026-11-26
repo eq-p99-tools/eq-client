@@ -355,6 +355,15 @@ impl InstalledClient {
     /// them.
     pub const ALL: [Self; 3] = [Self::Titanium, Self::EqMac, Self::Rof2];
 
+    /// Whether ordinary ground frames have a read velocity recurrence here.
+    #[must_use]
+    pub const fn owns_ground_frames(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac | Self::Rof2 => false,
+        }
+    }
+
     /// Whether this generation gives a player class a spellbook and gems.
     /// The class checks are Titanium 0x417daf and Mac-era 0x4b8ea1; neither
     /// reads mana, the book contents, memorized slots or the player's level.
