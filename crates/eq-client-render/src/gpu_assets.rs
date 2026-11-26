@@ -507,15 +507,56 @@ pub(super) fn create_texture_images(
     textures: Vec<eq_client_assets::ZoneTexture>,
     images: &mut Assets<Image>,
 ) -> Vec<TextureImages> {
+    create_texture_images_masking(textures, None, images)
+}
+
+/// Which textures a masked or additive draw shows, directly or as a frame
+/// of its texture animation: the only ones whose masked image is ever drawn.
+pub(super) fn masked_texture_use<'a>(
+    texture_count: usize,
+    draws: impl IntoIterator<Item = (&'a ZonePrimitive, Option<&'a TextureAnimation>)>,
+) -> Vec<bool> {
+    let mut used = vec![false; texture_count];
+    for (primitive, animation) in draws {
+        if !matches!(
+            primitive.material_mode,
+            MaterialMode::Masked | MaterialMode::Additive
+        ) {
+            continue;
+        }
+        let frames = animation.map(|animation| animation.frames.as_slice());
+        for index in primitive.texture.iter().chain(frames.unwrap_or_default()) {
+            if let Some(used) = used.get_mut(*index) {
+                *used = true;
+            }
+        }
+    }
+    used
+}
+
+/// As [`create_texture_images`], but a texture that `masked_use` marks as
+/// never drawn masked shares its drawn image as its masked one.
+pub(super) fn create_texture_images_masking(
+    textures: Vec<eq_client_assets::ZoneTexture>,
+    masked_use: Option<&[bool]>,
+    images: &mut Assets<Image>,
+) -> Vec<TextureImages> {
     textures
         .into_iter()
-        .map(|texture| {
-            let color_key = texture.color_key.unwrap_or([0, 0, 0]);
-            let keyed = |pixel: &[u8; 4]| pixel[..3] == color_key && pixel[3] != 0;
-            // Many textures, and nearly all of an HD pack's, have no texel the
-            // key would clear. Those draw the same either way, so one image
-            // serves both and the texture's memory isn't paid twice.
-            let needs_mask = texture.rgba8.as_chunks::<4>().0.iter().any(keyed);
+        .enumerate()
+        .map(|(index, texture)| {
+            // A texture without a key (every DDS, most BMPs) masks by its
+            // own alpha alone, so its masked image is its drawn one.
+            let keyed = |pixel: &[u8; 4]| {
+                texture.color_key.is_some_and(|key| pixel[..3] == key) && pixel[3] != 0
+            };
+            // A zone draws only a few dozen of its hundreds of textures masked,
+            // and many textures have no texel the key would clear. The rest
+            // draw the same either way, so one image serves both and the
+            // texture's memory isn't paid twice.
+            let drawn_masked =
+                masked_use.is_none_or(|used| used.get(index).copied().unwrap_or(true));
+            let needs_mask = drawn_masked && texture.rgba8.as_chunks::<4>().0.iter().any(keyed);
             let masked_pixels = needs_mask.then(|| {
                 let mut pixels = texture.rgba8.clone();
                 for pixel in pixels.as_chunks_mut::<4>().0 {
@@ -807,8 +848,10 @@ mod terrain_tests {
                 // No texel matches the key: one image for both.
                 texture(vec![9, 9, 9, 255, 1, 2, 3, 255], Some([0, 0, 0])),
                 // A keyed texel that is already clear changes nothing either.
-                texture(vec![0, 0, 0, 0, 1, 2, 3, 255], None),
+                texture(vec![0, 0, 0, 0, 1, 2, 3, 255], Some([0, 0, 0])),
                 // A visible keyed texel needs its own masked image.
+                texture(vec![0, 0, 0, 255, 1, 2, 3, 255], Some([0, 0, 0])),
+                // Without a key (a DDS), black is just black.
                 texture(vec![0, 0, 0, 255, 1, 2, 3, 255], None),
             ],
             &mut images,
@@ -816,9 +859,56 @@ mod terrain_tests {
         assert_eq!(made[0].opaque, made[0].masked);
         assert_eq!(made[1].opaque, made[1].masked);
         assert_ne!(made[2].opaque, made[2].masked);
-        assert_eq!(images.len(), 4);
+        assert_eq!(made[3].opaque, made[3].masked);
+        assert_eq!(images.len(), 5);
         let masked = images.get(&made[2].masked).unwrap().data.as_ref().unwrap();
         assert_eq!(&masked[..8], &[0, 0, 0, 0, 1, 2, 3, 255]);
+    }
+
+    #[test]
+    fn masks_only_textures_a_masked_or_additive_draw_shows() {
+        let draw = |texture, mode| ZonePrimitive {
+            texture: Some(texture),
+            ..primitive(mode)
+        };
+        let animation = TextureAnimation {
+            frames: vec![4, 5],
+            frame_millis: NonZeroU32::new(100).unwrap(),
+            skip_frames: false,
+        };
+        let opaque = draw(0, MaterialMode::Opaque);
+        let blended = draw(1, MaterialMode::Blended(BlendOpacity::Half));
+        let masked = draw(2, MaterialMode::Masked);
+        let additive = draw(3, MaterialMode::Additive);
+        let animated = draw(4, MaterialMode::Masked);
+        let used = masked_texture_use(
+            7,
+            [
+                (&opaque, None),
+                (&blended, None),
+                (&masked, None),
+                (&additive, None),
+                (&animated, Some(&animation)),
+            ],
+        );
+        assert_eq!(used, [false, false, true, true, true, true, false]);
+
+        // A texture no masked draw shows keeps one image, keyed texel or not.
+        let mut images = Assets::<Image>::default();
+        let keyed = || eq_client_assets::ZoneTexture {
+            name: "synthetic.bmp".to_owned(),
+            width: 1,
+            height: 1,
+            rgba8: vec![0, 0, 0, 255],
+            color_key: Some([0, 0, 0]),
+        };
+        let made = create_texture_images_masking(
+            vec![keyed(), keyed()],
+            Some(&[false, true]),
+            &mut images,
+        );
+        assert_eq!(made[0].opaque, made[0].masked);
+        assert_ne!(made[1].opaque, made[1].masked);
     }
 
     fn authored(double_sided: bool) -> TerrainMaterial {

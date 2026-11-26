@@ -901,7 +901,36 @@ fn spawn_static_zone(
     meshes: &mut Assets<Mesh>,
     materials: &mut Assets<StandardMaterial>,
 ) {
-    let texture_images = create_texture_images(zone.textures, images);
+    // Only the textures a masked or additive terrain or object draw shows
+    // need a masked image of their own.
+    let terrain_draws = zone
+        .primitives
+        .iter()
+        .enumerate()
+        .map(|(index, primitive)| {
+            let animation = zone
+                .terrain_materials
+                .get(index)
+                .and_then(|m| m.animation.as_ref());
+            (primitive, animation)
+        });
+    let object_draws = zone.models.iter().flat_map(|model| {
+        model
+            .primitives
+            .iter()
+            .enumerate()
+            .map(|(index, primitive)| {
+                let animation = model
+                    .materials
+                    .get(index)
+                    .and_then(|m| m.animation.as_ref());
+                (primitive, animation)
+            })
+    });
+    let masked_use =
+        gpu_assets::masked_texture_use(zone.textures.len(), terrain_draws.chain(object_draws));
+    let texture_images =
+        gpu_assets::create_texture_images_masking(zone.textures, Some(&masked_use), images);
     // Which drawn terrain is the top of water or lava, for Better Water.
     let solid = water::solid_centroids(&zone.collision);
     // A water or lava surface merges only with surfaces of its own liquid,
