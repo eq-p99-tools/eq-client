@@ -77,8 +77,8 @@ fn rolling_ground(profile: &[(f32, f32)], wall: bool) -> CollisionWorld {
 
 #[test]
 fn native_ground_rolling_walkable_slopes_keep_the_same_frame_owner() {
-    for delay in [0, 6] {
-        let mut scene = Scene::new(delay, true);
+    for (delay, speed) in [(0, 6.), (6, 6.), (0, 29.866_667), (6, 29.866_667)] {
+        let mut scene = Scene::with_speed(delay, true, speed);
         scene.app.insert_resource(Collision(Some(rolling_ground(
             &[
                 (-100., 0.),
@@ -87,7 +87,7 @@ fn native_ground_rolling_walkable_slopes_keep_the_same_frame_owner() {
                 (9., 0.),
                 (13., 1.),
                 (17., 0.),
-                (100., 0.),
+                (1000., 0.),
             ],
             false,
         ))));
@@ -106,13 +106,13 @@ fn native_ground_rolling_walkable_slopes_keep_the_same_frame_owner() {
             previous = row.shown;
         }
         println!(
-            "rolling delay={delay} handovers={handovers} restarts={restarts} stopped_frames={stopped_frames} final={previous:?}"
+            "rolling delay={delay} speed={speed} handovers={handovers} restarts={restarts} stopped_frames={stopped_frames} final={previous:?}"
         );
         assert_eq!(scene.refusals, 0);
         assert_eq!(handovers, 0, "ordinary slopes changed the recurrence owner");
         assert_eq!(restarts, 0);
         assert_eq!(stopped_frames, 0);
-        assert!(previous.x > 23.7);
+        assert!(previous.x > speed * 3.95);
     }
 }
 
@@ -144,7 +144,12 @@ fn native_ground_blocked_at_a_ramp_boundary_does_not_restart_while_forward_is_he
 
 impl Scene {
     fn new(delay: u32, known: bool) -> Self {
+        Self::with_speed(delay, known, 6.)
+    }
+
+    fn with_speed(delay: u32, known: bool, speed: f32) -> Self {
         let (mut app, commands, news) = latency_tests::timing_app();
+        app.world_mut().resource_mut::<Controls>().speed = Some(speed);
         // Physical Forward deliberately differs from the fixture's camera-W.
         crate::keys::testing::bind(
             &mut app,
@@ -186,7 +191,7 @@ impl Scene {
         owner
             .calibrate(
                 eq_client_core::MotionCalibration {
-                    units_per_second: 6.,
+                    units_per_second: speed,
                     velocity_scale: 1.,
                     animation: 12,
                     swim: None,
