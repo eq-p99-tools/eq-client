@@ -3446,6 +3446,22 @@ pub(super) fn input(
     } else {
         own_vertical_speed(controls.airborne.as_ref())
     };
+    let dry_pose = !placement_blocked
+        && !flying
+        && !swimming
+        && !entering
+        && shore.is_none()
+        && !surface_selected
+        && boat_sample.is_none()
+        && support.is_none();
+    // Retain only the path that reached this exact, unclipped endpoint.
+    // Actor origins and collision feet differ by the existing model offset.
+    if dry_pose && position == landing + Vec3::Y * body.feet_offset {
+        poses.origins(body.feet_offset, origin, position, span);
+    } else {
+        poses.clear_positions();
+    }
+    let history = poses.history(carried_position, position_sent);
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
@@ -3465,6 +3481,7 @@ pub(super) fn input(
                 .map(Support::Spawn)
                 .or(support.map(Support::Door)),
             vertical_speed,
+            history,
         })
     });
     if let Err(reason) = sent {
@@ -3484,9 +3501,9 @@ pub(super) fn input(
     {
         controls.test_proposal_path = Some(if surface_selected {
             surface_plan.as_ref().expect("selected surface plan").path
-        } else if !poses.1.is_empty() {
+        } else if !poses.test_steps.is_empty() {
             poses
-                .1
+                .test_steps
                 .iter()
                 .map(|(from, to)| (*to - *from).as_dvec3().length())
                 .sum()
@@ -3494,7 +3511,6 @@ pub(super) fn input(
             (landing - feet).as_dvec3().length()
         });
     }
-    let dry_pose = shore.is_none() && !surface_selected;
     controls.surface_rollback = None;
     controls.shoreline.sent(mode, shore, created);
     if entering {
@@ -3567,14 +3583,7 @@ pub(super) fn input(
         }
     }
     controls.sent_span = span;
-    controls.sample_pose = (!placement_blocked
-        && !flying
-        && !swimming
-        && !entering
-        && dry_pose
-        && boat_sample.is_none()
-        && support.is_none())
-    .then_some(poses);
+    controls.sample_pose = dry_pose.then_some(poses);
     controls.riding = under.map(|door| (door, created, position.y));
     controls.boat_pending = Some((
         created,
@@ -3852,6 +3861,13 @@ fn fall_step_observed(
     let mut position = feet;
     let start = airborne.velocity().max(0.0);
     let mut rising = start;
+    if let Some(path) = poses.as_deref_mut() {
+        path.position(
+            0.0,
+            feet,
+            airborne.velocity() != 0.0 || world.support(feet).is_none(),
+        );
+    }
     for index in 0..slices {
         let mut trial = airborne.clone();
         let step = eq_client_core::movement::MotionStep {
@@ -3883,8 +3899,16 @@ fn fall_step_observed(
             break;
         }
         if let Some(poses) = poses.as_deref_mut() {
+            poses.position(
+                elapsed,
+                next,
+                step.jump
+                    || trial.velocity() != 0.0
+                    || world.support(position).is_none()
+                    || world.support(next).is_none(),
+            );
             #[cfg(test)]
-            poses.1.push((position, next));
+            poses.test_steps.push((position, next));
             let horizontal = Vec2::new(next.x - position.x, next.z - position.z)
                 / step.seconds.max(f32::EPSILON);
             // Observe the launch speed before this slice's gravity. Reading
@@ -4354,8 +4378,14 @@ impl VisualMotion {
     fn map(&mut self, mut map: impl FnMut(Transform) -> Transform) {
         self.from = map(self.from);
         self.to = map(self.to);
+        if let Some(path) = self.pose.as_mut() {
+            path.map_positions(|point| map(Transform::from_translation(point)).translation);
+        }
         for segment in &mut self.queue {
             segment.to = map(segment.to);
+            if let Some(path) = segment.pose.as_mut() {
+                path.map_positions(|point| map(Transform::from_translation(point)).translation);
+            }
         }
         if let Some(playhead) = self.translation.as_mut() {
             playhead.map(|point| map(Transform::from_translation(point)).translation);
@@ -4369,8 +4399,13 @@ impl VisualMotion {
         };
         let mut prior = self.to;
         let compatible = flat(self.from, self.to)
+            && self.pose.as_ref().is_none_or(|path| !path.has_positions())
             && self.queue.iter().all(|segment| {
-                let same = flat(prior, segment.to);
+                let same = flat(prior, segment.to)
+                    && segment
+                        .pose
+                        .as_ref()
+                        .is_none_or(|path| !path.has_positions());
                 prior = segment.to;
                 same
             });
@@ -4431,7 +4466,13 @@ impl VisualMotion {
             self.pose = next.pose;
         }
         let fraction = (self.elapsed / self.duration.max(0.01)).clamp(0.0, 1.0);
-        transform.translation = self.from.translation.lerp(self.to.translation, fraction);
+        transform.translation = self
+            .pose
+            .as_ref()
+            .and_then(|path| {
+                path.position_at(self.elapsed, self.from.translation, self.to.translation)
+            })
+            .unwrap_or_else(|| self.from.translation.lerp(self.to.translation, fraction));
         transform.rotation = self.from.rotation.slerp(self.to.rotation, fraction);
         if let Some(playhead) = self.translation.as_mut() {
             transform.translation = playhead.advance(seconds);

@@ -1,0 +1,1 @@
+- Draw ordinary jump and fall samples through their measured intermediate positions and retain those positions for movement history; jump physics and position-update timing are unchanged.

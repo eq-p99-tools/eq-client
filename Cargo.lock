@@ -2643,7 +2643,7 @@ dependencies = [
 [[package]]
 name = "eq-network"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=7cac8c7d4a1b89c616665e8d47d168882b4d5fc1#7cac8c7d4a1b89c616665e8d47d168882b4d5fc1"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=03ea298527f8d9c332bbff62d9a9f943e1894077#03ea298527f8d9c332bbff62d9a9f943e1894077"
 dependencies = [
  "anyhow",
  "crc32fast",
@@ -2662,7 +2662,7 @@ dependencies = [
 [[package]]
 name = "eq-network-game"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=7cac8c7d4a1b89c616665e8d47d168882b4d5fc1#7cac8c7d4a1b89c616665e8d47d168882b4d5fc1"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=03ea298527f8d9c332bbff62d9a9f943e1894077#03ea298527f8d9c332bbff62d9a9f943e1894077"
 dependencies = [
  "anyhow",
  "hex",
@@ -2677,7 +2677,7 @@ dependencies = [
 [[package]]
 name = "eq-network-login"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=7cac8c7d4a1b89c616665e8d47d168882b4d5fc1#7cac8c7d4a1b89c616665e8d47d168882b4d5fc1"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=03ea298527f8d9c332bbff62d9a9f943e1894077#03ea298527f8d9c332bbff62d9a9f943e1894077"
 dependencies = [
  "cbc",
  "cipher",
@@ -2690,7 +2690,7 @@ dependencies = [
 [[package]]
 name = "eq-network-transport"
 version = "0.1.2"
-source = "git+https://github.com/eq-p99-tools/eq-network?rev=7cac8c7d4a1b89c616665e8d47d168882b4d5fc1#7cac8c7d4a1b89c616665e8d47d168882b4d5fc1"
+source = "git+https://github.com/eq-p99-tools/eq-network?rev=03ea298527f8d9c332bbff62d9a9f943e1894077#03ea298527f8d9c332bbff62d9a9f943e1894077"
 dependencies = [
  "anyhow",
  "crc32fast",
