@@ -370,10 +370,10 @@ fn the_bank_sill_is_tested_after_stepping_and_restores_the_airborne_snapshot() {
             // A four-unit sill and its leading face. Standing's unchanged
             // raised sweep clears it; the candidate floor is then four up.
             triangles.extend([
-                [[0.0, 4.0, -20.0], [0.0, 4.0, 20.0], [20.0, 4.0, 20.0]],
-                [[0.0, 4.0, -20.0], [20.0, 4.0, 20.0], [20.0, 4.0, -20.0]],
-                [[0.0, 0.0, -20.0], [0.0, 0.0, 20.0], [0.0, 4.0, 20.0]],
-                [[0.0, 0.0, -20.0], [0.0, 4.0, 20.0], [0.0, 4.0, -20.0]],
+                [[-20.0, 4.0, 0.0], [-20.0, 4.0, 20.0], [20.0, 4.0, 20.0]],
+                [[-20.0, 4.0, 0.0], [20.0, 4.0, 20.0], [20.0, 4.0, 0.0]],
+                [[-20.0, 0.0, 0.0], [-20.0, 4.0, 0.0], [20.0, 4.0, 0.0]],
+                [[-20.0, 0.0, 0.0], [20.0, 4.0, 0.0], [20.0, 0.0, 0.0]],
             ]);
             app.insert_resource(Collision(Some(CollisionWorld::new(triangles).unwrap())));
             // A synthetic fast grant crosses the whole face within even
@@ -381,7 +381,7 @@ fn the_bank_sill_is_tested_after_stepping_and_restores_the_airborne_snapshot() {
             // This isolates post-step gating from initial wall overlap;
             // it does not calibrate a human's ordinary walking speed.
             let speed = 120.0;
-            let start = Vec3::new(-speed * span * 0.5, 3.75, 0.0);
+            let start = Vec3::new(0.0, 3.75, -speed * span * 0.5);
             testing::place(
                 &mut app.world_mut().resource_mut::<online::OnlineState>(),
                 world_position(start.to_array(), 0.0),
@@ -419,7 +419,7 @@ fn the_bank_sill_is_tested_after_stepping_and_restores_the_airborne_snapshot() {
             } else {
                 assert!(!controls.headroom_refused);
                 assert!(
-                    moved[0].x > start.x && (moved[0].y - 7.75).abs() < 0.01,
+                    moved[0].z > start.z && (moved[0].y - 7.75).abs() < 0.01,
                     "{span}: {moved:?}"
                 );
             }

@@ -87,9 +87,13 @@ impl Context {
             return true;
         }
         let current = world.posture(player.spawn_id);
-        let ducking = self.client != InstalledClient::EqMac
-            && current.is_none_or(|posture| posture == PostureState::Standing)
-            && posture == Posture::Ducking;
+        let ducking = match self.client {
+            InstalledClient::EqMac => false,
+            InstalledClient::Titanium | InstalledClient::Rof2 => {
+                current.is_none_or(|posture| posture == PostureState::Standing)
+                    && posture == Posture::Ducking
+            }
+        };
         let tested = match self.client {
             InstalledClient::EqMac => posture == Posture::Standing,
             // RoF2's manual transition follows Titanium provisionally.

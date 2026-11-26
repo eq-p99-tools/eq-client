@@ -57,7 +57,11 @@ impl State {
         };
         let ducked = posture == Some(PostureState::Ducking);
         let standing = posture.is_none_or(|posture| posture == PostureState::Standing);
-        if client != InstalledClient::EqMac && !(standing && allow_auto_stand) {
+        let arms = match client {
+            InstalledClient::EqMac => true,
+            InstalledClient::Titanium | InstalledClient::Rof2 => standing && allow_auto_stand,
+        };
+        if !arms {
             return;
         }
         self.automatic = Some(Automatic {
@@ -173,7 +177,11 @@ impl State {
             // Titanium's ordinary standing-to-duck test may itself refuse.
             // Mac has no such transition test. Do not infer success from the
             // outbox's intentionally silent geometric-refusal Ok result.
-            if client != InstalledClient::EqMac
+            let tests_duck = match client {
+                InstalledClient::EqMac => false,
+                InstalledClient::Titanium | InstalledClient::Rof2 => true,
+            };
+            if tests_duck
                 && (!collision.headroom(origin, rule.room(stand, true, mounted))
                     || !outbox.posture_allowed(world, Posture::Ducking))
             {
