@@ -5,6 +5,8 @@ mod belongings_tests;
 mod boat_pace_tests;
 mod boats;
 #[cfg(test)]
+mod carrier_floor_tests;
+#[cfg(test)]
 mod carrier_walls;
 #[cfg(test)]
 mod chase_turn_tests;
@@ -81,6 +83,19 @@ impl FollowAsked {
     }
 }
 
+/// An observed controller floor sweep, retained without recomputing its basis.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct CarrierFloor {
+    pub admission: u64,
+    pub queried: Instant,
+    pub feet: Vec3,
+    pub current: Option<u16>,
+    pub support: Option<(
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+    )>,
+}
+
 #[derive(Resource)]
 #[allow(clippy::struct_excessive_bools)] // Independent movement states.
 pub(super) struct Controls {
@@ -133,6 +148,8 @@ pub(super) struct Controls {
     /// A queued endpoint never becomes the next physics/display basis until
     /// its exact movement result accepts it.
     boat_pending: Option<(Instant, Option<boats::Riding>)>,
+    /// The last actual controller floor query, distinct from the accepted link.
+    carrier_floor: Option<CarrierFloor>,
     visual_boat: Option<boats::DisplayFrame>,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
@@ -342,6 +359,7 @@ impl Default for Controls {
             riding: None,
             boat: None,
             boat_pending: None,
+            carrier_floor: None,
             visual_boat: None,
             sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
@@ -1425,6 +1443,33 @@ impl Controls {
     )> {
         self.boat
             .map(|riding| (riding.sample, riding.pose, riding.position))
+    }
+
+    /// The last floor sweep's own feet, result and time, for diagnostics.
+    pub(crate) fn carrier_floor(&self) -> Option<&CarrierFloor> {
+        self.carrier_floor.as_ref()
+    }
+
+    fn probe_carrier_floor(
+        &mut self,
+        collision: &CollisionWorld,
+        world: &ClientWorld,
+        feet: Vec3,
+        current: Option<u16>,
+        now: Instant,
+    ) -> Option<(
+        eq_client_core::movement::CarrierSample,
+        eq_client_core::WorldPosition,
+    )> {
+        let support = boats::under(collision, world.carriers(), feet, current, now);
+        self.carrier_floor = world.session_id().map(|admission| CarrierFloor {
+            admission,
+            queried: now,
+            feet,
+            current,
+            support,
+        });
+        support
     }
 
     pub(super) fn crossing_resolved(&mut self) {
@@ -2979,7 +3024,7 @@ pub(super) fn input(
             && !flying
             && !swimming
             && let Some((sample, pose)) =
-                boats::under(world, online.world().carriers(), feet, linked, now)
+                controls.probe_carrier_floor(world, online.world(), feet, linked, now)
         {
             let position = world_position(origin.to_array(), current_heading);
             let sent = outbox.post(online.world(), |stamp| {
@@ -3380,7 +3425,7 @@ pub(super) fn input(
     let boat_under = if placement_blocked || flying || swimming || surface_selected {
         None
     } else {
-        boats::under(world, online.world().carriers(), landing, linked, now)
+        controls.probe_carrier_floor(world, online.world(), landing, linked, now)
     };
     // The sample that walks off still removes the carrying motion from its
     // own budget. Only the floor under the landing carries the next pass.
