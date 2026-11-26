@@ -66,40 +66,6 @@ struct WaterParams {
     /// soft ceiling (y), and 1 outdoors (z), as its own surfaces take them
     /// ([`crate::rich_light::RichState::water_light`]).
     rich: Vec4,
-    /// Diagnostic only: which single term to draw in place of the water
-    /// (x), from `EQ_WATER_DEBUG` ([`debug_term`]); 0 draws it as usual.
-    debug: Vec4,
-}
-
-/// Diagnostic only, to be dropped before #702 merges: `EQ_WATER_DEBUG`
-/// picks one term of the water to draw on its own. 1 or `light`: the light
-/// on the water; 2 or `thickness`: water depth along the view as grey (white
-/// at 30 units); 3 or `behind`: what lies behind; 4 or `caustic`: the
-/// caustic net as grey; 5 or `flat`: the full look with what lies behind
-/// replaced by flat grey; 6 or `under`: the floor's depth below the surface
-/// as grey (white at 30); 7 or `albedo`: the texture; 8 or `opacity`: how
-/// opaque the water layer is.
-fn debug_term() -> f32 {
-    static TERM: std::sync::OnceLock<f32> = std::sync::OnceLock::new();
-    *TERM.get_or_init(|| {
-        let names = [
-            "light",
-            "thickness",
-            "behind",
-            "caustic",
-            "flat",
-            "under",
-            "albedo",
-            "opacity",
-        ];
-        std::env::var("EQ_WATER_DEBUG").map_or(0.0, |value| {
-            let value = value.trim().to_ascii_lowercase();
-            (1_u8..)
-                .zip(names)
-                .find(|(term, name)| *name == value || term.to_string() == value)
-                .map_or(0.0, |(term, _)| f32::from(term))
-        })
-    })
 }
 
 impl MaterialExtension for WaterLook {
@@ -324,8 +290,10 @@ type Evened<'a> = (&'a [[f32; 3]], &'a [[f32; 3]], &'a [[f32; 4]]);
 /// The same, copied out of the mesh.
 type Taken = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 4]>);
 
-/// How far apart the points are that a liquid's light is evened over.
-const EVEN_CELL: f32 = 24.0;
+/// How far apart the points are that a liquid's light is evened over: wide,
+/// since the zone's baked light can climb from dim to full within a single
+/// piece, and the bend where it turns shows as a line across the water.
+const EVEN_CELL: f32 = 128.0;
 
 /// Light, in a vertex colour, as one plane of liquid takes it: the zone
 /// bakes light into each piece of a surface on its own, so neighbouring
@@ -651,7 +619,6 @@ fn new_look(surface: &WaterSurface, plain: Option<&StandardMaterial>) -> WaterMa
                 deep,
                 timing: Vec4::new(0.0, surface.frame_secs, f32::from(u8::from(lava)), 0.0),
                 rich: Vec4::ZERO,
-                debug: Vec4::new(debug_term(), 0.0, 0.0, 0.0),
             },
             next: surface.frames.get(1).cloned().or_else(|| frame.clone()),
             frame,

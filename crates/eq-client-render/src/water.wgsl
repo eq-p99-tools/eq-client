@@ -19,8 +19,6 @@ struct Water {
     deep: vec4<f32>,
     timing: vec4<f32>,
     rich: vec4<f32>,
-    // Diagnostic only (EQ_WATER_DEBUG in water.rs).
-    debug: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water: Water;
@@ -270,28 +268,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         behind_at = world - to_eye * thickness;
     }
 #endif
-    var behind = textureSampleLevel(view_transmission_texture, view_transmission_sampler, screen + bend, 0.0).rgb;
-    let debug = u32(water.debug.x + 0.5);
-    if debug == 5u {
-        behind = vec3(0.5);
-    }
+    let behind = textureSampleLevel(view_transmission_texture, view_transmission_sampler, screen + bend, 0.0).rgb;
 
     // Taken here, out of the branches below, since it reads its own
     // footprint on screen.
     let caustic = caustic_net(behind_at.xz * 0.42, t);
-    if debug != 0u && debug != 5u && debug != 8u {
-        var term = albedo;
-        switch debug {
-            case 1u: { term = light; }
-            case 2u: { term = vec3(thickness / 30.0); }
-            case 3u: { term = behind; }
-            case 4u: { term = vec3(caustic); }
-            case 6u: { term = vec3(max(world.y - behind_at.y, 0.0) / 30.0); }
-            default: {}
-        }
-        out.color = vec4(term, 1.0);
-        return out;
-    }
 
     var color: vec3<f32>;
     var water_layer: vec3<f32>;
@@ -370,9 +351,6 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
         let above = behind * vec3(0.8, 0.95, 1.0) + albedo * 0.05;
         color = mix(deep, above, window);
         color = main_pass_post_lighting_processing(pbr_input, vec4(color, 1.0)).rgb;
-    }
-    if debug == 8u {
-        color = vec3(opacity);
     }
     out.color = vec4(color, 1.0);
     return out;
