@@ -74,7 +74,7 @@ a carrier race can enter the existing carrier collider path; player and
 unknown-kind carrier instances retain their previous behavior here rather
 than receiving the NPC exclusion. This remains a separate gap.
 
-## 6.663 — surface swimming
+## 6.663 â€” surface swimming
 
 The clear-water surface continuation uses the existing native swim calibration and frame clock. It uses ordinary calibrated movement input, supported Titanium calibration, known immutable ordinary-water regions and a clear unsupported body. Forward with keyboard turning, mouselook turning, strafing, pitch changes, camera-relative input and autorun share the ordinary wet input rates. Walking and backward input use their existing calibration; a zero-rate stroke does not create a new continuation. Water, W2 and W3 keep their exact region kind. Each physical frame move and final partial is checked by the original collision world; a proved numerical no-update tail can share the preceding move in the same request at the same velocity and stored medium.
 
@@ -105,7 +105,7 @@ The exact fixed-60 no-contact reference and a whole-millisecond 60 FPS reference
 
 Validation separates synthetic/reference checks, the real local movement guard, installed-zone CPU cost, local visible behavior and attended public compatibility. Local visual checks remain a premerge gate. The first public P99 surface swim is attended.
 
-## 6.666 — grouped ordinary airborne clock
+## 6.666 â€” grouped ordinary airborne clock
 
 [I, diagnostic] After two eligible surface requests (100 and 117 ms) at an
 85-degree upward pitch, a 100 ms ordinary dry handback traveled 1.7815865

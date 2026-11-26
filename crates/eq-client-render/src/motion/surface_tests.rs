@@ -1052,6 +1052,19 @@ fn surface_h4_redundant_forward_stays_eligible_without_compounding_gain() {
     );
 }
 
+fn assert_ordinary_input(action: &str, controls: &Controls) {
+    match action {
+        "autorun" => assert!(controls.autorun, "ordinary physical toggle must latch"),
+        "diagonal" => assert!(controls.diagonal_rates.run.is_some()),
+        "strafe" => assert!(matches!(
+            controls.test_motion_intent.unwrap().0,
+            MovementMode::Strafe(_)
+        )),
+        "turn" => assert_ne!(controls.test_motion_intent.unwrap().3, 0.),
+        _ => (),
+    }
+}
+
 #[test]
 fn surface_ordinary_turn_strafe_pitch_and_autorun_keep_the_clock() {
     for action in [
@@ -1118,22 +1131,7 @@ fn surface_ordinary_turn_strafe_pitch_and_autorun_keep_the_clock() {
         }
         for ms in [117, 167, 100] {
             let (request, _) = f.step(ms);
-            let c = f.app.world().resource::<Controls>();
-            if action == "autorun" {
-                assert!(c.autorun, "ordinary physical toggle must latch");
-            }
-            if action == "diagonal" {
-                assert!(c.diagonal_rates.run.is_some());
-            }
-            if action == "strafe" {
-                assert!(matches!(
-                    c.test_motion_intent.unwrap().0,
-                    MovementMode::Strafe(_)
-                ));
-            }
-            if action == "turn" {
-                assert_ne!(c.test_motion_intent.unwrap().3, 0.);
-            }
+            assert_ordinary_input(action, f.app.world().resource::<Controls>());
             assert!(
                 f.app.world().resource::<Controls>().surface.pending(),
                 "{action}: {}",
