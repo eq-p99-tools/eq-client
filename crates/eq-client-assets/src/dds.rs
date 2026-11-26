@@ -51,6 +51,39 @@ pub(crate) fn open_image(path: &std::path::Path) -> Result<RgbaImage, ImageError
     }
 }
 
+/// The top level of a DXT1/DXT3/DXT5 DDS file as its blocks, when its sides
+/// are multiples of four (as GPU block formats need); `None` for any other
+/// file, which then draws from its decoded pixels.
+pub(crate) fn compressed(bytes: &[u8]) -> Option<crate::CompressedTexture> {
+    if !is_dds(bytes) || word(bytes, 80).ok()? & PF_FOUR_CC == 0 {
+        return None;
+    }
+    let format = match bytes.get(84..88)? {
+        b"DXT1" => crate::BlockFormat::Bc1,
+        b"DXT3" => crate::BlockFormat::Bc2,
+        b"DXT5" => crate::BlockFormat::Bc3,
+        _ => return None,
+    };
+    let (height, width) = (word(bytes, 12).ok()?, word(bytes, 16).ok()?);
+    if width == 0
+        || height == 0
+        || width % 4 != 0
+        || height % 4 != 0
+        || width > MAX_SIDE
+        || height > MAX_SIDE
+    {
+        return None;
+    }
+    let block = if format == crate::BlockFormat::Bc1 {
+        8
+    } else {
+        16
+    };
+    let length = (width / 4) as usize * (height / 4) as usize * block;
+    let blocks = bytes.get(DATA_OFFSET..DATA_OFFSET + length)?.to_vec();
+    Some(crate::CompressedTexture { format, blocks })
+}
+
 /// Decodes the top level of a DDS file to RGBA.
 ///
 /// # Errors
@@ -392,6 +425,34 @@ mod tests {
         let image = decode(&dxt5).unwrap();
         assert_eq!(image.get_pixel(0, 0).0[3], 100);
         assert_eq!(image.get_pixel(1, 0).0[3], 185);
+    }
+
+    #[test]
+    fn keeps_block_aligned_dxt_tops_as_blocks() {
+        let mut dxt1 = header(8, 4, 0x4, *b"DXT1", [0; 5]);
+        dxt1.extend((0..16_u8).chain(0..16));
+        let kept = super::compressed(&dxt1).unwrap();
+        assert_eq!(kept.format, crate::BlockFormat::Bc1);
+        assert_eq!(kept.blocks, (0..16_u8).collect::<Vec<_>>());
+
+        let mut dxt5 = header(4, 4, 0x4, *b"DXT5", [0; 5]);
+        dxt5.extend([7; 16]);
+        assert_eq!(
+            super::compressed(&dxt5).unwrap().format,
+            crate::BlockFormat::Bc3
+        );
+
+        // Odd sides, uncompressed surfaces and short files decode instead.
+        let mut odd = header(5, 4, 0x4, *b"DXT1", [0; 5]);
+        odd.extend([0; 16]);
+        assert_eq!(super::compressed(&odd), None);
+        let mut rgb = header(4, 4, 0x40, *b"\0\0\0\0", [32, 0xff_0000, 0xff00, 0xff, 0]);
+        rgb.extend([0; 64]);
+        assert_eq!(super::compressed(&rgb), None);
+        assert_eq!(
+            super::compressed(&header(4, 4, 0x4, *b"DXT3", [0; 5])),
+            None
+        );
     }
 
     #[test]

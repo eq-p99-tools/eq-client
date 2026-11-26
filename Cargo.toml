@@ -50,6 +50,7 @@ anyhow = "1"
 eq-network = { git = "https://github.com/eq-p99-tools/eq-network", rev = "049994708201b28bf2fcff36185143a90bcc051b" }
 eq-network-game = { git = "https://github.com/eq-p99-tools/eq-network", rev = "049994708201b28bf2fcff36185143a90bcc051b" }
 glam = "0.32.1"
+texpresso = "2.0.2"
 parry3d = "0.30.2"
 rerecast = { version = "=0.4.0", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "ico", "jpeg", "png", "tga"] }
