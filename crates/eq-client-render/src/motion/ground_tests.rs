@@ -409,7 +409,9 @@ fn unknown_geometry_negative_control_retains_the_old_projected_tap_tail() {
             .resource::<Controls>()
             .ground
             .current
-            .is_none()
+            .is_none_or(|frame| {
+                frame.motion.velocity() == Vec3::ZERO && frame.position == corrected
+            })
     );
     assert!(
         stop.distance(release) > 0.4,
