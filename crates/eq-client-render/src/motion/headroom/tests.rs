@@ -252,6 +252,101 @@ fn a_new_admission_or_lost_geometry_cannot_drive_an_old_automatic_cycle() {
 }
 
 #[test]
+fn an_intervening_posture_does_not_leave_a_stale_wait_or_queue_another_action() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
+    app.update();
+    let _ = commands(&receiver);
+    app.update();
+    assert_eq!(commands(&receiver), vec![Posture::Ducking]);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset_all();
+    posture(&mut app, PostureState::Sitting);
+    app.update();
+    assert!(commands(&receiver).is_empty());
+    assert!(
+        app.world()
+            .resource::<Controls>()
+            .headroom
+            .automatic
+            .is_none()
+    );
+}
+
+#[test]
+fn a_ducked_refusal_with_the_option_off_arms_only_macs_return() {
+    // Exercise the refusal-to-posture contract separately from the capsule:
+    // a failed ducked strict-room query arms Mac even though already ducked.
+    for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+        let (mut app, receiver) = app(client, 8.1);
+        posture(&mut app, PostureState::Ducking);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .allow_auto_stand = false;
+        let now = Instant::now();
+        assert!(
+            refused(
+                client,
+                &room(4.25),
+                (&HUMAN, 3.75),
+                (Vec3::ZERO, Vec3::X),
+                (true, false)
+            )
+            .is_some()
+        );
+        app.world_mut()
+            .resource_scope(|world, mut controls: Mut<Controls>| {
+                controls.headroom.refused(
+                    client,
+                    world.resource::<online::OnlineState>().world(),
+                    Some(PostureState::Ducking),
+                    false,
+                    now,
+                );
+                controls.test_now = Some(now + Duration::from_millis(2_001));
+            });
+        app.update();
+        assert_eq!(
+            commands(&receiver),
+            if client == InstalledClient::EqMac {
+                vec![Posture::Standing]
+            } else {
+                vec![]
+            }
+        );
+    }
+}
+
+#[test]
+fn a_launch_stand_report_precedes_automatic_duck() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
+    posture(&mut app, PostureState::Ducking);
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset_all();
+    let now = Instant::now();
+    app.world_mut()
+        .resource_scope(|world, mut controls: Mut<Controls>| {
+            controls.headroom.refused(
+                InstalledClient::Titanium,
+                world.resource::<online::OnlineState>().world(),
+                Some(PostureState::Standing),
+                true,
+                now,
+            );
+        });
+    app.update();
+    assert!(commands(&receiver).is_empty());
+    posture(&mut app, PostureState::Standing);
+    app.update();
+    assert_eq!(commands(&receiver), vec![Posture::Ducking]);
+}
+
+#[test]
 fn the_bank_sill_is_tested_after_stepping_and_restores_the_airborne_snapshot() {
     for span in [0.01, 1.0 / 60.0, 0.05] {
         for ceiling in [12.0, 12.1] {
