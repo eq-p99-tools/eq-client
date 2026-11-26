@@ -229,6 +229,20 @@ pub(super) struct RichState {
     applied_limits: Vec4,
 }
 
+impl RichState {
+    /// How Better Water's surfaces take the lights (`rich` in
+    /// `water.wgsl`): 1 while Rich Lighting draws the zone (x), the lights'
+    /// soft ceiling (y) and 1 outdoors (z), as its own surfaces have them;
+    /// all 0 while it is off.
+    pub(super) fn water_light(&self) -> Vec4 {
+        if self.active {
+            Vec4::new(1.0, self.limits.x, self.limits.y, 0.0)
+        } else {
+            Vec4::ZERO
+        }
+    }
+}
+
 impl Tuning {
     /// The look with `name=value` pairs applied, comma separated: for
     /// comparing looks and their cost (`EQ_RICH_TUNE`, the capture probe).

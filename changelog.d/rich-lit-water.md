@@ -1,0 +1,1 @@
+- Rich Lighting now lights Better Water's surfaces too: lamps, carried lights and the sun (with its shadows) fall on the water as on the ground beside it.
