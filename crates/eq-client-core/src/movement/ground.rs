@@ -207,15 +207,18 @@ impl CollisionWorld {
         {
             return false;
         }
+        // A footprint can straddle the low tread while the body has climbed
+        // onto the high one. This search is evidence only, not a drop budget.
+        let spread = climb.max(MAX_GROUNDED_STEP);
         let mut low = f32::INFINITY;
         let mut high = f32::NEG_INFINITY;
         for (x, z) in SUPPORT_OFFSETS {
             let point = feet + Vec3::new(x, 0., z);
-            let Some(floor) = self.solid_ground(point, climb, MAX_GROUNDED_STEP) else {
+            let Some(floor) = self.solid_ground(point, climb, spread) else {
                 return false;
             };
-            if self.ground_door(point, climb, MAX_GROUNDED_STEP).is_some()
-                || self.ground_spawn(point, climb, MAX_GROUNDED_STEP).is_some()
+            if self.ground_door(point, climb, spread).is_some()
+                || self.ground_spawn(point, climb, spread).is_some()
             {
                 return false;
             }
@@ -226,7 +229,7 @@ impl CollisionWorld {
         // not a flatness test. The caller separately requires actual narrow
         // support at the starting and resolved feet: this wider lookahead can
         // never acquire an airborne body. world.step still owns every move.
-        high - low <= climb.max(MAX_GROUNDED_STEP)
+        high - low <= spread
     }
 
     fn plain_ground_segment(&self, from: Vec3, to: Vec3, height: f32) -> bool {

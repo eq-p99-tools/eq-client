@@ -203,8 +203,11 @@ fn native_ground_granted_strafe_and_diagonal_stay_on_the_ordinary_owner() {
             crate::keys::Chord::key(KeyCode::KeyL),
         );
         latency_tests::key(&mut scene.app, KeyCode::KeyL, true);
+        for _ in 0..90 {
+            scene.step(diagonal);
+        }
         let before = latency_tests::shown(&mut scene.app).0;
-        for _ in 0..120 {
+        for _ in 0..60 {
             scene.step(diagonal);
         }
         let after = latency_tests::shown(&mut scene.app).0;
@@ -226,8 +229,8 @@ fn native_ground_granted_strafe_and_diagonal_stay_on_the_ordinary_owner() {
         assert_eq!(scene.refusals, 0);
         // Components keep their independent ordinary rates. No radial
         // normalisation or Forward-rate substitution is introduced here.
-        assert!(((after.z - before.z).abs() - 6.).abs() < 0.02);
-        assert!(((after.x - before.x).abs() - if diagonal { 12. } else { 0. }).abs() < 0.02);
+        assert!(((after.z - before.z).abs() - 3.).abs() < 0.02);
+        assert!(((after.x - before.x).abs() - if diagonal { 6. } else { 0. }).abs() < 0.02);
         println!(
             "lateral diagonal={diagonal} displacement={:?} ordinary={}",
             after - before,
@@ -249,6 +252,43 @@ fn native_ground_an_unobserved_press_release_has_no_input_or_forced_stop_report(
     assert_eq!(scene.observations, 0);
     assert_eq!(scene.ordinary_stops, 0);
     assert_eq!(scene.packets.len(), packets);
+}
+
+#[test]
+fn native_ground_static_riser_uses_the_same_titanium_body_reach_without_a_handback() {
+    for delay in [0, 6] {
+        let mut scene = Scene::with_speed(delay, true, 29.866_667);
+        let mut triangles = Vec::new();
+        for (a, b, y) in [(-100., 3., 0.), (3., 100., 2.25)] {
+            triangles.extend([
+                [[a, y, -10.], [a, y, 10.], [b, y, -10.]],
+                [[b, y, -10.], [a, y, 10.], [b, y, 10.]],
+            ]);
+        }
+        triangles.extend([
+            [[3., 0., -10.], [3., 0., 10.], [3., 2.25, -10.]],
+            [[3., 2.25, -10.], [3., 0., 10.], [3., 2.25, 10.]],
+        ]);
+        scene.app.insert_resource(Collision(Some(
+            CollisionWorld::new(triangles).unwrap().with_liquids(Dry),
+        )));
+        let mut handovers = 0;
+        let mut previous = latency_tests::shown(&mut scene.app).0;
+        for _ in 0..90 {
+            let row = scene.step(true);
+            handovers += usize::from(!scene.app.world().resource::<Controls>().ground.active());
+            assert!(row.shown.x - previous.x <= 29.866_667 / 60. + 0.000_01);
+            previous = row.shown;
+        }
+        println!(
+            "static-riser delay={delay} handover_frames={handovers} final={previous:?} climb={}",
+            super::tests::fixture_climb()
+        );
+        assert_eq!(scene.refusals, 0);
+        assert_eq!(handovers, 0);
+        assert!(previous.x > 43.);
+        assert!((previous.y - 5.25).abs() < 0.000_01);
+    }
 }
 
 impl Scene {
