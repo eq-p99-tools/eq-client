@@ -61,6 +61,57 @@ fn floor_support_keeps_zero_ray_contact_and_both_window_edges() {
 }
 
 #[test]
+fn movement_room_is_strict_uses_floor_fronts_and_only_ceiling_fronts() {
+    let make = |ceiling| {
+        CollisionWorld::new(
+            plane(0.0, true)
+                .into_iter()
+                .chain(plane(1.0, false)) // an underside below the origin isn't support
+                .chain(plane(5.0, true)) // a back face above isn't a ceiling
+                .chain(plane(ceiling, false)),
+        )
+        .unwrap()
+    };
+    let origin = Vec3::Y * 3.75;
+    assert_eq!(make(8.0).headroom_bounds(origin), Some((0.0, 8.0)));
+    assert!(!make(8.0).headroom(origin, 8.0));
+    assert!(make(8.001).headroom(origin, 8.0));
+    assert!(
+        CollisionWorld::new(plane(0.0, true))
+            .unwrap()
+            .headroom(origin, 8.0)
+    );
+    assert!(
+        CollisionWorld::new(plane(8.0, false))
+            .unwrap()
+            .headroom(origin, 8.0)
+    );
+}
+
+#[test]
+fn movement_ceilings_keep_rotated_carriers_and_exclude_doors() {
+    let ceiling = Arc::new(CollisionMesh::new(plane(0.0, true)).unwrap());
+    let mut world = CollisionWorld::new(plane(0.0, true)).unwrap();
+    let instance = CollisionInstance::new(
+        Arc::clone(&ceiling),
+        Vec3::Y * 8.0,
+        Quat::from_rotation_x(std::f32::consts::PI),
+    )
+    .unwrap()
+    .with_spawn_kind(crate::SpawnKind::Npc);
+    world.set_spawn_instances(vec![(50, instance)]);
+    // Walking skips NPC lateral walls, but its ceiling query still keeps them.
+    let world = world.with_titanium_walking(3.75);
+    assert!(!world.headroom(Vec3::Y * 3.75, 8.001));
+    let mut doors = CollisionWorld::new(plane(0.0, true)).unwrap();
+    doors.set_door_obstacles(vec![(
+        7,
+        Arc::new(CollisionMesh::new(plane(8.0, false)).unwrap()),
+    )]);
+    assert!(doors.headroom(Vec3::Y * 3.75, 8.0));
+}
+
+#[test]
 fn floor_support_has_one_rule_for_terrain_objects_doors_and_rotated_carriers() {
     for up in [false, true] {
         let mesh = Arc::new(CollisionMesh::new(plane(0.0, up)).unwrap());
