@@ -1,6 +1,9 @@
 //! Move-end room and the original client's delayed automatic posture.
-use super::*;
-use eq_client_core::PostureState;
+use super::{PlayerBody, post_posture};
+use bevy::prelude::Vec3;
+use eq_client_assets::ui::InstalledClient;
+use eq_client_core::{Posture, PostureState, movement::CollisionWorld, world::ClientWorld};
+use std::time::{Duration, Instant};
 
 /// One refused own-movement proposal, kept separately from worker receipts.
 #[derive(Clone, Copy, Debug)]
@@ -38,9 +41,9 @@ impl State {
         self.automatic = None;
     }
 
-    /// Titanium arms only on a standing refusal with AllowAutoStand on.
+    /// Titanium arms only on a standing refusal with `AllowAutoStand` on.
     /// Mac arms on every headroom refusal, ignoring that option (0x50453a).
-    /// RoF2 provisionally follows Titanium.
+    /// `RoF2` provisionally follows Titanium.
     pub(super) fn refused(
         &mut self,
         client: InstalledClient,
@@ -116,7 +119,7 @@ impl State {
             let observed = match requested {
                 Posture::Ducking => posture == Some(PostureState::Ducking),
                 Posture::Standing => posture == Some(PostureState::Standing),
-                _ => false,
+                Posture::Sitting => false,
             };
             if !observed {
                 if world.player_posture_changes() != changes {
@@ -147,19 +150,7 @@ impl State {
         };
         let stand = crate::posture::stand_height(client, world, body);
         let origin = Vec3::from_array(eq_client_core::render_position(player.position));
-        let requested = if posture != Some(PostureState::Ducking) {
-            // Titanium's ordinary standing-to-duck test may itself refuse.
-            // Mac has no such transition test. Do not infer success from the
-            // outbox's intentionally silent geometric-refusal Ok result.
-            if client != InstalledClient::EqMac
-                && (!collision.headroom(origin, rule.room(stand, true, mounted))
-                    || !outbox.posture_allowed(world, Posture::Ducking))
-            {
-                self.clear();
-                return Ok(false);
-            }
-            Posture::Ducking
-        } else {
+        let requested = if posture == Some(PostureState::Ducking) {
             automatic.ducked = true;
             // Native reads say "past" now+2000; exact equality is retained
             // as a read gap. The strict endpoint here never stands early.
@@ -178,6 +169,18 @@ impl State {
                 return Ok(false);
             }
             Posture::Standing
+        } else {
+            // Titanium's ordinary standing-to-duck test may itself refuse.
+            // Mac has no such transition test. Do not infer success from the
+            // outbox's intentionally silent geometric-refusal Ok result.
+            if client != InstalledClient::EqMac
+                && (!collision.headroom(origin, rule.room(stand, true, mounted))
+                    || !outbox.posture_allowed(world, Posture::Ducking))
+            {
+                self.clear();
+                return Ok(false);
+            }
+            Posture::Ducking
         };
         // A queue refusal leaves the cycle retryable. Admission and ordinary
         // capability checks run again; no requested posture was installed.
