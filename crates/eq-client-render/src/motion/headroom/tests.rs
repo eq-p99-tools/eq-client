@@ -362,7 +362,12 @@ fn the_bank_sill_is_tested_after_stepping_and_restores_the_airborne_snapshot() {
                 [[0.0, 0.0, -20.0], [0.0, 4.0, 20.0], [0.0, 4.0, -20.0]],
             ]);
             app.insert_resource(Collision(Some(CollisionWorld::new(triangles).unwrap())));
-            let start = Vec3::new(-6.0 * span * 0.5, 3.75, 0.0);
+            // A synthetic fast grant crosses the whole face within even
+            // the .01-second sample, starting outside capsule contact.
+            // This isolates post-step gating from initial wall overlap;
+            // it does not calibrate a human's ordinary walking speed.
+            let speed = 120.0;
+            let start = Vec3::new(-speed * span * 0.5, 3.75, 0.0);
             testing::place(
                 &mut app.world_mut().resource_mut::<online::OnlineState>(),
                 world_position(start.to_array(), 0.0),
@@ -376,6 +381,7 @@ fn the_bank_sill_is_tested_after_stepping_and_restores_the_airborne_snapshot() {
                     .translation = start;
                 let mut controls = world.resource_mut::<Controls>();
                 controls.test_span = Some(span);
+                controls.speed = Some(speed);
                 controls.airborne = Some(AirborneController::default());
                 controls.climb_sent = None;
             }

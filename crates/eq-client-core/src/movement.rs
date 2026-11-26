@@ -1369,10 +1369,12 @@ mod tests {
     #[test]
     fn manual_posture_clearance_is_strict_and_also_checks_room_above_the_origin() {
         let make = |ceiling| {
-            CollisionWorld::new(floor(0.0).into_iter().chain(floor(ceiling).map(|mut face| {
-                face.swap(1, 2);
-                face
-            })))
+            CollisionWorld::new(floor(0.0).into_iter().chain(floor(ceiling).into_iter().map(
+                |mut face| {
+                    face.swap(1, 2);
+                    face
+                },
+            )))
             .unwrap()
         };
         assert!(!make(8.0).posture_clearance(Vec3::Y * 3.75, 3.75, 8.0));
