@@ -199,7 +199,9 @@ struct Arguments {
 
     /// Keep a quality-of-life setting on for every character this run,
     /// whatever their own choice: its key, such as `better_water` or
-    /// `rich_lighting`. Repeat it for more. Meant for test runs.
+    /// `rich_lighting`. Repeat it for more. Meant for test runs. The forced
+    /// value becomes the character's option for the run, so a save during it
+    /// (any change on the Options window) writes it into their options file.
     #[arg(long = "force-qol", value_name = "KEY", value_parser = parse_forced_fix)]
     force_qol: Vec<eq_client_core::qol::Fix>,
 
