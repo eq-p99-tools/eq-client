@@ -44,6 +44,17 @@ impl CollisionWorld {
         delta: Vec3,
         height: f32,
     ) -> Result<Option<ShapeCastHit>, Unsupported> {
+        let result = self.flight_sweep_inner(feet, delta, height);
+        self.observe_sweep(&result);
+        result
+    }
+
+    pub(super) fn flight_sweep_inner(
+        &self,
+        feet: Vec3,
+        delta: Vec3,
+        height: f32,
+    ) -> Result<Option<ShapeCastHit>, Unsupported> {
         let (pose, capsule) = body(feet - Vec3::Y * LIFT, height);
         let bounds = capsule.compute_aabb(&pose);
         let shift = -bounds.center();

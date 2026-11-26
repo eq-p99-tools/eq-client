@@ -413,6 +413,141 @@ impl ZoneRegions {
                 .is_none()
     }
 
+    /// A resolved ordinary-water/air leaf for surface motion. Zone lines,
+    /// other liquid kinds and ambiguous leaves cannot supply this evidence.
+    #[must_use]
+    pub fn surface_motion_region(&self, at: [f32; 3]) -> Option<RegionKind> {
+        let region = self.region_at(at)?;
+        if self.routes.contains_key(&region) {
+            return None;
+        }
+        let kind = self.kinds.get(&region).copied().unwrap_or(RegionKind::DRY);
+        match kind {
+            RegionKind::WATER | RegionKind::WATER_2 | RegionKind::WATER_3
+                if self.liquids.get(&region) == Some(&Liquid::Water) =>
+            {
+                Some(kind)
+            }
+            RegionKind::DRY
+                if self.media.get(&region).is_none_or(|&m| m == Medium::Air)
+                    && !self.liquids.contains_key(&region) =>
+            {
+                Some(kind)
+            }
+            _ => None,
+        }
+    }
+
+    /// Whether the whole original BSP segment contains only known air and
+    /// the specified ordinary water kind, without a zone line or other kind.
+    #[must_use]
+    pub fn surface_motion_segment(
+        &self,
+        start: [f32; 3],
+        end: [f32; 3],
+        water: RegionKind,
+    ) -> bool {
+        if !matches!(
+            water,
+            RegionKind::WATER | RegionKind::WATER_2 | RegionKind::WATER_3
+        ) {
+            return false;
+        }
+        let allowed = |kind| kind == RegionKind::DRY || kind == water;
+        self.surface_motion_region(start).is_some_and(allowed)
+            && self.surface_motion_region(end).is_some_and(allowed)
+            && self
+                .first_matching_span_with(
+                    start,
+                    end,
+                    |region| {
+                        if self.routes.contains_key(&region) {
+                            return SpanKind::Unresolved;
+                        }
+                        let kind = self.kinds.get(&region).copied().unwrap_or(RegionKind::DRY);
+                        if kind == water && self.liquids.get(&region) == Some(&Liquid::Water) {
+                            SpanKind::Wet(Liquid::Water)
+                        } else if kind == RegionKind::DRY
+                            && !self.liquids.contains_key(&region)
+                            && self.media.get(&region).is_none_or(|&m| m == Medium::Air)
+                        {
+                            SpanKind::Dry
+                        } else {
+                            SpanKind::Unresolved
+                        }
+                    },
+                    |kind| kind == SpanKind::Unresolved,
+                )
+                .is_none()
+    }
+
+    /// Original authored water-region identity, not merely its liquid kind.
+    #[must_use]
+    pub fn surface_motion_water_identity(&self, at: [f32; 3]) -> Option<usize> {
+        matches!(
+            self.surface_motion_region(at)?,
+            RegionKind::WATER | RegionKind::WATER_2 | RegionKind::WATER_3
+        )
+        .then(|| self.region_at(at))
+        .flatten()
+    }
+
+    /// Authored water of this exact kind and identity below resolved air, with no other
+    /// medium, zone line or unknown span before it. No surface is inferred.
+    #[must_use]
+    #[allow(clippy::cast_possible_truncation)] // Original bounded BSP interpolation.
+    pub fn surface_motion_water_below(
+        &self,
+        top: [f32; 3],
+        bottom: f32,
+        water: RegionKind,
+        water_region: usize,
+    ) -> Option<f32> {
+        if self.surface_motion_region(top) != Some(RegionKind::DRY)
+            || !bottom.is_finite()
+            || top[1] <= bottom
+            || !matches!(
+                water,
+                RegionKind::WATER | RegionKind::WATER_2 | RegionKind::WATER_3
+            )
+        {
+            return None;
+        }
+        let end = [top[0], bottom, top[2]];
+        let (span, kind) = self.first_matching_span_with(
+            top,
+            end,
+            |region| {
+                if self.routes.contains_key(&region) {
+                    return SpanKind::Unresolved;
+                }
+                let kind = self.kinds.get(&region).copied().unwrap_or(RegionKind::DRY);
+                if region == water_region
+                    && kind == water
+                    && self.liquids.get(&region) == Some(&Liquid::Water)
+                {
+                    SpanKind::Wet(Liquid::Water)
+                } else if kind == RegionKind::DRY
+                    && !self.liquids.contains_key(&region)
+                    && self
+                        .media
+                        .get(&region)
+                        .is_none_or(|&medium| medium == Medium::Air)
+                {
+                    SpanKind::Dry
+                } else {
+                    SpanKind::Unresolved
+                }
+            },
+            |kind| kind != SpanKind::Dry,
+        )?;
+        if kind != SpanKind::Wet(Liquid::Water) || span.start <= 0. {
+            return None;
+        }
+        let start = f64::from(top[1]);
+        Some(((f64::from(bottom) - start).mul_add(span.start, start)) as f32)
+    }
+
     /// Highest mapped water or lava entry along a downward ray from above.
     /// The entry must follow resolved dry space along the ray.
     #[must_use]
@@ -1393,6 +1528,150 @@ mod tests {
         }
         regions.nodes[2].back = None;
         assert!(!regions.water_surface_exit([-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]));
+    }
+
+    #[test]
+    fn surface_motion_preserves_exact_kind_and_the_entire_bsp_path() {
+        let split = |distance, front, back| Node {
+            normal: [1., 0., 0.],
+            distance,
+            region: None,
+            front: Some(front),
+            back: Some(back),
+        };
+        for water in [RegionKind::WATER, RegionKind::WATER_2, RegionKind::WATER_3] {
+            let mut regions = ZoneRegions {
+                nodes: vec![
+                    split(0., 2, 1),
+                    leaf(0),
+                    split(-0.0625, 4, 3),
+                    leaf(1),
+                    leaf(2),
+                ],
+                routes: BTreeMap::new(),
+                liquids: BTreeMap::from([(0, Liquid::Water)]),
+                media: BTreeMap::from([(0, Medium::Water)]),
+                kinds: BTreeMap::from([(0, water)]),
+            };
+            let (wet, air) = ([-1., 0., 0.], [1., 0., 0.]);
+            assert_eq!(regions.surface_motion_region(wet), Some(water));
+            assert!(regions.surface_motion_segment(wet, air, water));
+            assert!(regions.surface_motion_segment(air, wet, water));
+            let different = if water == RegionKind::WATER {
+                RegionKind::WATER_2
+            } else {
+                RegionKind::WATER
+            };
+            regions.kinds.insert(1, different);
+            regions.liquids.insert(1, Liquid::Water);
+            assert!(
+                !regions.surface_motion_segment(wet, air, water),
+                "thin other water kind"
+            );
+            regions.kinds.remove(&1);
+            regions.liquids.remove(&1);
+            regions.routes.insert(1, ZoneLine::Reference(7));
+            assert!(
+                !regions.surface_motion_segment(wet, air, water),
+                "thin zone line"
+            );
+            regions.routes.clear();
+            regions.media.insert(1, Medium::OtherSubmerging);
+            assert!(
+                !regions.surface_motion_segment(wet, air, water),
+                "unmapped medium"
+            );
+            regions.media.clear();
+            regions.nodes[2].back = None;
+            assert!(
+                !regions.surface_motion_segment(wet, air, water),
+                "unknown interior"
+            );
+        }
+    }
+
+    #[cfg(feature = "testing")]
+    #[test]
+    fn surface_water_below_is_original_resolved_exact_kind_evidence() {
+        for kind in [RegionKind::WATER, RegionKind::WATER_2, RegionKind::WATER_3] {
+            let mut regions = ZoneRegions::test_kind_surface(0., kind).with_titanium_own_liquids();
+            let identity = regions
+                .surface_motion_water_identity([0., -1., 0.])
+                .unwrap();
+            let surface = regions
+                .surface_motion_water_below([0., 2., 0.], -1000., kind, identity)
+                .unwrap();
+            // The original f64 BSP interpolation need not round to exact zero.
+            assert!(surface.abs() < 1e-12, "{kind:?}: {surface}");
+            let other = if kind == RegionKind::WATER {
+                RegionKind::WATER_2
+            } else {
+                RegionKind::WATER
+            };
+            assert_eq!(
+                regions.surface_motion_water_below([0., 2., 0.], -1000., other, identity),
+                None
+            );
+            assert_eq!(
+                regions.surface_motion_water_below([0., -1., 0.], -1000., kind, identity),
+                None
+            );
+            assert_eq!(
+                regions.surface_motion_water_below([0., 2., 0.], f32::NAN, kind, identity),
+                None
+            );
+            assert_eq!(
+                regions.surface_motion_water_below([0., 2., 0.], 3., kind, identity),
+                None
+            );
+            let wet = regions.region_at([0., -1., 0.]).unwrap();
+            regions.routes.insert(wet, ZoneLine::Reference(7));
+            assert_eq!(
+                regions.surface_motion_water_below([0., 2., 0.], -1000., kind, identity),
+                None
+            );
+        }
+    }
+
+    #[test]
+    fn water_kind_alone_cannot_establish_the_same_water_region_below() {
+        let split = |normal, distance, front, back| Node {
+            normal,
+            distance,
+            region: None,
+            front: Some(front),
+            back: Some(back),
+        };
+        let regions = ZoneRegions {
+            nodes: vec![
+                split([1., 0., 0.], -0.5, 4, 1),
+                split([0., 1., 0.], 0., 3, 2),
+                leaf(0),
+                leaf(2),
+                split([0., 1., 0.], 100., 3, 5),
+                leaf(1),
+            ],
+            routes: BTreeMap::new(),
+            liquids: BTreeMap::from([(0, Liquid::Water), (1, Liquid::Water)]),
+            kinds: BTreeMap::from([(0, RegionKind::WATER), (1, RegionKind::WATER)]),
+            media: BTreeMap::from([(0, Medium::Water), (1, Medium::Water)]),
+        };
+        assert_eq!(
+            regions.surface_motion_water_identity([0., -0.1, 0.]),
+            Some(0)
+        );
+        assert_eq!(
+            regions.surface_motion_water_identity([1., -101., 0.]),
+            Some(1)
+        );
+        assert_eq!(
+            regions.surface_motion_water_below([1., 2., 0.], -1000., RegionKind::WATER, 0),
+            None
+        );
+        assert_eq!(
+            regions.surface_motion_water_below([1., 2., 0.], -1000., RegionKind::WATER, 1),
+            Some(-100.)
+        );
     }
 
     #[test]

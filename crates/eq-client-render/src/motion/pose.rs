@@ -14,7 +14,10 @@ pub(crate) struct Snapshot {
 /// snapshots preserves a short rising pose even when the sample's endpoint
 /// has already passed it. No animation event or minimum hold is introduced.
 #[derive(Clone, Debug, Default)]
-pub(super) struct Path(Vec<(f32, Snapshot)>);
+pub(super) struct Path(
+    Vec<(f32, Snapshot)>,
+    #[cfg(test)] pub(super) Vec<(Vec3, Vec3)>,
+);
 
 impl Path {
     pub(super) fn push(&mut self, seconds: f32, snapshot: Snapshot) {
