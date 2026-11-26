@@ -26,7 +26,7 @@ use bevy::{
 };
 use eq_client_assets::{ZonePrimitive, regions::Liquid, regions::ZoneRegions};
 use eq_client_core::qol::Fix;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 /// A zone material wearing the water look.
 pub(crate) type WaterMaterial = ExtendedMaterial<StandardMaterial, WaterLook>;
@@ -268,7 +268,7 @@ pub(super) fn register(app: &mut App) {
     app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_systems(
             Update,
-            (wear, depth, animate, weather, rich_lit)
+            (wear, even_light, depth, animate, weather, rich_lit)
                 .chain()
                 .in_set(crate::Stage::Present),
         )
@@ -282,6 +282,167 @@ pub(super) fn register(app: &mut App) {
 
 fn better(options: &crate::options::OptionsState) -> bool {
     options.options.qol.on(Fix::BetterWater)
+}
+
+/// A liquid mesh's positions, normals and vertex colours.
+type Evened<'a> = (&'a [[f32; 3]], &'a [[f32; 3]], &'a [[f32; 4]]);
+
+/// The same, copied out of the mesh.
+type Taken = (Vec<[f32; 3]>, Vec<[f32; 3]>, Vec<[f32; 4]>);
+
+/// How far apart the points are that a liquid's light is evened over.
+const EVEN_CELL: f32 = 24.0;
+
+/// Light, in a vertex colour, as one plane of liquid takes it: the zone
+/// bakes light into each piece of a surface on its own, so neighbouring
+/// pieces can disagree along their shared edge. The plain look's half
+/// transparency hides that; Better Water's deeper colour shows it as a
+/// hard line across the water. So each level of each liquid is treated as
+/// one plane (each side of it apart: the sheet facing down bakes its own
+/// light for the view from below): every vertex spreads its colour over the nearest points of
+/// a grid, and every vertex then takes the blend of those points, which
+/// changes smoothly across piece edges and mesh cells alike.
+fn even_colours(meshes: &[Evened<'_>]) -> Vec<Vec<[f32; 4]>> {
+    // The four grid points around a level point, and how much each counts.
+    let around = |position: &[f32; 3], normal: &[f32; 3]| {
+        let x = position[0] / EVEN_CELL - 0.5;
+        let z = position[2] / EVEN_CELL - 0.5;
+        let (ix, iz) = (x.floor(), z.floor());
+        let (fx, fz) = (x - ix, z - iz);
+        let level = height_key(position[1]) * 2 + i64::from(normal[1] < 0.0);
+        #[expect(
+            clippy::cast_possible_truncation,
+            reason = "zone coordinates are far inside i64"
+        )]
+        let (ix, iz) = (ix as i64, iz as i64);
+        [
+            ((ix, iz, level), (1.0 - fx) * (1.0 - fz)),
+            ((ix + 1, iz, level), fx * (1.0 - fz)),
+            ((ix, iz + 1, level), (1.0 - fx) * fz),
+            ((ix + 1, iz + 1, level), fx * fz),
+        ]
+    };
+    let mut points: HashMap<(i64, i64, i64), ([f32; 4], f32)> = HashMap::new();
+    for (positions, normals, colours) in meshes {
+        for ((position, normal), colour) in positions.iter().zip(normals.iter()).zip(colours.iter())
+        {
+            for (key, weight) in around(position, normal) {
+                let point = points.entry(key).or_insert(([0.0; 4], 0.0));
+                for (sum, channel) in point.0.iter_mut().zip(colour) {
+                    *sum += channel * weight;
+                }
+                point.1 += weight;
+            }
+        }
+    }
+    meshes
+        .iter()
+        .map(|(positions, normals, colours)| {
+            positions
+                .iter()
+                .zip(normals.iter())
+                .zip(colours.iter())
+                .map(|((position, normal), own)| {
+                    let mut sum = [0.0; 4];
+                    let mut total = 0.0;
+                    for (key, weight) in around(position, normal) {
+                        if let Some((point, count)) = points.get(&key)
+                            && *count > 0.0
+                        {
+                            for (out, channel) in sum.iter_mut().zip(point) {
+                                *out += channel / count * weight;
+                            }
+                            total += weight;
+                        }
+                    }
+                    if total > 0.0 {
+                        sum.map(|channel| channel / total)
+                    } else {
+                        *own
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// While Better Water is on, evens the zone light across each liquid
+/// surface ([`even_colours`]) whenever the light writes new colours, and
+/// has the light write them afresh when it is turned off.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+fn even_light(
+    options: Res<crate::options::OptionsState>,
+    scene: Option<ResMut<crate::lighting::SceneLights>>,
+    surfaces: Query<&Mesh3d, With<WaterSurface>>,
+    mut meshes: ResMut<Assets<Mesh>>,
+    mut evened: Local<Option<(u64, usize)>>,
+) {
+    let Some(mut scene) = scene else {
+        *evened = None;
+        return;
+    };
+    if !better(&options) {
+        if evened.take().is_some() {
+            scene.recolour();
+        }
+        return;
+    }
+    let handles: Vec<_> = {
+        let mut seen = HashSet::new();
+        surfaces
+            .iter()
+            .filter(|mesh| seen.insert(mesh.0.id()))
+            .map(|mesh| mesh.0.clone())
+            .collect()
+    };
+    let now = (scene.writes, handles.len());
+    if *evened == Some(now) {
+        return;
+    }
+    *evened = Some(now);
+    let taken: Vec<Taken> = handles
+        .iter()
+        .map(|handle| {
+            let mesh = meshes.get(handle);
+            let positions = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_POSITION)) {
+                Some(bevy::mesh::VertexAttributeValues::Float32x3(all)) => all.clone(),
+                _ => Vec::new(),
+            };
+            let normals = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_NORMAL)) {
+                Some(bevy::mesh::VertexAttributeValues::Float32x3(all))
+                    if all.len() == positions.len() =>
+                {
+                    all.clone()
+                }
+                _ => vec![[0.0, 1.0, 0.0]; positions.len()],
+            };
+            let colours = match mesh.and_then(|mesh| mesh.attribute(Mesh::ATTRIBUTE_COLOR)) {
+                Some(bevy::mesh::VertexAttributeValues::Float32x4(all))
+                    if all.len() == positions.len() =>
+                {
+                    all.clone()
+                }
+                _ => Vec::new(),
+            };
+            (positions, normals, colours)
+        })
+        .collect();
+    let views: Vec<Evened<'_>> = taken
+        .iter()
+        .filter(|(_, _, colours)| !colours.is_empty())
+        .map(|(positions, normals, colours)| {
+            (positions.as_slice(), normals.as_slice(), colours.as_slice())
+        })
+        .collect();
+    let mut even = even_colours(&views).into_iter();
+    for (handle, (_, _, colours)) in handles.iter().zip(&taken) {
+        if colours.is_empty() {
+            continue;
+        }
+        if let (Some(colours), Some(mut mesh)) = (even.next(), meshes.get_mut(handle)) {
+            mesh.insert_attribute(Mesh::ATTRIBUTE_COLOR, colours);
+        }
+    }
 }
 
 /// A surface with whichever material it wears now.
@@ -961,5 +1122,37 @@ mod tests {
                     .is_some()
             );
         }
+    }
+
+    #[test]
+    fn neighbouring_pieces_meet_in_one_light() {
+        // Two pieces of one sheet at -2 share the edge x = 24, one baked
+        // bright and one dim, the way South Qeynos's canal pieces are.
+        let up = [0.0, 1.0, 0.0];
+        let left: Vec<[f32; 3]> = vec![[0.0, -2.0, 0.0], [24.0, -2.0, 0.0], [24.0, -2.0, 24.0]];
+        let right: Vec<[f32; 3]> = vec![[24.0, -2.0, 0.0], [48.0, -2.0, 0.0], [24.0, -2.0, 24.0]];
+        let normals = vec![up; 3];
+        let bright = vec![[0.9, 0.9, 0.6, 1.0]; 3];
+        let dim = vec![[0.4, 0.5, 0.4, 1.0]; 3];
+        // The sheet facing down under them bakes no light of its own.
+        let below: Vec<[f32; 3]> = left.clone();
+        let down = vec![[0.0, -1.0, 0.0]; 3];
+        let dark = vec![[0.0, 0.0, 0.0, 1.0]; 3];
+        let even = even_colours(&[
+            (&left, &normals, &bright),
+            (&right, &normals, &dim),
+            (&below, &down, &dark),
+        ]);
+        // Where the pieces meet, both take the same light, between the two.
+        for (a, b) in [(1, 0), (2, 2)] {
+            assert_eq!(even[0][a], even[1][b]);
+            assert!(
+                even[0][a][0] < 0.9 && even[0][a][0] > 0.4,
+                "{:?}",
+                even[0][a]
+            );
+        }
+        // The side facing down keeps its own.
+        assert_eq!(even[2], dark);
     }
 }

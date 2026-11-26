@@ -15,5 +15,8 @@
   from the ripples instead of the soft, magnified water texture, the light
   on the floor of shallow water is a curved net of bright seams rather than
   a letter-like pattern, and reflections look past thin things such as
-  posts and people instead of smearing them across the water. The offline
+  posts and people instead of smearing them across the water. Each sheet
+  of water is lit as one plane: the light the zone bakes into its pieces is
+  blended smoothly across them, so no hard line runs across the water where
+  two pieces were baked differently (South Qeynos's canals). The offline
   viewer's `--start-heading` now faces the camera that way.
