@@ -409,9 +409,7 @@ fn unknown_geometry_negative_control_retains_the_old_projected_tap_tail() {
             .resource::<Controls>()
             .ground
             .current
-            .is_none_or(|frame| {
-                frame.motion.velocity() == Vec3::ZERO && frame.position == corrected
-            })
+            .is_none()
     );
     assert!(
         stop.distance(release) > 0.4,
@@ -453,7 +451,9 @@ fn native_ground_real_correction_rolls_back_in_receive_and_retires_the_simulatio
             .resource::<Controls>()
             .ground
             .current
-            .is_none()
+            .is_none_or(|frame| {
+                frame.motion.velocity() == Vec3::ZERO && frame.position == corrected
+            })
     );
     for _ in 0..10 {
         assert_eq!(scene.step(false).shown, actual);
