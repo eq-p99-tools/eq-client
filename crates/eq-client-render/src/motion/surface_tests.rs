@@ -158,6 +158,7 @@ impl Native {
             controls.strafe_walk_speed = grant.strafe.and_then(|s| s.walk_units_per_second);
             controls.walk_speed = grant.walk.map(|s| s.units_per_second);
             controls.backward_speed = grant.backward.map(|s| s.units_per_second);
+            controls.diagonal_rates = grant.diagonal;
             controls.swim = grant.swim;
             controls.airborne = Some(AirborneController::default());
             controls.suppress_surface = suppressed;
@@ -194,6 +195,12 @@ impl Native {
             .resource_mut::<crate::outbox::Outbox>()
             .set_test_time(self.time);
         self.app.update();
+        // This minimal App has no InputPlugin. Match its end-of-frame edge
+        // clearing, while keeping physically held keys down.
+        self.app
+            .world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .clear();
         let commands = self.receiver.try_iter().collect::<Vec<_>>();
         let mut requests = Vec::new();
         for command in commands {
@@ -1056,6 +1063,11 @@ fn surface_ordinary_turn_strafe_pitch_and_autorun_keep_the_clock() {
             Act::StrafeLeft,
             crate::keys::Chord::key(KeyCode::KeyZ),
         );
+        crate::keys::testing::bind(
+            &mut f.app,
+            Act::Autorun,
+            crate::keys::Chord::key(KeyCode::KeyR),
+        );
         let (first, _) = f.step(100);
         f.accept(&first);
         let updates = f
@@ -1097,17 +1109,31 @@ fn surface_ordinary_turn_strafe_pitch_and_autorun_keep_the_clock() {
                 query.single_mut(world).unwrap().look = 60_f32.to_radians();
             }
             "autorun" => {
-                f.app.world_mut().resource_mut::<Controls>().autorun = true;
-                f.app
-                    .world_mut()
-                    .resource_mut::<ButtonInput<KeyCode>>()
-                    .release(KeyCode::KeyW);
+                let mut keys = f.app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+                keys.release(KeyCode::KeyW);
+                keys.press(KeyCode::KeyR);
             }
             "walk" => f.app.world_mut().resource_mut::<Controls>().walking = true,
             _ => unreachable!(),
         }
         for ms in [117, 167, 100] {
             let (request, _) = f.step(ms);
+            let c = f.app.world().resource::<Controls>();
+            if action == "autorun" {
+                assert!(c.autorun, "ordinary physical toggle must latch");
+            }
+            if action == "diagonal" {
+                assert!(c.diagonal_rates.run.is_some());
+            }
+            if action == "strafe" {
+                assert!(matches!(
+                    c.test_motion_intent.unwrap().0,
+                    MovementMode::Strafe(_)
+                ));
+            }
+            if action == "turn" {
+                assert_ne!(c.test_motion_intent.unwrap().3, 0.);
+            }
             assert!(
                 f.app.world().resource::<Controls>().surface.pending(),
                 "{action}: {}",
@@ -1182,11 +1208,14 @@ fn surface_retake_delay_after_one_ineligible_interval_is_reported() {
                 "R3 {}",
                 json!({"pitch":pitch,"cadence":cadence,"retake_ms":retake,"observed_ms":elapsed,"rows":rows})
             );
-            // A reported delay is backed by an actually accepted plan. An
-            // unresolved ordinary path remains explicit, never reset to win.
-            if let Some(delay) = retake {
-                assert!((0. ..=10000.).contains(&delay));
-            }
+            // These measured rows all reach a proved boundary within a
+            // second. Keep both the physics and local-result deadlines as
+            // regressions; never reset phase to make the diagnostic pass.
+            assert!(retake.is_some_and(|delay| (0. ..=1000.).contains(&delay)));
+            assert!(
+                elapsed <= 1000,
+                "local acceptance missed the measured one-second bound"
+            );
         }
     }
 }
