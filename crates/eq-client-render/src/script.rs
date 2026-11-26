@@ -1900,7 +1900,9 @@ pub(super) fn drive(
                     }
                 };
                 if observed.4.headroom_refused
-                    && observed.4.last_sent.is_some_and(|sent| sent >= since)
+                    && observed.4.last_sent.is_some_and(|sent| {
+                        std::time::Instant::now().saturating_duration_since(sent) <= elapsed
+                    })
                 {
                     log_end(&online);
                     script.stop(&mut keys, &mut mouse, HEADROOM_REFUSED);
