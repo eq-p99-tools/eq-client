@@ -25,7 +25,7 @@ struct Underwater {
 @group(0) @binding(4) var depth_texture: texture_2d<f32>;
 #endif
 
-// The same lattice hash and smooth noise as water.wgsl.
+// The same lattice hash as water.wgsl, and smooth value noise from it.
 fn hash(p: vec2<f32>) -> f32 {
     var q = vec2<u32>(bitcast<u32>(i32(p.x)), bitcast<u32>(i32(p.y)));
     q = q * vec2(1597334673u, 3812015801u);
@@ -44,41 +44,17 @@ fn noise(p: vec2<f32>) -> f32 {
     );
 }
 
-// Smooth value noise and its slope (x: value, yz: d/dx, d/dy), as in
-// water.wgsl.
-fn noised(p: vec2<f32>) -> vec3<f32> {
-    let i = floor(p);
-    let f = p - i;
-    let u = f * f * f * (f * (f * 6.0 - 15.0) + 10.0);
-    let du = 30.0 * f * f * (f * (f - 2.0) + 1.0);
-    let a = hash(i);
-    let b = hash(i + vec2(1.0, 0.0));
-    let c = hash(i + vec2(0.0, 1.0));
-    let d = hash(i + vec2(1.0, 1.0));
-    let k = vec3(b - a, c - a, a - b - c + d);
-    return vec3(
-        a + k.x * u.x + k.y * u.y + k.z * u.x * u.y,
-        du * vec2(k.x + k.z * u.y, k.y + k.z * u.x),
-    );
-}
-
-// The net of bright lines the moving ripples focus light into, the same
-// pattern water.wgsl lays on the floor of shallow water, here finer and
-// kept to its thinnest, brightest threads.
-fn caustic(p: vec2<f32>, t: f32) -> f32 {
-    let c1 = noised(p * 0.35 + vec2(t * 0.21, t * 0.13)).yz;
-    let c2 = noised(p * 0.47 + vec2(-t * 0.17, t * 0.19) + 7.3).yz;
-    return pow(clamp(1.0 - length(c1 + c2) * 0.42, 0.0, 1.0), 14.0);
-}
-
-// How much light comes down through the surface at a level point: a few
-// thin wisps of the caustic net, shimmering with the surface, each lit
-// only while a slow drifting field lets it through, so rays come and go
-// one by one rather than standing in rows.
+// How much light comes down through the surface at a level point: soft
+// spots a few units across where the ripples gather it, each flickering
+// with the surface, and only within slow drifting patches, so a few
+// broad, soft shafts come and go rather than a dense comb of threads.
+// The pattern is turned off the world's axes so it never lines up in rows.
 fn through_surface(p: vec2<f32>, t: f32) -> f32 {
-    let threads = caustic(p * 1.8, t * 1.5);
-    let gate = smoothstep(0.62, 0.85, noise(p * 0.21 + vec2(t * 0.07, -t * 0.05) + 31.7));
-    return threads * gate;
+    let q = mat2x2<f32>(0.8, 0.6, -0.6, 0.8) * p;
+    let spot = smoothstep(0.58, 0.82, noise(q * 0.32 + vec2(t * 0.09, -t * 0.06)));
+    let flicker = 0.6 + 0.4 * noise(q * 0.55 + vec2(-t * 0.35, t * 0.28) + 13.1);
+    let gate = smoothstep(0.6, 0.8, noise(q * 0.05 + vec2(t * 0.012, -t * 0.009) + 31.7));
+    return spot * flicker * gate;
 }
 
 // Whether the surface at a level point can see the sun (1) or is shaded by
@@ -138,12 +114,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let far_point = view.world_from_clip * vec4(ndc, max(depth, 0.00001), 1.0);
         let eye = view.world_position;
         let toward = far_point.xyz / far_point.w - eye;
-        let reach = min(length(toward), 90.0);
+        let reach = min(length(toward), 70.0);
         let ray = normalize(toward);
 
         let down = settings.light.xyz;
         let surface = eye.y + settings.light.w;
-        let steps = 20;
+        let steps = 32;
         let step = reach / f32(steps);
         // A fixed per-pixel offset hides the steps as soft grain.
         let jitter = fract(52.9829189 * fract(dot(coord, vec2(0.06711056, 0.00583715))));

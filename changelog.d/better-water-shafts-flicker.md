@@ -1,9 +1,8 @@
 - Better Water: light shafts under water now fall through the world from
   the sun, bent at the surface, so they slant with the sun, stay put as the
   camera turns, slide past while swimming and end on the floor and walls.
-  They come from the shimmering net of light the ripples focus (the same
-  pattern as on the floor) as a few thin, faint wisps that come and go,
-  fall only where the surface above can see the
+  They are a few broad, soft, faint shafts that come and go with the
+  surface, fall only where the surface above can see the
   sun (none under roofs, docks, bridges or in tunnels), follow the sun's
   strength at night, and never show in zones without a sky. Water surfaces
   no longer flicker as the camera moves (each side of the surface was drawn
@@ -12,5 +11,9 @@
   of a surface with no water region under them (South Qeynos's canals),
   now get the look too. Seen from above, water takes red first, then green,
   so deeper or farther water turns teal, then blue, then dark instead of
-  looking like grey glass over sand. The offline viewer's `--start-heading` now faces
-  the camera that way.
+  looking like grey glass over sand. Close up, deep water takes its detail
+  from the ripples instead of the soft, magnified water texture, the light
+  on the floor of shallow water is a curved net of bright seams rather than
+  a letter-like pattern, and reflections look past thin things such as
+  posts and people instead of smearing them across the water. The offline
+  viewer's `--start-heading` now faces the camera that way.

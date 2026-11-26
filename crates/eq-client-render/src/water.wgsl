@@ -107,6 +107,51 @@ fn untiled(texture: texture_2d<f32>, smp: sampler, uv: vec2<f32>, pick: f32) -> 
     return mix(ca, cb, smoothstep(0.2, 0.8, f - 0.1 * (difference.x + difference.y + difference.z)));
 }
 
+// The distances (x: nearest, y: next) from a point to a field of points,
+// one to a cell, each wandering slowly about its cell.
+fn cells(p: vec2<f32>, t: f32) -> vec2<f32> {
+    let i = floor(p);
+    let f = p - i;
+    var nearest = 8.0;
+    var next = 8.0;
+    for (var y = -1; y <= 1; y++) {
+        for (var x = -1; x <= 1; x++) {
+            let g = vec2(f32(x), f32(y));
+            let h = vec2(hash(i + g), hash(i + g + vec2(37.0, 17.0)));
+            let d = length(g + 0.5 + 0.38 * sin(t + 6.2831 * h) - f);
+            if d < nearest {
+                next = nearest;
+                nearest = d;
+            } else if d < next {
+                next = d;
+            }
+        }
+    }
+    return vec2(nearest, next);
+}
+
+// The net of bright lines the ripples focus light into on the floor of
+// shallow water: the seams between two drifting cell fields, thin and
+// bright where they cross. Lines narrower than a pixel spread and dim
+// instead of breaking into a pattern.
+fn caustic_net(p: vec2<f32>, t: f32) -> f32 {
+    // Bend the field so the seams curve rather than run straight.
+    let bent = p + 0.45 * vec2(
+        noised(p * 0.6 + vec2(t * 0.05, 0.0)).x,
+        noised(p * 0.6 + vec2(19.1, -t * 0.04)).x,
+    );
+    let a = cells(bent, t * 0.6);
+    let b = cells(bent * 1.37 * mat2x2<f32>(0.8, 0.6, -0.6, 0.8) + vec2(5.1, 9.7), t * 0.75 + 2.0);
+    let seam_a = a.y - a.x;
+    let seam_b = b.y - b.x;
+    let wide = max(fwidth(p.x) + fwidth(p.y), 0.001);
+    let width = max(0.1, wide * 1.5);
+    let line_a = (1.0 - smoothstep(0.0, width, seam_a)) * (0.1 / width);
+    let line_b = (1.0 - smoothstep(0.0, width, seam_b)) * (0.1 / width);
+    // Brightest where the two cross, faint along a single seam.
+    return clamp(line_a * 0.35 + line_b * 0.25 + line_a * line_b * 1.2, 0.0, 1.0);
+}
+
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
@@ -135,6 +180,11 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     // Wind: broad patches of rougher and calmer water drift across it.
     let wind = smoothstep(0.2, 0.8, patches(world.xz * 0.0045 + vec2(t * 0.012, t * 0.007)));
     let albedo = mix(a.rgb, b.rgb, 0.45) * (0.88 + 0.24 * wind);
+    // Close to the camera one texel of the water's texture spans many
+    // pixels and goes soft; there the ripples carry the detail instead.
+    let texels = uv * vec2<f32>(textureDimensions(frame_texture));
+    let footprint = max(length(dpdx(texels)), length(dpdy(texels)));
+    let magnified = 1.0 - smoothstep(0.5, 1.5, footprint);
     var light = vec3(1.0);
 #ifdef VERTEX_COLORS
     light = in.color.rgb;
@@ -194,6 +244,10 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 #endif
     let behind = textureSampleLevel(view_transmission_texture, view_transmission_sampler, screen + bend, 0.0).rgb;
 
+    // Taken here, out of the branches below, since it reads its own
+    // footprint on screen.
+    let caustic = caustic_net(behind_at.xz * 0.42, t);
+
     var color: vec3<f32>;
     var water_layer: vec3<f32>;
     var opacity: f32;
@@ -201,11 +255,8 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
     if from_above {
         // Light dancing on whatever lies under shallow water.
         let under = max(world.y - behind_at.y, 0.0);
-        let caustic_depth = smoothstep(0.3, 2.5, under) * (1.0 - smoothstep(12.0, 45.0, under));
-        let c1 = noised(behind_at.xz * 0.35 + vec2(t * 0.21, t * 0.13)).yz;
-        let c2 = noised(behind_at.xz * 0.47 + vec2(-t * 0.17, t * 0.19) + 7.3).yz;
-        let caustic = pow(clamp(1.0 - length(c1 + c2) * 0.42, 0.0, 1.0), 6.0);
-        var seen = behind + behind * caustic * caustic_depth * 0.9 * (0.3 + 0.7 * sun.w);
+        let caustic_depth = smoothstep(0.3, 2.5, under) * (1.0 - smoothstep(5.0, 25.0, under));
+        var seen = behind + behind * caustic * caustic_depth * 0.7 * (0.3 + 0.7 * sun.w);
         // Water takes red first, then green: what lies under it turns
         // teal, then blue, then dark the more water the light crosses, so
         // a sandy shelf reads as sea and not as sand under glass.
@@ -213,9 +264,13 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 
         // The water between: clear when thin, tinted and then dark when deep.
         let absorbed = 1.0 - exp(-thickness * water.deep.a);
-        let deep_body = water.deep.rgb * max(light, vec3(0.35)) * (0.6 + 0.8 * luminance(albedo));
+        let texture_shade = mix(0.6 + 0.8 * luminance(albedo), 1.0, magnified * 0.7);
+        let deep_body = water.deep.rgb * max(light, vec3(0.35)) * texture_shade;
         var body = mix(albedo * water.shallow.rgb * light, deep_body, absorbed * 0.85);
-        body *= 0.85 + 0.3 * crest;
+        // Ripples tilted toward the sun catch more of it, and those tilted
+        // away fall darker: fine, sharp detail at any distance.
+        let toward_sun = dot(slope, normalize(sun.xz + vec2(0.0001)));
+        body *= (0.85 + 0.3 * crest) * clamp(1.0 + 4.0 * toward_sun, 0.6, 1.4);
         opacity = mix(0.3, 0.92, absorbed);
         water_layer = body;
 
@@ -324,9 +379,14 @@ fn trace(start: vec3<f32>, direction: vec3<f32>, distance: f32) -> vec4<f32> {
             if hit.x < -1e8 {
                 return vec4(0.0);
             }
+            // A ray that went behind a thin thing (a person, a post) between
+            // two steps passed it: keep looking past it rather than smear
+            // the thing across the water around it.
+            if hit.x > 1.5 {
+                continue;
+            }
             let uv = hit.yz;
-            // A ray that passed well behind a thin thing found nothing.
-            let solid = 1.0 - smoothstep(1.0, 4.0, hit.x);
+            let solid = 1.0 - smoothstep(0.5, 1.5, hit.x);
             let edge = smoothstep(0.0, 0.15, min(min(uv.x, 1.0 - uv.x), min(uv.y, 1.0 - uv.y)));
             let fade = 1.0 - smoothstep(0.5, 1.0, far / reach);
             let colour = textureSampleLevel(view_transmission_texture, view_transmission_sampler, uv, 0.0).rgb;
