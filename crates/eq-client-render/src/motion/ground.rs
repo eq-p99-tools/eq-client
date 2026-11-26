@@ -81,6 +81,7 @@ pub(super) struct Control {
     pub restore: Option<WorldPosition>,
     pub blocked: bool,
     admitted: Option<Instant>,
+    epoch: Option<Instant>,
 }
 
 impl Control {
@@ -95,6 +96,7 @@ impl Control {
         self.current = Some(rest);
         self.last_posted = None;
         self.admitted = None;
+        self.epoch = Some(rest.at);
     }
 
     /// Retire presentation on a correction/control seam; pending identities
@@ -169,6 +171,22 @@ impl Control {
     /// A stalled result bounds speculation by the unchanged maximum cycle.
     /// Waiting freezes simulation; it never catches up missed held time later.
     pub fn timed_out(&self, now: Instant) -> bool {
+        let Some(epoch) = self.epoch.filter(|_| self.active()) else {
+            return false;
+        };
+        self.sent
+            .iter()
+            .find(|sent| {
+                sent.frame.at >= epoch
+                    && self
+                        .accepted
+                        .is_none_or(|accepted| !sent.frame.same_state(accepted))
+            })
+            .is_some_and(|sent| now.saturating_duration_since(sent.frame.at) >= MOVE_RESULT_WAIT)
+    }
+
+    #[cfg(test)]
+    pub fn old_timeout(&self, now: Instant) -> bool {
         self.sent
             .front()
             .is_some_and(|sent| now.saturating_duration_since(sent.frame.at) >= MOVE_RESULT_WAIT)
@@ -192,7 +210,9 @@ impl Control {
         };
         let sent = self.sent[index];
         self.sent.drain(..=index);
-        if refused || position != sent.frame.position || self.current.is_none() {
+        let current_owner =
+            self.current.is_some() && self.epoch.is_some_and(|epoch| sent.frame.at >= epoch);
+        if refused || position != sent.frame.position || !current_owner {
             self.retire();
             self.restore = Some(position);
             self.blocked = true;

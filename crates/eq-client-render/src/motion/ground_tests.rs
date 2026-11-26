@@ -326,7 +326,7 @@ fn native_ground_release_uses_the_release_frame_and_receipts_never_replay_distan
 #[test]
 fn native_ground_repress_retains_only_owned_velocity_and_new_actual_input() {
     for delay in [0, 6] {
-        for gap in [1, 3, 12] {
+        for gap in [1, 3, 12, 60] {
             let mut scene = Scene::new(delay, true);
             let before = latency_tests::shown(&mut scene.app).0;
             for _ in 0..2 {
@@ -335,8 +335,29 @@ fn native_ground_repress_retains_only_owned_velocity_and_new_actual_input() {
             for _ in 0..gap {
                 scene.step(false);
             }
+            if gap == 60 {
+                let controls = scene.app.world().resource::<Controls>();
+                assert!(
+                    controls.ground.old_timeout(scene.now()),
+                    "negative control lacks stale waiting identity"
+                );
+                assert!(
+                    !controls.ground.timed_out(scene.now()),
+                    "an admitted rest became a new unresolved prefix"
+                );
+            }
             for _ in 0..11 {
                 scene.step(true);
+                assert!(
+                    scene
+                        .app
+                        .world()
+                        .resource::<Controls>()
+                        .ground
+                        .current
+                        .is_some(),
+                    "re-press left the native controller"
+                );
             }
             let mut last = scene.step(false);
             for _ in 0..50 {
