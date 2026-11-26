@@ -26,8 +26,11 @@ struct Automatic {
     zone: String,
     client: InstalledClient,
     deadline: Instant,
-    requested: Option<Posture>,
+    requested: Option<(Posture, u32)>,
     ducked: bool,
+    /// A launch requested Standing, but its ordinary worker report has not
+    /// reached the host yet. The pre-launch Duck is not an automatic Duck.
+    launch_stand: Option<u32>,
 }
 
 impl State {
@@ -62,13 +65,20 @@ impl State {
             deadline: now + Duration::from_millis(2_000),
             requested: None,
             ducked,
+            launch_stand: (posture == Some(PostureState::Standing)
+                && world.posture(player.spawn_id) == Some(PostureState::Ducking))
+            .then(|| world.player_posture_changes()),
         });
     }
 
     /// Runs before the movement cadence gate, on a later input pass than
     /// the refusal. Returns true while an ordinary posture command is in
     /// flight. No repeated queue action or movement based on an assumed duck.
-    #[allow(clippy::too_many_arguments)]
+    #[allow(
+        clippy::too_many_arguments,
+        clippy::too_many_lines,
+        reason = "one admission-scoped posture cycle"
+    )]
     pub(super) fn drive(
         &mut self,
         client: InstalledClient,
@@ -92,13 +102,30 @@ impl State {
             return Ok(false);
         };
         let posture = world.posture(player.spawn_id);
-        if let Some(requested) = automatic.requested {
+        if let Some(changes) = automatic.launch_stand {
+            if posture == Some(PostureState::Standing) {
+                automatic.launch_stand = None;
+            } else {
+                if world.player_posture_changes() != changes {
+                    self.clear();
+                }
+                return Ok(false);
+            }
+        }
+        if let Some((requested, changes)) = automatic.requested {
             let observed = match requested {
                 Posture::Ducking => posture == Some(PostureState::Ducking),
                 Posture::Standing => posture == Some(PostureState::Standing),
                 _ => false,
             };
             if !observed {
+                if world.player_posture_changes() != changes {
+                    // An intervening observed posture makes this host wait
+                    // ambiguous. Abandon the cycle without calling it an
+                    // acknowledgement or sending a second queued action.
+                    self.clear();
+                    return Ok(false);
+                }
                 return Ok(true);
             }
             if requested == Posture::Standing {
@@ -155,7 +182,7 @@ impl State {
         // A queue refusal leaves the cycle retryable. Admission and ordinary
         // capability checks run again; no requested posture was installed.
         post_posture(outbox, world, requested)?;
-        automatic.requested = Some(requested);
+        automatic.requested = Some((requested, world.player_posture_changes()));
         Ok(true)
     }
 }

@@ -3403,18 +3403,6 @@ pub(super) fn input(
         trace!(?client, ?posture, session = ?session_id, floor = refused.floor,
             ceiling = refused.ceiling, stand = refused.stand, room = refused.room,
             origin = ?refused.origin, candidate = ?refused.candidate, "Movement headroom refused");
-        let effective_posture = if jump_posture == JumpPosture::StandIfDucked {
-            Some(eq_client_core::PostureState::Standing)
-        } else {
-            posture
-        };
-        controls.headroom.refused(
-            client,
-            online.world(),
-            effective_posture,
-            options.options.allow_auto_stand,
-            now,
-        );
         controls.airborne.clone_from(&previous_airborne);
         // A refused endpoint cannot own an unsubmitted surface frame.
         controls.restore_surface_trial();
@@ -3451,6 +3439,20 @@ pub(super) fn input(
             .as_ref()
             .and_then(|hud| hud.resource_estimate)
             .map(|(_, endurance)| jump_endurance(endurance));
+    }
+    if refused.is_some() {
+        let effective_posture = if jump_posture == JumpPosture::StandIfDucked {
+            Some(eq_client_core::PostureState::Standing)
+        } else {
+            posture
+        };
+        controls.headroom.refused(
+            client,
+            online.world(),
+            effective_posture,
+            options.options.allow_auto_stand,
+            now,
+        );
     }
     let position = if placement_blocked {
         origin
