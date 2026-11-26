@@ -599,6 +599,19 @@ fn native_ground_unknown_contact_hands_back_only_after_the_observed_prefix_is_ad
         }
         let frames = handed_back.expect("bounded handback to existing ordinary path");
         assert!(frames <= 20);
+        let mut previous = latency_tests::shown(&mut scene.app).0;
+        for _ in 0..30 {
+            let row = scene.step(true);
+            assert!(
+                row.shown.x >= previous.x - 0.000_01,
+                "late native receipt rewound legacy playback"
+            );
+            assert!(
+                row.shown.distance(previous) <= 6. / 60. + 0.000_01,
+                "handback caught up a frozen interval"
+            );
+            previous = row.shown;
+        }
         assert_eq!(scene.refusals, 0);
         println!(
             "unknown-contact delay={delay} handback_frames={frames} pause_ms={}",
