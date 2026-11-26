@@ -11,7 +11,8 @@
 //!   list, with a smooth falloff, so a lamp's pool follows the floor rather
 //!   than the edges of its triangles. The nearest are drawn, two of them
 //!   casting shadows.
-//! - The carried lights follow their bearers, the first casting shadows.
+//! - The carried lights follow their bearers, the first casting shadows when
+//!   the player asks for them (`Fix::TorchShadows`).
 //! - Warm lights flicker a little, as a flame does.
 //! - The camera draws in high dynamic range with a soft glow.
 //!
@@ -219,10 +220,28 @@ pub(super) struct RichState {
     carried: Vec<PassLight>,
     /// The player's height, for the own light's shadow.
     own_height: f32,
+    /// Whether the player asked for their own light's shadows
+    /// ([`Fix::TorchShadows`](eq_client_core::qol::Fix::TorchShadows)).
+    torch_shadows: bool,
+
     /// The materials' limits ([`BaseLight::limits`]) now, and as they were
     /// last given them.
     limits: Vec4,
     applied_limits: Vec4,
+}
+
+impl RichState {
+    /// How Better Water's surfaces take the lights (`rich` in
+    /// `water.wgsl`): 1 while Rich Lighting draws the zone (x), the lights'
+    /// soft ceiling (y) and 1 outdoors (z), as its own surfaces have them;
+    /// all 0 while it is off.
+    pub(super) fn water_light(&self) -> Vec4 {
+        if self.active {
+            Vec4::new(1.0, self.limits.x, self.limits.y, 0.0)
+        } else {
+            Vec4::ZERO
+        }
+    }
 }
 
 impl Tuning {
@@ -433,6 +452,7 @@ pub(super) fn gather(
         && qol.on(eq_client_core::qol::Fix::RichLighting)
         && lighting::in_scene(scene.as_deref(), world);
     state.interior = state.active && world.sky().is_some_and(|sky| sky.sky == 0);
+    state.torch_shadows = qol.on(eq_client_core::qol::Fix::TorchShadows);
     let outdoors = if state.interior { 0.0 } else { 1.0 };
     state.limits = Vec4::new(tuning.light_cap, outdoors, 0.0, 0.0);
     let zone = scene.as_ref().map_or("", |scene| scene.zone.as_str());
@@ -477,23 +497,39 @@ pub(super) fn swap(
     mut commands: Commands,
     mut state: ResMut<RichState>,
     tuning: Res<Tuning>,
-    // Water surfaces keep their own draw: Better Water dresses them, and
-    // the two swaps must not take the same surface.
+    // A water surface is drawn rich like the ground beside it, except while
+    // Better Water dresses it (and lights it with the same lights): the two
+    // swaps must not take the same surface. Its colours hold only the base
+    // either way, so a water surface drawn plain under Rich Lighting would
+    // lack the lights its neighbours have and show their seams.
     plain: Query<
-        (Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
-        (Without<Parked>, Without<crate::water::WaterSurface>),
+        (
+            Entity,
+            &Mesh3d,
+            &MeshMaterial3d<StandardMaterial>,
+            Has<crate::water::WaterSurface>,
+        ),
+        Without<Parked>,
     >,
-    parked: Query<(Entity, &Parked)>,
-    standard: Res<Assets<StandardMaterial>>,
-    mut rich: ResMut<Assets<RichMaterial>>,
+    parked: Query<(Entity, &Parked, Has<crate::water::WaterSurface>)>,
+    (standard, mut rich): (Res<Assets<StandardMaterial>>, ResMut<Assets<RichMaterial>>),
+    options: Res<OptionsState>,
 ) {
-    if !state.active {
-        for (entity, Parked(material)) in &parked {
+    // Better Water dresses the water surfaces, which this swap then leaves
+    // to it.
+    let better_water = options
+        .options
+        .qol
+        .on(eq_client_core::qol::Fix::BetterWater);
+    for (entity, Parked(material), water) in &parked {
+        if !state.active || (water && better_water) {
             commands
                 .entity(entity)
                 .insert(MeshMaterial3d(material.clone()))
                 .remove::<(Parked, MeshMaterial3d<RichMaterial>)>();
         }
+    }
+    if !state.active {
         return;
     }
     let state = &mut *state;
@@ -506,8 +542,8 @@ pub(super) fn swap(
             }
         }
     }
-    for (entity, mesh, material) in &plain {
-        if !state.lit.contains(&mesh.id()) {
+    for (entity, mesh, material, water) in &plain {
+        if !state.lit.contains(&mesh.id()) || (water && better_water) {
             continue;
         }
         let handle = if let Some(handle) = state.materials.get(&material.id()) {
@@ -720,7 +756,7 @@ pub(super) fn lamps(
     let mut slots = Vec::with_capacity(state.carried.len() + 1);
     let carried_now = if lit { state.carried.as_slice() } else { &[] };
     for (index, pass) in carried_now.iter().enumerate() {
-        if index == 0 && tuning.own_shadow {
+        if index == 0 && tuning.own_shadow && state.torch_shadows {
             slots.push((pass, index, tuning.shadow_strength, true));
             slots.push((pass, index, 1.0 - tuning.shadow_strength, false));
         } else {

@@ -1,0 +1,1 @@
+- Torch Shadows: a new setting, off by default. With Rich Lighting, your own light casts shadows only when it is on. Drawing them cost about 3.5 ms a frame at night in Qeynos (87 fps with them, 125 without).

@@ -10,8 +10,9 @@ Use these targets after `click`, `right_click` or `hover`. Each word of a target
 
 - `slot number`: an inventory slot; carried top-level slots start at 22.
 - `store`: auto-store the item on the cursor.
-- `drop`: open Inventory's ordinary ground-drop confirmation for the cursor
-  item on local-only Titanium EQEmu. Answer the drop question separately.
+- `drop`: select the eligible whole cursor item or stack for ground dropping
+  on local-only Titanium EQEmu. The saved drop preference applies: the default
+  asks for a separate answer, Fast submits without a question, and Never refuses.
 - `destroy` opens Inventory's confirmation to destroy the entire cursor item
   or stack where the session offers destruction. Answer separately.
 - `scribe`: scribe the cursor scroll.

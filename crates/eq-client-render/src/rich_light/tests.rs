@@ -215,9 +215,25 @@ fn rich_lighting_swaps_the_zone_in_and_out_whole() {
             .count(),
         0
     );
-    // The lamp and the player's torch, drawn as a shadowed part and an
-    // unshadowed fill that sum to the whole light.
+    // The lamp and the player's torch: whole and unshadowed, as torch
+    // shadows are the player's to ask for.
     assert_eq!(world.query::<&Lamp>().iter(world).count(), 1);
+    let whole: Vec<_> = world
+        .query::<(&Carried, &PointLight)>()
+        .iter(world)
+        .map(|(carried, light)| (carried.0, light.shadow_maps_enabled, light.intensity))
+        .collect();
+    assert_eq!(whole.len(), 1);
+    assert_eq!((whole[0].0, whole[0].1), (0, false));
+    // Asked for, the torch is a shadowed part and an unshadowed fill that
+    // sum to the whole light.
+    world
+        .resource_mut::<OptionsState>()
+        .options
+        .qol
+        .set(eq_client_core::qol::Fix::TorchShadows, true);
+    app.update();
+    let world = app.world_mut();
     let mut torch: Vec<_> = world
         .query::<(&Carried, &PointLight)>()
         .iter(world)
@@ -246,6 +262,7 @@ fn rich_lighting_swaps_the_zone_in_and_out_whole() {
     assert!((own_near - height * Tuning::default().own_shadow_near).abs() < 1e-4 && own_near > 1.0);
     let strength = Tuning::default().shadow_strength;
     assert!((torch[0].2 * (1.0 - strength) - torch[1].2 * strength).abs() < 1e-2 * torch[0].2);
+    assert!((torch[0].2 + torch[1].2 - whole[0].2).abs() < 1e-2 * whole[0].2);
     let (tone, glow) = world
         .query::<(&Tonemapping, Has<Bloom>)>()
         .single(world)
@@ -483,4 +500,56 @@ fn an_animated_surface_takes_each_frames_material_without_changing_any() {
     app.update();
     assert_eq!(drawn(&mut app).0, on_second);
     assert_eq!(app.world().resource::<Assets<RichMaterial>>().len(), made);
+}
+
+#[test]
+fn a_water_surface_is_drawn_rich_unless_better_water_dresses_it() {
+    let (mut app, mesh, material) = palace();
+    let water = app
+        .world_mut()
+        .spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(material.clone()),
+            crate::water::WaterSurface::new(
+                eq_client_assets::regions::Liquid::Water,
+                Vec::new(),
+                None,
+            ),
+        ))
+        .id();
+    set(&mut app, true);
+    app.update();
+    app.update();
+    // Its colours hold only the base, so it takes the lights like the
+    // ground beside it.
+    assert!(
+        app.world()
+            .get::<MeshMaterial3d<RichMaterial>>(water)
+            .is_some()
+    );
+    assert_eq!(app.world().get::<Parked>(water).unwrap().0, material);
+    // Better Water takes it: Rich Lighting hands it back plain, once.
+    app.world_mut()
+        .resource_mut::<OptionsState>()
+        .options
+        .qol
+        .set(eq_client_core::qol::Fix::BetterWater, true);
+    app.update();
+    app.update();
+    let world = app.world();
+    assert!(world.get::<MeshMaterial3d<RichMaterial>>(water).is_none());
+    assert!(world.get::<Parked>(water).is_none());
+    assert_eq!(
+        world
+            .get::<MeshMaterial3d<StandardMaterial>>(water)
+            .unwrap()
+            .0,
+        material
+    );
+    // The ground beside it stays rich.
+    let mut drawn = app.world_mut().query_filtered::<Entity, (
+        With<MeshMaterial3d<RichMaterial>>,
+        Without<crate::water::WaterSurface>,
+    )>();
+    assert_eq!(drawn.iter(app.world()).count(), 1);
 }

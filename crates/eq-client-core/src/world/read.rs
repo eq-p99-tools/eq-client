@@ -106,15 +106,15 @@ impl ClientWorld {
     /// same weight as their speeds, Titanium's from the field the stat
     /// recompute 0x4212b3 fills with 0x41bb06 and `EQMac`'s fall 0x4bfe16
     /// calling 0x4bbb78) where it can be established, else this client's
-    /// own estimate ([`Self::carried_weight`]). For a pending drop, use the
+    /// own estimate ([`Self::carried_weight`]). For a locally projected drop, use the
     /// retained fall-only bound. An ambiguous cursor update can leave this
     /// bound usable even while movement and inventory actions are held.
-    /// Returns `None` if a pending drop has no defensible bound.
+    /// Returns `None` if a projected drop has no defensible bound.
     #[must_use]
     pub fn fall_weight(&self) -> Option<f32> {
         #[allow(clippy::cast_precision_loss)]
         let weight = |tenths: u64| tenths as f32 / 10.0;
-        if self.inventory.ground_drop_pending() {
+        if self.inventory.ground_drop_projected() {
             return self
                 .inventory
                 .ground_drop_weight_tenths(self.carried_coin_count()?)

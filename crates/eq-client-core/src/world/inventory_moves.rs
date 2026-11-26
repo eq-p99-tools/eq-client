@@ -46,8 +46,28 @@ impl ClientWorld {
     /// Binds a drop to the current actor and one received cursor instance.
     ///
     /// # Errors
-    /// Refuses unavailable providers, stale inventory and an unresolved drop.
+    /// Refuses unavailable providers, stale inventory and pending moves.
     pub fn prepare_cursor_drop(&self) -> Result<crate::inventory::InventoryDrop> {
+        let request = self.cursor_drop_candidate()?;
+        self.check_cursor_drop(&request)?;
+        Ok(request)
+    }
+
+    /// Current eligible input candidate for ordinary excluded-type world input.
+    /// It is not submission authority; [`Self::check_cursor_drop`] keeps its
+    /// additional historical cursor-basis check.
+    ///
+    /// # Errors
+    /// Refuses the same admission, actor, current item, quantity, queue and
+    /// weight/coin gates as a drop, without its extra historical basis.
+    pub fn prepare_cursor_drop_input(&self) -> Result<crate::inventory::InventoryDrop> {
+        let request = self.cursor_drop_candidate()?;
+        self.check_cursor_drop_context(&request)?;
+        self.inventory().check_ground_drop_input(&request)?;
+        Ok(request)
+    }
+
+    fn cursor_drop_candidate(&self) -> Result<crate::inventory::InventoryDrop> {
         let inventory = self.inventory();
         let request = crate::inventory::InventoryDrop {
             session_id: self.session_id().context("Enter the world first")?,
@@ -60,7 +80,6 @@ impl ClientWorld {
                 .clone(),
             created: std::time::Instant::now(),
         };
-        self.check_cursor_drop(&request)?;
         Ok(request)
     }
 
@@ -69,6 +88,12 @@ impl ClientWorld {
     /// # Errors
     /// Refuses a changed actor, admission, inventory, unknown load or unsupported drop.
     pub fn check_cursor_drop(&self, request: &crate::inventory::InventoryDrop) -> Result<()> {
+        self.check_cursor_drop_context(request)?;
+        self.inventory().plan_ground_drop(request)?;
+        Ok(())
+    }
+
+    fn check_cursor_drop_context(&self, request: &crate::inventory::InventoryDrop) -> Result<()> {
         ensure!(
             self.in_world() && self.can(crate::Capability::GroundDropping),
             "Ground dropping is unavailable"
@@ -96,7 +121,6 @@ impl ClientWorld {
             self.movement_weight().is_ok(),
             "A cursor drop needs current carried weight"
         );
-        self.inventory().plan_ground_drop(request)?;
         Ok(())
     }
 
@@ -231,21 +255,33 @@ impl ClientWorld {
     ) {
         // A sequenced move or drop submission can arrive while the same
         // admission is suspended. Keep its revision-bound custody state.
-        let drop_submission = matches!(update, Some(InventoryUpdate::GroundDropPending(_)));
+        let drop_submission = matches!(
+            update,
+            Some(InventoryUpdate::GroundDropProjected(_) | InventoryUpdate::GroundDropUncertain(_))
+        );
         if self.session_id != Some(session_id)
+            || drop_submission && self.ended
             || (sequence.is_none() && !drop_submission && !self.accepts_reply(session_id))
             || error.is_some() == update.is_some()
         {
             changes.ignored = true;
             return;
         }
+        if let Some(
+            InventoryUpdate::GroundDropProjected(projection)
+            | InventoryUpdate::GroundDropUncertain(projection),
+        ) = update
+            && projection.revision != revision
+        {
+            changes.ignored = true;
+            return;
+        }
         let before = self.offering();
         let mut apply = error.is_none() && update.is_some();
-        if matches!(
-            update,
-            Some(InventoryUpdate::DestroyCursor | InventoryUpdate::GroundDropPending(_))
-        ) {
-            // A late submission cannot change the custody of a newer cursor.
+        if matches!(update, Some(InventoryUpdate::DestroyCursor)) {
+            // Destruction still needs the exact revision. A ground projection
+            // carries its own instance and cursor coverage; unrelated slots
+            // cannot undo the submitted removal.
             apply &= self.inventory.revision() == revision;
         }
         if let Some(sequence) = sequence {
@@ -277,6 +313,11 @@ impl ClientWorld {
                 self.held_models.submitted(&self.inventory, update);
             }
             self.inventory.apply(update.clone());
+            if drop_submission && !self.connected {
+                // A result can drain after this admission loses its link.
+                // It withdraws the old cursor without restoring readiness.
+                self.inventory.apply(InventoryUpdate::Invalidated);
+            }
         }
         if self.inventory_moves.pending.is_empty() {
             self.inventory_moves.projected = None;
