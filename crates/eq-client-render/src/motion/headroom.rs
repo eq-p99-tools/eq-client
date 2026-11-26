@@ -78,9 +78,10 @@ impl State {
         });
     }
 
-    /// Runs before the movement cadence gate, on a later input pass than
-    /// the refusal. Returns true while an ordinary posture command is in
-    /// flight. No repeated queue action or movement based on an assumed duck.
+    /// Before cadence, `candidate` is None: settle observed posture and
+    /// request the delayed Duck. Return to Standing is tested only with a
+    /// resolved, submitted own-movement candidate (Titanium 0x48be15).
+    /// Queuing a posture never makes it observed.
     #[allow(
         clippy::too_many_arguments,
         clippy::too_many_lines,
@@ -95,6 +96,7 @@ impl State {
         mounted: bool,
         outbox: &crate::outbox::Outbox,
         now: Instant,
+        candidate: Option<Vec3>,
     ) -> Result<bool, crate::outbox::Refusal> {
         let Some(automatic) = self.automatic.as_mut() else {
             return Ok(false);
@@ -153,9 +155,11 @@ impl State {
             return Ok(false);
         };
         let stand = crate::posture::stand_height(client, world, body);
-        let origin = Vec3::from_array(eq_client_core::render_position(player.position));
         let requested = if posture == Some(PostureState::Ducking) {
             automatic.ducked = true;
+            let Some(origin) = candidate else {
+                return Ok(false);
+            };
             // Native reads say "past" now+2000; exact equality is retained
             // as a read gap. The strict endpoint here never stands early.
             let room = match client {
@@ -174,6 +178,7 @@ impl State {
             }
             Posture::Standing
         } else {
+            let origin = Vec3::from_array(eq_client_core::render_position(player.position));
             // Titanium's ordinary standing-to-duck test may itself refuse.
             // Mac has no such transition test. Do not infer success from the
             // outbox's intentionally silent geometric-refusal Ok result.

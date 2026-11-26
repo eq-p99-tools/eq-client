@@ -97,6 +97,33 @@ fn commands(receiver: &mpsc::Receiver<ClientCommand>) -> Vec<Posture> {
         .collect()
 }
 
+// Return is evaluated on a later own move. Feed the actual queued request
+// back as a local worker submission so the next input pass can propose it.
+fn accepted_commands(app: &mut App, receiver: &mpsc::Receiver<ClientCommand>) -> Vec<Posture> {
+    let mut postures = Vec::new();
+    for command in receiver.try_iter() {
+        match command {
+            ClientCommand::SetPosture { posture, .. } => postures.push(posture),
+            ClientCommand::Move(request) => {
+                testing::news(
+                    &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                    [WorldEvent::MotionSent {
+                        session_id: request.session_id,
+                        created: request.created,
+                        position: request.position,
+                        refused: None,
+                    }],
+                );
+                let mut controls = app.world_mut().resource_mut::<Controls>();
+                assert!(controls.moved(Some(request.session_id), request.created));
+                controls.last_accepted = controls.now() - Duration::from_millis(100);
+            }
+            _ => (),
+        }
+    }
+    postures
+}
+
 #[test]
 fn actual_input_refuses_then_ducks_once_on_the_next_pass_for_keys_and_scripts() {
     for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
@@ -170,48 +197,60 @@ fn automatic_return_checks_the_next_floor_before_standing_at_the_bank_boundary()
         world_position(origin.to_array(), 0.0),
     );
     let now = Instant::now();
-    app.world_mut().resource_scope(|world, mut controls: Mut<Controls>| {
-        controls.headroom.refused(
-            InstalledClient::Titanium,
-            world.resource::<online::OnlineState>().world(),
-            Some(PostureState::Standing),
-            true,
-            now,
-        );
-        controls.test_now = Some(now + Duration::from_millis(2_001));
-        controls.test_span = Some(0.05);
-        controls.airborne = Some(AirborneController::default());
-        controls.climb_sent = None;
-        controls.speed = Some(120.0);
-    });
+    app.world_mut()
+        .resource_scope(|world, mut controls: Mut<Controls>| {
+            controls.headroom.refused(
+                InstalledClient::Titanium,
+                world.resource::<online::OnlineState>().world(),
+                Some(PostureState::Standing),
+                true,
+                now,
+            );
+            controls.test_now = Some(now + Duration::from_millis(2_001));
+            controls.test_span = Some(0.05);
+            controls.airborne = Some(AirborneController::default());
+            controls.climb_sent = None;
+            controls.speed = Some(120.0);
+        });
     posture(&mut app, PostureState::Ducking);
     app.update();
     let sent: Vec<_> = receiver.try_iter().collect();
     assert!(
-        !sent.iter().any(|command| matches!(command,
-            ClientCommand::SetPosture { posture: Posture::Standing, .. })),
+        !sent.iter().any(|command| matches!(
+            command,
+            ClientCommand::SetPosture {
+                posture: Posture::Standing,
+                ..
+            }
+        )),
         "a passing old origin must not stand before the low candidate: {sent:?}"
     );
-    assert!(sent.iter().any(|command| matches!(command,
-        ClientCommand::Move(request) if request.position.z > 7.7)), "{sent:?}");
+    assert!(
+        sent.iter().any(|command| matches!(command,
+        ClientCommand::Move(request) if request.position.z > 7.7)),
+        "{sent:?}"
+    );
     assert!(!app.world().resource::<Controls>().headroom_refused);
 }
 
 #[test]
 fn automatic_return_does_not_run_without_a_movement_candidate() {
     let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
-    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset_all();
     let now = Instant::now();
-    app.world_mut().resource_scope(|world, mut controls: Mut<Controls>| {
-        controls.headroom.refused(
-            InstalledClient::Titanium,
-            world.resource::<online::OnlineState>().world(),
-            Some(PostureState::Standing),
-            true,
-            now,
-        );
-        controls.test_now = Some(now + Duration::from_millis(2_001));
-    });
+    app.world_mut()
+        .resource_scope(|world, mut controls: Mut<Controls>| {
+            controls.headroom.refused(
+                InstalledClient::Titanium,
+                world.resource::<online::OnlineState>().world(),
+                Some(PostureState::Standing),
+                true,
+                now,
+            );
+            controls.test_now = Some(now + Duration::from_millis(2_001));
+        });
     posture(&mut app, PostureState::Ducking);
     app.update();
     assert_eq!(commands(&receiver), Vec::<Posture>::new());
@@ -224,28 +263,43 @@ fn automatic_return_waits_past_two_seconds_and_uses_the_native_return_predicate(
         let now = Instant::now();
         app.world_mut().resource_mut::<Controls>().test_now = Some(now);
         app.update();
-        let _ = commands(&receiver);
+        let _ = accepted_commands(&mut app, &receiver);
         app.update();
-        assert_eq!(commands(&receiver), vec![Posture::Ducking]);
+        assert_eq!(
+            accepted_commands(&mut app, &receiver),
+            vec![Posture::Ducking]
+        );
         posture(&mut app, PostureState::Ducking);
         app.insert_resource(Collision(Some(room(8.1))));
         for millis in [1_999, 2_000] {
             app.world_mut().resource_mut::<Controls>().test_now =
                 Some(now + Duration::from_millis(millis));
             app.update();
-            assert_eq!(commands(&receiver), Vec::<Posture>::new());
+            assert_eq!(
+                accepted_commands(&mut app, &receiver),
+                Vec::<Posture>::new()
+            );
         }
         app.world_mut().resource_mut::<Controls>().test_now =
             Some(now + Duration::from_millis(2_001));
         app.update();
         if client == InstalledClient::EqMac {
-            assert_eq!(commands(&receiver), vec![Posture::Standing]);
+            assert_eq!(
+                accepted_commands(&mut app, &receiver),
+                vec![Posture::Standing]
+            );
         } else {
             // Manual standing fits at >8.0, but Titanium return needs >2S+r=8.15.
-            assert_eq!(commands(&receiver), Vec::<Posture>::new());
+            assert_eq!(
+                accepted_commands(&mut app, &receiver),
+                Vec::<Posture>::new()
+            );
             app.insert_resource(Collision(Some(room(8.2))));
             app.update();
-            assert_eq!(commands(&receiver), vec![Posture::Standing]);
+            assert_eq!(
+                accepted_commands(&mut app, &receiver),
+                vec![Posture::Standing]
+            );
         }
         app.update();
         assert_eq!(commands(&receiver), Vec::<Posture>::new());
@@ -277,6 +331,72 @@ fn an_impossible_titanium_duck_clears_the_flag_and_sends_nothing() {
             .automatic
             .is_none()
     );
+}
+
+#[test]
+fn gallery_jumps_launch_after_windup_even_when_the_optional_stand_is_refused() {
+    for (floor, expected) in [
+        (0.0, eq_client_core::JumpPosture::StandIfDucked),
+        (4.0, eq_client_core::JumpPosture::Keep),
+    ] {
+        let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
+        app.insert_resource(Collision(Some(
+            CollisionWorld::new(plane(floor, true).into_iter().chain(plane(12.0, false))).unwrap(),
+        )));
+        testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            world_position([0.0, floor + 3.75, 0.0], 0.0),
+        );
+        posture(&mut app, PostureState::Ducking);
+        {
+            let mut controls = app.world_mut().resource_mut::<Controls>();
+            controls.crouch = Some(crate::motion::Crouch::Over);
+            controls.airborne = Some(AirborneController::default());
+            controls.climb_sent = None;
+        }
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            keys.press(KeyCode::Space);
+        }
+        app.update();
+        let sent: Vec<_> = receiver.try_iter().collect();
+        assert!(
+            sent.iter().any(|command| matches!(command,
+            ClientCommand::Jump { posture, .. } if *posture == expected)),
+            "floor={floor}, {sent:?}"
+        );
+        assert!(!app.world().resource::<Controls>().headroom_refused);
+    }
+}
+
+#[test]
+fn a_jump_without_starting_floor_is_silent_without_a_headroom_refusal() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
+    testing::place(
+        &mut app.world_mut().resource_mut::<online::OnlineState>(),
+        world_position([0.0, 4.75, 0.0], 0.0),
+    );
+    {
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.crouch = Some(crate::motion::Crouch::Over);
+        controls.airborne = Some(AirborneController::default());
+        controls.climb_sent = None;
+    }
+    {
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::Space);
+    }
+    app.update();
+    let sent: Vec<_> = receiver.try_iter().collect();
+    assert!(
+        !sent
+            .iter()
+            .any(|command| matches!(command, ClientCommand::Jump { .. })),
+        "{sent:?}"
+    );
+    assert!(!app.world().resource::<Controls>().headroom_refused);
 }
 
 #[test]
@@ -362,7 +482,7 @@ fn a_ducked_refusal_with_the_option_off_arms_only_macs_return() {
         posture(&mut app, PostureState::Ducking);
         app.world_mut()
             .resource_mut::<ButtonInput<KeyCode>>()
-            .reset_all();
+            .press(KeyCode::KeyW);
         app.world_mut()
             .resource_mut::<crate::options::OptionsState>()
             .options
