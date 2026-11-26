@@ -268,6 +268,13 @@ or occluded. The counters are independent of damage and inventory.
   usable movement policy, along with any pending request and last settlement.
   Its ages describe renderer observations. `camera_detached` reports whether
   the orbit camera is detached when the renderer can identify it.
+  `controller_carrier_floor` records the controller's last carrier floor sweep,
+  with its query feet, age, retained carrier and support result. That query uses
+  carried feet for an idle rider or the resolved movement endpoint. A null
+  observation means unavailable; an observation with null `support` means the
+  actual sweep found no eligible carrier. The retained `carrier_support` is the
+  accepted carrying basis. The legacy `carrier_floor` remains a separate narrow
+  probe at stored session feet, labelled by `carrier_floor_basis`.
   `liquid_contact_at_session_position` is local
   geometry: `unknown`, `unmarked`, `wading`, `surface`, `submerged` or
   `lava`. `unmarked` means no liquid at the sampled points, and

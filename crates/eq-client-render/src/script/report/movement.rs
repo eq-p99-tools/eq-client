@@ -87,6 +87,10 @@ pub(in crate::script) fn report(
             .collect::<Vec<_>>()
     );
     movement_state["carrier_support"] = json!(observed.4.carrier_support().map(|(sample, pose, position)| json!({ "sample": sample, "accepted_pose": pose, "accepted_position": position })));
+    movement_state["controller_carrier_floor"] =
+        controller_floor(observed.4.carrier_floor(), admission, now);
+    // Retain this legacy field for existing consumers, with its basis explicit.
+    movement_state["carrier_floor_basis"] = json!("session_feet_narrow_probe");
     movement_state["carrier_floor"] = json!(session_position.zip(body.zip(collision)).and_then(
         |(position, (body, collision))| {
             collision.ground_spawn(
@@ -102,6 +106,32 @@ pub(in crate::script) fn report(
     movement_state["arrival"] = json!(world.arrival());
     movement_state["camera_detached"] = json!(camera_detached);
     info!(label, %movement_state, "Script movement report");
+}
+
+/// Serializes the controller's own last query, including a known absent floor.
+/// A missing observation or another admission remains unavailable.
+fn controller_floor(
+    observation: Option<&crate::motion::CarrierFloor>,
+    admission: Option<u64>,
+    now: Instant,
+) -> Value {
+    json!(
+        observation
+            .filter(|query| Some(query.admission) == admission)
+            .map(|query| {
+                let feet = eq_client_core::world_position(query.feet.to_array(), 0.0);
+                json!({
+                    "admission_id": query.admission,
+                    "query_age_ms": now.saturating_duration_since(query.queried).as_millis(),
+                    "feet": { "x": feet.x, "y": feet.y, "z": feet.z },
+                    "retained_carrier": query.current,
+                    "support": query.support.map(|(sample, pose)| json!({
+                        "sample": sample,
+                        "pose": pose,
+                    })),
+                })
+            })
+    )
 }
 
 struct LiquidObservation {
@@ -271,6 +301,28 @@ fn snapshot(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn controller_floor_distinguishes_a_negative_query_from_unavailable_or_old_admission() {
+        let queried = Instant::now();
+        let query = crate::motion::CarrierFloor {
+            admission: 7,
+            queried,
+            feet: Vec3::new(10.0, 2.0, -5.0),
+            current: Some(8),
+            support: None,
+        };
+        let now = queried + std::time::Duration::from_millis(35);
+        let value = controller_floor(Some(&query), Some(7), now);
+        assert_eq!(value["query_age_ms"], 35);
+        assert_eq!(value["feet"], json!({ "x": 5.0, "y": 10.0, "z": 2.0 }));
+        assert_eq!(value["retained_carrier"], 8);
+        assert!(value["support"].is_null());
+        assert!(!value.is_null());
+        assert!(controller_floor(None, Some(7), now).is_null());
+        assert!(controller_floor(Some(&query), Some(8), now).is_null());
+        assert!(controller_floor(Some(&query), None, now).is_null());
+    }
 
     #[test]
     fn a_local_proposal_does_not_replace_the_received_placement() {
