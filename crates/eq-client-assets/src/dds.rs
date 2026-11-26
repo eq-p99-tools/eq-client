@@ -37,6 +37,20 @@ pub(crate) fn decode_image(bytes: &[u8]) -> Result<RgbaImage, ImageError> {
     }
 }
 
+/// Reads an image file to RGBA: DDS here, every other format by `image`,
+/// chosen by the file's extension (TGA has no magic bytes).
+///
+/// # Errors
+/// As [`decode_image`], or the file can't be read.
+pub(crate) fn open_image(path: &std::path::Path) -> Result<RgbaImage, ImageError> {
+    let bytes = std::fs::read(path).map_err(ImageError::IoError)?;
+    if is_dds(&bytes) {
+        decode(&bytes)
+    } else {
+        image::open(path).map(image::DynamicImage::into_rgba8)
+    }
+}
+
 /// Decodes the top level of a DDS file to RGBA.
 ///
 /// # Errors
