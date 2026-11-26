@@ -62,6 +62,9 @@ use parse::{MAX_STEPS, MAX_WAIT, MoveCommand};
 /// The command the steps that move toward something hold: forward the way
 /// the camera looks, which they turn toward their aim.
 const FORWARD: Act = Act::CameraForward;
+
+const HEADROOM_REFUSED: &str =
+    "walk refused: too little headroom over the floor ahead to stand there";
 /// Longest a `face` step waits for the server to have its heading: a half
 /// turn at the turn keys' rate takes about a second.
 const FACE_LIMIT: Duration = Duration::from_secs(5);
@@ -1896,6 +1899,13 @@ pub(super) fn drive(
                         );
                     }
                 };
+                if observed.4.headroom_refused
+                    && observed.4.last_sent.is_some_and(|sent| sent >= since)
+                {
+                    log_end(&online);
+                    script.stop(&mut keys, &mut mouse, HEADROOM_REFUSED);
+                    return;
+                }
                 let (arrived, out_of_time) = match step {
                     RouteStep::Unreachable => {
                         log_end(&online);

@@ -45,6 +45,11 @@ pub struct Settings {
     /// name): the build asks each size for its height plus this much
     /// headroom, as the capsule's top stands that high.
     pub lift: f32,
+    /// The floor-to-ceiling room the generation's own headroom test asks of
+    /// each size standing, over its capsule's (Titanium 0x48bb83, read R1d;
+    /// checklist 6.504): a span fits a size when its headroom is at least
+    /// the larger of the two. 0 asks nothing more than the capsule.
+    pub standing_room: [f32; 3],
     /// The highest step the walker climbs.
     pub climb: f32,
     /// The lowest floor normal's up component the walker stands on.
@@ -78,6 +83,7 @@ impl Settings {
             height,
             sizes: [height; 3],
             lift: super::LIFT,
+            standing_room: [0.0; 3],
             climb: super::MAX_GROUNDED_STEP,
             // The collision's own floor limit.
             floor_normal_y: 0.7,
@@ -100,6 +106,32 @@ impl Settings {
             sizes,
             ..Self::walker(sizes[0])
         }
+    }
+
+    /// These settings with each size's standing room set by `room`, given
+    /// the size's height: the room the generation's headroom test asks.
+    ///
+    /// # Panics
+    ///
+    /// When the room isn't shortest first, as the sizes are.
+    #[must_use]
+    pub fn with_standing_room(self, room: impl Fn(f32) -> f32) -> Self {
+        let standing_room = self.sizes.map(room);
+        assert!(
+            standing_room[0] <= standing_room[1] && standing_room[1] <= standing_room[2],
+            "standing room shortest first: {standing_room:?}"
+        );
+        Self {
+            standing_room,
+            ..self
+        }
+    }
+
+    /// The headroom a span needs to fit size `index`: its capsule's top, or
+    /// the generation's standing room where that is more.
+    #[must_use]
+    pub fn clearance(&self, index: usize) -> f32 {
+        (self.sizes[index] + self.lift).max(self.standing_room[index])
     }
 }
 

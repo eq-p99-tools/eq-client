@@ -749,6 +749,38 @@ impl CollisionWorld {
         nearest
     }
 
+    /// Floor and ceiling at a proposed origin, for the movement headroom
+    /// test. Support has the ordinary floor rules; the upward ray takes
+    /// authored ceiling fronts, including carriers (Titanium 0x43a0a0).
+    /// Rays approximate the native floor and model-radius sphere probes.
+    /// Missing surfaces, including the unread no-floor zone cases, stay unknown.
+    #[must_use]
+    pub fn headroom_bounds(&self, origin: Vec3) -> Option<(f32, f32)> {
+        const REACH: f32 = 32_767.0;
+        if !origin.is_finite() {
+            return None;
+        }
+        let floor = self.solid_ground(origin, 0.0, REACH)?;
+        let up = Ray::new(Vector::from_array(origin.to_array()), Vector::Y);
+        let ceiling = self
+            .labelled_wall_meshes()
+            .filter(|(obstacle, _)| !matches!(obstacle, Obstacle::Door(_)))
+            .filter_map(|(_, mesh)| mesh.cast_ceiling(&up, REACH))
+            .min_by(f32::total_cmp)
+            .map(|distance| origin.y + distance)?;
+        (ceiling > floor).then_some((floor, ceiling))
+    }
+
+    /// Strict floor-to-ceiling room at a movement candidate. A missing or
+    /// unusable bound leaves movement to the existing collision controller.
+    #[must_use]
+    pub fn headroom(&self, origin: Vec3, room: f32) -> bool {
+        !room.is_finite()
+            || self
+                .headroom_bounds(origin)
+                .is_none_or(|(floor, ceiling)| floor + room < ceiling)
+    }
+
     /// Clearance for a manual duck-to-stand transition (Titanium 0x483556,
     /// Mac 0x50be3c): the new posture's strict room test, then ceiling minus
     /// origin at least S. These rays approximate the programs' probe shapes;

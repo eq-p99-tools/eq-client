@@ -111,6 +111,23 @@ impl<'a> Surface<'a> {
             .map(|(_, time)| time)
     }
 
+    /// The opposite face test for a ceiling: authored downward-facing faces,
+    /// including placed carriers. Returned ray normals can face either way.
+    pub(super) fn cast_ceiling(self, ray: &Ray, reach: f32) -> Option<f32> {
+        let local = ray.inverse_transform_by(&self.pose);
+        let up = self.pose.rotation.inverse() * Vector::Y;
+        self.mesh
+            .bvh()
+            .cast_ray(&local, reach, |index, best| {
+                let face = self.mesh.triangle(index);
+                (face.scaled_normal().dot(up) <= 0.0)
+                    .then(|| face.cast_local_ray(&local, best, false))
+                    .flatten()
+            })
+            .filter(|(_, time)| *time < reach)
+            .map(|(_, time)| time)
+    }
+
     pub(super) fn minimum_y(self) -> f32 {
         if self.pose == Pose::IDENTITY {
             return self.mesh.local_aabb().mins.y;

@@ -83,11 +83,13 @@ impl Context {
         let Some(player) = world.player() else {
             return true;
         };
-        if world.session_id() != Some(self.admission)
-            || world.posture(player.spawn_id) != Some(PostureState::Ducking)
-        {
+        if world.session_id() != Some(self.admission) {
             return true;
         }
+        let current = world.posture(player.spawn_id);
+        let ducking = self.client != InstalledClient::EqMac
+            && current.is_none_or(|posture| posture == PostureState::Standing)
+            && posture == Posture::Ducking;
         let tested = match self.client {
             InstalledClient::EqMac => posture == Posture::Standing,
             // RoF2's manual transition follows Titanium provisionally.
@@ -95,18 +97,23 @@ impl Context {
                 matches!(posture, Posture::Standing | Posture::Sitting)
             }
         };
-        if !tested {
+        if !ducking && (current != Some(PostureState::Ducking) || !tested) {
             return true;
         }
         let Some(rule) = self.client.headroom() else {
             return true;
         };
         let stand = stand_height(self.client, world, &self.body);
-        self.collision.posture_clearance(
-            Vec3::from_array(eq_client_core::render_position(player.position)),
-            stand,
-            rule.room(stand, false, self.mounted),
-        )
+        let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+        if ducking {
+            // Our origin never loses the native standing lift when ducking,
+            // so a rejected transition needs no compensating origin raise.
+            return self
+                .collision
+                .headroom(origin, rule.room(stand, true, self.mounted));
+        }
+        self.collision
+            .posture_clearance(origin, stand, rule.room(stand, false, self.mounted))
     }
 }
 
@@ -121,14 +128,7 @@ pub(super) fn refresh(
     outbox: Res<Outbox>,
     spells: Option<Res<crate::spellbook::SpellNames>>,
 ) {
-    use eq_client_core::world::SpellCatalog;
-    let mounted = spells.is_some_and(|spells| {
-        online.world().buffs().spells().any(|spell| {
-            spells
-                .effect_ids(spell)
-                .is_some_and(|effects| effects.contains(&113))
-        })
-    });
+    let mounted = on_mount(online.world(), spells.as_deref());
     let context = online
         .world()
         .session_id()
@@ -142,6 +142,19 @@ pub(super) fn refresh(
             mounted,
         });
     outbox.set_posture_context(context);
+}
+
+/// A resolved summon-mount buff stands in for the native actor mount link,
+/// which this client does not hold. Unknown spells do not establish a mount.
+pub(super) fn on_mount(world: &ClientWorld, spells: Option<&crate::spellbook::SpellNames>) -> bool {
+    use eq_client_core::world::SpellCatalog;
+    spells.is_some_and(|spells| {
+        world.buffs().spells().any(|spell| {
+            spells
+                .effect_ids(spell)
+                .is_some_and(|effects| effects.contains(&113))
+        })
+    })
 }
 
 #[cfg(test)]
@@ -199,10 +212,47 @@ mod tests {
             client,
             body: HUMAN,
             mounted: false,
-            collision: eq_client_core::movement::CollisionWorld::new(
-                plane(0.0).into_iter().chain(plane(ceiling)),
-            )
+            collision: eq_client_core::movement::CollisionWorld::new(plane(0.0).into_iter().chain(
+                plane(ceiling).map(|mut face| {
+                    face.swap(1, 2);
+                    face
+                }),
+            ))
             .unwrap(),
+        }
+    }
+
+    #[test]
+    fn standing_to_duck_is_tested_on_titanium_and_silent_for_every_command_source() {
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            for ceiling in [5.25, 5.251] {
+                for scripted in [false, true] {
+                    let mut state = admitted(Some(0));
+                    testing::news(
+                        &mut state,
+                        [WorldEvent::Posture {
+                            spawn_id: 7,
+                            posture: PostureState::Standing,
+                        }],
+                    );
+                    let (tx, rx) = mpsc::sync_channel(4);
+                    let outbox = Outbox::new(Some(tx));
+                    outbox.set_posture_context(Some(context(client, ceiling)));
+                    let script = outbox.for_script(Some(11));
+                    let sender = if scripted { &script } else { &outbox };
+                    sender
+                        .post(state.world(), |stamp| ClientCommand::SetPosture {
+                            session_id: stamp.session_id,
+                            spawn_id: 7,
+                            posture: Posture::Ducking,
+                            created: stamp.created,
+                        })
+                        .unwrap();
+                    let sent = rx.try_recv().is_ok();
+                    assert_eq!(sent, client == InstalledClient::EqMac || ceiling > 5.25);
+                    assert_eq!(state.world().posture(7), Some(PostureState::Standing));
+                }
+            }
         }
     }
 

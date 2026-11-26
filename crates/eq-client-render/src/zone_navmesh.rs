@@ -22,7 +22,10 @@ pub(super) fn install(app: &mut App, enabled: bool) {
         enabled,
         ..ZoneNavMesh::default()
     })
-    .add_systems(Update, poll);
+    .add_systems(
+        Update,
+        (refresh, poll).chain().in_set(crate::systems::Stage::Scene),
+    );
     if !enabled {
         app.add_systems(Startup, || {
             warn!(
@@ -40,6 +43,18 @@ pub(super) struct ZoneNavMesh {
     /// The mesh, split for its walker sizes.
     mesh: Option<SizedMeshes>,
     making: Option<Making>,
+    source: Option<Source>,
+}
+
+/// Retain shared build inputs so a late zone-header scale changes both the
+/// mesh and its cache identity, rather than keeping an under-filtered mesh.
+#[derive(Clone)]
+struct Source {
+    zone: String,
+    triangles: Arc<Vec<[[f32; 3]; 3]>>,
+    world: Option<CollisionWorld>,
+    directory: Option<PathBuf>,
+    settings: Settings,
 }
 
 /// Why a walk plans on the grid rather than the zone's mesh.
@@ -87,30 +102,49 @@ impl ZoneNavMesh {
         triangles: Vec<[[f32; 3]; 3]>,
         world: Option<CollisionWorld>,
         settings_directory: Option<PathBuf>,
+        settings: Settings,
     ) {
         self.leave();
+        self.source = Some(Source {
+            zone: zone.to_owned(),
+            triangles: Arc::new(triangles),
+            world,
+            directory: settings_directory,
+            settings,
+        });
+        self.build();
+    }
+
+    fn build(&mut self) {
+        let Some(source) = self.source.clone() else {
+            return;
+        };
+        if let Some(making) = self.making.take() {
+            making.cancel.store(true, Ordering::Relaxed);
+        }
+        self.mesh = None;
         let cancel = Arc::new(AtomicBool::new(false));
         let threads = navmesh::build_threads();
         let task = {
-            let (zone, cancel) = (zone.to_owned(), Arc::clone(&cancel));
+            let cancel = Arc::clone(&cancel);
+            let source = source.clone();
             // One task that runs its own threads, so the tiles don't crowd
             // out the pool's other work.
             AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(async move {
-                let sizes = walker_sizes();
                 cache::load_or_build(
-                    settings_directory.as_deref(),
-                    &zone,
-                    &triangles,
-                    world.as_ref(),
-                    &Settings::sized(sizes),
+                    source.directory.as_deref(),
+                    &source.zone,
+                    &source.triangles,
+                    source.world.as_ref(),
+                    &source.settings,
                     threads,
                     &cancel,
                 )
-                .map(|loaded| (loaded, sizes))
+                .map(|loaded| (loaded, source.settings.sizes))
             })
         };
         self.making = Some(Making {
-            zone: zone.to_owned(),
+            zone: source.zone,
             threads,
             started: Instant::now(),
             cancel,
@@ -124,6 +158,7 @@ impl ZoneNavMesh {
             making.cancel.store(true, Ordering::Relaxed);
         }
         self.mesh = None;
+        self.source = None;
     }
 
     /// The shown zone's mesh for a walker drawn `size` tall, once it is
@@ -140,6 +175,33 @@ impl ZoneNavMesh {
     }
 }
 
+/// Unknown headers use the unreduced, conservative settings. A later
+/// header replaces a running build as well as an already loaded mesh.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameter wrappers.
+fn refresh(
+    mut navmesh: ResMut<ZoneNavMesh>,
+    online: Option<Res<crate::online::OnlineState>>,
+    viewer: Option<Res<crate::ViewerSettings>>,
+) {
+    let (Some(online), Some(viewer), Some(source)) = (online, viewer, navmesh.source.as_mut())
+    else {
+        return;
+    };
+    let wanted = settings(
+        viewer.0.installed_client,
+        eq_client_assets::scale::ZoneScale {
+            classic_reduced: online
+                .world()
+                .classic_model_scale_flag()
+                .is_some_and(|flag| flag != 0),
+        },
+    );
+    if source.settings != wanted {
+        source.settings = wanted;
+        navmesh.build();
+    }
+}
+
 /// The heights of the three walker sizes: in each of
 /// [`races::SIZE_GROUPS`], the tallest size its races are drawn at, by
 /// `EQEmu`'s default sizes (dwarf 4, human 6, ogre 9). A walker's own drawn
@@ -148,6 +210,49 @@ impl ZoneNavMesh {
 /// [`races::SIZE_GROUPS`]: eq_client_core::races::SIZE_GROUPS
 pub(super) fn walker_sizes() -> [f32; 3] {
     eq_client_core::races::walker_sizes(|race| eq_client_core::size_or_default(race, 0.0))
+}
+
+/// What a zone's mesh is built with for `client`: the three walker sizes,
+/// each needing the room the generation's headroom test asks of it
+/// standing, with S the stand height a size is drawn at (Titanium
+/// 0x48bb83, reads R1d and R49-9, with its 0.5 margin; checklist 6.504).
+/// Ducking asks less than the capsule already does, and walkers don't
+/// mount, so neither is asked. The mesh asks one cell height more than the
+/// test: a span's headroom is counted in whole cells, so a span the voxel
+/// rounding makes look up to a cell taller still never leads a walker to a
+/// refused move (reviewer N1). In a zone whose header sets the classic model
+/// scale flag, Titanium's S is 1/1.3 smaller, as the test's is (read R49-9f a);
+/// Mac follows its own unshrunk model-scale policy. A mesh
+/// built before the header is known (a prebuild, a select spot) asks the
+/// larger room, which never leads a walker to a refused move either.
+pub(crate) fn settings(
+    client: eq_client_assets::ui::InstalledClient,
+    zone: eq_client_assets::scale::ZoneScale,
+) -> Settings {
+    let sized = Settings::sized(walker_sizes());
+    match client.headroom() {
+        Some(rule) => {
+            let guard = sized.cell_height;
+            let stands = eq_client_core::races::walker_sizes(|race| {
+                [0, 1]
+                    .into_iter()
+                    .map(|gender| {
+                        eq_client_core::drawn_feet_offset(client.model_scale().drawn_scale(
+                            race,
+                            gender,
+                            eq_client_core::size_or_default(race, 0.0),
+                            zone,
+                        ))
+                    })
+                    .fold(0.0_f32, f32::max)
+            });
+            Settings {
+                standing_room: stands.map(|stand| rule.room(stand, false, false) + guard),
+                ..sized
+            }
+        }
+        None => sized,
+    }
 }
 
 /// Takes the mesh once it is ready, and says so in the log.
@@ -251,6 +356,42 @@ pub(super) fn report(
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn a_titanium_mesh_asks_each_size_for_twice_its_stand_height_and_the_margin() {
+        use eq_client_assets::{scale::ZoneScale, ui::InstalledClient};
+        let titanium = settings(InstalledClient::Titanium, ZoneScale::default());
+        let eqmac = settings(InstalledClient::EqMac, ZoneScale::default());
+        // A zone with the classic model scale flag asks 1/1.3 of S (R49-9f).
+        let reduced = settings(
+            InstalledClient::Titanium,
+            ZoneScale {
+                classic_reduced: true,
+            },
+        );
+        let lift = eqmac.lift;
+        assert_eq!(
+            eqmac,
+            settings(
+                InstalledClient::EqMac,
+                ZoneScale {
+                    classic_reduced: true
+                }
+            )
+        );
+        assert_eq!(titanium.sizes, walker_sizes());
+        assert_eq!(eqmac, titanium);
+        for (index, size) in walker_sizes().into_iter().enumerate() {
+            let room =
+                2.0 * eq_client_core::drawn_feet_offset(size * 0.2) + 0.5 + titanium.cell_height;
+            assert!((titanium.clearance(index) - room.max(size + lift)).abs() < 1e-5);
+            assert!((eqmac.clearance(index) - room.max(size + lift)).abs() < 1e-5);
+            let small = 2.0 * eq_client_core::drawn_feet_offset(size * 0.2 / 1.3)
+                + 0.5
+                + titanium.cell_height;
+            assert!((reduced.clearance(index) - small.max(size + lift)).abs() < 1e-5);
+        }
+    }
+
     use super::*;
 
     fn floor() -> Vec<[[f32; 3]; 3]> {
@@ -270,11 +411,69 @@ mod tests {
     }
 
     #[test]
+    fn a_late_header_replaces_titanium_build_settings_and_key_but_not_macs() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_assets::{scale::ZoneScale, ui::InstalledClient};
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            let mut app = app();
+            let mut online = OnlineState::new(true);
+            testing::admit(&mut online, 11, testing::player(7));
+            app.insert_resource(online)
+                .init_resource::<crate::ViewerSettings>();
+            app.world_mut()
+                .resource_mut::<crate::ViewerSettings>()
+                .0
+                .installed_client = client;
+            app.world_mut().resource_mut::<ZoneNavMesh>().start(
+                "zone",
+                floor(),
+                None,
+                None,
+                settings(client, ZoneScale::default()),
+            );
+            let navmesh = app.world().resource::<ZoneNavMesh>();
+            let source = navmesh.source.as_ref().unwrap();
+            let old_key = cache::key(&source.triangles, source.world.as_ref(), &source.settings);
+            let cancelled = Arc::clone(&navmesh.making.as_ref().unwrap().cancel);
+            let mut header = [0; 700];
+            header[592] = 1;
+            testing::news(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                [eq_client_core::WorldEvent::ZoneDescription(
+                    eq_client_core::zones::titanium_description(&header).unwrap(),
+                )],
+            );
+            app.update();
+            let navmesh = app.world().resource::<ZoneNavMesh>();
+            let source = navmesh.source.as_ref().unwrap();
+            let new_key = cache::key(&source.triangles, source.world.as_ref(), &source.settings);
+            assert_eq!(old_key != new_key, client == InstalledClient::Titanium);
+            assert_eq!(
+                cancelled.load(Ordering::Relaxed),
+                client == InstalledClient::Titanium
+            );
+            assert_eq!(
+                source.settings,
+                settings(
+                    client,
+                    ZoneScale {
+                        classic_reduced: true
+                    }
+                )
+            );
+        }
+    }
+
+    #[test]
     fn the_mesh_is_taken_once_ready_and_dropped_on_leaving() {
         let mut app = app();
-        app.world_mut()
-            .resource_mut::<ZoneNavMesh>()
-            .start("zone", floor(), None, None);
+        app.world_mut().resource_mut::<ZoneNavMesh>().start(
+            "zone",
+            floor(),
+            None,
+            None,
+            Settings::sized(walker_sizes()),
+        );
         let started = Instant::now();
         while app
             .world()
@@ -307,7 +506,7 @@ mod tests {
     fn leaving_stops_the_build() {
         let mut app = app();
         let mut navmesh = app.world_mut().resource_mut::<ZoneNavMesh>();
-        navmesh.start("zone", floor(), None, None);
+        navmesh.start("zone", floor(), None, None, Settings::sized(walker_sizes()));
         let cancel = Arc::clone(&navmesh.making.as_ref().unwrap().cancel);
         navmesh.leave();
         assert!(cancel.load(Ordering::Relaxed));
@@ -334,9 +533,13 @@ mod tests {
             app.world().resource::<ZoneNavMesh>().for_walker(6.0).err(),
             Some(GridReason::Missing)
         );
-        app.world_mut()
-            .resource_mut::<ZoneNavMesh>()
-            .start("floor", floor(), None, None);
+        app.world_mut().resource_mut::<ZoneNavMesh>().start(
+            "floor",
+            floor(),
+            None,
+            None,
+            Settings::sized(walker_sizes()),
+        );
         assert_eq!(
             app.world().resource::<ZoneNavMesh>().for_walker(6.0).err(),
             Some(GridReason::Building)

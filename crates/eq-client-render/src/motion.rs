@@ -20,6 +20,7 @@ mod release_tests;
 mod rider_animation_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod headroom;
 mod pad;
 mod placement;
 pub(super) mod pose;
@@ -217,6 +218,10 @@ pub(super) struct Controls {
     /// Death standing (Move While Feigned, 6.454), whose feign the crouch's
     /// duck and stand would end. It keeps its wait (6.600).
     quiet_crouch: bool,
+    headroom: headroom::State,
+    /// The latest resolved own move failed the strict room test; a route
+    /// can stop instead of continuing to push at the same ceiling.
+    pub headroom_refused: bool,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
     unreported: Option<FallCost>,
@@ -400,6 +405,8 @@ impl Default for Controls {
             endurance_spent: None,
             crouch: None,
             quiet_crouch: false,
+            headroom: headroom::State::default(),
+            headroom_refused: false,
             unreported: None,
             facing: None,
             mouse_turn: 0.0,
@@ -2158,6 +2165,30 @@ pub(super) fn input(
     let now = controls.now();
     controls.restore_surface_trial();
     controls.settle(now);
+    if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
+        match controls.headroom.drive(
+            client,
+            online.world(),
+            world,
+            body,
+            crate::posture::on_mount(online.world(), spells.as_deref()),
+            &outbox,
+            now,
+        ) {
+            Ok(true) => {
+                controls.held = Some(Held::Waiting);
+                return;
+            }
+            Err(reason) => {
+                controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
+                return;
+            }
+            Ok(false) => (),
+        }
+    } else {
+        controls.headroom.clear();
+    }
     let water_enabled = match client {
         InstalledClient::Titanium => true,
         // RoF2's water is not read yet.
@@ -3325,7 +3356,7 @@ pub(super) fn input(
             .surface
             .declined(eq_client_core::movement::SurfaceDecline::Region);
     }
-    let surface_selected = surface_plan.as_ref().is_some_and(|p| p.active);
+    let mut surface_selected = surface_plan.as_ref().is_some_and(|p| p.active);
     if let Some(plan) = surface_plan.as_ref().filter(|p| p.active) {
         // Both plans were disposable. Keep the ordinary accepted raw state
         // until the exact local result settles this continuation once.
@@ -3345,8 +3376,61 @@ pub(super) fn input(
         jumped = false;
         delta = landing - feet;
     }
+    // Body/floor resolution precedes the strict candidate room test. The
+    // swimmer exemption is retained from the old draft pending H1's full
+    // Kedge entry/retreat check; it is not a native water rule. Fly and a
+    // held server placement also keep their existing paths.
+    let refused = (!flying && !swimming && !placement_blocked)
+        .then(|| {
+            headroom::refused(
+                client,
+                world,
+                (
+                    body,
+                    crate::posture::stand_height(client, online.world(), body),
+                ),
+                (feet, landing),
+                (
+                    posture == Some(eq_client_core::PostureState::Ducking)
+                        && jump_posture != JumpPosture::StandIfDucked,
+                    crate::posture::on_mount(online.world(), spells.as_deref()),
+                ),
+            )
+        })
+        .flatten();
+    controls.headroom_refused = refused.is_some();
+    let landing = if let Some(refused) = refused {
+        trace!(?client, ?posture, session = ?session_id, floor = refused.floor,
+            ceiling = refused.ceiling, stand = refused.stand, room = refused.room,
+            origin = ?refused.origin, candidate = ?refused.candidate, "Movement headroom refused");
+        let effective_posture = if jump_posture == JumpPosture::StandIfDucked {
+            Some(eq_client_core::PostureState::Standing)
+        } else {
+            posture
+        };
+        controls.headroom.refused(
+            client,
+            online.world(),
+            effective_posture,
+            options.options.allow_auto_stand,
+            now,
+        );
+        controls.airborne.clone_from(&previous_airborne);
+        // A refused endpoint cannot own an unsubmitted surface frame.
+        controls.restore_surface_trial();
+        controls.surface.pause();
+        surface_plan = None;
+        surface_selected = false;
+        poses = pose::Path::default();
+        shore = None;
+        mode = MovementMode::Forward;
+        feet
+    } else {
+        landing
+    };
     // The server charges the jump's endurance; the arc travels in position
-    // updates.
+    // updates. A refused movement candidate does not cancel an otherwise
+    // eligible launch's command or endurance (the accepted jump bridge).
     if jumped
         && let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::Jump {
             session_id: stamp.session_id,

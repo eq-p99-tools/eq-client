@@ -169,6 +169,16 @@ uses grid search. The older `--navmesh` flag is still accepted and changes
 nothing. This is route planning, not server permission to move or teleport.
 
 Models, UI layouts and movement rules remain incomplete across client versions.
+
+Standing navigation meshes include the movement headroom policy: more than
+twice the scaled stand height plus 0.5 above the floor, in addition to the
+existing capsule clearance. One cell height guards against voxel rounding.
+The installed generation's model-scale rule supplies that height; a late zone
+header replaces the mesh and its cache key when it changes the clearance.
+Prebuild and offline select-spot tools use the conservative unreduced settings
+until a header is available. Routes do not plan ducking or mounting. A scripted
+walk that still meets the room gate stops with a headroom refusal.
+
 Sound loading currently handles Titanium WAV assets, not the Mac-era sound
 format. Day/night lighting has provisional presentation tuning. Bounded
 swimming on Project 1999 and Titanium EQEmu uses the classic water regions.
