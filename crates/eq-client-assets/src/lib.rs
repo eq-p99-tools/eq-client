@@ -89,7 +89,8 @@ pub struct ZonePrimitive {
 pub enum MaterialMode {
     /// Fully opaque diffuse rendering.
     Opaque,
-    /// Binary transparency using the texture's black color key.
+    /// Binary transparency: the texture's alpha, plus its colour key when it
+    /// has one (an 8-bit BMP's palette entry 0).
     Masked,
     /// Conventional alpha blending at the given fixed opacity.
     Blended(BlendOpacity),
@@ -1441,19 +1442,43 @@ fn load_texture(
     Ok(Some(index))
 }
 
+/// The colour an archive texture's masked draws make transparent, as the
+/// program's texture loader (EQGraphicsDX9.dll 0x1004f7a0) picks it: only an
+/// 8-bit BMP has one, palette entry 0, and only when that colour is
+/// magenta-like or index 0 fills a two-pixel pair at a corner of the pixel
+/// data. Every other archive texture, DDS included, relies on its own alpha.
 fn bmp_color_key(bytes: &[u8]) -> Option<[u8; 3]> {
     if bytes.get(..2)? != b"BM" {
         return None;
     }
-    let dib_size = u32::from_le_bytes(bytes.get(14..18)?.try_into().ok()?) as usize;
+    let word = |at: usize| Some(u32::from_le_bytes(bytes.get(at..at + 4)?.try_into().ok()?));
+    let dib_size = word(14)? as usize;
     let bits_per_pixel = u16::from_le_bytes(bytes.get(28..30)?.try_into().ok()?);
-    let pixel_offset = u32::from_le_bytes(bytes.get(10..14)?.try_into().ok()?) as usize;
+    let pixel_offset = word(10)? as usize;
     let palette_offset = 14_usize.checked_add(dib_size)?;
-    if bits_per_pixel > 8 || palette_offset.checked_add(4)? > pixel_offset {
+    if bits_per_pixel != 8 || palette_offset.checked_add(4)? > pixel_offset {
         return None;
     }
     let entry = bytes.get(palette_offset..palette_offset + 4)?;
-    Some([entry[2], entry[1], entry[0]])
+    let key = [entry[2], entry[1], entry[0]];
+    if key[0] >= 0xf0 && key[1] <= 0x10 && key[2] >= 0xf0 {
+        return Some(key);
+    }
+    // Two indices at each end of the first and last rows of pixel data.
+    let width = word(18)? as usize;
+    let height = word(22)?.cast_signed().unsigned_abs() as usize;
+    if width < 2 || height == 0 {
+        return None;
+    }
+    let stride = width.div_ceil(4) * 4;
+    let corner_pair = |row: usize, column: usize| {
+        let at = pixel_offset + row * stride + column;
+        bytes.get(at..at + 2) == Some(&[0, 0][..])
+    };
+    let rows = [0, height - 1];
+    rows.iter()
+        .any(|&row| corner_pair(row, 0) || corner_pair(row, width - 2))
+        .then_some(key)
 }
 
 #[cfg(test)]
@@ -2406,16 +2431,35 @@ mod tests {
         assert!(terrain > 0.9 && character > 0.9);
     }
 
-    #[test]
-    fn reads_the_first_indexed_bmp_palette_color_as_the_mask_key() {
+    /// An 8-bit 4x2 BMP whose palette entry 0 is `bgr`, with these indices.
+    fn indexed_bmp(bgr: [u8; 3], indices: [u8; 8]) -> Vec<u8> {
         let mut bmp = vec![0_u8; 58];
         bmp[..2].copy_from_slice(b"BM");
         bmp[10..14].copy_from_slice(&58_u32.to_le_bytes());
         bmp[14..18].copy_from_slice(&40_u32.to_le_bytes());
+        bmp[18..22].copy_from_slice(&4_u32.to_le_bytes());
+        bmp[22..26].copy_from_slice(&2_u32.to_le_bytes());
         bmp[28..30].copy_from_slice(&8_u16.to_le_bytes());
-        bmp[54..58].copy_from_slice(&[3, 5, 8, 0]);
+        bmp[54..57].copy_from_slice(&bgr);
+        bmp.extend_from_slice(&indices);
+        bmp
+    }
 
-        assert_eq!(bmp_color_key(&bmp), Some([8, 5, 3]));
+    #[test]
+    fn keys_an_8_bit_bmp_on_palette_zero_only_as_the_program_does() {
+        // Index 0 fills a corner pair: keyed on palette entry 0.
+        let corner = indexed_bmp([3, 5, 8], [1, 1, 1, 1, 1, 1, 0, 0]);
+        assert_eq!(bmp_color_key(&corner), Some([8, 5, 3]));
+        // Index 0 only away from the corner pairs: no key.
+        let middle = indexed_bmp([3, 5, 8], [1, 0, 0, 1, 1, 0, 0, 1]);
+        assert_eq!(bmp_color_key(&middle), None);
+        // A magenta-like entry 0 is the key wherever index 0 is.
+        let magenta = indexed_bmp([0xf8, 0x08, 0xf4], [1; 8]);
+        assert_eq!(bmp_color_key(&magenta), Some([0xf4, 0x08, 0xf8]));
+        // Not 8-bit, or not a bitmap: no key.
+        let mut four_bit = corner.clone();
+        four_bit[28..30].copy_from_slice(&4_u16.to_le_bytes());
+        assert_eq!(bmp_color_key(&four_bit), None);
         assert_eq!(bmp_color_key(b"not a bitmap"), None);
     }
 }
