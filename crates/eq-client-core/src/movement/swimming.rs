@@ -445,6 +445,133 @@ mod tests {
         )
     }
 
+    fn sloping_bottom(slope: f32, offset: Vec3) -> [[[f32; 3]; 3]; 2] {
+        let at = |x: f32, z: f32| (offset + Vec3::new(x, -12.0 + x * slope, z)).to_array();
+        [
+            [at(-100.0, -100.0), at(100.0, 100.0), at(100.0, -100.0)],
+            [at(-100.0, -100.0), at(-100.0, 100.0), at(100.0, 100.0)],
+        ]
+    }
+
+    fn submerged_bottom(
+        triangles: impl IntoIterator<Item = [[f32; 3]; 3]>,
+        offset: Vec3,
+    ) -> CollisionWorld {
+        CollisionWorld::new(triangles)
+            .unwrap()
+            .with_swim_origin(3.75)
+            .with_liquids(Boxes(vec![(
+                offset + Vec3::splat(-100.0),
+                offset + Vec3::new(100.0, 0.0, 100.0),
+                Liquid::Water,
+            )]))
+    }
+
+    #[test]
+    fn submerged_forward_strokes_slide_up_a_rising_bottom() {
+        let height = 6.677_319_5;
+        for offset in [Vec3::ZERO, Vec3::new(7_118.0, 0.0, -3_372.0)] {
+            for slope in [0.05_f32, 0.2] {
+                let world = submerged_bottom(sloping_bottom(slope, offset), offset);
+                for clearance in [0.0_f32, 0.03, 0.15] {
+                    for down in [0.0_f32, -0.25, -1.0] {
+                        let mut feet = offset + Vec3::new(0.0, -12.0 + clearance, 0.0);
+                        let delta = Vec3::new(2.2, down, 0.0);
+                        // The walking diagnostic is raised by LIFT. Its empty
+                        // result does not mean the actual wet capsule is clear.
+                        if slope.to_bits() == 0.2_f32.to_bits()
+                            && clearance.to_bits() == 0.03_f32.to_bits()
+                            && down >= -0.25
+                        {
+                            assert!(world.first_contact(feet, delta, height).is_none());
+                        }
+                        for _ in 0..12 {
+                            assert!(world.in_swimmable_water(feet, height));
+                            let next = world.wet_step(feet, delta, height);
+                            assert!(
+                                next.x - feet.x > 1.5,
+                                "uphill stall: {slope} {clearance} {down} {feet:?} -> {next:?}"
+                            );
+                            assert!(
+                                next.distance(feet) <= delta.length() + 0.002,
+                                "slide added distance"
+                            );
+                            let floor = -12.0 + (next.x - offset.x) * slope;
+                            assert!(
+                                next.y >= floor - 0.002,
+                                "sank into bottom: {next:?}, floor {floor}"
+                            );
+                            assert!(
+                                (next.z - offset.z).abs() < 0.002,
+                                "sideways drift: {next:?}"
+                            );
+                            feet = next;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn submerged_level_and_downhill_strokes_keep_forward_progress() {
+        for slope in [0.0_f32, -0.2] {
+            let world = submerged_bottom(sloping_bottom(slope, Vec3::ZERO), Vec3::ZERO);
+            for down in [0.0_f32, -0.25] {
+                let mut feet = Vec3::new(0.0, -11.97, 0.0);
+                let delta = Vec3::new(2.2, down, 0.0);
+                for _ in 0..12 {
+                    let next = world.wet_step(feet, delta, 6.677_319_5);
+                    assert!(
+                        (next.x - feet.x - delta.x).abs() < 0.002,
+                        "{feet:?} -> {next:?}"
+                    );
+                    assert!(next.y >= -12.0 + next.x * slope - 0.002, "{next:?}");
+                    if slope < 0.0 || down == 0.0 {
+                        assert!(
+                            (next - feet - delta).length() < 0.002,
+                            "clear stroke changed"
+                        );
+                    }
+                    feet = next;
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn submerged_bottom_slide_keeps_walls_and_headroom_solid() {
+        let height = 6.677_319_5;
+        for ceiling in [false, true] {
+            let obstacles = if ceiling {
+                flat(-5.0)
+            } else {
+                [
+                    [[4.0, -20.0, -20.0], [4.0, 0.0, -20.0], [4.0, 0.0, 20.0]],
+                    [[4.0, -20.0, -20.0], [4.0, 0.0, 20.0], [4.0, -20.0, 20.0]],
+                ]
+            };
+            let world = submerged_bottom(
+                sloping_bottom(0.2, Vec3::ZERO).into_iter().chain(obstacles),
+                Vec3::ZERO,
+            );
+            let mut feet = Vec3::new(0.0, -11.97, 0.0);
+            for _ in 0..12 {
+                feet = world.wet_step(feet, Vec3::new(2.2, -0.25, 0.0), height);
+                assert!(feet.y >= -12.0 + feet.x * 0.2 - 0.002, "{feet:?}");
+                if ceiling {
+                    assert!(feet.y + height <= -5.0 + 0.002, "ceiling crossed: {feet:?}");
+                } else {
+                    assert!(feet.x <= 3.6 + 0.002, "wall crossed: {feet:?}");
+                }
+            }
+            assert!(
+                feet.x > 0.5,
+                "initial floor contact blocked the approach: {feet:?}"
+            );
+        }
+    }
+
     #[test]
     fn titanium_water_entry_and_surfacing_use_the_origin_above_the_soles() {
         let world = CollisionWorld::new(flat(-12.0))
