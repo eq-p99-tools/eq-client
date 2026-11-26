@@ -30,6 +30,8 @@ mod surface_tail_tests;
 #[cfg(test)]
 mod surface_tests;
 mod translation;
+#[cfg(test)]
+mod turn_tests;
 
 struct SurfaceRollback {
     wet: eq_client_core::movement::water::WetVelocity,
