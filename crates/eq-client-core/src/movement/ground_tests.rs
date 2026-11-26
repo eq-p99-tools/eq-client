@@ -29,6 +29,57 @@ fn terrain() -> Vec<[[f32; 3]; 3]> {
 fn world() -> CollisionWorld {
     CollisionWorld::new(terrain()).unwrap().with_liquids(Dry)
 }
+
+fn rolling_world() -> CollisionWorld {
+    let mut triangles = Vec::new();
+    let profile = [(-100., 0.), (1., 0.), (5., 1.), (9., 0.), (100., 0.)];
+    for pair in profile.windows(2) {
+        let [(a, ay), (b, by)] = [pair[0], pair[1]];
+        triangles.extend([
+            [[a, ay, -10.], [a, ay, 10.], [b, by, -10.]],
+            [[b, by, -10.], [a, ay, 10.], [b, by, 10.]],
+        ]);
+    }
+    CollisionWorld::new(triangles).unwrap().with_liquids(Dry)
+}
+
+#[test]
+fn native_ground_walkable_slopes_retain_velocity_and_the_ordinary_collision_owner() {
+    let world = rolling_world();
+    for fps in [20_u32, 60, 144] {
+        let dt = Duration::from_secs_f64(1. / f64::from(fps));
+        let mut motion = GroundMotion::new(Vec3::ZERO).unwrap();
+        let mut peak = 0_f32;
+        for _ in 0..fps * 3 {
+            let before = motion;
+            motion = next(motion, &world, 6., true, dt);
+            let ordinary = world.step(before.feet(), motion.velocity() * dt.as_secs_f32(), 6.);
+            assert!(motion.feet().distance(ordinary) < 0.000_01);
+            assert!(motion.velocity().length() <= 6.);
+            assert!(world.support(motion.feet()).is_some());
+            peak = peak.max(motion.feet().y);
+        }
+        assert!(peak > 0.99, "the fixture did not cross the hill");
+        assert!(motion.feet().x > 17.4);
+        assert!(motion.feet().y.abs() < 0.000_01);
+        assert!(motion.velocity().x > 5.99);
+    }
+}
+
+#[test]
+fn native_ground_wider_floor_search_cannot_acquire_an_airborne_body() {
+    let world = rolling_world();
+    for height in [0.06, 0.5, 1.9] {
+        let airborne = GroundMotion::new(Vec3::new(0., height, 0.)).unwrap();
+        assert!(
+            airborne
+                .frame(&world, 6., Vec3::X, 6., true, Duration::from_millis(17))
+                .is_none(),
+            "broad slope probes snapped an unsupported body to the floor"
+        );
+        assert_eq!(airborne.feet().y, height);
+    }
+}
 fn next(
     motion: GroundMotion,
     world: &CollisionWorld,

@@ -55,6 +55,93 @@ struct Scene {
     ordinary_stops: usize,
 }
 
+// Each piece meets its neighbour exactly; the collision owner's capsule,
+// support probes and ordinary walk decide the actual body height.
+fn rolling_ground(profile: &[(f32, f32)], wall: bool) -> CollisionWorld {
+    let mut triangles = Vec::new();
+    for pair in profile.windows(2) {
+        let [(a, ay), (b, by)] = [pair[0], pair[1]];
+        triangles.extend([
+            [[a, ay, -10.], [a, ay, 10.], [b, by, -10.]],
+            [[b, by, -10.], [a, ay, 10.], [b, by, 10.]],
+        ]);
+    }
+    if wall {
+        triangles.extend([
+            [[3., 0., -10.], [3., 0., 10.], [3., 10., -10.]],
+            [[3., 10., -10.], [3., 0., 10.], [3., 10., 10.]],
+        ]);
+    }
+    CollisionWorld::new(triangles).unwrap().with_liquids(Dry)
+}
+
+#[test]
+fn native_ground_rolling_walkable_slopes_keep_the_same_frame_owner() {
+    for delay in [0, 6] {
+        let mut scene = Scene::new(delay, true);
+        scene.app.insert_resource(Collision(Some(rolling_ground(
+            &[
+                (-100., 0.),
+                (1., 0.),
+                (5., 1.),
+                (9., 0.),
+                (13., 1.),
+                (17., 0.),
+                (100., 0.),
+            ],
+            false,
+        ))));
+        let mut handovers = 0;
+        let mut restarts = 0;
+        let mut prior_native = false;
+        let mut stopped_frames = 0;
+        let mut previous = latency_tests::shown(&mut scene.app).0;
+        for frame in 0..240 {
+            let row = scene.step(true);
+            let native = scene.app.world().resource::<Controls>().ground.active();
+            handovers += usize::from(prior_native && !native);
+            restarts += usize::from(!prior_native && native && frame != 0);
+            stopped_frames += usize::from(frame > 8 && row.shown.distance(previous) < 0.000_01);
+            prior_native = native;
+            previous = row.shown;
+        }
+        println!(
+            "rolling delay={delay} handovers={handovers} restarts={restarts} stopped_frames={stopped_frames} final={previous:?}"
+        );
+        assert_eq!(scene.refusals, 0);
+        assert_eq!(handovers, 0, "ordinary slopes changed the recurrence owner");
+        assert_eq!(restarts, 0);
+        assert_eq!(stopped_frames, 0);
+        assert!(previous.x > 23.7);
+    }
+}
+
+#[test]
+fn native_ground_blocked_at_a_ramp_boundary_does_not_restart_while_forward_is_held() {
+    for delay in [0, 6] {
+        let mut scene = Scene::new(delay, true);
+        scene.app.insert_resource(Collision(Some(rolling_ground(
+            &[(-100., 0.), (2.95, 0.), (100., 9.705)],
+            true,
+        ))));
+        let mut handovers = 0;
+        let mut restarts = 0;
+        let mut prior_native = false;
+        for frame in 0..300 {
+            let row = scene.step(true);
+            let native = scene.app.world().resource::<Controls>().ground.active();
+            handovers += usize::from(prior_native && !native);
+            restarts += usize::from(!prior_native && native && frame != 0);
+            prior_native = native;
+            assert!(row.shown.x < 2.58, "the collision wall was crossed");
+        }
+        println!("blocked-ramp delay={delay} handovers={handovers} restarts={restarts}");
+        assert_eq!(scene.refusals, 0);
+        assert_eq!(handovers, 0, "blocked ramp changed the recurrence owner");
+        assert_eq!(restarts, 0, "held input was mistaken for a fresh start");
+    }
+}
+
 impl Scene {
     fn new(delay: u32, known: bool) -> Self {
         let (mut app, commands, news) = latency_tests::timing_app();
