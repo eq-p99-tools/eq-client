@@ -6,6 +6,10 @@ use eq_client_core::{
 use std::sync::Arc;
 
 #[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one shifted-deck diagnostic fixture and its lifecycle"
+)]
 fn controller_floor_records_the_deep_sweep_at_carried_feet_and_clears_on_reset() {
     let now = Instant::now();
     let player = WorldPosition {
@@ -64,7 +68,12 @@ fn controller_floor_records_the_deep_sweep_at_carried_feet_and_clears_on_reset()
         ])
         .unwrap(),
     );
-    let mut collision = CollisionWorld::new([]).unwrap();
+    let mut collision = CollisionWorld::new([[
+        [-1000.0, -10.0, -1000.0],
+        [-999.0, -10.0, -999.0],
+        [-999.0, -10.0, -1000.0],
+    ]])
+    .unwrap();
     collision.set_spawn_instances(vec![(
         8,
         CollisionInstance::new(deck, Vec3::X * 100.0, Quat::IDENTITY)
