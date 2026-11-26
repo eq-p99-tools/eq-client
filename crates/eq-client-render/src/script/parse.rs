@@ -630,6 +630,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "drag",
     "press",
     "hold",
+    "key_down",
+    "key_up",
     "wheel",
     "look",
     "wait",

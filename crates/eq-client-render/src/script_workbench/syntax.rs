@@ -148,7 +148,10 @@ pub(super) fn tokens<'a>(line: &'a str, symbols: &Symbols) -> Vec<(&'a str, Kind
 
 fn code_tokens<'a>(mut code: &'a str, symbols: &Symbols) -> Vec<(&'a str, Kind)> {
     let leading = language::shape(code);
-    let keys = matches!(leading, language::Shape::Action("press" | "hold", _));
+    let keys = matches!(
+        leading,
+        language::Shape::Action("press" | "hold" | "key_down" | "key_up", _)
+    );
     let mut first = true;
     let mut result = Vec::new();
     while let Some(ch) = code.chars().next() {
@@ -286,6 +289,12 @@ mod tests {
         assert!(tokens.contains(&("\"CTRL+W\"", Kind::Key)));
         assert!(tokens.contains(&("250", Kind::Number)));
         assert!(tokens.contains(&("# café\r", Kind::Comment)));
+        for command in ["key_down", "key_up"] {
+            let call = format!("{command}(\"CTRL+W\")");
+            let tokens = kinds(&call, &Symbols::default());
+            assert!(tokens.contains(&(command, Kind::Command)));
+            assert!(tokens.contains(&("\"CTRL+W\"", Kind::Key)));
+        }
         let tokens = kinds("wheel(\"world\", -1.5)", &Symbols::default());
         assert!(tokens.contains(&("\"world\"", Kind::String)));
         assert!(tokens.contains(&("1.5", Kind::Number)));

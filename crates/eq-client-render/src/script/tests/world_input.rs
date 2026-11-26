@@ -79,14 +79,17 @@ fn released(app: &App) {
 
 #[test]
 fn explicit_key_hold_spans_wait_and_world_rmb_look_until_key_up() {
-    let (mut app, _, camera) = fixture(vec![
-        Step::KeyDown(vec![KeyCode::KeyA]),
-        Step::Wait(Duration::from_millis(30)),
-        look(100),
-        Step::Wait(Duration::from_millis(30)),
-        Step::KeyUp(vec![KeyCode::KeyA]),
-        Step::Wait(Duration::from_millis(50)),
-    ]);
+    let (mut app, _, camera) = fixture(Vec::new());
+    let program = Program::parse(
+        "key_down(\"A\")\nwait(30)\nlook(\"world\", 120, -80, 100)\nwait(30)\nkey_up(\"A\")\nwait(50)",
+        Path::new("."),
+    )
+    .unwrap();
+    app.insert_resource(
+        Script::from_program(program)
+            .offline_preview(true)
+            .input_mode(InputMode::Background),
+    );
     let mut saw_look = false;
     let mut saw_wait_after_look = false;
     for ms in (0..=400).step_by(10) {
