@@ -4638,13 +4638,18 @@ pub(super) fn interpolate(
     controls.restore_observed_preview(online.world());
     controls.prepare_translation_restore(online.world());
     if let Some(frame) = controls.ground.current {
-        if let Ok((_, mut transform)) = players.single_mut() {
+        if let Ok((entity, mut transform)) = players.single_mut() {
             controls.apply_translation_restore(&mut transform);
             *transform = frame.drawn;
+            let preview = controls.mouse_heading;
+            if let Some(heading) = preview {
+                transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
+            }
+            *displayed_mouse = preview.map(|_| entity);
             controls.drawn_pose = Some(frame.pose);
             for (mut camera, free) in &mut cameras {
                 camera.focus = transform.translation;
-                if frame.follows && !free {
+                if (frame.follows || preview.is_some()) && !free {
                     crate::camera::start_behind(&mut camera, &transform);
                 }
             }

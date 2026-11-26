@@ -385,6 +385,47 @@ fn native_ground_a_subframe_tap_never_invents_held_duration() {
 }
 
 #[test]
+fn native_ground_paused_translation_keeps_the_independent_mouse_heading_preview() {
+    let mut scene = Scene::new(6, true);
+    for _ in 0..8 {
+        scene.step(true);
+    }
+    let before = latency_tests::shown(&mut scene.app).0;
+    {
+        let mut controls = scene.app.world_mut().resource_mut::<Controls>();
+        controls.walking = true;
+        controls.walk_speed = Some(3.);
+        controls.mouse_heading = Some(37.125);
+    }
+    let row = scene.step(true);
+    assert_eq!(
+        row.shown, before,
+        "unsupported Walk advanced native translation"
+    );
+    assert!(
+        scene
+            .app
+            .world()
+            .resource::<Controls>()
+            .ground
+            .current
+            .is_some()
+    );
+    let world = scene.app.world_mut();
+    let drawn = world
+        .query_filtered::<&Transform, With<Player>>()
+        .single(world)
+        .unwrap();
+    let expected = Quat::from_rotation_y(eq_client_core::render_heading(37.125));
+    assert!(drawn.rotation.angle_between(expected) < 0.000_01);
+    let camera = world.query::<&OrbitCamera>().single(world).unwrap();
+    assert!(
+        (camera.yaw - crate::camera::behind(eq_client_core::render_heading(37.125))).abs()
+            < 0.000_01
+    );
+}
+
+#[test]
 fn native_ground_ten_seconds_keeps_held_travel_and_ordinary_report_cadence() {
     let mut scene = Scene::new(0, true);
     let before = latency_tests::shown(&mut scene.app).0;
