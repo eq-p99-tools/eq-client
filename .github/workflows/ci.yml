@@ -40,6 +40,7 @@ jobs:
           sudo apt-get install --no-install-recommends -y pkg-config libasound2-dev
       - uses: dtolnay/rust-toolchain@stable
         with:
+          toolchain: 1.99.0
           components: clippy
       - uses: Swatinem/rust-cache@v2
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
@@ -52,6 +53,8 @@ jobs:
     steps:
       - uses: actions/checkout@v7
       - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: 1.99.0
       - uses: Swatinem/rust-cache@v2
         with:
           key: windows
