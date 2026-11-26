@@ -2180,6 +2180,7 @@ pub(super) fn input(
             crate::posture::on_mount(online.world(), spells.as_deref()),
             &outbox,
             now,
+            None,
         ) {
             Ok(true) => {
                 controls.held = Some(Held::Waiting);
@@ -3604,6 +3605,31 @@ pub(super) fn input(
         });
     }
     controls.surface_rollback = None;
+    // Native return tests the successful move's candidate, not its retained
+    // origin before the sweep (0x48bd31..0x48be35). A higher next floor can
+    // fail 2S+r even when the approach origin passed it. Queue after the
+    // move succeeds; a jump has already made its one stand decision.
+    if !flying
+        && !swimming
+        && !placement_blocked
+        && !jumped
+        && refused.is_none()
+        && posture == Some(eq_client_core::PostureState::Ducking)
+        && position.distance_squared(origin) > 1e-10
+        && let Err(reason) = controls.headroom.drive(
+            client,
+            online.world(),
+            world,
+            body,
+            crate::posture::on_mount(online.world(), spells.as_deref()),
+            &outbox,
+            now,
+            Some(position),
+        )
+    {
+        // Keep the submitted move and retry posture on a later candidate.
+        debug!(?reason, "Automatic return could not be queued");
+    }
     controls.shoreline.sent(mode, shore, created);
     if entering {
         controls.water_entry_rollback = previous_airborne;
