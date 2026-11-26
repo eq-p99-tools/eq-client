@@ -62,6 +62,10 @@ struct WaterParams {
     /// When the frame began (x), seconds each frame shows (y), 1 for lava
     /// (z), and 1 when the scene's depth is drawn first (w).
     timing: Vec4,
+    /// Rich Lighting's lights on the water: 1 while it is on (x), their
+    /// soft ceiling (y), and 1 outdoors (z), as its own surfaces take them
+    /// ([`crate::rich_light::RichState::water_light`]).
+    rich: Vec4,
 }
 
 impl MaterialExtension for WaterLook {
@@ -264,7 +268,7 @@ pub(super) fn register(app: &mut App) {
     app.add_plugins(MaterialPlugin::<WaterMaterial>::default())
         .add_systems(
             Update,
-            (wear, depth, animate, weather)
+            (wear, depth, animate, weather, rich_lit)
                 .chain()
                 .in_set(crate::Stage::Present),
         )
@@ -401,6 +405,7 @@ fn new_look(surface: &WaterSurface, plain: Option<&StandardMaterial>) -> WaterMa
                 shallow,
                 deep,
                 timing: Vec4::new(0.0, surface.frame_secs, f32::from(u8::from(lava)), 0.0),
+                rich: Vec4::ZERO,
             },
             next: surface.frames.get(1).cloned().or_else(|| frame.clone()),
             frame,
@@ -526,6 +531,31 @@ fn weather(
             params.sky = sky;
             params.sun_direction = sun_direction;
             params.sun_color = sun_color;
+        }
+    }
+}
+
+/// Gives the looks Rich Lighting's state, so its lights fall on the water
+/// while it is on, when it changes or a look is new.
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+fn rich_lit(
+    rich: Option<Res<crate::rich_light::RichState>>,
+    surfaces: Query<&MeshMaterial3d<WaterMaterial>>,
+    mut looks: ResMut<Assets<WaterMaterial>>,
+) {
+    let now = rich.map_or(Vec4::ZERO, |rich| rich.water_light());
+    let stale: HashSet<_> = surfaces
+        .iter()
+        .map(|material| material.0.id())
+        .filter(|id| {
+            looks
+                .get(*id)
+                .is_some_and(|look| look.extension.params.rich != now)
+        })
+        .collect();
+    for id in stale {
+        if let Some(mut look) = looks.get_mut(id) {
+            look.extension.params.rich = now;
         }
     }
 }

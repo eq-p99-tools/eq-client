@@ -1,7 +1,8 @@
 // Better Water: the look of a water or lava surface (water.rs).
 #import bevy_pbr::{
     pbr_fragment::pbr_input_from_standard_material,
-    pbr_functions::main_pass_post_lighting_processing,
+    pbr_functions::{apply_pbr_lighting, main_pass_post_lighting_processing},
+    pbr_types::PbrInput,
     forward_io::{VertexOutput, FragmentOutput},
     mesh_view_bindings::{view, globals, view_transmission_texture, view_transmission_sampler},
     view_transformations::{depth_ndc_to_view_z, frag_coord_to_uv, position_world_to_ndc, ndc_to_uv},
@@ -17,6 +18,7 @@ struct Water {
     shallow: vec4<f32>,
     deep: vec4<f32>,
     timing: vec4<f32>,
+    rich: vec4<f32>,
 }
 
 @group(#{MATERIAL_BIND_GROUP}) @binding(100) var<uniform> water: Water;
@@ -152,6 +154,27 @@ fn caustic_net(p: vec2<f32>, t: f32) -> f32 {
     return clamp(line_a * 0.35 + line_b * 0.25 + line_a * line_b * 1.2, 0.0, 1.0);
 }
 
+// What Rich Lighting's lights (the zone's lamps, carried lights and the
+// sun, with their shadows) add here, as they light the ground beside the
+// water (rich_light.wgsl): worked out on a white surface with no ambient,
+// softly capped by luminance. No specular: the water makes its own glints.
+fn rich_light(input: PbrInput) -> vec3<f32> {
+    var lit_input = input;
+    lit_input.material.base_color = vec4(1.0);
+    lit_input.material.emissive = vec4(0.0);
+    lit_input.material.reflectance = vec3(0.0);
+    lit_input.material.perceptual_roughness = 1.0;
+    lit_input.diffuse_occlusion = vec3(0.0);
+    lit_input.specular_occlusion = 0.0;
+    let lit = apply_pbr_lighting(lit_input).rgb;
+    let brightness = dot(lit, vec3(0.2126, 0.7152, 0.0722));
+    // Outdoors the night's grading darkens the frame afterwards, so the
+    // ceiling rises to hold once graded.
+    let night = min(view.color_grading.exposure, 0.0);
+    let cap = water.rich.y * select(1.0, exp2(-night), water.rich.z > 0.5);
+    return lit / (1.0 + brightness / max(cap, 0.0001));
+}
+
 fn luminance(c: vec3<f32>) -> f32 {
     return dot(c, vec3(0.299, 0.587, 0.114));
 }
@@ -189,6 +212,9 @@ fn fragment(in: VertexOutput, @builtin(front_facing) is_front: bool) -> Fragment
 #ifdef VERTEX_COLORS
     light = in.color.rgb;
 #endif
+    if water.rich.x > 0.5 && !lava {
+        light += rich_light(pbr_input);
+    }
 
     var out: FragmentOutput;
     if lava {
