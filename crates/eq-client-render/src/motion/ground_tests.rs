@@ -179,6 +179,7 @@ impl Scene {
                     self.refusals += 1;
                     self.reply(request.created, Some(error.to_string()));
                 } else {
+                    assert!(matches!(result, Ok(GroundSampleResult::Accepted)));
                     self.admissions += 1;
                     self.reply(request.created, None);
                 }
@@ -306,6 +307,7 @@ fn native_ground_release_uses_the_release_frame_and_receipts_never_replay_distan
                 assert_eq!(scene.step(false).shown, stopped);
             }
             assert!(stopped.distance(before) <= 6. * (f32::from(held) / 60.) + 0.001);
+            assert_eq!(scene.refusals, 0);
             let accepted = Vec3::from_array(eq_client_core::render_position(prior.accepted));
             assert!(
                 stopped.distance(accepted) < 0.001,
@@ -343,6 +345,7 @@ fn native_ground_repress_retains_only_owned_velocity_and_new_actual_input() {
             assert!(last.shown.distance(before) <= 6. * (13. / 60.) + 0.001);
             assert_eq!(last.owned, Vec3::ZERO);
             assert_eq!(scene.step(false).shown, last.shown);
+            assert_eq!(scene.refusals, 0);
         }
     }
 }
@@ -368,6 +371,7 @@ fn native_ground_ten_seconds_keeps_held_travel_and_ordinary_report_cadence() {
         "per-frame observations increased wire cadence"
     );
     assert!(scene.observations > scene.admissions && scene.admissions > scene.packets.len());
+    assert_eq!(scene.refusals, 0);
     println!(
         "10s held distance={distance} packets={} observations={} admissions={}",
         scene.packets.len(),
