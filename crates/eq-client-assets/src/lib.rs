@@ -7,6 +7,7 @@ pub mod camera;
 pub mod characters;
 pub mod clock;
 pub mod db_strings;
+mod dds;
 pub mod eqg;
 pub mod falls;
 pub mod items;
@@ -1424,11 +1425,10 @@ fn load_texture(
     let Some(bytes) = archive.get(name)? else {
         return Ok(None);
     };
-    let decoded = image::load_from_memory(&bytes).map_err(|source| LoadError::DecodeTexture {
+    let rgba = dds::decode_image(&bytes).map_err(|source| LoadError::DecodeTexture {
         name: name.to_owned(),
         source,
     })?;
-    let rgba = decoded.into_rgba8();
     let index = textures.len();
     textures.push(ZoneTexture {
         name: name.to_owned(),

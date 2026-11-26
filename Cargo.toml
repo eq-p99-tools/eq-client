@@ -53,7 +53,7 @@ glam = "0.32.1"
 parry3d = "0.30.2"
 rerecast = { version = "=0.4.0", default-features = false, features = ["std"] }
 image = { version = "0.25", default-features = false, features = ["bmp", "dds", "ico", "jpeg", "png", "tga"] }
-libeq = { git = "https://github.com/eq-p99-tools/libeq", rev = "e0e5a4e65c170272035a8beb65bda048f7a60a01" }
+libeq = { git = "https://github.com/eq-p99-tools/libeq", rev = "36d7e4f52f24c3f9ddbf7fd8597722de56011c34" }
 # David Henry's MIT EQG reader, from his libeq fork; the crate alone, at a merged commit.
 libeq_eqg = { git = "https://github.com/djhenry/libeq", rev = "686b74a1a82e8f4f207958ebbe8c06579046ce04" }
 roxmltree = "0.21.1"
