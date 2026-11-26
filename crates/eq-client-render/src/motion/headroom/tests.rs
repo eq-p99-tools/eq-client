@@ -23,6 +23,114 @@ const HUMAN: PlayerBody = PlayerBody {
     size: 6.0,
 };
 
+const OGRE: PlayerBody = PlayerBody {
+    feet_offset: 5.625,
+    height: 10.015_979,
+    size: 9.0,
+};
+
+fn thin_lintel() -> CollisionWorld {
+    let mut faces = plane(0.0, true);
+    // The 10-unit Door62 opening, with a synthetic .1-unit underside.
+    // Both endpoints of a 50/150 ms stride are outside its ray shadow.
+    faces.extend([
+        [[-20.0, 10.0, -0.05], [20.0, 10.0, 0.05], [-20.0, 10.0, 0.05]],
+        [[-20.0, 10.0, -0.05], [20.0, 10.0, -0.05], [20.0, 10.0, 0.05]],
+    ]);
+    CollisionWorld::new(faces).unwrap()
+}
+
+#[test]
+fn headroom_thin_lintel_cannot_be_skipped_in_either_direction() {
+    for direction in [-1.0, 1.0] {
+        for span in [0.05, 0.15] {
+            let from = Vec3::Z * -direction * 60.0 * span * 0.5;
+            let to = -from;
+            assert!(refused(InstalledClient::Titanium, &thin_lintel(),
+                (&OGRE, 5.625), (from, to), (false, false)).is_some(),
+                "standing direction={direction} span={span}");
+            assert!(refused(InstalledClient::Titanium, &thin_lintel(),
+                (&OGRE, 5.625), (from, to), (true, false)).is_none(),
+                "ducked direction={direction} span={span}");
+        }
+    }
+}
+
+#[test]
+fn headroom_held_input_retries_lintel_and_crosses_only_after_observed_duck() {
+    for direction in [-1.0, 1.0] {
+        for span in [0.05, 0.15] {
+            for enabled in [false, true] {
+                let (mut app, receiver) = app(InstalledClient::Titanium, 30.0);
+                app.insert_resource(Collision(Some(thin_lintel())));
+                let start = Vec3::new(0.0, 5.625, -direction * 60.0 * span * 0.5);
+                testing::place(&mut app.world_mut().resource_mut::<online::OnlineState>(),
+                    world_position(start.to_array(), if direction > 0.0 { 0.0 } else { 256.0 }));
+                {
+                    let world = app.world_mut();
+                    let mut player = world.query::<(&mut PlayerBody, &mut Transform)>();
+                    let (mut body, mut transform) = player.single_mut(world).unwrap();
+                    *body = OGRE;
+                    transform.translation = start;
+                    let mut controls = world.resource_mut::<Controls>();
+                    controls.test_span = Some(span);
+                    controls.speed = Some(60.0);
+                    controls.airborne = Some(AirborneController::default());
+                    controls.climb_sent = None;
+                }
+                app.world_mut().resource_mut::<crate::options::OptionsState>()
+                    .options.allow_auto_stand = enabled;
+                let mut crossed = false;
+                for frame in 0..16 {
+                    app.update();
+                    let at = app.world().resource::<online::OnlineState>()
+                        .world().player().unwrap().position;
+                    let z = eq_client_core::render_position(at)[2];
+                    let ducked = app.world().resource::<online::OnlineState>()
+                        .world().posture(7) == Some(PostureState::Ducking);
+                    if z * direction > 0.05 {
+                        assert!(ducked && enabled, "standing crossed: {direction} {span} {enabled} frame={frame}");
+                        crossed = true;
+                    }
+                    let requests = accepted_commands(&mut app, &receiver);
+                    if requests.contains(&Posture::Ducking) {
+                        assert!(enabled);
+                        posture(&mut app, PostureState::Ducking);
+                    }
+                }
+                assert_eq!(crossed, enabled, "direction={direction} span={span}");
+                if !enabled {
+                    assert!(app.world().resource::<Controls>().headroom_refused);
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn headroom_gallery_held_forward_stays_ducked_after_the_deadline() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
+    app.insert_resource(Collision(Some(CollisionWorld::new(
+        plane(4.0, true).into_iter().chain(plane(12.0, false))).unwrap())));
+    testing::place(&mut app.world_mut().resource_mut::<online::OnlineState>(),
+        world_position([0.0, 7.75, -10.0], 0.0));
+    let now = Instant::now();
+    app.world_mut().resource_scope(|world, mut controls: Mut<Controls>| {
+        controls.headroom.refused(InstalledClient::Titanium,
+            world.resource::<online::OnlineState>().world(),
+            Some(PostureState::Standing), true, now);
+        controls.test_span = Some(0.05);
+        controls.speed = Some(10.0);
+    });
+    posture(&mut app, PostureState::Ducking);
+    for millis in [2_001, 2_100, 2_200, 2_500, 3_000] {
+        app.world_mut().resource_mut::<Controls>().test_now = Some(now + Duration::from_millis(millis));
+        app.update();
+        assert_eq!(accepted_commands(&mut app, &receiver), Vec::<Posture>::new());
+    }
+    assert_eq!(app.world().resource::<online::OnlineState>().world().posture(7), Some(PostureState::Ducking));
+}
+
 fn plane(y: f32, up: bool) -> Vec<[[f32; 3]; 3]> {
     let mut faces = vec![
         [[-20.0, y, -20.0], [-20.0, y, 20.0], [20.0, y, 20.0]],
