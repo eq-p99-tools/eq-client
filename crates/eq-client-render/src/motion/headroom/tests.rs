@@ -1,7 +1,21 @@
-use super::*;
-use crate::{online::testing, outbox::Outbox};
-use eq_client_core::{GameDialect, WorldEvent};
-use std::sync::mpsc;
+use super::refused;
+use crate::{
+    Collision, Player, PlayerBody,
+    motion::{Controls, input},
+    online::{self, testing},
+    outbox::Outbox,
+};
+use bevy::prelude::*;
+use eq_client_assets::ui::InstalledClient;
+use eq_client_core::{
+    ClientCommand, GameDialect, MovementMode, Posture, PostureState, WorldEvent,
+    movement::{AirborneController, CollisionWorld},
+    world_position,
+};
+use std::{
+    sync::mpsc,
+    time::{Duration, Instant},
+};
 
 const HUMAN: PlayerBody = PlayerBody {
     feet_offset: 3.75,
@@ -153,7 +167,7 @@ fn automatic_return_waits_past_two_seconds_and_uses_the_native_return_predicate(
             app.world_mut().resource_mut::<Controls>().test_now =
                 Some(now + Duration::from_millis(millis));
             app.update();
-            assert!(commands(&receiver).is_empty());
+            assert_eq!(commands(&receiver), Vec::<Posture>::new());
         }
         app.world_mut().resource_mut::<Controls>().test_now =
             Some(now + Duration::from_millis(2_001));
@@ -162,13 +176,13 @@ fn automatic_return_waits_past_two_seconds_and_uses_the_native_return_predicate(
             assert_eq!(commands(&receiver), vec![Posture::Standing]);
         } else {
             // Manual standing fits at >8.0, but Titanium return needs >2S+r=8.15.
-            assert!(commands(&receiver).is_empty());
+            assert_eq!(commands(&receiver), Vec::<Posture>::new());
             app.insert_resource(Collision(Some(room(8.2))));
             app.update();
             assert_eq!(commands(&receiver), vec![Posture::Standing]);
         }
         app.update();
-        assert!(commands(&receiver).is_empty());
+        assert_eq!(commands(&receiver), Vec::<Posture>::new());
         posture(&mut app, PostureState::Standing);
         app.update();
         assert!(
@@ -189,7 +203,7 @@ fn an_impossible_titanium_duck_clears_the_flag_and_sends_nothing() {
     // Geometry changes before the next pass; Duck's own room test fails.
     app.insert_resource(Collision(Some(room(5.25))));
     app.update();
-    assert!(commands(&receiver).is_empty());
+    assert_eq!(commands(&receiver), Vec::<Posture>::new());
     assert!(
         app.world()
             .resource::<Controls>()
@@ -240,7 +254,7 @@ fn a_new_admission_or_lost_geometry_cannot_drive_an_old_automatic_cycle() {
             testing::admit(&mut online, 12, player);
         }
         app.update();
-        assert!(commands(&receiver).is_empty());
+        assert_eq!(commands(&receiver), Vec::<Posture>::new());
         assert!(
             app.world()
                 .resource::<Controls>()
@@ -263,7 +277,7 @@ fn an_intervening_posture_does_not_leave_a_stale_wait_or_queue_another_action() 
         .reset_all();
     posture(&mut app, PostureState::Sitting);
     app.update();
-    assert!(commands(&receiver).is_empty());
+    assert_eq!(commands(&receiver), Vec::<Posture>::new());
     assert!(
         app.world()
             .resource::<Controls>()
@@ -340,7 +354,7 @@ fn a_launch_stand_report_precedes_automatic_duck() {
             );
         });
     app.update();
-    assert!(commands(&receiver).is_empty());
+    assert_eq!(commands(&receiver), Vec::<Posture>::new());
     posture(&mut app, PostureState::Standing);
     app.update();
     assert_eq!(commands(&receiver), vec![Posture::Ducking]);
