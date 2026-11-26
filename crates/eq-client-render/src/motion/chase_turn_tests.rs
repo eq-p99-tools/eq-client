@@ -64,7 +64,7 @@ impl Rig {
                 .yaw = crate::camera::behind(eq_client_core::render_heading(heading));
             world.resource_mut::<Controls>().strafe_speed = Some(4.);
             world
-                .resource_mut::<options::OptionsState>()
+                .resource_mut::<crate::options::OptionsState>()
                 .options
                 .qol
                 .set(eq_client_core::qol::Fix::FreeCamera, true);
