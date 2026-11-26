@@ -197,6 +197,12 @@ struct Arguments {
     #[arg(long)]
     better_water: bool,
 
+    /// Keep a quality-of-life setting on for every character this run,
+    /// whatever their own choice: its key, such as `better_water` or
+    /// `rich_lighting`. Repeat it for more. Meant for test runs.
+    #[arg(long = "force-qol", value_name = "KEY", value_parser = parse_forced_fix)]
+    force_qol: Vec<eq_client_core::qol::Fix>,
+
     /// Hide placed objects to inspect terrain and material transitions.
     #[arg(long)]
     terrain_only: bool,
@@ -784,6 +790,7 @@ fn viewer_config(
         eq_directory: Some(eq_directory),
         installed_client: client.unwrap_or_default(),
         entity_distance: arguments.entity_distance,
+        forced_qol: arguments.force_qol.clone(),
         option_defaults: {
             let mut defaults = eq_client_core::options::Options {
                 show_helm: !arguments.hide_own_helm,
@@ -924,6 +931,13 @@ fn script_check_exit(path: &Path) -> i32 {
             2
         }
     }
+}
+
+/// A `--force-qol` key: a quality-of-life setting the player could turn off.
+fn parse_forced_fix(key: &str) -> Result<eq_client_core::qol::Fix, String> {
+    eq_client_core::qol::Fix::from_key(key)
+        .filter(|fix| fix.is_setting())
+        .ok_or_else(|| format!("no quality-of-life setting `{key}`"))
 }
 
 fn default_eq_directory() -> Option<PathBuf> {

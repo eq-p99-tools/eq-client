@@ -262,6 +262,9 @@ pub struct ViewerConfig {
     /// What a character with no options of their own starts with, the
     /// frame rate cap among them.
     pub option_defaults: eq_client_core::options::Options,
+    /// Quality-of-life settings kept on for every character this run,
+    /// whatever their saved choice (test runs).
+    pub forced_qol: Vec<eq_client_core::qol::Fix>,
     /// The frame rate cap the command line sets, which wins over
     /// `eqclient.ini`'s for a character with no choice of their own.
     pub max_fps: Option<u16>,
@@ -481,6 +484,7 @@ pub fn run(
     let installed_client = config.installed_client;
     let navmesh = config.navmesh;
     let mut option_defaults = config.option_defaults;
+    let forced_qol = config.forced_qol.clone();
     seed_official_options(&config, &mut option_defaults);
     if let Some(cap) = config.max_fps {
         option_defaults.max_fps = cap;
@@ -550,7 +554,7 @@ pub fn run(
     .insert_resource(online::Updates(std::sync::Mutex::new(updates)))
     .insert_resource(outbox);
     init_presentation(&mut app);
-    app.insert_resource(options::OptionsState::new(&option_defaults));
+    app.insert_resource(options::OptionsState::new(&option_defaults).forcing(&forced_qol));
     app.add_plugins(
         DefaultPlugins
             .set(WindowPlugin {
