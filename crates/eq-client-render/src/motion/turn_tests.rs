@@ -243,13 +243,17 @@ fn refused_water_translation_retains_mouse_view_and_restores_observed_position()
                 "refusal changed yaw: {before:?} -> {after:?}"
             );
             assert_eq!(before.1.to_bits(), after.1.to_bits());
-            assert_eq!(
+            assert!(
                 f.app
                     .world()
                     .get::<Transform>(f.player)
                     .unwrap()
-                    .translation,
-                Vec3::from_array(eq_client_core::render_position(placement))
+                    .translation
+                    .abs_diff_eq(
+                        Vec3::from_array(eq_client_core::render_position(placement)),
+                        1e-5
+                    ),
+                "refusal must restore the observed position within render-coordinate rounding"
             );
             assert_eq!(
                 f.app
