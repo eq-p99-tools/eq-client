@@ -160,10 +160,19 @@ fn turn_case(heading: f32, code: KeyCode, moving: bool, delay: usize, old_tag: b
         // Present and the following Receive; turn math and commands stay intact.
         rig.app.add_systems(
             Update,
-            (|mut controls: ResMut<Controls>| controls.sent_yaw = SentYaw::Ordinary)
-                .after(input)
-                .before(interpolate)
-                .in_set(crate::systems::Stage::Input),
+            (|mut controls: ResMut<Controls>| {
+                controls.sent_yaw = SentYaw::Ordinary;
+                // Input may already have created the submitted dry preview.
+                if let Some(visual) = controls.visual.as_mut() {
+                    visual.follow_heading = false;
+                    for segment in &mut visual.queue {
+                        segment.follow_heading = false;
+                    }
+                }
+            })
+            .after(input)
+            .before(interpolate)
+            .in_set(crate::systems::Stage::Input),
         );
     }
     let initial = rig.rows.last().unwrap().clone();
