@@ -7,6 +7,8 @@ mod boats;
 #[cfg(test)]
 mod carrier_walls;
 #[cfg(test)]
+mod chase_turn_tests;
+#[cfg(test)]
 mod latency_tests;
 #[cfg(test)]
 mod release_animation_tests;
