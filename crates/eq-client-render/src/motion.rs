@@ -11,8 +11,6 @@ mod carrier_walls;
 #[cfg(test)]
 mod chase_turn_tests;
 #[cfg(test)]
-mod teleport_camera_tests;
-#[cfg(test)]
 mod latency_tests;
 #[cfg(test)]
 mod release_animation_tests;
@@ -20,6 +18,8 @@ mod release_animation_tests;
 mod release_tests;
 #[cfg(test)]
 mod rider_animation_tests;
+#[cfg(test)]
+mod teleport_camera_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
 mod pad;

@@ -48,7 +48,8 @@ impl Rig {
                 &mut world.resource_mut::<online::OnlineState>(),
                 world_position([0., 3., 0.], accepted),
             );
-            world.resource_mut::<Controls>().last_accepted = base - Duration::from_secs(1);
+            world.resource_mut::<Controls>().last_accepted =
+                base.checked_sub(Duration::from_secs(1)).unwrap();
             world
                 .resource_mut::<crate::options::OptionsState>()
                 .options
