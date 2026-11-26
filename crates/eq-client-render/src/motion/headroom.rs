@@ -80,7 +80,8 @@ impl State {
 
     /// Before cadence, `candidate` is None: settle observed posture and
     /// request the delayed Duck. Return to Standing is tested only with a
-    /// resolved, submitted own-movement candidate (Titanium 0x48be15).
+    /// resolved, submitted own-movement candidate (Titanium 0x48be15),
+    /// or the unchanged origin on the host's existing idle-return path.
     /// Queuing a posture never makes it observed.
     #[allow(
         clippy::too_many_arguments,
@@ -160,8 +161,8 @@ impl State {
             let Some(origin) = candidate else {
                 return Ok(false);
             };
-            // Native reads say "past" now+2000; exact equality is retained
-            // as a read gap. The strict endpoint here never stands early.
+            // Titanium 0x48be0d uses jbe: exactly now+2000 still waits.
+            // Mac's exact timer endpoint remains unread.
             let room = match client {
                 InstalledClient::EqMac => rule.room(stand, false, false),
                 InstalledClient::Titanium | InstalledClient::Rof2 => {
