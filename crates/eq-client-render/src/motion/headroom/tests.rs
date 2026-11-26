@@ -152,6 +152,75 @@ fn actual_input_refuses_then_ducks_once_on_the_next_pass_for_keys_and_scripts() 
 }
 
 #[test]
+fn automatic_return_checks_the_next_floor_before_standing_at_the_bank_boundary() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
+    let mut triangles = plane(3.8, true);
+    triangles.extend(plane(12.0, false));
+    // The last two tenths of the approach rise onto the floor4 counter.
+    // At the retained origin the gap8.2 passes return's 2S+r=8.15;
+    // at the next candidate the gap8 does not. No threshold is changed.
+    triangles.extend([
+        [[-20.0, 4.0, 0.0], [-20.0, 4.0, 20.0], [20.0, 4.0, 20.0]],
+        [[-20.0, 4.0, 0.0], [20.0, 4.0, 20.0], [20.0, 4.0, 0.0]],
+    ]);
+    app.insert_resource(Collision(Some(CollisionWorld::new(triangles).unwrap())));
+    let origin = Vec3::new(0.0, 7.55, -0.5);
+    testing::place(
+        &mut app.world_mut().resource_mut::<online::OnlineState>(),
+        world_position(origin.to_array(), 0.0),
+    );
+    let now = Instant::now();
+    app.world_mut().resource_scope(|world, mut controls: Mut<Controls>| {
+        controls.headroom.refused(
+            InstalledClient::Titanium,
+            world.resource::<online::OnlineState>().world(),
+            Some(PostureState::Standing),
+            true,
+            now,
+        );
+        controls.test_now = Some(now + Duration::from_millis(2_001));
+        controls.test_span = Some(0.05);
+        controls.airborne = Some(AirborneController::default());
+        controls.climb_sent = None;
+        let mut speed = controls.speed.unwrap();
+        speed.units_per_second = 120.0;
+        speed.walk_units_per_second = Some(120.0);
+        controls.speed = Some(speed);
+    });
+    posture(&mut app, PostureState::Ducking);
+    app.update();
+    let sent: Vec<_> = receiver.try_iter().collect();
+    assert!(
+        !sent.iter().any(|command| matches!(command,
+            ClientCommand::SetPosture { posture: Posture::Standing, .. })),
+        "a passing old origin must not stand before the low candidate: {sent:?}"
+    );
+    assert!(sent.iter().any(|command| matches!(command,
+        ClientCommand::Move(request) if request.position.z > 7.7)), "{sent:?}");
+    assert!(!app.world().resource::<Controls>().headroom_refused);
+}
+
+#[test]
+fn automatic_return_does_not_run_without_a_movement_candidate() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+    let now = Instant::now();
+    app.world_mut().resource_scope(|world, mut controls: Mut<Controls>| {
+        controls.headroom.refused(
+            InstalledClient::Titanium,
+            world.resource::<online::OnlineState>().world(),
+            Some(PostureState::Standing),
+            true,
+            now,
+        );
+        controls.test_now = Some(now + Duration::from_millis(2_001));
+    });
+    posture(&mut app, PostureState::Ducking);
+    app.update();
+    assert_eq!(commands(&receiver), Vec::<Posture>::new());
+}
+
+#[test]
 fn automatic_return_waits_past_two_seconds_and_uses_the_native_return_predicate() {
     for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
         let (mut app, receiver) = app(client, 7.9);
