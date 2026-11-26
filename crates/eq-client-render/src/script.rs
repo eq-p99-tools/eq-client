@@ -1432,6 +1432,7 @@ pub(super) fn drive(
         script.progress.complete_step();
         if script.follow.is_some() && script.mode == RunMode::PauseRequested {
             script.advance(now);
+            script.release(&mut keys, &mut mouse);
             return;
         }
     }
