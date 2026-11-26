@@ -2905,6 +2905,81 @@ fn a_corpse_fills_while_open_and_closes_when_the_server_says() {
 }
 
 #[test]
+fn loot_grant_is_separate_from_request_items_and_listing() {
+    use crate::loot::{LootResponse, LootUpdate};
+    let mut world = admitted();
+    world.open_loot(9);
+    assert!(!world.loot().unwrap().granted);
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Item {
+            place: 0,
+            item: Box::new(chest()),
+        }),
+    );
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Listed { corpse_id: 9 }),
+    );
+    assert!(world.loot().unwrap().listed);
+    assert!(!world.loot().unwrap().granted);
+    game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Opened {
+            response: LootResponse::Normal,
+            coins: Coins::default(),
+        }),
+    );
+    assert!(world.loot().unwrap().granted);
+    world.close_loot();
+    world.open_loot(10);
+    let loot = world.loot().unwrap();
+    assert_eq!(loot.corpse_id, 10);
+    assert!(!loot.granted);
+    assert!(!loot.listed);
+    assert!(loot.items.is_empty());
+}
+
+#[test]
+fn loot_grant_opens_before_an_empty_or_delayed_listing_and_keeps_denial_feedback() {
+    use crate::loot::{LootResponse, LootUpdate};
+    let mut world = admitted();
+    world.open_loot(9);
+    let revision = world.inventory().revision();
+    let changes = game(
+        &mut world,
+        WorldEvent::Loot(LootUpdate::Opened {
+            response: LootResponse::Normal,
+            coins: Coins::default(),
+        }),
+    );
+    assert!(changes.trade);
+    let loot = world.loot().unwrap();
+    assert!(loot.granted);
+    assert!(!loot.listed);
+    assert!(loot.items.is_empty());
+    assert_eq!(world.inventory().revision(), revision);
+    for response in [
+        LootResponse::SomeoneElse,
+        LootResponse::NotAtThisTime,
+        LootResponse::Hostiles,
+        LootResponse::TooFar,
+        LootResponse::Other(255),
+    ] {
+        world.open_loot(9);
+        let changes = game(
+            &mut world,
+            WorldEvent::Loot(LootUpdate::Opened {
+                response,
+                coins: Coins::default(),
+            }),
+        );
+        assert!(world.loot().is_none());
+        assert_eq!(changes.notices, [Notice::LootRefused(response)]);
+    }
+}
+
+#[test]
 fn loot_receipt_then_refusal_never_reports_delivery() {
     use crate::loot::LootUpdate;
     let mut world = admitted();
