@@ -73,7 +73,10 @@ fn movement_room_is_strict_uses_floor_fronts_and_only_ceiling_fronts() {
         .unwrap()
     };
     let origin = Vec3::Y * 3.75;
-    assert_eq!(make(8.0).headroom_bounds(origin), Some((0.0, 8.0)));
+    let (floor, ceiling) = make(8.0).headroom_bounds(origin).unwrap();
+    // The support ray's endpoint guard can leave a sub-micro-unit residue.
+    assert!(floor.abs() < 1e-6, "{floor}");
+    assert_eq!(ceiling, 8.0);
     assert!(!make(8.0).headroom(origin, 8.0));
     assert!(make(8.001).headroom(origin, 8.0));
     assert!(
