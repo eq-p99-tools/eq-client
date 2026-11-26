@@ -1413,7 +1413,7 @@ impl Controls {
         session: Option<u64>,
         created: Instant,
         position: eq_client_core::WorldPosition,
-        refused: Option<&String>,
+        refused: Option<&str>,
     ) -> bool {
         if !self
             .ground
@@ -1422,7 +1422,7 @@ impl Controls {
             return false;
         }
         self.last_answer = Some(self.now());
-        self.refused = refused.cloned();
+        self.refused = refused.map(str::to_owned);
         if refused.is_none()
             && self
                 .mouse_heading
@@ -1439,6 +1439,15 @@ impl Controls {
             self.moving = false;
         }
         true
+    }
+
+    pub(super) fn refuse_move(&mut self, world: &ClientWorld, created: Instant, reason: &str) {
+        let native = world.player().is_some_and(|player| {
+            self.ground_result(world.session_id(), created, player.position, Some(reason))
+        });
+        if !native {
+            self.move_refused(world.session_id(), created, reason);
+        }
     }
 
     /// Settles only the matching proposed carrier link. A rejection retains
@@ -4638,23 +4647,12 @@ pub(super) fn interpolate(
 ) {
     controls.restore_observed_preview(online.world());
     controls.prepare_translation_restore(online.world());
-    if let Some(frame) = controls.ground.current {
-        if let Ok((entity, mut transform)) = players.single_mut() {
-            controls.apply_translation_restore(&mut transform);
-            *transform = frame.drawn;
-            let preview = controls.mouse_heading;
-            if let Some(heading) = preview {
-                transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
-            }
-            *displayed_mouse = preview.map(|_| entity);
-            controls.drawn_pose = Some(frame.pose);
-            for (mut camera, free) in &mut cameras {
-                camera.focus = transform.translation;
-                if (frame.follows || preview.is_some()) && !free {
-                    crate::camera::start_behind(&mut camera, &transform);
-                }
-            }
-        }
+    if ground::present(
+        &mut controls,
+        &mut players,
+        &mut cameras,
+        &mut displayed_mouse,
+    ) {
         return;
     }
     let preview = controls.mouse_heading;
@@ -4811,6 +4809,7 @@ fn short(requested: Vec3, resolved: Vec3) -> bool {
 }
 
 /// Input intent remains separate from collision, timing and network submission.
+#[derive(Clone, Copy)]
 struct MotionInput {
     mode: MovementMode,
     speed: f32,

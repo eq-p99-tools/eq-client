@@ -511,7 +511,7 @@ impl Outbox {
         self.try_send(world, command(stamp), false, None)
     }
 
-    /// The queue, if the session can take this command now.
+    /// Checks current admission and capability without reserving queue capacity.
     pub(super) fn check_command(
         &self,
         world: &ClientWorld,

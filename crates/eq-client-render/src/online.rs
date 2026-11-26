@@ -640,18 +640,7 @@ impl Panels<'_> {
                 // A crossing without a transfer releases the movement hold.
                 Reply::ZoneLineRefused => self.motion.crossing_resolved(),
                 Reply::MotionRefused { created, reason } => {
-                    let native = state.world().player().is_some_and(|player| {
-                        self.motion.ground_result(
-                            state.world().session_id(),
-                            *created,
-                            player.position,
-                            Some(reason),
-                        )
-                    });
-                    if !native {
-                        self.motion
-                            .move_refused(state.world().session_id(), *created, reason);
-                    }
+                    self.motion.refuse_move(state.world(), *created, reason);
                 }
             }
         }
@@ -677,7 +666,7 @@ impl Panels<'_> {
             admission_id,
             moved.created,
             moved.position,
-            moved.refused.as_ref(),
+            moved.refused.as_deref(),
         ) {
             return;
         }

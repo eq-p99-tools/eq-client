@@ -1,7 +1,20 @@
 //! Completed native dry frames; prediction and local admission remain separate.
-use super::*;
-use eq_client_core::{GroundState, WorldPosition, movement::GroundMotion};
-use std::collections::VecDeque;
+use super::{
+    Controls, Held, LiquidBasis, MOVE_RESULT_WAIT, MotionInput, OrbitCamera, Player, PlayerBody,
+    START_CYCLE_DURATION, TURN_RATE, TURN_STEPS_PER_SECOND, TapBuffer, arc, online, pose,
+    ramped_turn, stop_at_zone_line, turn_cap, turn_toward,
+};
+use bevy::prelude::{Entity, Has, Quat, Query, Transform, Vec2, Vec3, With};
+use eq_client_core::{
+    ClientCommand, GroundState, HeadingUpdate, MovementMode, MovementRequest, WorldPosition,
+    movement::{CollisionWorld, GroundMotion},
+    world::ClientWorld,
+    world_position,
+};
+use std::{
+    collections::VecDeque,
+    time::{Duration, Instant},
+};
 
 // Normal queue refusal bounds this much earlier. Keeping identities is needed
 // to retire delayed receipts without playing their distance for a second time.
@@ -259,6 +272,7 @@ impl Control {
     }
 }
 
+#[derive(Clone, Copy)]
 pub(super) struct Context<'a> {
     pub online: &'a online::OnlineState,
     pub world: &'a CollisionWorld,
@@ -269,6 +283,34 @@ pub(super) struct Context<'a> {
     pub first_span: Duration,
     pub eligible: bool,
     pub mouse_heading: Option<f32>,
+}
+
+pub(super) fn present(
+    controls: &mut Controls,
+    players: &mut Query<(Entity, &mut Transform), With<Player>>,
+    cameras: &mut Query<(&mut OrbitCamera, Has<crate::camera::FreeCamera>)>,
+    displayed_mouse: &mut Option<Entity>,
+) -> bool {
+    let Some(frame) = controls.ground.current else {
+        return false;
+    };
+    if let Ok((entity, mut transform)) = players.single_mut() {
+        controls.apply_translation_restore(&mut transform);
+        *transform = frame.drawn;
+        let preview = controls.mouse_heading;
+        if let Some(heading) = preview {
+            transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
+        }
+        *displayed_mouse = preview.map(|_| entity);
+        controls.drawn_pose = Some(frame.pose);
+        for (mut camera, free) in cameras {
+            camera.focus = transform.translation;
+            if (frame.follows || preview.is_some()) && !free {
+                crate::camera::start_behind(&mut camera, &transform);
+            }
+        }
+    }
+    true
 }
 
 /// Own only observed, collision-resolved ordinary ground frames. All other
