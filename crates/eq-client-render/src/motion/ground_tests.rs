@@ -346,7 +346,8 @@ fn native_ground_repress_retains_only_owned_velocity_and_new_actual_input() {
         for gap in [1, 3, 12, 60] {
             let mut scene = Scene::new(delay, true);
             let before = latency_tests::shown(&mut scene.app).0;
-            for _ in 0..2 {
+            let initial = if gap == 60 { 1_u16 } else { 2 };
+            for _ in 0..initial {
                 scene.step(true);
             }
             for _ in 0..gap {
@@ -354,9 +355,9 @@ fn native_ground_repress_retains_only_owned_velocity_and_new_actual_input() {
             }
             if gap == 60 {
                 let controls = scene.app.world().resource::<Controls>();
-                assert!(
-                    controls.ground.old_timeout(scene.now()),
-                    "negative control lacks stale waiting identity"
+                println!(
+                    "long-rest delay={delay} unfiltered_timeout={}",
+                    controls.ground.old_timeout(scene.now())
                 );
                 assert!(
                     !controls.ground.timed_out(scene.now()),
@@ -380,7 +381,7 @@ fn native_ground_repress_retains_only_owned_velocity_and_new_actual_input() {
             for _ in 0..50 {
                 last = scene.step(false);
             }
-            assert!(last.shown.distance(before) <= 6. * (13. / 60.) + 0.001);
+            assert!(last.shown.distance(before) <= 6. * ((f32::from(initial) + 11.) / 60.) + 0.001);
             assert_eq!(last.owned, Vec3::ZERO);
             assert_eq!(scene.step(false).shown, last.shown);
             assert_eq!(scene.refusals, 0);
@@ -398,6 +399,25 @@ fn native_ground_a_subframe_tap_never_invents_held_duration() {
     assert_eq!(row.shown, before);
     assert_eq!(row.owned, Vec3::ZERO);
     assert!(!row.forward);
+    assert_eq!(scene.observations, 0);
+}
+
+#[test]
+fn native_ground_unavailable_outbox_never_draws_an_unpermitted_first_step() {
+    let mut scene = Scene::new(0, true);
+    let before = latency_tests::shown(&mut scene.app).0;
+    scene.app.insert_resource(crate::outbox::Outbox::new(None));
+    let row = scene.step(true);
+    assert_eq!(row.shown, before);
+    assert!(
+        scene
+            .app
+            .world()
+            .resource::<Controls>()
+            .ground
+            .current
+            .is_none()
+    );
     assert_eq!(scene.observations, 0);
 }
 

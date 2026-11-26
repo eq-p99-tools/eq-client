@@ -512,6 +512,17 @@ impl Outbox {
     }
 
     /// The queue, if the session can take this command now.
+    pub(super) fn check_command(
+        &self,
+        world: &ClientWorld,
+        command: &ClientCommand,
+    ) -> Result<(), Refusal> {
+        // Availability is not a reservation of channel capacity. Publication
+        // still uses try_send and its normal rollback on queue refusal.
+        self.check(world, command).map(|_| ())
+    }
+
+    /// The queue, if the session can take this command now.
     fn check(
         &self,
         world: &ClientWorld,

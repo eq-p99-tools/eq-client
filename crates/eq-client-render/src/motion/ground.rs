@@ -424,6 +424,24 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         ) else {
             return true;
         };
+        let legal = online
+            .world()
+            .session_id()
+            .ok_or(crate::outbox::Refusal::NotAdmitted)
+            .and_then(|session| {
+                outbox.check_command(
+                    online.world(),
+                    &ClientCommand::GroundFrame {
+                        request: frame.request(session),
+                        state: frame.state,
+                    },
+                )
+            });
+        if let Err(reason) = legal {
+            controls.send_failed(reason);
+            controls.held = Some(Held::Refused);
+            return true;
+        }
         controls.ground.current = Some(frame);
         controls.moving = forward || trial.velocity() != Vec3::ZERO;
         controls.visual = None;
