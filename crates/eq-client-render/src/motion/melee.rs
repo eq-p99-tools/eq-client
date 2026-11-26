@@ -12,7 +12,8 @@ const MANUAL_PAUSE: Duration = Duration::from_millis(500);
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Scope {
     session: u64,
-    target: eq_network_game::targets::TargetState,
+    target_id: u16,
+    target_revision: u64,
     spawn_revision: u64,
 }
 
@@ -185,7 +186,8 @@ fn target(
     Some((
         Scope {
             session,
-            target: intent,
+            target_id: id,
+            target_revision: intent.revision,
             spawn_revision: spawn.revision,
         },
         there,
