@@ -2504,6 +2504,7 @@ pub(super) fn input(
         );
         let eligible = time.is_some()
             && client == InstalledClient::Titanium
+            && online.world().generation() == eq_client_core::GameDialect::Titanium
             && focused
             && standing
             && !lying

@@ -422,6 +422,30 @@ fn native_ground_unavailable_outbox_never_draws_an_unpermitted_first_step() {
 }
 
 #[test]
+fn native_ground_other_protocol_generations_keep_the_existing_request_path() {
+    let mut scene = Scene::new(0, true);
+    {
+        let world = scene.app.world_mut();
+        online::testing::generation(
+            &mut world.resource_mut::<online::OnlineState>(),
+            eq_client_core::GameDialect::EqMac,
+        );
+        world.resource_mut::<Controls>().ground.retire();
+    }
+    scene.step(true);
+    assert!(
+        scene
+            .app
+            .world()
+            .resource::<Controls>()
+            .ground
+            .current
+            .is_none()
+    );
+    assert_eq!(scene.observations, 0);
+}
+
+#[test]
 fn native_ground_paused_translation_keeps_the_independent_mouse_heading_preview() {
     let mut scene = Scene::new(6, true);
     for _ in 0..8 {
