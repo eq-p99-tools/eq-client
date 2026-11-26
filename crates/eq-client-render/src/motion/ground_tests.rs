@@ -23,7 +23,9 @@ impl Liquids for Dry {
 #[derive(Clone, Copy, Debug)]
 struct Row {
     shown: Vec3,
+    predicted: Vec3,
     focus: Vec3,
+    camera: Vec3,
     owned: Vec3,
     forward: bool,
     accepted: eq_client_core::WorldPosition,
@@ -215,20 +217,32 @@ impl Scene {
             .unwrap();
         let (shown, focus) = latency_tests::shown(&mut self.app);
         let current = self.app.world().resource::<Controls>().ground.current;
-        Row {
+        let world = self.app.world_mut();
+        let camera = world
+            .query_filtered::<&Transform, With<OrbitCamera>>()
+            .single(world)
+            .unwrap()
+            .translation;
+        let row = Row {
             shown,
+            predicted: current.map_or(shown, |frame| frame.drawn.translation),
             focus,
+            camera,
             owned: current.map_or(Vec3::ZERO, |frame| frame.motion.velocity()),
             forward: current.is_some_and(|frame| frame.state.forward()),
             accepted: self.owner.position(),
+        };
+        if std::env::var_os("EQ_LAND_TRACE").is_some() {
+            println!("land-frame frame={} held={held} {row:?}", self.frame);
         }
+        row
     }
 }
 
 #[test]
 fn native_ground_release_uses_the_release_frame_and_receipts_never_replay_distance() {
     for delay in [0, 2, 6] {
-        for held in [1, 2, 5, 7, 13] {
+        for held in [1_u16, 2, 5, 7, 13] {
             let mut scene = Scene::new(delay, true);
             let before = latency_tests::shown(&mut scene.app).0;
             let mut prior = scene.step(true);
@@ -248,6 +262,11 @@ fn native_ground_release_uses_the_release_frame_and_receipts_never_replay_distan
                     "release/receipt accelerated the display: {row:?}"
                 );
                 assert_eq!(row.shown, row.focus);
+                assert_eq!(row.shown, row.predicted);
+                assert!(
+                    ((row.camera - prior.camera) - (row.shown - prior.shown)).length() < 0.000_01,
+                    "camera introduced a separate release step"
+                );
                 prior_step = step;
                 prior = row;
             }
@@ -256,7 +275,7 @@ fn native_ground_release_uses_the_release_frame_and_receipts_never_replay_distan
             for _ in 0..30 {
                 assert_eq!(scene.step(false).shown, stopped);
             }
-            assert!(stopped.distance(before) <= 6. * (held as f32 / 60.) + 0.001);
+            assert!(stopped.distance(before) <= 6. * (f32::from(held) / 60.) + 0.001);
             let accepted = Vec3::from_array(eq_client_core::render_position(prior.accepted));
             assert!(
                 stopped.distance(accepted) < 0.001,
