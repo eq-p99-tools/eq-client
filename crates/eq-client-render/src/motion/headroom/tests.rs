@@ -237,6 +237,54 @@ fn automatic_return_checks_the_next_floor_before_standing_at_the_bank_boundary()
 }
 
 #[test]
+fn automatic_return_tests_the_manual_origin_bound_at_the_candidate_too() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 10.0);
+    let now = Instant::now();
+    app.world_mut()
+        .resource_scope(|world, mut controls: Mut<Controls>| {
+            controls.headroom.refused(
+                InstalledClient::Titanium,
+                world.resource::<online::OnlineState>().world(),
+                Some(PostureState::Standing),
+                true,
+                now.checked_sub(Duration::from_millis(2_001)).unwrap(),
+            );
+        });
+    posture(&mut app, PostureState::Ducking);
+    for (height, expected) in [(6.251, false), (6.25, true)] {
+        // Both candidates pass floor+2S+r<10. The first lacks S above
+        // its origin; the equality at ceiling-origin==S permits Stand.
+        app.world_mut()
+            .resource_scope(|world, mut controls: Mut<Controls>| {
+                assert_eq!(
+                    controls
+                        .headroom
+                        .drive(
+                            InstalledClient::Titanium,
+                            world.resource::<online::OnlineState>().world(),
+                            world.resource::<Collision>().0.as_ref().unwrap(),
+                            &HUMAN,
+                            false,
+                            world.resource::<Outbox>(),
+                            now,
+                            Some(Vec3::new(0.0, height, 1.0)),
+                        )
+                        .unwrap(),
+                    expected
+                );
+            });
+        assert_eq!(
+            commands(&receiver),
+            if expected {
+                vec![Posture::Standing]
+            } else {
+                vec![]
+            }
+        );
+    }
+}
+
+#[test]
 fn automatic_return_preserves_the_existing_idle_origin_test() {
     let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
     app.world_mut()

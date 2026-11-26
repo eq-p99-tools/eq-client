@@ -173,6 +173,7 @@ impl State {
             };
             if now <= automatic.deadline
                 || !collision.headroom(origin, room)
+                || !collision.posture_clearance(origin, stand, rule.room(stand, false, mounted))
                 || !outbox.posture_allowed(world, Posture::Standing)
             {
                 return Ok(false);
