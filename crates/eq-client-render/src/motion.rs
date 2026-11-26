@@ -256,6 +256,8 @@ const MOVE_RESULT_WAIT: Duration = Duration::from_millis(250);
 enum SentYaw {
     #[default]
     Ordinary,
+    // The ordinary turn clock, with camera follow from the drawn actor.
+    KeyboardRate,
     MouseRate,
     MouseSnapshot,
 }
@@ -696,7 +698,9 @@ impl Controls {
         // A turn key turns at most the limit in a span; the 1% margin keeps
         // rounding in the angle between two rotations from making that a snap.
         let snap = match self.sent_yaw {
-            SentYaw::Ordinary => asked.angle_between(rotation) > limit * 1.01,
+            SentYaw::Ordinary | SentYaw::KeyboardRate => {
+                asked.angle_between(rotation) > limit * 1.01
+            }
             SentYaw::MouseRate => false,
             SentYaw::MouseSnapshot => true,
         };
@@ -3224,6 +3228,13 @@ pub(super) fn input(
         SentYaw::MouseSnapshot
     } else if mouse_aim.is_some() || follow_heading.is_some() && heading_snapshots {
         SentYaw::MouseRate
+    } else if !mouse_steering
+        && follow_heading.is_none()
+        && !matches!(mode, MovementMode::GroundedDiagonal(_))
+        && (Vec2::new(direction.x, direction.z) == Vec2::ZERO || preserve_facing)
+        && (turn != 0.0 || controls.released_turn != 0.0)
+    {
+        SentYaw::KeyboardRate
     } else {
         SentYaw::Ordinary
     };
