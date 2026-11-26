@@ -223,6 +223,7 @@ pub(super) struct RichState {
     /// Whether the player asked for their own light's shadows
     /// ([`Fix::TorchShadows`](eq_client_core::qol::Fix::TorchShadows)).
     torch_shadows: bool,
+
     /// The materials' limits ([`BaseLight::limits`]) now, and as they were
     /// last given them.
     limits: Vec4,
@@ -496,23 +497,39 @@ pub(super) fn swap(
     mut commands: Commands,
     mut state: ResMut<RichState>,
     tuning: Res<Tuning>,
-    // Water surfaces keep their own draw: Better Water dresses them, and
-    // the two swaps must not take the same surface.
+    // A water surface is drawn rich like the ground beside it, except while
+    // Better Water dresses it (and lights it with the same lights): the two
+    // swaps must not take the same surface. Its colours hold only the base
+    // either way, so a water surface drawn plain under Rich Lighting would
+    // lack the lights its neighbours have and show their seams.
     plain: Query<
-        (Entity, &Mesh3d, &MeshMaterial3d<StandardMaterial>),
-        (Without<Parked>, Without<crate::water::WaterSurface>),
+        (
+            Entity,
+            &Mesh3d,
+            &MeshMaterial3d<StandardMaterial>,
+            Has<crate::water::WaterSurface>,
+        ),
+        Without<Parked>,
     >,
-    parked: Query<(Entity, &Parked)>,
-    standard: Res<Assets<StandardMaterial>>,
-    mut rich: ResMut<Assets<RichMaterial>>,
+    parked: Query<(Entity, &Parked, Has<crate::water::WaterSurface>)>,
+    (standard, mut rich): (Res<Assets<StandardMaterial>>, ResMut<Assets<RichMaterial>>),
+    options: Res<OptionsState>,
 ) {
-    if !state.active {
-        for (entity, Parked(material)) in &parked {
+    // Better Water dresses the water surfaces, which this swap then leaves
+    // to it.
+    let better_water = options
+        .options
+        .qol
+        .on(eq_client_core::qol::Fix::BetterWater);
+    for (entity, Parked(material), water) in &parked {
+        if !state.active || (water && better_water) {
             commands
                 .entity(entity)
                 .insert(MeshMaterial3d(material.clone()))
                 .remove::<(Parked, MeshMaterial3d<RichMaterial>)>();
         }
+    }
+    if !state.active {
         return;
     }
     let state = &mut *state;
@@ -525,8 +542,8 @@ pub(super) fn swap(
             }
         }
     }
-    for (entity, mesh, material) in &plain {
-        if !state.lit.contains(&mesh.id()) {
+    for (entity, mesh, material, water) in &plain {
+        if !state.lit.contains(&mesh.id()) || (water && better_water) {
             continue;
         }
         let handle = if let Some(handle) = state.materials.get(&material.id()) {

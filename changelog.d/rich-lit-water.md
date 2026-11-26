@@ -1,1 +1,1 @@
-- Rich Lighting now lights Better Water's surfaces too: lamps, carried lights and the sun (with its shadows) fall on the water as on the ground beside it.
+- Rich Lighting now lights water too. With Better Water, lamps, carried lights and the sun (with its shadows) fall on the water as on the ground beside it; without it, water surfaces take Rich Lighting like the rest of the zone instead of staying darker, which showed hard seams in Qeynos's canals.

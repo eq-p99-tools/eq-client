@@ -501,3 +501,55 @@ fn an_animated_surface_takes_each_frames_material_without_changing_any() {
     assert_eq!(drawn(&mut app).0, on_second);
     assert_eq!(app.world().resource::<Assets<RichMaterial>>().len(), made);
 }
+
+#[test]
+fn a_water_surface_is_drawn_rich_unless_better_water_dresses_it() {
+    let (mut app, mesh, material) = palace();
+    let water = app
+        .world_mut()
+        .spawn((
+            Mesh3d(mesh),
+            MeshMaterial3d(material.clone()),
+            crate::water::WaterSurface::new(
+                eq_client_assets::regions::Liquid::Water,
+                Vec::new(),
+                None,
+            ),
+        ))
+        .id();
+    set(&mut app, true);
+    app.update();
+    app.update();
+    // Its colours hold only the base, so it takes the lights like the
+    // ground beside it.
+    assert!(
+        app.world()
+            .get::<MeshMaterial3d<RichMaterial>>(water)
+            .is_some()
+    );
+    assert_eq!(app.world().get::<Parked>(water).unwrap().0, material);
+    // Better Water takes it: Rich Lighting hands it back plain, once.
+    app.world_mut()
+        .resource_mut::<OptionsState>()
+        .options
+        .qol
+        .set(eq_client_core::qol::Fix::BetterWater, true);
+    app.update();
+    app.update();
+    let world = app.world();
+    assert!(world.get::<MeshMaterial3d<RichMaterial>>(water).is_none());
+    assert!(world.get::<Parked>(water).is_none());
+    assert_eq!(
+        world
+            .get::<MeshMaterial3d<StandardMaterial>>(water)
+            .unwrap()
+            .0,
+        material
+    );
+    // The ground beside it stays rich.
+    let mut drawn = app.world_mut().query_filtered::<Entity, (
+        With<MeshMaterial3d<RichMaterial>>,
+        Without<crate::water::WaterSurface>,
+    )>();
+    assert_eq!(drawn.iter(app.world()).count(), 1);
+}
