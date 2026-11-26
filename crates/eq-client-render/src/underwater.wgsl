@@ -44,17 +44,19 @@ fn noise(p: vec2<f32>) -> f32 {
     );
 }
 
-// How much light comes down through the surface at a level point: soft
-// spots a few units across where the ripples gather it, each flickering
-// with the surface, and only within slow drifting patches, so a few
-// broad, soft shafts come and go rather than a dense comb of threads.
-// The pattern is turned off the world's axes so it never lines up in rows.
+// How much light comes down through the surface at a level point: narrow
+// spots where the ripples gather it, each the meeting of two noise fields
+// drifting different ways, so the spots keep changing shape, splitting and
+// fading even while the camera holds still; and only within slow drifting
+// patches, so a few slim shafts come and go rather than a dense comb. The
+// pattern is turned off the world's axes so it never lines up in rows.
 fn through_surface(p: vec2<f32>, t: f32) -> f32 {
     let q = mat2x2<f32>(0.8, 0.6, -0.6, 0.8) * p;
-    let spot = smoothstep(0.58, 0.82, noise(q * 0.32 + vec2(t * 0.09, -t * 0.06)));
-    let flicker = 0.6 + 0.4 * noise(q * 0.55 + vec2(-t * 0.35, t * 0.28) + 13.1);
-    let gate = smoothstep(0.6, 0.8, noise(q * 0.05 + vec2(t * 0.012, -t * 0.009) + 31.7));
-    return spot * flicker * gate;
+    let a = noise(q * 0.6 + vec2(t * 0.42, -t * 0.27));
+    let b = noise(q * 0.78 + vec2(-t * 0.31, t * 0.38) + 13.1);
+    let spot = smoothstep(0.6, 0.78, 0.5 * (a + b));
+    let gate = smoothstep(0.58, 0.78, noise(q * 0.05 + vec2(t * 0.03, -t * 0.022) + 31.7));
+    return spot * gate;
 }
 
 // Whether the surface at a level point can see the sun (1) or is shaded by
@@ -114,12 +116,12 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
         let far_point = view.world_from_clip * vec4(ndc, max(depth, 0.00001), 1.0);
         let eye = view.world_position;
         let toward = far_point.xyz / far_point.w - eye;
-        let reach = min(length(toward), 70.0);
+        let reach = min(length(toward), 60.0);
         let ray = normalize(toward);
 
         let down = settings.light.xyz;
         let surface = eye.y + settings.light.w;
-        let steps = 32;
+        let steps = 40;
         let step = reach / f32(steps);
         // A fixed per-pixel offset hides the steps as soft grain.
         let jitter = fract(52.9829189 * fract(dot(coord, vec2(0.06711056, 0.00583715))));
@@ -138,7 +140,7 @@ fn fragment(in: FullscreenVertexOutput) -> @location(0) vec4<f32> {
             let lost = exp(-path * 0.03 - along * 0.025);
             gathered += through_surface(entry, t) * sunlit(entry) * lost;
         }
-        gathered *= step * 1.5;
+        gathered *= step * 2.0;
         color += settings.shafts.rgb * gathered * strength;
     }
     return vec4(color, 1.0);
