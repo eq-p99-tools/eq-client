@@ -53,6 +53,18 @@ Run a script from the workbench while logged in to act on your current character
 
 - `press(keys)`: press a key or chord for one frame, such as `I` or `CTRL+I`.
 - `hold(keys, milliseconds)`: hold a key or chord, then release it.
+- `key_down(keys)` holds a key or chord across later steps.
+  `key_up(keys)` releases the named explicit holds. Repeating `key_down`
+  on an already held key creates no new press. Ordinary `press` and
+  timed `hold` steps preserve any explicit hold of the same key.
+  Completion, stop, error, pause, or native input takeover releases all
+  script-owned holds. A genuine native hold remains owned by the user.
+  These steps use the ordinary keyboard path and current bindings.
+
+  To overlap a mapped movement key with a world RMB turn, for example,
+  `key_down("A")`, `look("world", 120, 0, 500)`, then `key_up("A")`.
+  Choose the key from the current movement bindings. The world-look step
+  still applies its ordinary focus, viewport, admission and camera checks.
 - `click(target...)`: left-click a named control.
 - `right_click(target...)`: right-click a named control.
 - `click_with(keys, target...)` and `right_click_with(keys, target...)`: click a named control with modifier keys held, as a person holds them. `keys` is `"shift"`, `"ctrl"`, `"alt"` or a chord of them such as `"ctrl+shift"`. The keys go down with the button and come up the frame after it, so each window reads them as it reads yours. For example:
