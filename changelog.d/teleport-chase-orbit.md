@@ -1,0 +1,1 @@
+- Keep the chase camera's relative orbit, pitch and zoom when a server teleport changes the character's facing, placing the view behind the new facing when no orbit offset was chosen.

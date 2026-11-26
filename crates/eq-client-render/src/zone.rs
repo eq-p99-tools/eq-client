@@ -295,6 +295,7 @@ pub(super) struct Scene<'w, 's> {
     roots: Query<'w, 's, Entity, Roots>,
     players: Query<'w, 's, &'static mut Transform, With<Player>>,
     cameras: Query<'w, 's, (Entity, &'static mut OrbitCamera)>,
+    projections: Query<'w, 's, &'static Projection>,
     images: ResMut<'w, Assets<Image>>,
     meshes: ResMut<'w, Assets<Mesh>>,
     materials: ResMut<'w, Assets<StandardMaterial>>,
@@ -450,7 +451,30 @@ impl Scene<'_, '_> {
         player
     }
 
-    /// Puts the player where the server placed them; `entered` is a player
+    /// Carries a chase orbit with server-set facing, preserving its offset
+    /// from the last drawn actor rather than the older accepted heading.
+    pub(super) fn place_server(&mut self, commands: &mut Commands, placed: Transform) {
+        if let Some(previous) = self.player() {
+            let from = previous.rotation.to_euler(EulerRot::YXZ).0;
+            let to = placed.rotation.to_euler(EulerRot::YXZ).0;
+            let (sine, cosine) = (to - from).sin_cos();
+            let turn = sine.atan2(cosine);
+            for (entity, mut camera) in &mut self.cameras {
+                // No projection is the camera system's existing perspective
+                // fallback. Detached transforms use their own free-view yaw;
+                // only their retained return-to-chase orbit changes here.
+                let perspective = self.projections.get(entity).map_or(true, |projection| {
+                    matches!(projection, Projection::Perspective(_))
+                });
+                if perspective && !camera.is_first_person() {
+                    camera.yaw += turn;
+                }
+            }
+        }
+        self.place(commands, placed, None);
+    }
+
+    /// Places the player without changing the view's yaw; `entered` is a player
     /// this batch spawned, who only exists once the commands apply.
     pub(super) fn place(
         &mut self,
