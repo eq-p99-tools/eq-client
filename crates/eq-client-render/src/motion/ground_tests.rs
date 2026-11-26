@@ -521,3 +521,52 @@ fn native_ground_guard_and_pre_admission_refusals_restore_observed_state() {
         }
     }
 }
+
+#[test]
+fn native_ground_unknown_contact_hands_back_only_after_the_observed_prefix_is_admitted() {
+    for delay in [0, 6] {
+        let mut scene = Scene::new(delay, true);
+        for _ in 0..8 {
+            scene.step(true);
+        }
+        let held_pose = latency_tests::shown(&mut scene.app).0;
+        scene.app.insert_resource(Collision(Some(
+            CollisionWorld::new([
+                [
+                    [-2000., 0., -2000.],
+                    [-2000., 0., 2000.],
+                    [2000., 0., -2000.],
+                ],
+                [[2000., 0., -2000.], [-2000., 0., 2000.], [2000., 0., 2000.]],
+            ])
+            .unwrap(),
+        )));
+        let mut handed_back = None;
+        for frame in 1..=30 {
+            let row = scene.step(true);
+            if scene
+                .app
+                .world()
+                .resource::<Controls>()
+                .ground
+                .current
+                .is_some()
+            {
+                assert_eq!(
+                    row.shown, held_pose,
+                    "unknown contact advanced native simulation"
+                );
+            } else if row.shown.distance(held_pose) > 0.001 {
+                handed_back = Some(frame);
+                break;
+            }
+        }
+        let frames = handed_back.expect("bounded handback to existing ordinary path");
+        assert!(frames <= 20);
+        assert_eq!(scene.refusals, 0);
+        println!(
+            "unknown-contact delay={delay} handback_frames={frames} pause_ms={}",
+            f64::from(frames) * 1000. / 60.
+        );
+    }
+}

@@ -3,6 +3,41 @@
 `[R]` identifies a static program read. `[I]` identifies an inference or
 offline comparison. Offline results do not establish live compatibility.
 
+## 6.670 — ordinary forward run and release glide
+
+[R] Titanium samples input before its motion step. On release it clears
+Forward immediately, while owned horizontal velocity decays by 0.625 per
+frame; input contributes 0.8 while held (`eqgame.exe` `0x4a1d74`,
+`0x4bfe0f`). The following pass's ordinary report block samples current
+position and velocity, subject to its existing more-than-280 ms gate
+(`0x4aba14`). A gated start and stop can coalesce. There is no special final
+endpoint or stop report.
+
+The client owns these completed frames separately from local admission. It
+shows each collision-resolved step immediately, publishes the previous
+completed state before advancing the next input, and never replays an admitted
+prefix. Local refusal or server placement retires prediction. A refusal keeps
+the existing mouse heading; a genuine placement retains its existing reset
+semantics. Unsupported handback waits for a genuinely admitted prefix rather
+than rewinding accepted movement or catching up missing time.
+
+[I] The host's precise observed frame duration replaces the native whole-ms
+clock. Input is normalized to the existing independently calibrated steady
+speed; the 150 ms cap, movement guard and packet pacing remain unchanged.
+The per-move stationary-delta test is not inferred from distance. Current
+scope is Titanium ordinary Forward running on positively known, static,
+flat dry geometry. Walk, backward/strafe/diagonal, slopes/edges, unknown
+liquid metadata, moving support, water, flight, crouch, jump, boosted run,
+routes and follow retain their existing paths. Slippery-region friction is
+not separately modeled. Zero vertical wire velocity at this horizontal-only
+seam is inferred, not a native slope-velocity claim.
+
+Offline release/re-press and whole-ms-reference comparisons are distinct
+from gameplay validation. The native target includes a short decreasing
+glide after release; an instant stop is not the selected behavior. The local
+look remains required before merge, and the first public-server movement
+check is attended.
+
 ## 6.660 — ship rigging, sail and rail as walking walls
 
 [R] Titanium's ordinary walking move (`eqgame.exe` `0x48acef`) uses object
