@@ -12,6 +12,9 @@ impl Liquids for Dry {
     fn segment_known(&self, _: Vec3, _: Vec3) -> bool {
         true
     }
+    fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
+        Some(Box::new(Self))
+    }
 }
 fn terrain() -> Vec<[[f32; 3]; 3]> {
     vec![
@@ -224,6 +227,9 @@ fn native_ground_dry_endpoints_do_not_prove_a_dry_path_between_them() {
         }
         fn segment_known(&self, _: Vec3, _: Vec3) -> bool {
             true
+        }
+        fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
+            Some(Box::new(Self))
         }
     }
     let world = CollisionWorld::new(terrain())
