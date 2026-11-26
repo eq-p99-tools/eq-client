@@ -97,6 +97,8 @@ pub struct Script {
     /// step's line: a chat pace refusal after it fails the run there (6.523).
     chatted: Option<(std::time::Instant, Option<usize>)>,
     held: Vec<KeyCode>,
+    /// Explicit holds which survive ordinary step completion.
+    latched: Vec<KeyCode>,
     /// The movement commands a moving step holds itself, as the key map
     /// resolves a held key to them, so the step moves under any key table.
     acts: Vec<Act>,
@@ -265,6 +267,7 @@ impl Script {
             language: None,
             current: None,
             held: Vec::new(),
+            latched: Vec::new(),
             acts: Vec::new(),
             facing: None,
             clicked: None,
@@ -516,6 +519,7 @@ impl Script {
     /// Whether cancellation must release input before yielding the window.
     fn holding(&self) -> bool {
         !self.held.is_empty()
+            || !self.latched.is_empty()
             || !self.acts.is_empty()
             || self.facing.is_some()
             || self.clicked.is_some()
@@ -618,9 +622,18 @@ impl Script {
     }
 
     fn release(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
+        for key in self.latched.drain(..) {
+            keys.release(key);
+        }
+        self.release_step(keys, mouse);
+    }
+
+    fn release_step(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>) {
         self.world_gesture = None;
         for key in self.held.drain(..) {
-            keys.release(key);
+            if !self.latched.contains(&key) {
+                keys.release(key);
+            }
         }
         self.acts.clear();
         self.facing = None;
@@ -818,7 +831,7 @@ impl Script {
         }
     }
 
-    /// Returns whether another action may start; every caller has released input.
+    /// Returns whether another action may start, after transient step cleanup.
     fn advance(&mut self, now: Duration) -> bool {
         match self.mode {
             RunMode::Continuous => true,
@@ -1277,6 +1290,7 @@ pub(super) fn drive(
     script.stepped_social = false;
     let now = time.elapsed();
     if !script.progress.phase.active() {
+        script.release(&mut keys, &mut mouse);
         script.retire(&mut commands);
         return;
     }
@@ -1412,11 +1426,13 @@ pub(super) fn drive(
             return;
         }
         keys.restore(&script.held);
+        keys.restore(&script.latched);
     }
     if script.current.is_none() {
         script.progress.complete_step();
         if script.follow.is_some() && script.mode == RunMode::PauseRequested {
             script.advance(now);
+            script.release(&mut keys, &mut mouse);
             return;
         }
     }
@@ -1427,6 +1443,7 @@ pub(super) fn drive(
     };
     if script.current.is_none() && script.exhausted() {
         if script.follow.is_none() {
+            script.release(&mut keys, &mut mouse);
             script.progress.finish(Phase::Completed, "Script finished");
             script.retire(&mut commands);
             info!("Script finished");
@@ -1434,6 +1451,7 @@ pub(super) fn drive(
         }
         script.poll(now);
         if !script.progress.phase.active() {
+            script.release(&mut keys, &mut mouse);
             script.retire(&mut commands);
             return;
         }
@@ -1552,7 +1570,7 @@ pub(super) fn drive(
             script.current = Some((Step::Press(script.held.clone()), now));
             return;
         }
-        script.release(&mut keys, &mut mouse);
+        script.release_step(&mut keys, &mut mouse);
         script.current = None;
         if menu_entry {
             // The entry's release reaches its handler later this frame.
@@ -1681,7 +1699,7 @@ pub(super) fn drive(
                     if running && script.acts.is_empty() {
                         script.acts = vec![FORWARD];
                     } else if !running && script.holding() {
-                        script.release(&mut keys, &mut mouse);
+                        script.release_step(&mut keys, &mut mouse);
                     }
                     false
                 }
@@ -1900,7 +1918,7 @@ pub(super) fn drive(
                     RouteStep::Arrived => (true, false),
                     RouteStep::OpenDoor(id) => {
                         // Stand at the door: click it as the use key would, then wait.
-                        script.release(&mut keys, &mut mouse);
+                        script.release_step(&mut keys, &mut mouse);
                         let door = online.world().doors().entries().get(&id);
                         let within_use =
                             door.zip(online.world().player())
@@ -1955,7 +1973,7 @@ pub(super) fn drive(
                     }
                     RouteStep::Searching => {
                         // Stand still while a stalled route searches again.
-                        script.release(&mut keys, &mut mouse);
+                        script.release_step(&mut keys, &mut mouse);
                         (false, elapsed >= *duration)
                     }
                     RouteStep::Toward(next) => {
@@ -2210,7 +2228,7 @@ pub(super) fn drive(
         if !done {
             return;
         }
-        script.release(&mut keys, &mut mouse);
+        script.release_step(&mut keys, &mut mouse);
         script.current = None;
         script.route = None;
         script.glide = None;
@@ -2234,6 +2252,9 @@ pub(super) fn drive(
         return;
     }
     if !script.advance(now) || script.breakpoint(now) {
+        if matches!(script.mode, RunMode::Paused(_)) {
+            script.release(&mut keys, &mut mouse);
+        }
         return;
     }
     let sight = language::Sight {
@@ -2562,6 +2583,24 @@ pub(super) fn drive(
                 keys.press(*key);
             }
             script.held.clone_from(chord);
+        }
+        Step::KeyDown(chord) => {
+            for key in chord {
+                if !script.latched.contains(key) {
+                    keys.press(*key);
+                    script.latched.push(*key);
+                }
+            }
+        }
+        Step::KeyUp(chord) => {
+            for key in chord {
+                if let Some(index) = script.latched.iter().position(|held| held == key) {
+                    script.latched.remove(index);
+                    if !script.held.contains(key) {
+                        keys.release(*key);
+                    }
+                }
+            }
         }
         Step::Login => {
             if front.screen(&online) != super::login::Screen::Login || front.running() {
@@ -3745,7 +3784,7 @@ fn scene_frame(
             }
             click.clicks = click.clicks.saturating_sub(1);
             if click.clicks == 0 {
-                script.release(keys, mouse);
+                script.release_step(keys, mouse);
                 return Ok(true);
             }
             // The door's second click, on the same point.

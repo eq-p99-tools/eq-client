@@ -100,6 +100,10 @@ pub enum Step {
     Press(Vec<KeyCode>),
     /// Holds keys together for a bounded duration.
     Hold(Vec<KeyCode>, Duration),
+    /// Holds keys across later steps until explicitly released or the run ends.
+    KeyDown(Vec<KeyCode>),
+    /// Releases only the named explicit holds.
+    KeyUp(Vec<KeyCode>),
     /// Turns the wheel over visible world space, upward positive, in lines.
     WorldWheel(f32),
     /// Holds right over visible world space and distributes a bounded mouse
@@ -626,6 +630,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "drag",
     "press",
     "hold",
+    "key_down",
+    "key_up",
     "wheel",
     "look",
     "wait",
@@ -744,6 +750,8 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
         ),
         ("press", [keys]) => Step::Press(chord(keys)?),
         ("hold", [keys, duration]) => Step::Hold(chord(keys)?, millis(duration, MAX_HOLD)?),
+        ("key_down", [keys]) => Step::KeyDown(chord(keys)?),
+        ("key_up", [keys]) => Step::KeyUp(chord(keys)?),
         ("wheel", ["world", lines]) => Step::WorldWheel(number(lines, -64.0, 64.0)?),
         ("look", ["world", x, y, duration]) => {
             let duration = millis(duration, MAX_HOLD)?;
@@ -2461,6 +2469,18 @@ mod tests {
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn explicit_key_holds_use_the_existing_chord_parser() {
+        assert_eq!(
+            parse("key_down(\"CTRL+W\")\nkey_up(\"CTRL+W\")", Path::new(".")).unwrap(),
+            vec![
+                Step::KeyDown(vec![KeyCode::ControlLeft, KeyCode::KeyW]),
+                Step::KeyUp(vec![KeyCode::ControlLeft, KeyCode::KeyW])
+            ]
+        );
+        assert!(parse("key_down(\"not-a-key\")", Path::new(".")).is_err());
     }
 
     #[test]

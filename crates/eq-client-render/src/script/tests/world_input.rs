@@ -78,6 +78,183 @@ fn released(app: &App) {
 }
 
 #[test]
+fn explicit_key_hold_spans_wait_and_world_rmb_look_until_key_up() {
+    let (mut app, _, camera) = fixture(Vec::new());
+    let program = Program::parse(
+        "key_down(\"A\")\nwait(30)\nlook(\"world\", 120, -80, 100)\nwait(30)\nkey_up(\"A\")\nwait(50)",
+        Path::new("."),
+    )
+    .unwrap();
+    app.insert_resource(
+        Script::from_program(program)
+            .offline_preview(true)
+            .input_mode(InputMode::Background),
+    );
+    let mut saw_look = false;
+    let mut saw_wait_after_look = false;
+    for ms in (0..=400).step_by(10) {
+        frame(&mut app, ms);
+        if app.world().resource::<WorldInput>().held {
+            saw_look = true;
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<KeyCode>>()
+                    .pressed(KeyCode::KeyA)
+            );
+        }
+        if saw_look
+            && let Some(script) = app.world().get_resource::<Script>()
+            && matches!(script.current, Some((Step::Wait(_), _)))
+            && script.latched.contains(&KeyCode::KeyA)
+        {
+            saw_wait_after_look = true;
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<KeyCode>>()
+                    .pressed(KeyCode::KeyA)
+            );
+        }
+    }
+    assert!(saw_look && saw_wait_after_look);
+    assert!(
+        app.world()
+            .get::<crate::OrbitCamera>(camera)
+            .unwrap()
+            .yaw
+            .abs()
+            > 0.0
+    );
+    assert!(
+        !app.world()
+            .resource::<ButtonInput<KeyCode>>()
+            .pressed(KeyCode::KeyA)
+    );
+    released(&app);
+}
+
+#[test]
+fn explicit_holds_release_on_completion_stop_pause_and_native_takeover_error() {
+    for ending in 0..4 {
+        let mut steps = vec![
+            Step::KeyDown(vec![KeyCode::KeyA]),
+            look(if matches!(ending, 0 | 3) { 30 } else { 1000 }),
+        ];
+        if ending == 3 {
+            // Pause at the next action; the last action instead completes.
+            steps.push(Step::Wait(Duration::from_secs(1)));
+        }
+        let (mut app, window, _) = fixture(steps);
+        for ms in [0, 10, 20] {
+            frame(&mut app, ms);
+        }
+        assert!(
+            app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+        if ending == 1 {
+            app.world_mut()
+                .resource_mut::<RunControl>()
+                .request(Request::Stop);
+        } else if ending == 3 {
+            app.world_mut()
+                .resource_mut::<RunControl>()
+                .request(Request::Pause);
+        } else if ending == 2 {
+            set_focus(&mut app, window, true);
+            app.world_mut().write_message(MouseMotion {
+                delta: Vec2::new(50.0, 0.0),
+            });
+        }
+        for ms in (30..=200).step_by(10) {
+            frame(&mut app, ms);
+        }
+        assert!(
+            !app.world()
+                .resource::<ButtonInput<KeyCode>>()
+                .pressed(KeyCode::KeyA)
+        );
+        released(&app);
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            match ending {
+                0 => Phase::Completed,
+                1 => Phase::Stopped,
+                3 => Phase::Paused,
+                _ => Phase::Failed,
+            }
+        );
+    }
+}
+
+#[test]
+fn explicit_hold_cleanup_preserves_a_native_hold_of_the_same_key() {
+    let (mut app, window, _) = fixture(vec![
+        Step::KeyDown(vec![KeyCode::KeyA]),
+        Step::Wait(Duration::from_secs(1)),
+    ]);
+    frame(&mut app, 0);
+    set_focus(&mut app, window, true);
+    native_key(&mut app, window, KeyCode::KeyA, true);
+    frame(&mut app, 10);
+    assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+    assert!(
+        app.world()
+            .resource::<ButtonInput<KeyCode>>()
+            .pressed(KeyCode::KeyA)
+    );
+    assert!(
+        app.world()
+            .resource::<SeenKeys>()
+            .0
+            .iter()
+            .all(|event| event.state.is_pressed())
+    );
+}
+
+#[test]
+fn explicit_hold_survives_same_key_transient_steps_and_repeated_key_down() {
+    let (mut app, _, _) = fixture(vec![
+        Step::KeyDown(vec![KeyCode::KeyA]),
+        Step::KeyDown(vec![KeyCode::KeyA]),
+        Step::Press(vec![KeyCode::KeyA]),
+        Step::Hold(vec![KeyCode::KeyA], Duration::from_millis(30)),
+        Step::Wait(Duration::from_millis(30)),
+        Step::KeyUp(vec![KeyCode::KeyA]),
+        Step::Wait(Duration::from_millis(30)),
+    ]);
+    for ms in (0..=250).step_by(10) {
+        frame(&mut app, ms);
+        if app
+            .world()
+            .get_resource::<Script>()
+            .is_some_and(|script| script.latched.contains(&KeyCode::KeyA))
+        {
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<KeyCode>>()
+                    .pressed(KeyCode::KeyA)
+            );
+        }
+    }
+    let events = &app.world().resource::<SeenKeys>().0;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.key_code == KeyCode::KeyA && event.state.is_pressed())
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.key_code == KeyCode::KeyA && !event.state.is_pressed())
+            .count(),
+        1
+    );
+}
+
+#[test]
 fn wheel_enters_first_person_and_right_look_holds_off_spring_until_release() {
     let (mut app, _, camera) = fixture(vec![
         Step::WorldWheel(64.0),
