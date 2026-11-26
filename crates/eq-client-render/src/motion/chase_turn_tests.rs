@@ -293,7 +293,7 @@ fn chase_leaves_detached_camera_under_its_own_turn_controls() {
         assert_eq!(row["free"], true);
         assert_eq!(row["yaw"], before["yaw"]);
         assert_eq!(row["rotation"], before["rotation"]);
-        assert!(row["commands"].as_array().unwrap().is_empty());
+        assert_eq!(row["commands"].as_array().unwrap().as_slice(), []);
     }
     assert_ne!(
         rig.rows.last().unwrap()["camera_rotation"],
