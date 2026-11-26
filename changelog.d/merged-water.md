@@ -1,0 +1,1 @@
+- Water, lava and animated terrain now merge into fewer, larger meshes like still terrain does, so big seas such as Timorous Deep draw in far fewer pieces.

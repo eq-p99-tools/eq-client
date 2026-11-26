@@ -904,9 +904,9 @@ fn spawn_static_zone(
     let texture_images = create_texture_images(zone.textures, images);
     // Which drawn terrain is the top of water or lava, for Better Water.
     let solid = water::solid_centroids(&zone.collision);
-    // A water or lava surface keeps a mesh of its own, which Better Water
-    // dresses alone.
-    let mut apart = vec![false; zone.primitives.len()];
+    // A water or lava surface merges only with surfaces of its own liquid,
+    // which Better Water dresses alike.
+    let mut kinds = vec![0_u8; zone.primitives.len()];
     let surfaces: Vec<_> = zone
         .primitives
         .iter()
@@ -914,7 +914,7 @@ fn spawn_static_zone(
         .filter(|(_, primitive)| gpu_assets::drawn(primitive))
         .map(|(index, primitive)| {
             water::surface_liquid(primitive, &zone.regions, &solid).map(|liquid| {
-                apart[index] = true;
+                kinds[index] = water::merge_kind(liquid);
                 let (frames, frame_millis) = gpu_assets::opaque_frames(
                     primitive.texture,
                     zone.terrain_materials.get(index),
@@ -953,7 +953,7 @@ fn spawn_static_zone(
     let terrain = gpu_assets::create_merged_terrain(
         zone.primitives,
         &zone.terrain_materials,
-        (&apart, Some(gpu_assets::TERRAIN_CELL)),
+        (&kinds, Some(gpu_assets::TERRAIN_CELL)),
         &texture_images,
         (meshes, materials),
     );
