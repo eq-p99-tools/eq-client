@@ -217,7 +217,7 @@ fn native_ground_granted_strafe_and_diagonal_stay_on_the_ordinary_owner() {
             MovementMode::Strafe(Pace::Run)
         };
         assert!(scene.ordinary_modes.iter().all(|mode| *mode == expected));
-        assert!(!scene.ordinary_modes.is_empty());
+        assert_ne!(scene.ordinary_modes, Vec::<MovementMode>::new());
         assert_eq!(
             scene.observations, 0,
             "lateral movement was submitted as native Forward"

@@ -154,7 +154,10 @@ impl GroundMotion {
         // Keep the ordinary water-entry handback: a grounded sweep can stop
         // at a dry prefix, which must not strand this owner at the shoreline.
         if !world.plain_ground_segment(feet, target, height)
-            || !matches!(world.liquid_contact(target, height), LiquidContact::Unmarked)
+            || !matches!(
+                world.liquid_contact(target, height),
+                LiquidContact::Unmarked
+            )
         {
             return None;
         }
