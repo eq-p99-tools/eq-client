@@ -130,11 +130,11 @@ fn explicit_key_hold_spans_wait_and_world_rmb_look_until_key_up() {
 }
 
 #[test]
-fn explicit_holds_release_on_completion_stop_and_native_takeover_error() {
-    for ending in 0..3 {
+fn explicit_holds_release_on_completion_stop_pause_and_native_takeover_error() {
+    for ending in 0..4 {
         let (mut app, window, _) = fixture(vec![
             Step::KeyDown(vec![KeyCode::KeyA]),
-            look(if ending == 0 { 30 } else { 1000 }),
+            look(if matches!(ending, 0 | 3) { 30 } else { 1000 }),
         ]);
         for ms in [0, 10, 20] {
             frame(&mut app, ms);
@@ -148,6 +148,10 @@ fn explicit_holds_release_on_completion_stop_and_native_takeover_error() {
             app.world_mut()
                 .resource_mut::<RunControl>()
                 .request(Request::Stop);
+        } else if ending == 3 {
+            app.world_mut()
+                .resource_mut::<RunControl>()
+                .request(Request::Pause);
         } else if ending == 2 {
             set_focus(&mut app, window, true);
             app.world_mut().write_message(MouseMotion {
@@ -168,10 +172,53 @@ fn explicit_holds_release_on_completion_stop_and_native_takeover_error() {
             match ending {
                 0 => Phase::Completed,
                 1 => Phase::Stopped,
+                3 => Phase::Paused,
                 _ => Phase::Failed,
             }
         );
     }
+}
+
+#[test]
+fn explicit_hold_survives_same_key_transient_steps_and_repeated_key_down() {
+    let (mut app, _, _) = fixture(vec![
+        Step::KeyDown(vec![KeyCode::KeyA]),
+        Step::KeyDown(vec![KeyCode::KeyA]),
+        Step::Press(vec![KeyCode::KeyA]),
+        Step::Hold(vec![KeyCode::KeyA], Duration::from_millis(30)),
+        Step::Wait(Duration::from_millis(30)),
+        Step::KeyUp(vec![KeyCode::KeyA]),
+        Step::Wait(Duration::from_millis(30)),
+    ]);
+    for ms in (0..=250).step_by(10) {
+        frame(&mut app, ms);
+        if app
+            .world()
+            .get_resource::<Script>()
+            .is_some_and(|script| script.latched.contains(&KeyCode::KeyA))
+        {
+            assert!(
+                app.world()
+                    .resource::<ButtonInput<KeyCode>>()
+                    .pressed(KeyCode::KeyA)
+            );
+        }
+    }
+    let events = &app.world().resource::<SeenKeys>().0;
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.key_code == KeyCode::KeyA && event.state.is_pressed())
+            .count(),
+        1
+    );
+    assert_eq!(
+        events
+            .iter()
+            .filter(|event| event.key_code == KeyCode::KeyA && !event.state.is_pressed())
+            .count(),
+        1
+    );
 }
 
 #[test]
