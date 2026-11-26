@@ -1104,6 +1104,18 @@ mod tests {
         assert_eq!(off.show_names, ShowNames::Off);
     }
 
+    #[test]
+    fn melee_positioning_is_default_off_and_saved_per_character() {
+        let mut options = Options::default();
+        let toggle = Toggle::Qol(Fix::MeleePositioning);
+        assert!(!options.get(toggle));
+        assert!(!Options::read("", options).get(toggle));
+        options.set(toggle, true);
+        assert!(options.text().contains("melee_positioning = true\n"));
+        assert!(Options::read(&options.text(), Options::default()).get(toggle));
+        assert_eq!(toggle.needs(), Some(crate::Capability::GameplayDepartures));
+    }
+
     /// The chat font size, the pointer speed and the colours `/chatfontsize`,
     /// `/mousespeed` and `/usercolor` set keep to the file (6.525).
     #[test]

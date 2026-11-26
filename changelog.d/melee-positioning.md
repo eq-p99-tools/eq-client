@@ -1,0 +1,1 @@
+- Added Stay in Melee Range, an optional QoL setting, off by default. While auto-attack is requested, it faces the current target and approaches ordinary melee reach on clear ground. Manual input takes priority; it stops at obstacles and never selects a target or starts attacking.

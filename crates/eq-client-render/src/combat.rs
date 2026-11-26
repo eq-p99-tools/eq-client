@@ -71,6 +71,11 @@ pub(super) struct CombatState {
 const ASSIST_ATTACK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl CombatState {
+    /// Only an attack requested in this admission may drive positioning.
+    pub(super) fn requested_in(&self, session: Option<u64>) -> bool {
+        self.auto_attack && session.is_some() && self.session_id == session
+    }
+
     /// Forgets the admission's requests, keeping only the tick's comparison.
     /// From the Titanium program (0x422198, read R49-32), only its character
     /// tick writes \[0x79db92\], so it outlasts a camp and a new login in the

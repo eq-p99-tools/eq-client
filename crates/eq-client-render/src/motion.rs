@@ -20,6 +20,7 @@ mod release_tests;
 mod rider_animation_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod melee;
 mod pad;
 mod placement;
 pub(super) mod pose;
@@ -264,6 +265,8 @@ pub(super) struct Controls {
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
     following: Option<follow::Following>,
+    /// Opt-in melee positioning; every reset discards its target and approach.
+    melee: melee::Assist,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -420,6 +423,7 @@ impl Default for Controls {
             wet: eq_client_core::movement::water::WetVelocity::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
+            melee: melee::Assist::default(),
         }
     }
 }
@@ -1870,6 +1874,8 @@ type InputExtras<'w, 's> = (
     Option<Res<'w, crate::options::MovementSync>>,
     Local<'s, Option<u64>>,
     Option<Res<'w, crate::doors::LiftReach>>,
+    Option<Res<'w, crate::combat::CombatState>>,
+    Option<Res<'w, crate::confirm::Asked>>,
 );
 
 /// A script run that fails can no longer steer, so the autorun latch goes
@@ -1919,7 +1925,7 @@ pub(super) fn input(
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
     options: Res<crate::options::OptionsState>,
-    (movement_sync, mut told_wait, lifts): InputExtras,
+    (movement_sync, mut told_wait, lifts, combat, asked): InputExtras,
     mut controls: ResMut<Controls>,
     players: Query<(&PlayerBody, &Transform), With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
@@ -2320,6 +2326,7 @@ pub(super) fn input(
         && !swimming
         && !shoreline_active
         && controls.following.is_none()
+        && !controls.melee.driving()
         && !keys.script_routing()
         && controls.riding.is_none()
         && controls.boat.is_none()
@@ -2657,6 +2664,101 @@ pub(super) fn input(
     } else {
         None
     };
+    let melee_enabled = options.options.qol.on(Fix::MeleePositioning)
+        && combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(session_id))
+        && [
+            Capability::GameplayDepartures,
+            Capability::Moving,
+            Capability::Combat,
+        ]
+        .into_iter()
+        .all(|capability| online.world().can(capability));
+    let manual = follow::moves(map, &sampled, scripted)
+        || controls.autorun
+        || [Act::Jump, Act::Duck]
+            .into_iter()
+            .any(|act| map.holding(&sampled, scripted).held(act))
+        || look.as_ref().is_some_and(|look| look.held)
+        || mouse_aim.is_some_and(|yaw| yaw != 0.)
+        || mouse_snapshot.is_some()
+        || controls.released_turn != 0.
+        || active_mouse_yaw
+        || keys.pressed(Act::Walk)
+        || scripted_facing.is_some()
+        || keys.script_active();
+    let melee_step = if !melee_enabled {
+        controls.melee.clear();
+        None
+    } else if manual || !focused || controls.following.is_some() {
+        controls.melee.yield_input(now);
+        None
+    } else if !standing
+        || stunned
+        || flying
+        || swimming
+        || placement_blocked
+        || controls.refused.is_some()
+        || online.world().camp().is_some()
+        || online.world().casting().holds_actions()
+        || asked
+            .as_deref()
+            .is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer())
+        || controls.riding.is_some()
+        || controls.boat.is_some()
+        || controls.visual_boat.is_some()
+        || controls.jump.is_some()
+        || controls.crouch.is_some()
+        || controls
+            .airborne
+            .as_ref()
+            .is_some_and(|airborne| airborne.velocity() != 0. || airborne.peak().is_some())
+    {
+        controls.melee.clear();
+        None
+    } else {
+        let body = melee::Body {
+            position: accepted.position,
+            height: body.height,
+            offset: body.feet_offset,
+            seconds: span,
+            speeds: (
+                controls.speed.unwrap_or(0.),
+                controls.walk_speed.or(controls.speed).unwrap_or(0.),
+            ),
+            walking: controls.walking,
+        };
+        controls.melee.step(online.world(), world, &body, now)
+    };
+    if let Some(step) = melee_step {
+        let radians = eq_client_core::render_heading(step.heading);
+        intent = MotionInput {
+            mode: if !step.run && controls.walk_speed.is_some() {
+                MovementMode::Walk
+            } else {
+                MovementMode::Forward
+            },
+            speed: if step.run {
+                controls.speed
+            } else {
+                controls.walk_speed.or(controls.speed)
+            }
+            .unwrap_or(0.),
+            direction: if step.forward {
+                Vec3::new(radians.sin(), 0., radians.cos())
+            } else {
+                Vec3::ZERO
+            },
+            turn: 0.,
+            preserve_facing: true,
+            diagonal: None,
+        };
+        if heading_snapshots {
+            heading_update = HeadingUpdate::Snapshot;
+        }
+    }
+    let follow_step = follow_step.or(melee_step);
     let follow_heading = follow_step.map(|step| step.heading);
     if placement_blocked {
         // Keep the turn inputs and ordinary sample timing. Translation,
@@ -2947,7 +3049,12 @@ pub(super) fn input(
         // Stop within one frame of reach at the selected movement rate.
         // Water selects its ordinary swim rate above, so it shares this
         // limit rather than replacing an already limited land speed.
-        speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
+        let margin = if melee_step.is_some() {
+            0.
+        } else {
+            speed / 60.0
+        };
+        speed = speed.min((step.beyond + margin) / span.max(f32::EPSILON));
     }
     // A ducking body, or one with its origin in liquid, is swept at its
     // origin (L = 0, 0x489a32), so only the floor sweep's climb holds; else
