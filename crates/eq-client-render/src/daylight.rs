@@ -285,7 +285,18 @@ pub(super) fn update(
     ambient.brightness = lit.ambient.0;
     ambient.color = color(lit.ambient.1);
     if let Some(mut clear) = clear {
-        clear.0 = color(lit.sky);
+        // Without a sky, Titanium clears to the current fog colour. Masked
+        // leaves and other uncovered pixels must reveal that background,
+        // while a zone with a sky keeps its own day/night colour.
+        let background = if settings.0.installed_client
+            == eq_client_assets::ui::InstalledClient::Titanium
+            && sky.sky == 0
+        {
+            lit.fog.map_or(lit.sky, |(tint, _, _)| tint)
+        } else {
+            lit.sky
+        };
+        clear.0 = color(background);
     }
     for (camera, fog, grading) in &mut cameras {
         let grade = |grading: &mut ColorGrading| {
@@ -324,6 +335,103 @@ pub(super) fn update(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn no_sky_background_matches_fog_without_replacing_the_sky() {
+        let mut app = App::new();
+        app.insert_resource(crate::online::OnlineState::new(true))
+            .init_resource::<crate::options::OptionsState>()
+            .insert_resource(launch_ambient())
+            .init_resource::<ClearColor>()
+            .insert_resource(crate::ViewerSettings(crate::ViewerConfig::default()))
+            .add_systems(Update, update);
+        let camera = app
+            .world_mut()
+            .spawn(OrbitCamera {
+                focus: Vec3::ZERO,
+                radius: 120.0,
+                yaw: 0.0,
+                pitch: -0.5,
+                pulled: None,
+                view: default(),
+                look: 0.0,
+            })
+            .id();
+        // A no-sky forest header with pale green fog, seen through foliage.
+        let forest = ZoneSky {
+            fog: [Fog {
+                color: [230, 255, 200],
+                near: 10.0,
+                far: 1600.0,
+            }; 4],
+            ..zone(0, [230, 255, 200])
+        };
+        for installed in [
+            eq_client_assets::ui::InstalledClient::Titanium,
+            eq_client_assets::ui::InstalledClient::EqMac,
+            eq_client_assets::ui::InstalledClient::Rof2,
+        ] {
+            app.world_mut()
+                .resource_mut::<crate::ViewerSettings>()
+                .0
+                .installed_client = installed;
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                [eq_client_core::WorldEvent::Sky(forest)],
+            );
+            app.update();
+            let fog = app.world().get::<DistanceFog>(camera).unwrap();
+            assert_eq!(fog.color, color([230.0 / 255.0, 1.0, 200.0 / 255.0]));
+            let expected = if installed == eq_client_assets::ui::InstalledClient::Titanium {
+                fog.color
+            } else {
+                Color::BLACK
+            };
+            assert_eq!(app.world().resource::<ClearColor>().0, expected);
+        }
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = eq_client_assets::ui::InstalledClient::Titanium;
+        // A sky advertised by the zone still owns the background by day/night.
+        let outdoors = ZoneSky { sky: 1, ..forest };
+        for hour in [0, 12] {
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                [
+                    eq_client_core::WorldEvent::Sky(outdoors),
+                    eq_client_core::WorldEvent::TimeOfDay(at(hour)),
+                ],
+            );
+            app.update();
+            let clock = eq_client_assets::clock::TITANIUM;
+            let expected = lighting(
+                &outdoors,
+                sky_minute(clock, None, Some(at(hour))),
+                &day_night(clock),
+            );
+            assert_eq!(app.world().resource::<ClearColor>().0, color(expected.sky));
+        }
+        // Disabled fog and Clear View do not introduce a new background tint.
+        for clearly in [false, true] {
+            let mut sky = forest;
+            if !clearly {
+                sky.fog[0].far = 0.0;
+            }
+            app.world_mut()
+                .resource_mut::<crate::options::OptionsState>()
+                .options
+                .qol
+                .set(eq_client_core::qol::Fix::ClearView, clearly);
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                [eq_client_core::WorldEvent::Sky(sky)],
+            );
+            app.update();
+            assert!(app.world().get::<DistanceFog>(camera).is_none());
+            assert_eq!(app.world().resource::<ClearColor>().0, Color::BLACK);
+        }
+    }
 
     #[test]
     fn leaving_the_world_puts_back_the_launch_lighting() {
