@@ -485,6 +485,11 @@ fn native_ground_guard_and_pre_admission_refusals_restore_observed_state() {
     for early in [false, true] {
         let mut scene = Scene::new(0, true);
         let before = latency_tests::shown(&mut scene.app).0;
+        scene
+            .app
+            .world_mut()
+            .resource_mut::<Controls>()
+            .mouse_heading = Some(37.125);
         scene.step(true);
         if early {
             scene.early_refuse = true;
@@ -507,6 +512,10 @@ fn native_ground_guard_and_pre_admission_refusals_restore_observed_state() {
                 .is_none()
         );
         assert!(scene.app.world().resource::<Controls>().refused.is_some());
+        assert_eq!(
+            scene.app.world().resource::<Controls>().mouse_heading,
+            Some(37.125)
+        );
         if !early {
             assert_eq!(scene.refusals, 1);
         }
