@@ -420,7 +420,7 @@ fn poll(mut navmesh: ResMut<ZoneNavMesh>) {
         navmesh.failure = Some("no walkable polygons");
         warn!(zone = making.zone, "Navmesh failed: no walkable polygons");
         return;
-    };
+    }
     report(
         &making.zone,
         (making.started, making.threads),

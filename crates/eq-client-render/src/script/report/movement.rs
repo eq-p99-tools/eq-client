@@ -69,7 +69,7 @@ pub(in crate::script) fn report(
     movement_state["surface_clock"] = observed.4.surface_report();
     movement_state["navigation_mesh"] = observed.7.as_ref().map_or(
         json!({"zone":world.zone(),"phase":"missing","ready":false}),
-        |mesh| mesh.status(world.zone(), body.map(|body| body.mesh_size())),
+        |mesh| mesh.status(world.zone(), body.map(PlayerBody::mesh_size)),
     );
     movement_state["settings"] = json!(observed.14.as_ref().zip(observed.9.as_ref()).map(
         |(sync, state)| {

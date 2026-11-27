@@ -167,7 +167,7 @@ fn exit_selection_skips_an_unreachable_nearby_floor() {
         Vec3::ZERO,
         6.0,
         1.0,
-        Vec::new(),
+        &[],
         false,
         &stop,
     )
@@ -182,7 +182,7 @@ fn exit_selection_skips_an_unreachable_nearby_floor() {
             Vec3::ZERO,
             6.0,
             1.0,
-            Vec::new(),
+            &[],
             false,
             &stop
         )
