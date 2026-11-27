@@ -1081,7 +1081,7 @@ fn observed_automatic_duck(app: &mut App, receiver: &mpsc::Receiver<ClientComman
 }
 
 #[test]
-fn headroom_observed_automatic_duck_survives_placement_and_motion_reset() {
+fn headroom_observed_automatic_duck_survives_placement_and_motion_rebase() {
     for settle_before_placement in [false, true] {
         let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
         let now = Instant::now();
@@ -1101,7 +1101,7 @@ fn headroom_observed_automatic_duck_survives_placement_and_motion_reset() {
             world_position([2.0, 3.75, 0.0], 0.0),
         );
         app.insert_resource(Collision(Some(room(30.0))));
-        app.world_mut().resource_mut::<Controls>().reset(Some(6.0));
+        app.world_mut().resource_mut::<Controls>().rebase();
         for millis in [500, 1_999, 2_000] {
             app.world_mut().resource_mut::<Controls>().test_now =
                 Some(now + Duration::from_millis(millis));
@@ -1124,7 +1124,7 @@ fn headroom_observed_automatic_duck_survives_placement_and_motion_reset() {
 
 #[test]
 fn headroom_automatic_duck_in_water_keeps_the_delay_then_returns_idle_or_held() {
-    for held in [false, true] {
+    for (held, placed) in [(false, false), (true, false), (false, true), (true, true)] {
         let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
         let now = Instant::now();
         observed_automatic_duck(&mut app, &receiver, now);
@@ -1133,12 +1133,14 @@ fn headroom_automatic_duck_in_water_keeps_the_delay_then_returns_idle_or_held() 
                 .resource_mut::<ButtonInput<KeyCode>>()
                 .reset_all();
         }
-        testing::place(
-            &mut app.world_mut().resource_mut::<online::OnlineState>(),
-            world_position([2.0, 3.75, 0.0], 0.0),
-        );
+        if placed {
+            testing::place(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                world_position([2.0, 3.75, 0.0], 0.0),
+            );
+            app.world_mut().resource_mut::<Controls>().rebase();
+        }
         app.insert_resource(Collision(Some(room(30.0).with_liquids(Submerged))));
-        app.world_mut().resource_mut::<Controls>().reset(Some(6.0));
         for millis in [500, 1_999, 2_000] {
             app.world_mut().resource_mut::<Controls>().test_now =
                 Some(now + Duration::from_millis(millis));
@@ -1154,7 +1156,7 @@ fn headroom_automatic_duck_in_water_keeps_the_delay_then_returns_idle_or_held() 
         assert_eq!(
             accepted_commands(&mut app, &receiver),
             vec![Posture::Standing],
-            "held={held}"
+            "held={held} placed={placed}"
         );
     }
 }
@@ -1176,7 +1178,7 @@ fn headroom_manual_duck_survives_land_and_water_placement_without_a_return_cycle
         if water {
             app.insert_resource(Collision(Some(room(30.0).with_liquids(Submerged))));
         }
-        app.world_mut().resource_mut::<Controls>().reset(Some(6.0));
+        app.world_mut().resource_mut::<Controls>().rebase();
         app.world_mut().resource_mut::<Controls>().test_now =
             Some(Instant::now() + Duration::from_secs(5));
         app.update();
@@ -1304,4 +1306,28 @@ fn headroom_held_input_at_a_tall_wall_never_arms_duck() {
         assert!(!controls.headroom_refused);
         assert!(controls.headroom.automatic.is_none());
     }
+}
+
+#[test]
+fn headroom_ducked_low_opening_can_leave_a_standing_slide_path() {
+    // Synthetic geometry control, not an installed asset or a native replay.
+    // A hanging wall blocks the standing capsule, but its lower opening
+    // admits the ducked shape. A different path is not itself a refusal.
+    let faces = plane(0.0, true)
+        .into_iter()
+        .chain(plane(8.0, false))
+        .chain([
+            [[-10.0, 6.0, 0.0], [-10.0, 8.0, 0.0], [10.0, 8.0, 0.0]],
+            [[-10.0, 6.0, 0.0], [10.0, 8.0, 0.0], [10.0, 6.0, 0.0]],
+        ]);
+    let world = CollisionWorld::new(faces).unwrap();
+    let from = Vec3::new(0.0, 0.0, -1.0);
+    let displacement = Vec3::Z * 2.0;
+    let standing = world.step(from, displacement, HUMAN.height);
+    let height = eq_client_core::movement::ducked_height(3.75, 4.75, 0.65, HUMAN.height);
+    let ducked = world.clone().with_collision_height(height).step(from, displacement, HUMAN.height);
+    assert!(standing.z < 0.0, "{standing:?}");
+    assert!(ducked.z > 0.9, "{ducked:?}");
+    assert!(refused(InstalledClient::Titanium, &world, (&HUMAN, 3.75), (from, ducked), (false, false)).is_some());
+    assert!(refused(InstalledClient::Titanium, &world, (&HUMAN, 3.75), (from, ducked), (true, false)).is_none());
 }
