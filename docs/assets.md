@@ -177,7 +177,9 @@ The installed generation's model-scale rule supplies that height; a late zone
 header replaces the mesh and its cache key when it changes the clearance.
 Prebuild and offline select-spot tools use the conservative unreduced settings
 until a header is available. Routes do not plan ducking or mounting. A scripted
-walk that still meets the room gate stops with a headroom refusal.
+walk that meets the room gate waits for an armed automatic duck, then follows
+with the observed ducked collision height. It stops with a headroom refusal
+when automatic duck is not armed or the ducked move also fails.
 
 Sound loading currently handles Titanium WAV assets, not the Mac-era sound
 format. Day/night lighting has provisional presentation tuning. Bounded
