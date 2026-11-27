@@ -275,3 +275,5 @@ fn pursuit_6716_manual_native_ground_keeps_its_owner_until_release() {
     let (_, proposals, travel) = observe(&mut scene, 90);
     assert!(proposals > 0 && travel > 1.);
 }
+
+mod script_walk;

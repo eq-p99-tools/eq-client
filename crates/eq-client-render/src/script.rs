@@ -19,9 +19,9 @@ mod input;
 mod length;
 pub(crate) use input::AuthoredInput;
 pub use input::InputMode;
-pub(super) use input::install as install_input;
 pub(crate) use input::world::WorldInput;
 pub(super) use input::world::apply as world_input;
+pub(super) use input::{install as install_input, interrupt_walk};
 pub use length::{MAX_MINUTES, RunLength};
 pub(crate) mod language;
 pub(crate) use parse::{COMMANDS, FREE_TEXT};
@@ -145,6 +145,8 @@ pub struct Script {
     walk_scope: Option<walking::Scope>,
     walk_generation: Option<walking::Generation>,
     walk_waiting: Option<&'static str>,
+    /// Detached camera time does not spend a destination's steering timeout.
+    walk_camera_pause: Option<Duration>,
     place: Option<walking::PlaceGoal>,
     place_lookup: Option<walking::FindingExit>,
     /// The closed door the walk is opening, if any.
@@ -298,6 +300,7 @@ impl Script {
             walk_scope: None,
             walk_generation: None,
             walk_waiting: None,
+            walk_camera_pause: None,
             place: None,
             place_lookup: None,
             door_wait: None,
@@ -439,10 +442,10 @@ impl Script {
 
     /// Background runs yield their drawn pointer and carried overlay together
     /// with their input; existing attended/local pointer behavior is retained.
-    pub(crate) const fn pointer_owned(&self) -> bool {
+    pub(crate) fn pointer_owned(&self) -> bool {
         match self.input_mode {
             InputMode::Attended => true,
-            InputMode::Background => self.owns_input,
+            InputMode::Background => self.owns_input && !self.walking(),
         }
     }
 
@@ -479,8 +482,20 @@ impl Script {
     }
 
     /// Whether native pointer hit testing yields to the explicit script owner.
-    pub(crate) const fn background_owns_input(&self) -> bool {
-        matches!(self.input_mode, InputMode::Background) && self.owns_input
+    pub(crate) fn background_owns_input(&self) -> bool {
+        matches!(self.input_mode, InputMode::Background) && self.owns_input && !self.walking()
+    }
+
+    /// A destination walk shares native chat, UI and camera input.
+    pub(crate) fn walking(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|(step, _)| walking::is_step(step))
+            || (self.current.is_none()
+                && self
+                    .steps
+                    .front()
+                    .is_some_and(|step| walking::is_step(&step.step)))
     }
 
     /// The movement commands the script holds itself.
@@ -701,6 +716,7 @@ impl Script {
         self.walk_scope = None;
         self.walk_generation = None;
         self.walk_waiting = None;
+        self.walk_camera_pause = None;
         self.place = None;
         self.place_lookup = None;
         self.glide = None;
@@ -1433,7 +1449,9 @@ pub(super) fn drive(
     if script.input_mode == InputMode::Background {
         // Watching the window does not take input ownership. Only genuine
         // keyboard, button or wheel activity yields the background runner.
-        let native = keys.background.as_ref().is_none_or(|state| state.busy());
+        // Destination walks share native input and use the post-text movement
+        // override instead; unrelated script steps keep exclusive ownership.
+        let native = !script.walking() && keys.background.as_ref().is_none_or(|state| state.busy());
         script.owns_input = !native;
         if !script.owns_input {
             if script.holding() {
@@ -1763,24 +1781,49 @@ pub(super) fn drive(
                     Step::WalkPlace { range, .. } => Some(*range),
                     _ => None,
                 };
-                // Only an object walk has chosen an object.
-                match walking::scene_ready(script, &online) {
-                    Ok(true) => (),
-                    Ok(false) => {
-                        script.release_step(&mut keys, &mut mouse);
-                        if elapsed >= *duration {
-                            script.stop(
-                                &mut keys,
-                                &mut mouse,
-                                "walk ran out of time waiting for current-zone geometry",
-                            );
-                        }
-                        return;
-                    }
+                // Validate admission even while detached. Geometry may wait,
+                // but the detached interval is not route steering time.
+                let ready = match walking::scene_ready(script, &online) {
+                    Ok(ready) => ready,
                     Err(reason) => {
                         script.stop(&mut keys, &mut mouse, &reason);
                         return;
                     }
+                };
+                if detached_camera.iter().any(|free| free) {
+                    script.walk_camera_pause.get_or_insert(now);
+                    script.release_step(&mut keys, &mut mouse);
+                    if let Some(route) = &mut script.route {
+                        route.pause_steering(now);
+                    }
+                    return;
+                }
+                let paused = script
+                    .walk_camera_pause
+                    .take()
+                    .map(|since| now.saturating_sub(since));
+                if let Some(paused) = paused {
+                    if let Some((_, since)) = &mut script.current {
+                        *since += paused;
+                    }
+                    // Rebuild even when the render clock did not advance: the
+                    // server may have moved the player during the detachment.
+                    script.route = None;
+                    script.following = None;
+                    script.search_frames = None;
+                    script.door_wait = None;
+                }
+                let elapsed = elapsed.saturating_sub(paused.unwrap_or(Duration::ZERO));
+                if !ready {
+                    script.release_step(&mut keys, &mut mouse);
+                    if elapsed >= *duration {
+                        script.stop(
+                            &mut keys,
+                            &mut mouse,
+                            "walk ran out of time waiting for current-zone geometry",
+                        );
+                    }
+                    return;
                 }
                 let body = bodies.single().ok().copied();
                 let world = collision
@@ -2358,6 +2401,7 @@ pub(super) fn drive(
         script.walk_scope = None;
         script.walk_generation = None;
         script.walk_waiting = None;
+        script.walk_camera_pause = None;
         script.place = None;
         script.place_lookup = None;
         script.glide = None;
@@ -2405,6 +2449,17 @@ pub(super) fn drive(
     let Some(QueuedStep { step, line }) = script.steps.pop_front() else {
         return;
     };
+    // A walk may have just completed while native UI input was active. Do not
+    // hand that movement exemption to a subsequent click or authored key step.
+    if script.input_mode == InputMode::Background
+        && !walking::is_step(&step)
+        && keys.background.as_ref().is_none_or(|state| state.busy())
+    {
+        script.steps.push_front(QueuedStep { step, line });
+        script.owns_input = false;
+        script.progress.phase = Phase::WaitingForInput;
+        return;
+    }
     // An entry of the closed EQ menu: the script opens the menu with its own
     // button first, as a player would, then comes back to the entry.
     let (step, authored) = match opens_menu_first(&step, menu.open, script.menu_opening, now) {

@@ -1,0 +1,1 @@
+Scripted destination walks continue during chat entry, UI clicks and camera-only input. Character movement keys or captured character steering interrupt the walk using the same movement-input classification as melee positioning.

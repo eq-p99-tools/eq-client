@@ -2371,7 +2371,11 @@ pub(super) fn input(
         controls.held = Some(Held::Withdrawn);
         return;
     }
-    let focused = keys.focused() && !detached && !stunned && controls.speed.is_some();
+    let native_focused = keys.focused();
+    let focused = (native_focused || keys.script_walk_available())
+        && !detached
+        && !stunned
+        && controls.speed.is_some();
     let melee_available =
         keys.automatic_input_available() && !detached && !stunned && controls.speed.is_some();
     // Where the program holds a lying player still (read R19 c), the keys
@@ -2619,7 +2623,10 @@ pub(super) fn input(
         controls.crouch = Some(Crouch::Over);
     }
     let map = &*keys.map;
-    let keyboard = navigation.sample(&keys.input);
+    let mut keyboard = navigation.sample(&keys.input);
+    if !native_focused {
+        keyboard.reset_all();
+    }
     // The turn keys ramp up from the frame one is first held, and start
     // over when the way changes or both are let go.
     let turning = if focused && look.as_deref().is_none_or(|look| !look.held) {
@@ -2864,12 +2871,12 @@ pub(super) fn input(
     let manual = controls.autorun
         || keys.script_active()
         || (focused
-            && (follow::moves(map, &ownership_keys, scripted)
-                || [Act::Jump, Act::Duck]
-                    .into_iter()
-                    .any(|act| map.holding(&ownership_keys, scripted).held(act))
-                || look.as_ref().is_some_and(|look| look.held)
-                || mouse_aim.is_some_and(|yaw| yaw != 0.)
+            && (crate::keys::movement::requested(
+                map,
+                &ownership_keys,
+                scripted,
+                look.as_ref().is_some_and(|look| look.held),
+            ) || mouse_aim.is_some_and(|yaw| yaw != 0.)
                 || controls.mouse_turn != 0.
                 || controls.mouse_heading.is_some_and(|heading| {
                     online
@@ -2878,7 +2885,6 @@ pub(super) fn input(
                         .is_some_and(|player| arc(player.position.heading, heading) != 0.)
                 })
                 || controls.released_turn != 0.
-                || keys.pressed(Act::Walk)
                 || scripted_facing.is_some()));
     if !melee_enabled {
         controls.melee.clear();

@@ -241,7 +241,51 @@ pub(super) fn observe(
         script.owns_input = script.input_mode == InputMode::Background
             && script.progress.phase.active()
             && !matches!(script.mode, super::RunMode::Paused(_))
-            && !state.busy();
+            && (script.walking() || !state.busy());
+    }
+}
+
+/// Runs after text fields consume native input and before locomotion reads acts.
+/// Other script actions retain their existing exclusive background policy.
+#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+pub(crate) fn interrupt_walk(
+    mut commands: Commands,
+    script: Option<ResMut<super::Script>>,
+    input: super::Input,
+    map: Res<crate::keys::KeyMap>,
+    typing: Res<crate::keys::Typing>,
+    navigation: Res<crate::navigation::NavigationKeys>,
+    windows: Query<&Window, With<PrimaryWindow>>,
+    look: Option<Res<crate::camera::MouseLook>>,
+    cameras: Query<Has<crate::camera::FreeCamera>, With<crate::OrbitCamera>>,
+) {
+    let Some(mut script) = script else { return };
+    if !script.walking()
+        || !script.progress.phase.active()
+        || matches!(script.mode, super::RunMode::Paused(_))
+        || !windows.single().is_ok_and(|window| window.focused)
+        || cameras.single().is_ok_and(|detached| detached)
+    {
+        return;
+    }
+    let (mut keys, mut mouse) = input;
+    let mut native = navigation.sample(&keys.state);
+    // Routed acts are semantic, not synthetic key presses. Any latched raw keys
+    // still belong to the script and must not cancel their own destination.
+    for key in script.held.iter().chain(&script.latched) {
+        native.reset(*key);
+    }
+    if !typing.gameplay_available() {
+        native.reset_all();
+    }
+    let steering = look.as_ref().is_some_and(|look| look.held);
+    if crate::keys::movement::requested(&map, &native, &[], steering) {
+        script.stop(
+            &mut keys,
+            &mut mouse,
+            "walk interrupted by character movement input",
+        );
+        script.retire(&mut commands);
     }
 }
 

@@ -65,11 +65,16 @@ pub(super) fn update(
     navigation.keys.clear();
     let focused = windows.single().is_ok_and(|window| window.focused);
     let typing = typing.map(Res::into_inner);
-    if !focused || typing.is_some_and(|typing| typing.spell_search_claimed) {
+    let available = focused && typing.is_none_or(|typing| typing.gameplay_available());
+    if !available || typing.is_some_and(|typing| typing.spell_search_claimed) {
         *navigation = NavigationKeys::default();
     }
     for (event, id) in events.read_with_id() {
-        if focused && !typing.is_some_and(|typing| typing.spell_search_captured(id)) {
+        if available
+            && !typing.is_some_and(|typing| {
+                typing.spell_search_captured(id) || typing.chat_events.contains(&id)
+            })
+        {
             navigation.apply(event.key_code, &event.logical_key, event.state);
         }
     }

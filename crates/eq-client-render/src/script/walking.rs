@@ -382,3 +382,11 @@ fn choose_exit(
     }
     Err("no reachable floor in the requested authored zone line".into())
 }
+
+/// Only routed destination walks have movement-only native takeover.
+pub(super) fn is_step(step: &Step) -> bool {
+    matches!(
+        step,
+        Step::Walk(..) | Step::WalkObject { .. } | Step::WalkPlace { .. }
+    )
+}

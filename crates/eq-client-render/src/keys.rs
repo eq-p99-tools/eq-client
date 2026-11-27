@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 pub(crate) mod bindings;
 mod installed;
 pub(crate) mod modifiers;
+pub(crate) mod movement;
 pub(crate) mod presses;
 pub(crate) mod search;
 
@@ -678,6 +679,20 @@ pub(crate) struct Typing {
 }
 
 impl Typing {
+    /// Whether a text field or key editor currently owns native keyboard input.
+    pub(crate) fn gameplay_available(&self) -> bool {
+        !self.composing
+            && !self.creating_character
+            && !self.editing_script
+            && !self.counting
+            && !self.logging_in
+            && !self.map_search
+            && !self.reporting
+            && !self.spell_search
+            && !self.spell_set_name
+            && !self.rebinding
+    }
+
     /// Whether another reader should skip keyboard input owned by the book.
     pub(crate) fn spell_search_captured(&self, id: MessageId<KeyboardInput>) -> bool {
         self.spell_search_claimed || self.spell_search_events.contains(&id)
@@ -722,16 +737,12 @@ impl Keys<'_, '_> {
 
     /// Text entry still owns input when automatic positioning runs unfocused.
     pub(crate) fn automatic_input_available(&self) -> bool {
-        !self.typing.composing
-            && !self.typing.creating_character
-            && !self.typing.editing_script
-            && !self.typing.counting
-            && !self.typing.logging_in
-            && !self.typing.map_search
-            && !self.typing.reporting
-            && !self.typing.spell_search
-            && !self.typing.spell_set_name
-            && !self.typing.rebinding
+        self.typing.gameplay_available()
+    }
+
+    /// A routed walk keeps its own acts while a text field owns native keys.
+    pub(crate) fn script_walk_available(&self) -> bool {
+        self.window_focused() && self.script.as_ref().is_some_and(|script| script.walking())
     }
 
     /// The movement acts a running script holds itself.
