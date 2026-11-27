@@ -7,6 +7,9 @@ use bevy::prelude::*;
 use eq_client_core::logs;
 use std::io::Write as _;
 
+mod diagnostic;
+pub(crate) use diagnostic::trace_lines;
+
 /// The file the chat goes to, and how far it has gone.
 #[derive(Resource, Default)]
 pub(crate) struct ChatLog {

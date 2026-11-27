@@ -450,7 +450,7 @@ pub(super) fn schedule(app: &mut App) {
                 ),
                 (
                     (spell_icons::update, skinned::gem::pieces),
-                    logs::write,
+                    (logs::write, logs::trace_lines).chain(),
                     options::tell_session,
                 ),
                 (outbox::show, inventory::say_refusals),
