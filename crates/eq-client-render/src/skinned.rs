@@ -2123,6 +2123,10 @@ enum Layer {
     Over,
 }
 
+/// Retains the skin tint while native negative gauge values use a grey line.
+#[derive(Component)]
+pub(crate) struct LinesFillTint(u32, Color);
+
 /// Both fill layers clip their natural artwork to the live value.
 fn gauge_fill(
     bar: &mut ChildSpawnerCommands,
@@ -2153,6 +2157,9 @@ fn gauge_fill(
                 image,
                 at(0.0, 0.0, to_f32(piece.width), to_f32(piece.height)),
             ));
+            if let Shows::LinesFill(kind) = shows {
+                image.insert(LinesFillTint(kind, tint.map_or(Color::WHITE, rgb)));
+            }
             if shows == Shows::Fill(8) && gauge.area.width > 0.0 && gauge.area.height > 0.0 {
                 image.insert(crate::breath::NativeGauge);
             }
