@@ -154,6 +154,10 @@ fn range_close_uses_model_reference_and_classic_scale_at_the_500ms_boundary() {
 fn queued_range_close_preserves_frames_and_custody_until_server_close_and_never_retries() {
     for skinned in [false, true] {
         let (mut host, _metadata) = prepared(skinned, 0, None);
+        let taking = host.take();
+        host.result(&taking, eq_client_core::loot::LootRequestStatus::Sent);
+        let pending = host.pending();
+        assert!(pending.is_some());
         let shown = frames(&mut host);
         let inventory = host.world().inventory().items().clone();
         let rows = host.world().loot().unwrap().items.clone();
@@ -177,6 +181,7 @@ fn queued_range_close_preserves_frames_and_custody_until_server_close_and_never_
             crate::clicks::testing::click(&mut host.app, button);
         }
         assert!(host.commands.try_recv().is_err());
+        assert_eq!(host.pending(), pending);
         assert_eq!(frames(&mut host), shown);
         assert_eq!(host.world().loot().unwrap().items, rows);
         assert_eq!(host.world().inventory().items(), &inventory);
@@ -244,7 +249,9 @@ fn range_close_blocks_a_preexisting_no_drop_yes_and_the_actual_input_uses_the_sa
             .insert(InheritedVisibility::VISIBLE);
         host.app.add_systems(
             Update,
-            crate::trade::loot_range::input.before(crate::trade::input),
+            crate::trade::loot_range::input
+                .after(crate::online::carry_as)
+                .before(crate::trade::input),
         );
         position(&mut host, 30.0, 0.0, 0.0);
         assert!(matches!(
@@ -289,6 +296,12 @@ fn unknown_basis_hidden_frame_and_unread_generations_send_no_distance_close() {
                 );
             });
         assert!(host.commands.try_recv().is_err());
+        if client != eq_client_assets::ui::InstalledClient::Titanium {
+            // A shown frame with valid metadata still does not enable an
+            // unread generation's automatic close rule.
+            check(&mut host, now + Duration::from_secs(1));
+            assert!(host.commands.try_recv().is_err());
+        }
         host.app
             .world_mut()
             .resource_mut::<crate::ViewerSettings>()
@@ -298,6 +311,83 @@ fn unknown_basis_hidden_frame_and_unread_generations_send_no_distance_close() {
         check(&mut host, now + Duration::from_secs(1));
         assert!(host.commands.try_recv().is_err());
         assert!(host.world().loot().unwrap().granted);
+    }
+}
+
+#[test]
+fn a_full_queue_does_not_latch_an_unsent_close() {
+    let (mut host, _metadata) = prepared(false, 0, None);
+    position(&mut host, 30.0, 0.0, 0.0);
+    let now = Instant::now();
+    let (queue, commands) = std::sync::mpsc::sync_channel(1);
+    queue
+        .try_send(ClientCommand::Loot {
+            session_id: 5,
+            corpse_id: 9,
+            created: now,
+        })
+        .unwrap();
+    host.app.insert_resource(Outbox::new(Some(queue)));
+    host.commands = commands;
+    check(&mut host, now);
+    assert!(
+        !host
+            .app
+            .world()
+            .resource::<TradeState>()
+            .range
+            .closing(host.world())
+    );
+    assert!(matches!(
+        host.commands.try_recv().unwrap(),
+        ClientCommand::Loot { .. }
+    ));
+    check(&mut host, now + Duration::from_millis(499));
+    assert!(host.commands.try_recv().is_err());
+    check(&mut host, now + Duration::from_millis(500));
+    assert!(matches!(
+        host.commands.try_recv().unwrap(),
+        ClientCommand::EndLoot { corpse_id: 9, .. }
+    ));
+    check(&mut host, now + Duration::from_secs(1));
+    assert!(host.commands.try_recv().is_err());
+    assert!(host.world().loot().unwrap().granted);
+    assert_eq!(frames(&mut host).len(), 1);
+}
+
+#[test]
+fn actual_input_checks_only_a_shown_loot_frame() {
+    for skinned in [false, true] {
+        for hidden_by_display in [false, true] {
+            let (mut host, _metadata) = prepared(skinned, 0, None);
+            let frame = frames(&mut host)[0];
+            if hidden_by_display {
+                host.app.world_mut().get_mut::<Node>(frame).unwrap().display = Display::None;
+            } else {
+                host.app
+                    .world_mut()
+                    .entity_mut(frame)
+                    .insert(InheritedVisibility::HIDDEN);
+            }
+            host.app.add_systems(
+                Update,
+                crate::trade::loot_range::input
+                    .after(crate::online::carry_as)
+                    .before(crate::trade::input),
+            );
+            position(&mut host, 30.0, 0.0, 0.0);
+            assert!(host.commands.try_recv().is_err());
+            host.app.world_mut().get_mut::<Node>(frame).unwrap().display = Display::Flex;
+            host.app
+                .world_mut()
+                .entity_mut(frame)
+                .insert(InheritedVisibility::VISIBLE);
+            host.app.update();
+            assert!(matches!(
+                host.commands.try_recv().unwrap(),
+                ClientCommand::EndLoot { corpse_id: 9, .. }
+            ));
+        }
     }
 }
 

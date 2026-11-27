@@ -2,32 +2,46 @@
 use super::*;
 
 #[test]
-fn received_loot_close_clears_the_target_only_while_a_loot_lease_exists() {
-    let mut world = admitted();
-    world.select_target(Some(5));
-    assert!(
+fn received_titanium_loot_close_clears_the_target_only_while_a_loot_lease_exists() {
+    for generation in [
+        crate::GameDialect::Titanium,
+        crate::GameDialect::EqMac,
+        crate::GameDialect::Rof2,
+    ] {
+        let mut world = admitted();
+        world.carry_as(generation);
+        world.select_target(Some(5));
+        assert!(
+            game(
+                &mut world,
+                WorldEvent::Loot(crate::loot::LootUpdate::Closed)
+            )
+            .ignored
+        );
+        assert_eq!(world.target().selected, Some(5));
+        world.open_loot(5);
         game(
             &mut world,
-            WorldEvent::Loot(crate::loot::LootUpdate::Closed)
-        )
-        .ignored
-    );
-    assert_eq!(world.target().selected, Some(5));
-    world.open_loot(5);
-    game(
-        &mut world,
-        WorldEvent::Loot(crate::loot::LootUpdate::Closed),
-    );
-    assert_eq!(world.target().selected, None);
-    world.select_target(Some(6));
-    assert!(
-        game(
-            &mut world,
-            WorldEvent::Loot(crate::loot::LootUpdate::Closed)
-        )
-        .ignored
-    );
-    assert_eq!(world.target().selected, Some(6));
+            WorldEvent::Loot(crate::loot::LootUpdate::Closed),
+        );
+        assert_eq!(
+            world.target().selected,
+            if generation == crate::GameDialect::Titanium {
+                None
+            } else {
+                Some(5)
+            }
+        );
+        world.select_target(Some(6));
+        assert!(
+            game(
+                &mut world,
+                WorldEvent::Loot(crate::loot::LootUpdate::Closed)
+            )
+            .ignored
+        );
+        assert_eq!(world.target().selected, Some(6));
+    }
 }
 use crate::loot::{LootRequest, LootRequestStatus};
 

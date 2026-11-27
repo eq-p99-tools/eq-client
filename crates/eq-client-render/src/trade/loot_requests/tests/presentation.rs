@@ -212,6 +212,10 @@ fn loot_grant_empty_and_delayed_items_open_without_inventory_or_listing_changes(
         assert_eq!(frames(&mut host), shown);
         host.hear(WorldEvent::Loot(LootUpdate::Closed));
         assert_eq!(frames(&mut host), Vec::<Entity>::new());
+        host.app
+            .world_mut()
+            .resource_mut::<OnlineState>()
+            .select_target(Some(9));
         host.open();
         assert_eq!(frames(&mut host), Vec::<Entity>::new());
         grant(&mut host);
