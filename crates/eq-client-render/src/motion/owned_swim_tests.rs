@@ -445,7 +445,7 @@ fn discarded_owned_request_restores_native_trial_without_a_position_publication(
             reason: "fixture discarded before motion owner".into(),
         },
     );
-    assert!(frame(&mut f, &mut owner).is_empty());
+    assert_eq!(frame(&mut f, &mut owner).len(), 0);
     assert_eq!(f.app.world().resource::<Controls>().wet, rest);
     assert_eq!(
         f.app
