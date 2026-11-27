@@ -34,6 +34,8 @@ mod fit;
 mod frame;
 pub(crate) mod gem;
 mod items;
+#[cfg(test)]
+pub(crate) use items::testing_loot_slot;
 pub(crate) mod looks;
 #[cfg(test)]
 mod merchant_grid_tests;

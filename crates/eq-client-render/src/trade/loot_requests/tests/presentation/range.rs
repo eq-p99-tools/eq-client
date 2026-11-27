@@ -172,7 +172,14 @@ fn queued_range_close_preserves_frames_and_custody_until_server_close_and_never_
         position(&mut host, 0.0, 0.0, 0.0);
         host.refuse(&close, "No transport success inferred");
         check(&mut host, now + Duration::from_secs(5));
-        for action in [Action::Take(0), Action::TakeAll, Action::EndLoot] {
+        for action in [
+            Action::Take {
+                place: 0,
+                auto: false,
+            },
+            Action::TakeAll,
+            Action::EndLoot,
+        ] {
             let button = host
                 .app
                 .world_mut()
@@ -231,7 +238,14 @@ fn range_close_blocks_a_preexisting_no_drop_yes_and_the_actual_input_uses_the_sa
         let button = host
             .app
             .world_mut()
-            .spawn((Button, Action::Take(0), Interaction::None))
+            .spawn((
+                Button,
+                Action::Take {
+                    place: 0,
+                    auto: false,
+                },
+                Interaction::None,
+            ))
             .id();
         crate::clicks::testing::click(&mut host.app, button);
         assert!(

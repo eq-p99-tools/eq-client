@@ -141,7 +141,10 @@ impl Host {
     }
 
     fn take(&mut self) -> ClientCommand {
-        self.click(Action::Take(0))
+        self.click(Action::Take {
+            place: 0,
+            auto: false,
+        })
     }
 
     fn result(&mut self, command: &ClientCommand, status: LootRequestStatus) {

@@ -2018,6 +2018,18 @@ mod tests {
     }
 
     #[test]
+    fn loot_cursor_and_inventory_forms_keep_the_same_real_control_target() {
+        let target = ClickTarget::Trade(TradeClick::Take(0));
+        assert_eq!(
+            parse(
+                "click(\"loot\", 0)\nright_click(\"loot\", 0)",
+                Path::new("private")
+            ),
+            Ok(vec![Step::Click(target), Step::RightClick(target)])
+        );
+    }
+
+    #[test]
     #[allow(clippy::too_many_lines, reason = "one table of step bounds")]
     fn parses_bounded_steps_and_rejects_unsafe_input() {
         let base = Path::new("private");

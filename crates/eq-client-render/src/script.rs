@@ -1245,6 +1245,9 @@ fn cancel_pointer_presses(
                     presses.cancel_target(target);
                 }
             } else if button == MouseButton::Right {
+                if let Some(mut trade) = world.get_resource_mut::<crate::trade::TradeState>() {
+                    trade.cancel_loot_press(target);
+                }
                 if let Some(mut press) = world.get_resource_mut::<crate::hud::GemPress>() {
                     press.cancel_target(target);
                 }
@@ -3385,7 +3388,7 @@ const fn book(edit: BookEdit) -> super::book_delete::Action {
 const fn trading(click: TradeClick) -> super::trade::Action {
     use super::trade::Action;
     match click {
-        TradeClick::Take(place) => Action::Take(place),
+        TradeClick::Take(place) => Action::Take { place, auto: false },
         TradeClick::TakeAll => Action::TakeAll,
         TradeClick::EndLoot => Action::EndLoot,
         TradeClick::Buy(slot) => Action::Buy(slot),

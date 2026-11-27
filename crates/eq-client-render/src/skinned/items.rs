@@ -32,9 +32,8 @@ pub(crate) struct SkinSlot {
 pub(crate) struct TheirSlot(pub(crate) u8);
 
 /// A place in the loot window, from 0, which shows the corpse's item there;
-/// a click takes it as the press begins, as an item's place does.
+/// left press takes it to the cursor, right release to inventory.
 #[derive(Component, Clone, Copy)]
-#[require(crate::clicks::OnPress)]
 pub(crate) struct LootSlot(pub(crate) u16);
 
 /// The loot window's first place's number (`EQType`); the rest follow.
@@ -148,10 +147,9 @@ pub(super) fn slot(
 }
 
 /// A place in the loot window: the skin's empty picture, with the corpse's
-/// item there drawn over it (`loot`). A click takes the item into the packs,
-/// as the client's own loot window does; which click does what in the
-/// official window is not checked yet (its request can take an item to the
-/// cursor or into the packs).
+/// item there drawn over it (`loot`). Both window styles retain the same
+/// loot action: the input rule sends left press to cursor and a same-cell
+/// right release to inventory.
 fn loot_slot(window: &mut ChildSpawnerCommands, art: &mut Art, slot: &InvSlot, inside: &Area) {
     let Some(place) = slot
         .slot
@@ -165,7 +163,7 @@ fn loot_slot(window: &mut ChildSpawnerCommands, art: &mut Art, slot: &InvSlot, i
         .spawn((
             Button,
             LootSlot(place),
-            crate::trade::Action::Take(place),
+            crate::trade::Action::Take { place, auto: false },
             crate::outbox::Needs::Capability(eq_client_core::Capability::Looting),
             at(
                 inside.x + area.x,
@@ -179,6 +177,29 @@ fn loot_slot(window: &mut ChildSpawnerCommands, art: &mut Art, slot: &InvSlot, i
                 picture(cell, art, piece, at(0.0, 0.0, area.width, area.height));
             }
         });
+}
+
+/// Builds a real skinned loot cell for the two-button request regression.
+#[cfg(test)]
+pub(crate) fn testing_loot_slot(parent: &mut ChildSpawnerCommands, art: &mut Art, place: u16) {
+    let area = Area {
+        x: 0.0,
+        y: 0.0,
+        width: 40.0,
+        height: 40.0,
+    };
+    loot_slot(
+        parent,
+        art,
+        &InvSlot {
+            id: Some(format!("LootSlot{place}")),
+            area,
+            anchors: None,
+            slot: Some(FIRST_LOOT_PLACE + u32::from(place)),
+            background: None,
+        },
+        &area,
+    );
 }
 
 /// Draws the corpse's item in each place of the loot window, when the loot

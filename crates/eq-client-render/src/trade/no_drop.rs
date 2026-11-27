@@ -33,6 +33,10 @@ pub(super) struct Confirm {
 }
 
 impl Confirm {
+    pub(super) fn active(&self) -> bool {
+        self.wanted.is_some() || self.asking.is_some()
+    }
+
     pub(super) const fn want(&mut self, question: Question) {
         self.wanted = Some(question);
     }
@@ -78,6 +82,7 @@ pub(super) fn question(
     world: &ClientWorld,
     session_id: u64,
     place: u16,
+    auto: bool,
     choice: LootNoDrop,
 ) -> Option<Question> {
     let loot = world.loot()?;
@@ -87,6 +92,7 @@ pub(super) fn question(
         corpse_id: loot.corpse_id,
         place,
         item_id: item.details.id,
+        auto,
     })
 }
 
@@ -97,6 +103,7 @@ fn asked_item(world: &ClientWorld, question: Question) -> Option<&InventoryItem>
         corpse_id,
         place,
         item_id,
+        ..
     } = question
     else {
         return None;
@@ -160,11 +167,17 @@ fn take(trade: &mut TradeState, world: &ClientWorld, outbox: &Outbox, question: 
         return;
     }
     let Question::LootNoDrop {
-        corpse_id, place, ..
+        corpse_id,
+        place,
+        auto,
+        ..
     } = question
     else {
         return;
     };
+    if !trade.can_take_loot(world, place) {
+        return;
+    }
     let (Some(stamp), Some(own_id)) = (
         outbox.peek(world),
         world.player().map(|player| player.spawn_id),
@@ -183,7 +196,7 @@ fn take(trade: &mut TradeState, world: &ClientWorld, outbox: &Outbox, question: 
         corpse_id,
         own_id,
         place,
-        auto: true,
+        auto,
         created: stamp.created,
     };
     if outbox.send(world, command).is_ok() {
@@ -193,7 +206,7 @@ fn take(trade: &mut TradeState, world: &ClientWorld, outbox: &Outbox, question: 
                 corpse_id,
                 own_id,
                 place,
-                auto: true,
+                auto,
             },
         ));
     }
