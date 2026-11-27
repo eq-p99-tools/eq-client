@@ -1,6 +1,7 @@
 //! Session events enter presentation here; this module never decodes wire
 //! packets. The world model in `eq_client_core::world` applies each update;
 //! this module shows what it changed.
+mod damage_trace;
 mod movement_reports;
 
 use super::{ViewerSettings, hud};
@@ -973,6 +974,7 @@ pub(super) fn receive(
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
     mut chat: ResMut<super::chat::ChatState>,
+    mut damage_trace_ordinal: Local<u64>,
     (mut scene, loading): (super::zone::Scene, Option<Res<super::loading::Loading>>),
 ) {
     let (settings, mut spell_names, messages, options) = definitions;
@@ -1059,6 +1061,12 @@ pub(super) fn receive(
                 }
                 continue;
             }
+            let damage_receipt = damage_trace::begin(
+                &mut damage_trace_ordinal,
+                &update,
+                state.world.session_id(),
+                &chat.history,
+            );
             let (mut changes, before, old_gems) =
                 apply(&mut state.world, &update, spells, outbox.as_deref());
             state.observe_server_placement(&changes);
@@ -1164,6 +1172,9 @@ pub(super) fn receive(
             }
             if let WorldUpdate::Chat(line) = update {
                 chat.receive(line, &state);
+            }
+            if let Some(receipt) = damage_receipt {
+                receipt.finish(&changes, &chat.history);
             }
         }
         if ended || taken < BATCH || started.elapsed() >= share {
