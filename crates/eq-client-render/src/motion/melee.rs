@@ -12,7 +12,7 @@ const MANUAL_PAUSE: Duration = Duration::from_millis(500);
 /// Records scheduling before any movement, ownership or admission gate runs.
 /// This is local diagnostic time, not a received/server movement timestamp.
 #[derive(Default)]
-pub(super) struct InputTrace {
+pub(crate) struct InputTrace {
     started: Option<Instant>,
     previous: Option<Instant>,
     sequence: u64,
