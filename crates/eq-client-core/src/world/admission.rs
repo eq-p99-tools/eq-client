@@ -173,8 +173,8 @@ impl ClientWorld {
                 now,
             )
         });
-        // A Bard's own refreshes start no recovery where the session says
-        // the Titanium program's rule applies (read R49-21 c, 6.642).
+        // Titanium Bards use the program's recovery rule. Other dialects
+        // retain the existing session capability policy.
         self.casting.bard_refresh = player.class == Some(super::casting::BARD)
             && (self.generation == crate::GameDialect::Titanium
                 || self.can(crate::Capability::BardRefreshTimers));
