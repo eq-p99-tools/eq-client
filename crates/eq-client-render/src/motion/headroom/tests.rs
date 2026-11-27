@@ -102,7 +102,14 @@ fn headroom_held_input_retries_lintel_and_crosses_only_after_observed_duck() {
                 let start = Vec3::new(0.0, 5.625, -direction * 60.0 * span * 0.5);
                 testing::place(
                     &mut app.world_mut().resource_mut::<online::OnlineState>(),
-                    world_position(start.to_array(), if direction > 0.0 { 0.0 } else { 256.0 }),
+                    world_position(
+                        start.to_array(),
+                        eq_client_core::world_heading(if direction > 0.0 {
+                            0.0
+                        } else {
+                            std::f32::consts::PI
+                        }),
+                    ),
                 );
                 {
                     let world = app.world_mut();
@@ -110,6 +117,15 @@ fn headroom_held_input_retries_lintel_and_crosses_only_after_observed_duck() {
                     let (mut body, mut transform) = player.single_mut(world).unwrap();
                     *body = OGRE;
                     transform.translation = start;
+                    world
+                        .query::<&mut crate::OrbitCamera>()
+                        .single_mut(world)
+                        .unwrap()
+                        .yaw = if direction > 0.0 {
+                        std::f32::consts::PI
+                    } else {
+                        0.0
+                    };
                     let mut controls = world.resource_mut::<Controls>();
                     controls.test_span = Some(span);
                     controls.speed = Some(60.0);
