@@ -100,17 +100,22 @@ fn headroom_held_input_retries_lintel_and_crosses_only_after_observed_duck() {
                 let (mut app, receiver) = app(InstalledClient::Titanium, 30.0);
                 app.insert_resource(Collision(Some(thin_lintel())));
                 let start = Vec3::new(0.0, 5.625, -direction * 60.0 * span * 0.5);
-                testing::place(
-                    &mut app.world_mut().resource_mut::<online::OnlineState>(),
-                    world_position(
+                {
+                    let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+                    let mut player = online.world().player().unwrap().clone();
+                    player.race = 10;
+                    player.size = 9.0;
+                    player.posture = Some(PostureState::Standing);
+                    player.position = world_position(
                         start.to_array(),
                         eq_client_core::world_heading(if direction > 0.0 {
                             0.0
                         } else {
                             std::f32::consts::PI
                         }),
-                    ),
-                );
+                    );
+                    testing::admit(&mut online, 11, player);
+                }
                 {
                     let world = app.world_mut();
                     let mut player = world.query::<(&mut PlayerBody, &mut Transform)>();
