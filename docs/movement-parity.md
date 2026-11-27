@@ -47,6 +47,13 @@ that residual is not reported as zero. The current display and accepted
 position settle to the same point after the actual stopped prefix is
 processed. A 150 ms frame cap is distinct from one 16.667 ms render frame.
 
+Send-boundary checks use a separate guarded session and recorded completed
+render waypoints. They distinguish a timer release of already committed
+motion from a prepared, guard-checked send: the actual sender commits that
+transaction only after its send callback succeeds. The pre-call committed
+position is recorded separately; an unchecked queued proposal is never
+substituted for acceptance.
+
 [I] The host's precise observed frame duration replaces the native whole-ms
 clock. Input is normalized to the existing independently calibrated steady
 speed; the 150 ms cap, movement guard and packet pacing remain unchanged.

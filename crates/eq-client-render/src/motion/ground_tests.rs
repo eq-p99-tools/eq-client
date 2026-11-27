@@ -1403,6 +1403,14 @@ impl Scene {
         }
     }
 
+    fn send_witness(&self, stage: &'static str) -> SendWitness {
+        SendWitness {
+            accepted: self.independent_admission(),
+            committed_before_call: self.owner.position(),
+            stage,
+        }
+    }
+
     fn correct(&mut self, position: eq_client_core::WorldPosition) {
         self.owner.correct(position, self.now()).unwrap();
         self.independent_owner
@@ -1454,11 +1462,9 @@ impl Scene {
                         )
                         .unwrap();
                 }
-                let witness = SendWitness {
-                    accepted: self.independent_admission(),
-                    committed_before_call: self.owner.position(),
-                    stage: "guard-validated prepared admission; actual commit follows successful send",
-                };
+                let witness = self.send_witness(
+                    "guard-validated prepared admission; actual commit follows successful send",
+                );
                 let packets = &mut self.packets;
                 let submissions = &mut self.submissions;
                 let result = self
@@ -1506,11 +1512,9 @@ impl Scene {
                 self.independent_owner
                     .send_move_sample(&request, now, |_| Ok(()))
                     .unwrap();
-                let witness = SendWitness {
-                    accepted: self.independent_admission(),
-                    committed_before_call: self.owner.position(),
-                    stage: "guard-validated prepared admission; actual commit follows successful send",
-                };
+                let witness = self.send_witness(
+                    "guard-validated prepared admission; actual commit follows successful send",
+                );
                 self.ordinary_stops += usize::from(request.position == self.owner.position());
                 let packets = &mut self.packets;
                 let submissions = &mut self.submissions;
@@ -1590,11 +1594,7 @@ impl Scene {
         self.independent_owner.tick_sample(now, |_| Ok(())).unwrap();
         let accepted = self.independent_admission();
         assert_eq!(self.owner.position(), accepted.position);
-        let witness = SendWitness {
-            accepted,
-            committed_before_call: self.owner.position(),
-            stage: "timer release of already committed motion",
-        };
+        let witness = self.send_witness("timer release of already committed motion");
         let packets = &mut self.packets;
         let submissions = &mut self.submissions;
         self.owner
