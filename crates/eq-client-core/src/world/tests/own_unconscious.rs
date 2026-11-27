@@ -38,7 +38,7 @@ fn own_hp_control_distinguishes_unknown_gear_display_zero_waking_and_actual_deat
         }]
     ));
     assert!(!world.is_dead());
-    assert!(echo(&mut world, 1, true).notices.is_empty());
+    assert_eq!(echo(&mut world, 1, true).notices, []);
     // The report can heal; the existing posture owner's wake releases control.
     game(&mut world, hit_points(9, 1, 150));
     assert!(world.is_unconscious());
