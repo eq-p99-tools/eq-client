@@ -30,6 +30,42 @@ fn world() -> CollisionWorld {
     CollisionWorld::new(terrain()).unwrap().with_liquids(Dry)
 }
 
+#[test]
+fn ordinary_carrier_handover_uses_the_existing_raised_floor_once() {
+    use crate::movement::{CollisionMesh, PROVISIONAL_PHYSICS};
+    use std::sync::Arc;
+    let mut world = world();
+    let deck = terrain()
+        .into_iter()
+        .map(|triangle| triangle.map(|point| [point[0], 2.25, point[2]]));
+    world.set_spawn_obstacles(vec![(172, Arc::new(CollisionMesh::new(deck).unwrap()))]);
+    let physics = VerticalPhysics {
+        climb: 3.75,
+        edge_climb: Some(5.),
+        ..PROVISIONAL_PHYSICS
+    };
+    let frame = Duration::from_nanos(16_666_667);
+    let motion = GroundMotion::new(Vec3::ZERO).unwrap();
+    assert!(world.support(motion.feet()).is_none());
+    assert!(
+        motion
+            .frame_with_physics(&world, 6., Vec3::X, 6., true, frame, physics)
+            .is_none()
+    );
+    let ordinary = motion
+        .ordinary_frame_with_physics(&world, 6., Vec3::X, 6., true, frame, physics)
+        .expect("ordinary raised-floor recovery uses the same collision owner");
+    assert!((ordinary.feet().y - 2.25).abs() < 0.000_01);
+    assert!((ordinary.velocity().x - 2.25).abs() < 0.000_01);
+    assert!((ordinary.feet().x - 2.25 / 60.).abs() < 0.000_01);
+    let airborne = GroundMotion::new(Vec3::Y * 10.).unwrap();
+    assert!(
+        airborne
+            .ordinary_frame_with_physics(&world, 6., Vec3::X, 6., true, frame, physics,)
+            .is_none()
+    );
+}
+
 fn rolling_world() -> CollisionWorld {
     let mut triangles = Vec::new();
     let profile = [(-100., 0.), (1., 0.), (5., 1.), (9., 0.), (100., 0.)];

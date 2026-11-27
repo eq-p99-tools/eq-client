@@ -152,7 +152,7 @@ impl GroundMotion {
             || !direction.is_finite()
             || !height.is_finite()
             || height < 1.0
-            || world.support(feet).is_none()
+            || static_ground && world.support(feet).is_none()
             || world.liquid_support
             || !matches!(world.liquid_contact(feet, height), LiquidContact::Unmarked)
             || static_ground && !world.plain_ground(feet, height, climb)
