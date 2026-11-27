@@ -1,0 +1,1 @@
+- Select offered trainer skills in scripts by stable skill ID or canonical name with `training_skill`, preserving index and language selection when trainer row order changes after re-login.
