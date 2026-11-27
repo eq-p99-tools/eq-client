@@ -259,6 +259,9 @@ impl SessionWorker {
                             crate::gaps::record(&*gap);
                             None
                         }
+                        // This host does not request movement-counter snapshots.
+                        // They carry diagnostics, not a change to the world.
+                        ClientEvent::MovementPacketSnapshot { .. } => None,
                         ClientEvent::Diagnostic(message) => {
                             tracing::info!("{message}");
                             None
