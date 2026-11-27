@@ -306,7 +306,13 @@ fn default_size_wrapped_qol_reaches_speed(wheel_lines: Option<f32>) {
         // Dangerous section without clipping it at the content's bottom.
         assert_visible(app.world(), &[heading]);
         let wheel_pixels = wheel_lines.map_or_else(
-            || (max_scroll / LINE_PIXELS).ceil() * LINE_PIXELS,
+            || {
+                // The color picker follows Run Speed. Scroll whole wheel lines
+                // until the speed control itself enters the page.
+                let bottom = bounds(app.world(), speed).max.y;
+                let clip = app.world().get::<CalculatedClip>(speed).unwrap().clip;
+                ((bottom - clip.max.y).max(0.0) / LINE_PIXELS).ceil() * LINE_PIXELS
+            },
             |lines| lines * LINE_PIXELS,
         );
         *app.world_mut().resource_mut::<Wheel>() = Wheel {

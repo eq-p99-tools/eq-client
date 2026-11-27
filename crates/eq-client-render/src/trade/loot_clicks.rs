@@ -34,6 +34,22 @@ pub(super) fn cursor_empty(world: &ClientWorld) -> bool {
         .contains_key(&InventorySlot::CURSOR)
 }
 
+/// Freeze the original cell's admission, corpse and item identity.
+fn target(world: &ClientWorld, entity: Entity, action: &Action) -> Option<Target> {
+    let session = world.session_id()?;
+    let loot = world.loot()?;
+    let Action::Take { place, .. } = action else {
+        return None;
+    };
+    Some(Target {
+        entity,
+        session,
+        corpse: loot.corpse_id,
+        place: *place,
+        item: loot.items.get(place)?.details.id,
+    })
+}
+
 /// Reads the same hit-tested controls for ordinary and skinned loot windows.
 #[derive(SystemParam)]
 pub(crate) struct Buttons<'w, 's> {
@@ -76,36 +92,38 @@ impl Buttons<'_, '_> {
             };
         }
         let press = mouse.just_pressed(MouseButton::Right);
-        let under_pointer = || {
-            let session = world.session_id()?;
-            let loot = world.loot()?;
-            let (entity, action, ..) =
-                self.controls
-                    .iter()
-                    .find(|(_, action, interaction, scripted)| {
-                        matches!(action, Action::Take { .. })
-                            && (**interaction == Interaction::Hovered
-                                || (press && *scripted && **interaction == Interaction::Pressed))
-                    })?;
-            let Action::Take { place, .. } = action else {
-                return None;
-            };
-            Some(Target {
-                entity,
-                session,
-                corpse: loot.corpse_id,
-                place: *place,
-                item: loot.items.get(place)?.details.id,
-            })
-        };
         if press {
-            pressed.0 = under_pointer();
+            // A script owns the pressed control even if the native pointer
+            // still hovers another cell. Query order must not choose its item.
+            let over = self
+                .controls
+                .iter()
+                .find(|(_, action, interaction, scripted)| {
+                    matches!(action, Action::Take { .. })
+                        && *scripted
+                        && **interaction == Interaction::Pressed
+                })
+                .or_else(|| {
+                    self.controls.iter().find(|(_, action, interaction, _)| {
+                        matches!(action, Action::Take { .. })
+                            && **interaction == Interaction::Hovered
+                    })
+                });
+            pressed.0 = over.and_then(|(entity, action, ..)| target(world, entity, action));
         }
         if mouse.just_released(MouseButton::Right) {
             return pressed
                 .0
                 .take()
-                .filter(|start| under_pointer().as_ref() == Some(start))
+                .filter(|start| {
+                    self.controls
+                        .get(start.entity)
+                        .ok()
+                        .filter(|(_, _, interaction, _)| **interaction == Interaction::Hovered)
+                        .and_then(|(entity, action, ..)| target(world, entity, action))
+                        .as_ref()
+                        == Some(start)
+                })
                 .map(|start| {
                     vec![Action::Take {
                         place: start.place,

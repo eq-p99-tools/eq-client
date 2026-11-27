@@ -236,8 +236,13 @@ fn normal_and_skinned_gems_follow_global_then_individual_readiness_and_equality(
     assert_eq!(all_frames(&app), vec![0; 16]);
     for (root, icon, _, fallback) in gems {
         assert_eq!(
-            app.world().get::<ImageNode>(icon).unwrap().color,
-            Color::WHITE
+            app.world()
+                .get::<ImageNode>(icon)
+                .unwrap()
+                .color
+                .to_srgba()
+                .to_u8_array(),
+            [255; 4]
         );
         if fallback {
             assert_eq!(
@@ -401,8 +406,13 @@ fn p99_b_and_early_ready_a_have_no_unavailable_fade_tail_in_either_bar() {
     for (root, icon, _, fallback) in gems.iter().take(6) {
         assert_eq!(app.world().get::<Refresh>(*root).unwrap().fade.frame, 0);
         assert_eq!(
-            app.world().get::<ImageNode>(*icon).unwrap().color,
-            Color::WHITE
+            app.world()
+                .get::<ImageNode>(*icon)
+                .unwrap()
+                .color
+                .to_srgba()
+                .to_u8_array(),
+            [255; 4]
         );
         if *fallback {
             assert_eq!(

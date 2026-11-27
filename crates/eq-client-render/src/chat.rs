@@ -2701,13 +2701,20 @@ pub(super) fn assisted(words: &str, online: &super::online::OnlineState) -> Resu
         .ok_or_else(|| format!("No one named {name} is in the zone."))
 }
 
+fn supports_own_corpse_pull(generation: eq_client_core::GameDialect) -> bool {
+    match generation {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    }
+}
+
 /// The targeted corpse; no target means none, including for `/corpsedrop`.
 fn targeted_corpse(online: &super::online::OnlineState) -> Result<u16, String> {
     let world = online.world();
     if let Some(id) = world.target().selected.filter(|id| {
         world.spawn(*id).is_some_and(|spawn| {
             spawn.state.kind == eq_client_core::SpawnKind::PlayerCorpse
-                || (world.generation() == eq_client_core::GameDialect::Titanium
+                || (supports_own_corpse_pull(world.generation())
                     && spawn.state.kind == eq_client_core::SpawnKind::NpcCorpse)
         })
     }) {
@@ -2723,7 +2730,7 @@ fn corpse_for_pull(online: &super::online::OnlineState) -> Result<u16, String> {
         return Ok(id);
     }
     let world = online.world();
-    if world.generation() == eq_client_core::GameDialect::Titanium
+    if supports_own_corpse_pull(world.generation())
         && let Some(player) = world.player()
     {
         let mut own = world

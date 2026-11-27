@@ -238,6 +238,8 @@ pub(super) fn state(
         display_con_color = ?target.and_then(|id| online.world().consider_color(id)),
         selected_target_level = ?target.and_then(|id| online.world().spawn(id))
             .map(|spawn| spawn.state.level).filter(|&level| level != 0),
+        selected_target_position = ?target.and_then(|id| online.world().spawn(id)).map(|spawn| spawn.state.position),
+        selected_target_model = ?target.and_then(|id| online.world().spawn(id)).map(|spawn| (spawn.state.race, spawn.state.gender, spawn.state.size)),
         own_level = ?online.world().player().map(|player| player.level).filter(|&level| level != 0),
         camp = ?online.world().camp().map(|camp| camp.logging_out),
         ?gems,

@@ -1278,7 +1278,9 @@ fn arguments(command: &str, call: &str) -> Result<(Vec<String>, Range<usize>), F
                 .find(|ch: char| ch == ',' || ch.is_whitespace())
                 .unwrap_or(rest.len());
             let token = &rest[..width];
-            if !number(token) {
+            let drop_choice =
+                command == "with_drops" && matches!(token, "True" | "False" | "true" | "false");
+            if !number(token) && !drop_choice {
                 return Err(Fault::at(
                     "action arguments are literals: quote text, such as \"I\"",
                     start..start + width,

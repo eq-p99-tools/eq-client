@@ -229,6 +229,8 @@ pub(super) struct Controls {
     surface_rollback: Option<SurfaceRollback>,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
+    /// A script-owned proposal refused before it could step off an unsafe edge.
+    pub(crate) script_drop_refused: Option<(std::sync::Arc<()>, Instant, &'static str)>,
     /// When a jump was pressed since the last sample; only where falls are simulated.
     pub jump: Option<Instant>,
     /// When the latest jump started; it outlasts a reset, so a new
@@ -442,6 +444,7 @@ impl Default for Controls {
             surface: surface::Control::default(),
             surface_rollback: None,
             refused: None,
+            script_drop_refused: None,
             jump: None,
             last_jump: None,
             endurance_spent: None,
@@ -4221,7 +4224,7 @@ pub(super) fn input(
     // cancels it. The jump a finished crouch hands on goes as it is. A
     // strafe-only jump counts as moving and goes at once: the read covered
     // the forward input only (inferred, recording checklist 6.417).
-    let jump = match client.standing_jump_crouch().filter(|_| !crouched) {
+    let mut jump = match client.standing_jump_crouch().filter(|_| !crouched) {
         Some(_) if jump && mode == MovementMode::Backward => {
             debug!("Jump cancelled: backing up");
             false
@@ -4293,6 +4296,44 @@ pub(super) fn input(
     let world = jumping_world.as_ref().unwrap_or(world);
     let walking_world = carrier_walking_world(world, client, body.feet_offset, flying, swimming);
     let world = walking_world.as_ref().unwrap_or(world);
+    // Probe the same pose and walking collision world as the actual step.
+    let script_drop_blocked = if !flying
+        && !swimming
+        && !placement_blocked
+        && delta.with_y(0.0).length_squared() > 1e-12
+        && previous_airborne
+            .as_ref()
+            .is_none_or(|state| state.peak().is_none() || physics.steers_in_air)
+        && let Some((identity, allowed)) = keys.script_drop_policy()
+        && let Err(reason) = crate::script::drops::input(
+            world,
+            online.world(),
+            client,
+            previous_airborne.as_ref(),
+            crate::script::drops::Probe {
+                feet,
+                delta,
+                seconds: span,
+                height: body.height,
+                jump,
+                physics,
+            },
+            allowed,
+        ) {
+        controls.script_drop_refused = Some((std::sync::Arc::clone(identity), now, reason));
+        true
+    } else {
+        false
+    };
+    if script_drop_blocked {
+        // Keep the ordinary standing sample/authority path, with no authored
+        // displacement or alternate shoreline/diagonal proposal this frame.
+        delta = Vec3::ZERO;
+        direction = Vec3::ZERO;
+        speed = 0.0;
+        jump = false;
+        shore = None;
+    }
     let diagonal_heading = mouse_snapshot.unwrap_or(current_heading);
     // A combined input keeps one body heading and both signed component
     // budgets. Run the usual sweep on a copy before selecting that sample.
@@ -4302,7 +4343,8 @@ pub(super) fn input(
     // grant's diagonal rates being the standing ones (read R28).
     let combined = diagonal
         .filter(|_| {
-            (standing || moves_ducked)
+            !script_drop_blocked
+                && (standing || moves_ducked)
                 && !jump
                 && !airborne
                 && !swimming
@@ -4319,6 +4361,28 @@ pub(super) fn input(
         })
         .and_then(|intent| {
             let displacement = intent.velocity * span;
+            // A combined proposal may reach an edge the cardinal fallback
+            // does not. It must satisfy the same consent before selection.
+            if let Some((_, allowed)) = keys.script_drop_policy()
+                && crate::script::drops::input(
+                    world,
+                    online.world(),
+                    client,
+                    previous_airborne.as_ref(),
+                    crate::script::drops::Probe {
+                        feet,
+                        delta: displacement,
+                        seconds: span,
+                        height: body.height,
+                        jump: false,
+                        physics,
+                    },
+                    allowed,
+                )
+                .is_err()
+            {
+                return None;
+            }
             let mut trial = previous_airborne.clone();
             let landing = if let Some(controller) = trial.as_mut() {
                 let landed = fall_step_with_water(
@@ -5386,7 +5450,7 @@ pub(super) fn walking(
     })
 }
 
-fn carrier_walking_world(
+pub(super) fn carrier_walking_world(
     world: &CollisionWorld,
     client: InstalledClient,
     feet_offset: f32,
@@ -5526,7 +5590,7 @@ fn observe_landing(
 /// fall did damage for it to lessen (Titanium: recording checklist item
 /// 6.148). The rank of the ability that raises Safe Fall is not in what the
 /// sessions decode, so it counts as none (unsure).
-fn landing_cost(
+pub(super) fn landing_cost(
     client: InstalledClient,
     collision: &CollisionWorld,
     feet: Vec3,
@@ -9139,6 +9203,198 @@ pub(super) mod tests {
             size: 6.0,
             lifted: true,
         })
+    }
+
+    fn scripted_drop_app(
+        allowed: bool,
+        enabled: bool,
+        walk: bool,
+    ) -> (App, mpsc::Receiver<ClientCommand>, Vec3) {
+        let (mut app, receiver) = app();
+        let upper = [
+            [
+                [-100.0, 53.0, -100.0],
+                [100.0, 53.0, 0.0],
+                [100.0, 53.0, -100.0],
+            ],
+            [
+                [-100.0, 53.0, -100.0],
+                [-100.0, 53.0, 0.0],
+                [100.0, 53.0, 0.0],
+            ],
+        ];
+        app.insert_resource(Collision(Some(
+            CollisionWorld::new(flat_surface(0.0).into_iter().chain(upper)).unwrap(),
+        )));
+        // The footprint still has support, but this first actual 0.3-unit
+        // input leaves it completely. Merely crossing the center is harmless.
+        let start = Vec3::new(0.0, 56.0, 0.3);
+        assert!(
+            app.world()
+                .resource::<Collision>()
+                .0
+                .as_ref()
+                .unwrap()
+                .support(start - Vec3::Y * 3.0)
+                .is_some()
+        );
+        let world = app.world_mut();
+        world
+            .query_filtered::<&mut Transform, With<Player>>()
+            .single_mut(world)
+            .unwrap()
+            .translation = start;
+        let mut player = world
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .clone();
+        player.position = world_position(start.to_array(), 384.0);
+        online::testing::admit(&mut world.resource_mut::<online::OnlineState>(), 11, player);
+        world.resource_mut::<online::OnlineState>().enabled = enabled;
+        world
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = InstalledClient::Titanium;
+        world.resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        world.insert_resource(
+            crate::script::Script::new(Vec::new()).drop_guard_for_test(allowed, walk),
+        );
+        (app, receiver, start)
+    }
+
+    fn assert_scripted_drop_sample(allowed: bool, enabled: bool) {
+        for walk in [false, true] {
+            let (mut app, receiver, start) = scripted_drop_app(allowed, enabled, walk);
+            app.update();
+            let moves: Vec<_> = receiver
+                .try_iter()
+                .filter_map(|command| match command {
+                    ClientCommand::Move(request) => Some(request),
+                    _ => None,
+                })
+                .collect();
+            if !enabled {
+                assert_eq!(moves.len(), 0, "drop consent bypassed the session gate");
+                continue;
+            }
+            let controls = app.world().resource::<Controls>();
+            if allowed {
+                assert_eq!(moves.len(), 1);
+                let at = Vec3::from_array(eq_client_core::render_position(moves[0].position));
+                assert!(
+                    at.z > start.z,
+                    "consented descent never moved toward the known landing"
+                );
+            } else {
+                for request in moves {
+                    assert!(
+                        (Vec3::from_array(eq_client_core::render_position(request.position))
+                            - start)
+                            .length()
+                            < 1e-3,
+                        "refused input stepped off the edge: {request:?}"
+                    );
+                }
+                assert!(controls.airborne.as_ref().unwrap().peak().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn scripted_drops_refuse_damaging_actual_input_without_consent() {
+        assert_scripted_drop_sample(false, true);
+    }
+
+    #[test]
+    fn scripted_drops_with_consent_move_toward_the_known_landing() {
+        assert_scripted_drop_sample(true, true);
+    }
+
+    #[test]
+    fn scripted_drops_cannot_bypass_a_disabled_session() {
+        assert_scripted_drop_sample(true, false);
+    }
+
+    #[test]
+    fn an_actual_script_drop_refusal_names_the_current_run() {
+        let (mut app, _, _) = scripted_drop_app(false, true, false);
+        app.update();
+        let report = app
+            .world()
+            .resource::<Controls>()
+            .script_drop_refused
+            .clone()
+            .unwrap();
+        let mut script = app.world_mut().resource_mut::<crate::script::Script>();
+        assert!(std::sync::Arc::ptr_eq(
+            &report.0,
+            script.drop_policy().unwrap().0
+        ));
+        assert!(report.2.starts_with("drop too high"));
+        assert_eq!(
+            script.drop_response(Some(&report)),
+            Some(crate::script::DropResponse::FindRoute)
+        );
+        assert_eq!(
+            script.drop_response(Some(&report)),
+            None,
+            "the same refusal restarted its search"
+        );
+        let next = (
+            std::sync::Arc::clone(&report.0),
+            report.1 + Duration::from_millis(1),
+            report.2,
+        );
+        assert_eq!(
+            script.drop_response(Some(&next)),
+            Some(crate::script::DropResponse::Stop(report.2))
+        );
+    }
+
+    #[test]
+    fn explicit_drop_consent_refuses_unknown_native_damage() {
+        let (mut app, _, start) = scripted_drop_app(true, true, false);
+        {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            hold_drop(&mut online, 1_500, std::iter::empty());
+            online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::PurseUncertain { session_id: 11 }],
+            );
+            assert!(online.world().fall_weight().is_none());
+        }
+        let body = PlayerBody {
+            feet_offset: 3.0,
+            height: 6.0,
+            size: 6.0,
+        };
+        let physics = walking(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &body,
+            1,
+            (true, false),
+        );
+        let collision = app.world().resource::<Collision>().0.as_ref().unwrap();
+        let online = app.world().resource::<online::OnlineState>();
+        let result = crate::script::drops::input(
+            collision,
+            online.world(),
+            InstalledClient::Titanium,
+            None,
+            crate::script::drops::Probe {
+                feet: start - Vec3::Y * body.feet_offset,
+                delta: Vec3::Z * 1.5,
+                seconds: 0.05,
+                height: body.height,
+                jump: false,
+                physics,
+            },
+            true,
+        );
+        assert_eq!(result, Err("drop damage is unavailable"));
     }
 
     pub(crate) fn fixture() -> (App, mpsc::Receiver<ClientCommand>) {

@@ -164,10 +164,15 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `approach("object", kind, range, milliseconds)`: approach a tradeskill container type.
 - `walk(range, milliseconds)`: follow a searched path toward the target.
 - `walk("object", kind, range, milliseconds)`: path toward a tradeskill container type.
-- `walk_to(x, y, z, range, milliseconds)`: path to EQ coordinates at the requested floor (feet), without selecting a target. A partial route or timeout fails unless the place is reached.
+- `walk_to(x, y, z, range, milliseconds)`: path to EQ coordinates at the requested floor (feet), without selecting a target. A coordinate with no floor at the requested height refuses before travel; known swimming destinations remain eligible. A partial route or timeout fails unless the place is reached.
 - `walk_exit(reference, range, milliseconds)`: path to reachable floor inside an authored current-zone line with this reference number.
 - `walk_exit("zone", zone_id, range, milliseconds)`: choose an authored current-zone line embedding this destination zone ID. The embedded arrival coordinates belong to the next zone and are never used as a current-zone goal. Missing or unreachable lines fail. Range is approach tolerance; reaching it does not confirm a server transition. Use `wait_zone` to observe zoning separately.
 - `chase(range, milliseconds)`: follow the target until it dies, leaves or times out.
+- `with_drops(True)` / `with_drops(False)`: allow or refuse known damaging
+  descents for this run. The default is `False`, restored on stop or replacement.
+  Unknown landings or damage still refuse, and normal collision and session
+  checks still apply. Walk checks each route leg and next movement input; chase
+  stays direct on safe ground and searches for a safe route when needed.
 
 Walk, approach and chase guidance use the same keyboard turn owner. Forward
 travel follows the facing reached during each turn, including at waypoint

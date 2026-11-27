@@ -56,7 +56,11 @@ fn measured_path(locked: bool, code: KeyCode, authored: bool, delay: u32) -> f32
                     .world()
                     .resource::<Controls>()
                     .key_facing
-                    .is_none()
+                    .as_ref()
+                    .is_some_and(|facing| matches!(
+                        facing.source,
+                        Some(key_turn::Source::Melee { .. })
+                    ))
             );
         }
     }
@@ -172,7 +176,11 @@ fn melee_orbit_held_turn_crosses_acquisition_and_forward_break_without_two_facin
                     .world()
                     .resource::<Controls>()
                     .key_facing
-                    .is_none()
+                    .as_ref()
+                    .is_some_and(|facing| matches!(
+                        facing.source,
+                        Some(key_turn::Source::Melee { .. })
+                    ))
             );
             if rmb {
                 crate::camera::testing::button(&mut scene.app, MouseButton::Right, true);
@@ -472,6 +480,9 @@ fn melee_orbit_typing_casting_and_question_suspensions_do_not_bank_held_strafe()
 #[test]
 fn melee_orbit_jump_suspends_through_supported_landing_without_deliberate_release() {
     let mut scene = scene(true, 0);
+    let fall_speed = Some(physics(InstalledClient::Titanium, None).terminal_speed);
+    scene.owner = scene.owner.with_fall_speed(fall_speed);
+    scene.independent_owner = scene.independent_owner.with_fall_speed(fall_speed);
     crate::keys::testing::bind(
         &mut scene.app,
         Act::Jump,

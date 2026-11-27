@@ -794,9 +794,22 @@ impl Route {
                 return RouteStep::OpenDoor(*door);
             }
             (Some(next), _) => *next,
-            // A full route's last waypoint lies within reach of the goal, so the
-            // rest of the way is a short straight walk.
-            (None, _) if !self.partial => goal,
+            // A target may move after the route ends, or the final sample
+            // may overshoot. A new tail is still an edge to validate; it
+            // cannot turn an empty path into permission to leave a platform.
+            (None, _) if !self.partial => {
+                if !falling
+                    && !path::walk(world, feet, Vec2::new(goal.x, goal.z), self.height).is_some_and(
+                        |end| {
+                            (end.y - goal.y).abs() <= self.goal_height.unwrap_or(MAX_GROUNDED_STEP)
+                        },
+                    )
+                {
+                    self.replan(feet, goal);
+                    return RouteStep::Searching;
+                }
+                goal
+            }
             (None, _) => return RouteStep::Arrived,
         };
         match self.door_ahead(world, feet, toward) {
@@ -848,6 +861,46 @@ fn flat_to_segment(point: Vec3, from: Vec3, to: Vec3) -> f32 {
 mod tests {
     use super::*;
     use std::sync::Arc;
+
+    #[test]
+    fn an_empty_finished_route_cannot_authorize_a_new_tail_off_a_platform() {
+        let world = CollisionWorld::new([
+            [[-30.0, 0.0, -30.0], [30.0, 0.0, 30.0], [30.0, 0.0, -30.0]],
+            [[-30.0, 0.0, -30.0], [-30.0, 0.0, 30.0], [30.0, 0.0, 30.0]],
+            [[-30.0, 53.0, -30.0], [0.0, 53.0, 30.0], [0.0, 53.0, -30.0]],
+            [[-30.0, 53.0, -30.0], [-30.0, 53.0, 30.0], [0.0, 53.0, 30.0]],
+        ])
+        .unwrap();
+        let feet = Vec3::new(-1.0, 53.0, 0.0);
+        let goal = Vec3::new(5.0, 0.0, 0.0);
+        for models_falls in [false, true] {
+            let mut route = Route::new(feet, feet, 1.0, 6.0).with_drops(models_falls);
+            // The old target was reached; the new target moved below it.
+            route.search = None;
+            assert_eq!(
+                route.next(&world, feet, goal, 1, Duration::ZERO),
+                RouteStep::Searching
+            );
+            assert!(route.is_searching());
+        }
+    }
+
+    #[test]
+    fn a_finished_routes_new_tail_on_supported_ground_still_moves_directly() {
+        let world = CollisionWorld::new([
+            [[-30.0, 0.0, -30.0], [30.0, 0.0, 30.0], [30.0, 0.0, -30.0]],
+            [[-30.0, 0.0, -30.0], [-30.0, 0.0, 30.0], [30.0, 0.0, 30.0]],
+        ])
+        .unwrap();
+        let goal = Vec3::X * 10.0;
+        let mut route = Route::new(Vec3::ZERO, Vec3::ZERO, 1.0, 6.0);
+        route.search = None;
+        assert_eq!(
+            route.next(&world, Vec3::ZERO, goal, 1, Duration::ZERO),
+            RouteStep::Toward(goal)
+        );
+        assert!(!route.is_searching());
+    }
 
     fn quad(a: [f32; 3], b: [f32; 3], c: [f32; 3], d: [f32; 3]) -> [[[f32; 3]; 3]; 2] {
         [[a, b, c], [a, c, d]]

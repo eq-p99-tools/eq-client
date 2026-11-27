@@ -109,7 +109,8 @@ fn refresh_at(
     now: Instant,
 ) {
     for (SpellGem(gem), mut refresh) in gems {
-        let spell = (client == InstalledClient::Titanium)
+        let spell = client
+            .fades_blocked_gems()
             .then(|| world.gem(usize::from(*gem)))
             .flatten();
         let blocked = spell.is_some_and(|spell| blocked(world, names, *gem, spell, now));

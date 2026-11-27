@@ -155,6 +155,8 @@ pub enum Step {
     /// Holds a movement command for a bounded duration, as holding its key
     /// does, whatever keys the key table gives it; traced as `hold` is.
     Move(MoveCommand, Duration),
+    /// Allows known damaging drops for this script run, never unknown landings.
+    WithDrops(bool),
     /// Moves forward while ordinary keyboard turns guide toward the current
     /// target, until it is within a distance, for a bounded duration.
     Approach(f32, Duration),
@@ -662,6 +664,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "trace",
     "face",
     "move",
+    "with_drops",
     "approach",
     "chase",
     "walk",
@@ -811,6 +814,8 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
         ("chase", [range, limit]) => {
             Step::Chase(number(range, 1.0, 200.0)?, millis(limit, MAX_WAIT)?)
         }
+        ("with_drops", ["True" | "true"]) => Step::WithDrops(true),
+        ("with_drops", ["False" | "false"]) => Step::WithDrops(false),
         ("walk_to", [x, y, z, range, duration]) => Step::WalkPlace {
             destination: PlaceDestination::Coordinates([
                 number(x, -1_000_000.0, 1_000_000.0)?,
@@ -2027,6 +2032,18 @@ mod tests {
             ),
             Ok(vec![Step::Click(target), Step::RightClick(target)])
         );
+    }
+
+    #[test]
+    fn damaging_drop_consent_requires_an_explicit_boolean_command() {
+        let base = Path::new(".");
+        assert_eq!(
+            parse("with_drops(True)\nwith_drops(False)\n", base).unwrap(),
+            vec![Step::WithDrops(true), Step::WithDrops(false)]
+        );
+        for text in ["with_drops()", "with_drops(1)", "with_drops(yes)"] {
+            assert!(parse(text, base).is_err(), "{text}");
+        }
     }
 
     #[test]

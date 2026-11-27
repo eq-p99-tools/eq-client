@@ -16,6 +16,107 @@ fn floor() -> Vec<[[f32; 3]; 3]> {
     ]
 }
 
+#[test]
+fn an_unsupported_coordinate_refuses_before_off_mesh_fallback_can_move() {
+    let mut app = pending_walk();
+    app.insert_resource(
+        Script::new(vec![Step::WalkPlace {
+            destination: PlaceDestination::Coordinates([0.0, -40.0, 0.0]),
+            range: 3.0,
+            duration: Duration::from_secs(20),
+        }])
+        .offline_preview(true)
+        .input_mode(InputMode::Background),
+    );
+    let mesh = NavMesh::build(
+        &floor(),
+        &eq_client_core::movement::navmesh::Settings::walker(6.0),
+        1,
+        &AtomicBool::new(false),
+    )
+    .unwrap()
+    .0;
+    app.world_mut()
+        .resource_mut::<ZoneNavMesh>()
+        .complete_for_test(Some(mesh));
+    let began = Instant::now();
+    for ms in 0.. {
+        frame_at(&mut app, ms);
+        let script = app.world().resource::<Script>();
+        assert!(!script.acts.contains(&FORWARD));
+        assert!(script.route.is_none());
+        if script.status().phase() == Phase::Failed {
+            assert_eq!(
+                script.status().events().back().unwrap().message,
+                "walk destination has no supported floor at the requested height"
+            );
+            break;
+        }
+        assert!(began.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn a_supported_coordinate_still_walks_when_the_mesh_goal_needs_grid_fallback() {
+    let mut app = pending_walk();
+    let from = Vec3::new(-10.0, 3.75, 0.0);
+    let world = app.world_mut();
+    world
+        .query_filtered::<&mut Transform, With<crate::Player>>()
+        .single_mut(world)
+        .unwrap()
+        .translation = from;
+    testing::place(
+        &mut world.resource_mut::<OnlineState>(),
+        eq_client_core::world_position(from.to_array(), 0.0),
+    );
+    app.insert_resource(
+        Script::new(vec![Step::WalkPlace {
+            destination: PlaceDestination::Coordinates([0.0, 20.0, 0.0]),
+            range: 1.0,
+            duration: Duration::from_secs(20),
+        }])
+        .offline_preview(true)
+        .input_mode(InputMode::Background),
+    );
+    let left = vec![
+        [[-30.0, 0.0, -30.0], [-30.0, 0.0, 30.0], [0.0, 0.0, 30.0]],
+        [[-30.0, 0.0, -30.0], [0.0, 0.0, 30.0], [0.0, 0.0, -30.0]],
+    ];
+    let mesh = NavMesh::build(
+        &left,
+        &eq_client_core::movement::navmesh::Settings::walker(6.0),
+        1,
+        &AtomicBool::new(false),
+    )
+    .unwrap()
+    .0;
+    assert!(mesh.locate(Vec3::new(-10.0, 0.0, 0.0)).is_some());
+    assert!(mesh.locate(Vec3::new(20.0, 0.0, 0.0)).is_none());
+    app.world_mut()
+        .resource_mut::<ZoneNavMesh>()
+        .complete_for_test(Some(mesh));
+    let began = Instant::now();
+    for ms in 0.. {
+        frame_at(&mut app, ms);
+        let script = app.world().resource::<Script>();
+        assert_eq!(script.status().phase(), Phase::Running);
+        if script.acts.contains(&FORWARD) {
+            assert!(
+                script
+                    .status()
+                    .events()
+                    .iter()
+                    .any(|e| e.message == "Walk fell back to grid search: OffMesh")
+            );
+            break;
+        }
+        assert!(began.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+}
+
 fn pending_walk() -> App {
     place_walk(true)
 }
@@ -56,9 +157,11 @@ fn place_walk(mesh_pending: bool) -> App {
         },
     );
     // The helper accepts a production-shaped input without executing a bake.
-    app.world_mut()
-        .resource_mut::<ZoneNavMesh>()
-        .set_test_settings(settings);
+    if mesh_pending {
+        app.world_mut()
+            .resource_mut::<ZoneNavMesh>()
+            .set_test_settings(settings);
+    }
     app.insert_resource(
         Script::new(vec![Step::WalkPlace {
             destination: PlaceDestination::Coordinates([0.0, -20.0, 0.0]),

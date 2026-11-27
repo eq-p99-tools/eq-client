@@ -241,7 +241,8 @@ mod guidance_tests {
 
     #[test]
     fn orbit_chord_consumes_only_the_achieved_facing_budget() {
-        let from = Vec3::new(0., 0., -10.);
+        let from =
+            -10. * eq_client_core::axes::from_world(eq_client_core::axes::heading_direction(0.));
         for side in [-1., 1.] {
             let input = Input {
                 side,
@@ -253,7 +254,7 @@ mod guidance_tests {
             let limited = plan_with_budget(from, Vec3::ZERO, 0., 0.1, input, 1. / 3.).unwrap();
             assert!(arc(0., limited.heading).abs() <= 1. / 3. + 0.0001);
             assert!(limited.motion.speed < normal.motion.speed);
-            assert!(limited.motion.direction.x * side > 0.);
+            assert!(limited.motion.direction.dot(Vec3::Y.cross(from)) * side > 0.);
             let end = from + limited.motion.direction * limited.motion.speed * 0.1;
             assert!((end.length() - from.length()).abs() < 0.0001);
             assert!(plan_with_budget(from, Vec3::ZERO, 0., 0.1, input, 0.).is_none());

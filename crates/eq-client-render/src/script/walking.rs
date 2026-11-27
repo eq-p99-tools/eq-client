@@ -234,8 +234,28 @@ pub(super) fn prepare(
         script.approached,
         script.place.as_ref(),
         Some(world),
+        matches!(step, Step::Chase(..))
+            .then_some(script.awaited)
+            .flatten(),
     )
     .ok_or("walk needs its current destination and collision")?;
+    // OffMesh can mean a missing bake polygon on otherwise usable ground.
+    // Refuse a coordinate with no actual floor before either planner moves
+    // toward a closest partial route. Keep the same floor tolerance as end().
+    if matches!(
+        step,
+        Step::WalkPlace {
+            destination: PlaceDestination::Coordinates(_),
+            ..
+        }
+    ) {
+        let tolerance = range.min(eq_client_core::movement::MAX_GROUNDED_STEP);
+        if world.ground(goal, tolerance, tolerance).is_none()
+            && !world.in_swimmable_water(goal, body.height)
+        {
+            return Err("walk destination has no supported floor at the requested height".into());
+        }
+    }
     let mut route = Route::new(feet, goal, range, body.height)
         .with_drops(falls)
         .with_doors(openable_doors(online))

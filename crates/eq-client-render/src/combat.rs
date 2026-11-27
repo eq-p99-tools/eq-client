@@ -819,11 +819,13 @@ mod tests {
                 off_unsent: true,
                 off_quiet: true,
                 last_sent,
+                positioning_intent: 2,
                 seen_assists: 9,
                 assist_attack: Some((30, std::time::Instant::now())),
             };
             combat.reset();
             assert_eq!(combat.last_sent, last_sent);
+            assert_eq!(combat.positioning_intent(), 0);
             assert!(!combat.auto_attack);
             assert_eq!(combat.idle, IdleSwings::default());
             assert!(combat.session_id.is_none());

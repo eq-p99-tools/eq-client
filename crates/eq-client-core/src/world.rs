@@ -524,9 +524,13 @@ impl ClientWorld {
         if let Some(clocks) = &mut self.casting.gem_clocks {
             clocks.resolve(spells);
         }
-        self.casting
-            .p99_gems
-            .resolve(spells, self.generation == crate::GameDialect::Titanium);
+        self.casting.p99_gems.resolve(
+            spells,
+            match self.generation {
+                crate::GameDialect::Titanium => true,
+                crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
+            },
+        );
         self.expire_casts(now);
     }
 

@@ -623,7 +623,7 @@ pub(super) fn liquid_and_movement()
         crate::breath::update,
         crate::arrival::place,
         crate::piloting::update,
-        crate::script::interrupt_walk,
+        crate::script::interrupt_walk.run_if(resource_exists::<crate::script::Script>),
         motion::stop_autorun_after_failed_script,
         motion::input,
         motion::spend_endurance,

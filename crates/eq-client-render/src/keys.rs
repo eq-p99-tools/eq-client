@@ -759,6 +759,12 @@ impl Keys<'_, '_> {
         self.script.as_ref().is_some_and(|script| script.routing())
     }
 
+    pub(crate) fn script_drop_policy(&self) -> Option<(&std::sync::Arc<()>, bool)> {
+        self.script
+            .as_deref()
+            .and_then(crate::script::Script::drop_policy)
+    }
+
     /// A queued or paused run keeps its input sequence ahead of automatic
     /// melee positioning, even on frames when it holds no movement key.
     pub(crate) fn script_active(&self) -> bool {

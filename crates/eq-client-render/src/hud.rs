@@ -412,8 +412,7 @@ pub(super) fn spell_details(
     let casting = online.world().casting();
     let held = online.world().gems();
     let mut hovered = None;
-    let titanium = settings
-        .is_none_or(|s| s.0.installed_client == eq_client_assets::ui::InstalledClient::Titanium);
+    let titanium = settings.is_none_or(|s| s.0.installed_client.fades_blocked_gems());
     for (interaction, SpellGem(gem), refresh, fallback, mut background) in &mut gems {
         let spell = held.get(usize::from(*gem)).copied().flatten();
         let waiting = casting.cast.is_some()

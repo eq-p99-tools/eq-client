@@ -275,7 +275,7 @@ fn melee_and_orbit_facing_use_the_shared_ramp_while_locked_rmb_stays_independent
             delta: Vec2::new(73., 0.),
         });
         let mut prior = actor(&mut scene);
-        let mut independent_yaw = None;
+        let mut independent_yaw: Option<f32> = None;
         for _ in 0..60 {
             scene.step(false);
             let after = actor(&mut scene);

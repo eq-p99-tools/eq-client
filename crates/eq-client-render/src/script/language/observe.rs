@@ -642,6 +642,7 @@ mod tests {
                 spells: Some(&names),
                 clock: TITANIUM,
                 now: at + Duration::from_millis(millis),
+                motion: None,
                 chat: None,
                 filters: None,
             };
