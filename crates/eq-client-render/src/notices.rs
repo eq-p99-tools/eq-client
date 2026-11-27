@@ -687,12 +687,14 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                     eq_client_core::skills::name_string(*skill)
                         .and_then(|id| table.argument_free(id))
                 })
-                .map(str::to_owned)
-                .unwrap_or_else(|| {
-                    eq_client_core::skills::name(*skill)
-                        .unwrap_or("skill")
-                        .to_owned()
-                });
+                .map_or_else(
+                    || {
+                        eq_client_core::skills::name(*skill)
+                            .unwrap_or("skill")
+                            .to_owned()
+                    },
+                    str::to_owned,
+                );
             let fallback = format!("You begin to learn {name} from {trainer}.");
             chat(messages.map_or_else(
                 || Said::own(fallback.clone()),
