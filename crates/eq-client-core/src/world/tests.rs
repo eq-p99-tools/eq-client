@@ -565,6 +565,7 @@ fn camping_forgets_the_admission_and_its_zone() {
 fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
     let mut world = admitted();
     let revision = world.spawn(5).unwrap().revision;
+    let incarnation = world.spawn(5).unwrap().incarnation;
     let rat = Death {
         spawn_id: 5,
         killer_id: 9,
@@ -577,6 +578,7 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
     assert_eq!(corpse.state.kind, SpawnKind::NpcCorpse);
     assert_eq!(corpse.health, Some(0));
     assert!(corpse.revision > revision);
+    assert_eq!(corpse.incarnation, incarnation);
     // It takes the name the death gives its corpse, once.
     assert_eq!(corpse.state.name, "a_rat`s_corpse5");
     game(
@@ -603,6 +605,20 @@ fn only_the_player_dying_holds_them_and_every_death_leaves_a_corpse() {
     assert_eq!(world.health(9), Some(0));
     // The zone stays drawn around the corpse.
     assert!(world.spawn(5).is_some());
+}
+
+#[test]
+fn replacing_a_spawn_id_starts_a_new_actor_incarnation() {
+    let mut world = admitted();
+    let first = world.spawn(5).unwrap().incarnation;
+    let replacement = world.spawn(5).unwrap().state.clone();
+    game(&mut world, WorldEvent::Spawns(vec![replacement.clone()]));
+    let second = world.spawn(5).unwrap().incarnation;
+    assert_ne!(second, first);
+    assert_eq!(second, world.spawn(5).unwrap().revision);
+    game(&mut world, WorldEvent::Despawn(5));
+    game(&mut world, WorldEvent::Spawns(vec![replacement]));
+    assert_ne!(world.spawn(5).unwrap().incarnation, second);
 }
 
 #[test]

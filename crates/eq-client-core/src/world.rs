@@ -158,6 +158,9 @@ pub struct Spawn {
     /// Changes whenever the spawn must be drawn again: it appeared, was
     /// replaced or became a corpse.
     pub revision: u64,
+    /// Local identity assigned on appearance, retained when this same actor
+    /// becomes a corpse. A replacement using its ID gets a new identity.
+    pub incarnation: u64,
     /// When the server last said where the spawn is, from which the client
     /// carries it on.
     pub reported: Instant,

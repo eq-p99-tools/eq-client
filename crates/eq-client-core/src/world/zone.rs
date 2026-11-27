@@ -109,6 +109,7 @@ impl Zone {
                     health: spawn.hp_percent,
                     posture: None,
                     revision: *revision,
+                    incarnation: *revision,
                     reported: now,
                 },
             );
