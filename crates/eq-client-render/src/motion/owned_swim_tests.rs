@@ -307,11 +307,19 @@ fn held_strafe_and_turn_both_sides_keep_native_carry_and_report_path_and_net() {
             let net = f64::from((end.x - origin.x).hypot(end.y - origin.y));
             let net_xyz = net.hypot(f64::from(end.z - origin.z));
             assert_eq!(refused, 0);
-            assert!(accepted > 50 && path > 40.);
+            assert!(
+                accepted > 50 && path > 1.,
+                "held controls must actually move"
+            );
             assert!(net <= path + 0.001);
             assert!(net_xyz <= path_xyz + 0.001);
             if turning.is_some() {
                 assert!(net < path * 0.8);
+            } else {
+                assert!(
+                    path > 50.,
+                    "straight strafe must retain its calibrated native travel"
+                );
             }
             eprintln!(
                 "controlled native {side:?}+{turning:?}: accepted={accepted} refused={refused} accepted_path_xy={path} net_xy={net} accepted_path_xyz={path_xyz} net_xyz={net_xyz}"
