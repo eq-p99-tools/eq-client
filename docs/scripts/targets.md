@@ -115,8 +115,13 @@ merchant action.
   as `(id, received_value, cap)`; a missing value remains unknown.
 - `train` or `training_done`: the training window's buttons. Use
   `interact(admission, spawn, revision)` with the selected guildmaster's
-  current `target_interaction` tuple to open training. On P99, opening the
-  same trainer or submitting another practice requires a fresh admission.
+  current `target_interaction` tuple to open training. P99 spends the local
+  practice point and price at the accepted press, so consecutive practices
+  and reopening the same guildmaster do not require zoning. A fresh accepted
+  offer reopens the window even if Done and the offer arrive between frames.
+  Received skill updates replace values without another spend; fresh balances
+  and profiles replace local projections. Native eligibility and a positive
+  practice balance are still required.
 - `tracking row`: a track window row counted from 1, in the server's order.
 - `track`: the track window's Track button, which follows the chosen row.
   The Tracking ability opens the window; `done tracking` (the skin's Cancel)

@@ -1,0 +1,1 @@
+- Reopen Training for a fresh offer from the same guildmaster, including close/reopen events received between frames. Document native repeat-practice balances and same-trainer reopening without zoning.
