@@ -185,6 +185,8 @@ pub struct GaugeLook {
     pub fill: Option<Piece>,
     /// The tick lines over the bar.
     pub lines: Option<Piece>,
+    /// The tinted line showing progress within one fifth of the gauge.
+    pub lines_fill: Option<Piece>,
     /// The bar's left end.
     pub cap_left: Option<Piece>,
     /// The bar's right end.
@@ -204,6 +206,10 @@ pub struct Gauge {
     pub look: GaugeLook,
     /// The fill's colour.
     pub fill_tint: Option<[u8; 3]>,
+    /// Whether the skin enables the within-bubble line.
+    pub draw_lines_fill: bool,
+    /// Tint applied to the within-bubble line.
+    pub lines_fill_tint: Option<[u8; 3]>,
     /// The text's colour.
     pub text_color: Option<[u8; 3]>,
     /// The text's offset from the gauge's top left.
@@ -1201,10 +1207,13 @@ impl Library {
                 background: part("Background"),
                 fill: part("Fill"),
                 lines: part("Lines"),
+                lines_fill: part("LinesFill"),
                 cap_left: part("EndCapLeft"),
                 cap_right: part("EndCapRight"),
             },
             fill_tint: color(node, "FillTint"),
+            draw_lines_fill: flag(node, "DrawLinesFill"),
+            lines_fill_tint: color(node, "LinesFillTint"),
             text_color: color(node, "TextColor"),
             text_offset: (
                 number(node, "TextOffsetX").unwrap_or(0.0),
@@ -2763,5 +2772,38 @@ mod tests {
             library.screen(WINDOW, "OtherWindow"),
             Err(UiLayoutError::MissingWindow(name)) if name == "OtherWindow"
         ));
+    }
+}
+
+#[cfg(test)]
+mod lines_fill_tests {
+    use super::*;
+
+    #[test]
+    fn gauge_lines_fill_retains_opt_in_tint_and_art() {
+        let library = Library::parse("<XML/>", "<XML/>").unwrap();
+        let xml = r#"<XML><Ui2DAnimation item="Inner"><Frames><Texture>fake.tga</Texture>
+            <Size><CX>80</CX><CY>3</CY></Size></Frames></Ui2DAnimation>
+            <Gauge item="Exp"><EQType>4</EQType><DrawLinesFill>true</DrawLinesFill>
+            <LinesFillTint><R>0</R><G>80</G><B>220</B></LinesFillTint>
+            <GaugeDrawTemplate><LinesFill>Inner</LinesFill></GaugeDrawTemplate></Gauge>
+            <Screen item="Example"><Size><CX>100</CX><CY>50</CY></Size><Pieces>Exp</Pieces></Screen></XML>"#;
+        let screen = library.screen(xml, "Example").unwrap();
+        let Element::Gauge(gauge) = &screen.pieces[0].1 else {
+            panic!("gauge")
+        };
+        assert!(gauge.draw_lines_fill);
+        assert_eq!(gauge.lines_fill_tint, Some([0, 80, 220]));
+        assert_eq!(gauge.look.lines_fill.as_ref().unwrap().height, 3);
+        let screen = library
+            .screen(
+                &xml.replace("<DrawLinesFill>true</DrawLinesFill>", ""),
+                "Example",
+            )
+            .unwrap();
+        let Element::Gauge(gauge) = &screen.pieces[0].1 else {
+            panic!("gauge")
+        };
+        assert!(!gauge.draw_lines_fill);
     }
 }

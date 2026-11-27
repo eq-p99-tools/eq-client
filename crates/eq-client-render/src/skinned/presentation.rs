@@ -157,6 +157,7 @@ pub(crate) fn show(
                 Some(crate::give::ink(world, crate::give::Side::Mine)),
             ),
             Shows::Fill(_)
+            | Shows::LinesFill(_)
             | Shows::Attacking
             | Shows::WhilePetSits(_)
             | Shows::PetBuff(_)
@@ -189,16 +190,30 @@ fn fill_gauges(
     breath: &crate::breath::State,
 ) {
     for (shows, mut node, step) in fills {
-        if let Shows::Fill(kind) = *shows {
+        if let Shows::Fill(kind) | Shows::LinesFill(kind) = *shows {
             // Titanium eqgame.exe 0x5598bc, EQType 8, current air over capacity.
             let fraction = if kind == 8 {
                 breath.air().map_or(0.0, eq_client_core::breath::Air::ratio)
             } else {
                 filled(world, estimate_and_requests, kind)
             };
-            fill_to(&mut node, step, fraction.clamp(0.0, 1.0));
+            let fraction = fraction.clamp(0.0, 1.0);
+            let fraction = if matches!(shows, Shows::LinesFill(_)) {
+                lines_fraction(fraction)
+            } else {
+                fraction
+            };
+            fill_to(&mut node, step, fraction);
         }
     }
+}
+
+/// The native gauge's integer thousandths keep a bubble full at its final
+/// step and reset on the next one. The same rule serves every gauge type.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn lines_fraction(fraction: f32) -> f32 {
+    let value = (fraction * 1000.0) as i32;
+    ((value - 1).max(0) % 200) as f32 / 200.0
 }
 
 /// Applies conditional visibility without changing controls or world state.
@@ -522,4 +537,25 @@ pub(super) fn target_health(world: &eq_client_core::world::ClientWorld) -> Optio
             .filter(|player| player.spawn_id == target)
             .and_then(|player| player.hp_percent)
     })
+}
+
+#[cfg(test)]
+mod lines_fill_tests {
+    use super::lines_fraction;
+
+    #[test]
+    fn every_bubble_finishes_before_the_next_value_resets_the_line() {
+        for (value, expected) in [
+            (0, 0.0),
+            (1, 0.0),
+            (100, 0.495),
+            (200, 0.995),
+            (201, 0.0),
+            (400, 0.995),
+            (999, 0.99),
+            (1000, 0.995),
+        ] {
+            assert!((lines_fraction(value as f32 / 1000.0) - expected).abs() < 0.0001);
+        }
+    }
 }
