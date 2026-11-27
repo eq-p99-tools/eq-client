@@ -3040,9 +3040,9 @@ mod tests {
     fn parses_place_walks_without_a_target() {
         let base = Path::new("private");
         assert_eq!(parse("walk_to(12, -34, 5, 2, 15000)\nwalk_exit(7, 1, 20000)\nwalk_exit(\"zone\", 54, 1, 20000)", base).unwrap(), [
-            Step::WalkPlace { destination: PlaceDestination::Coordinates([12.0, -34.0, 5.0]), range: 2.0, duration: Duration::from_millis(15000) },
-            Step::WalkPlace { destination: PlaceDestination::ExitReference(7), range: 1.0, duration: Duration::from_millis(20000) },
-            Step::WalkPlace { destination: PlaceDestination::ExitZone(54), range: 1.0, duration: Duration::from_millis(20000) },
+            Step::WalkPlace { destination: PlaceDestination::Coordinates([12.0, -34.0, 5.0]), range: 2.0, duration: Duration::from_secs(15) },
+            Step::WalkPlace { destination: PlaceDestination::ExitReference(7), range: 1.0, duration: Duration::from_secs(20) },
+            Step::WalkPlace { destination: PlaceDestination::ExitZone(54), range: 1.0, duration: Duration::from_secs(20) },
         ]);
         for bad in [
             "walk_to(NaN, 0, 0, 1, 10)",
