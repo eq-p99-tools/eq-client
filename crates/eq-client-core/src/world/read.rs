@@ -334,6 +334,7 @@ impl ClientWorld {
             item_hit_points: self.counted_hit_points()? - i64::from(report.current),
             inventory_revision: self.inventory.revision(),
             local_damage: self.vitals.local_hp_damage,
+            local_base: self.vitals.local_hp_base,
             damage_floor: None,
         })
     }

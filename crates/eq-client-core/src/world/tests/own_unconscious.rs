@@ -134,6 +134,7 @@ fn submitted_drowning_changes_local_hp_and_a_fresh_report_replaces_it() {
     assert_eq!(world.vitals().local_hp_damage, 2);
     game(&mut world, hit_points(9, 1, 23));
     assert_eq!(world.vitals().local_hp_damage, 0);
+    assert_eq!(world.vitals().local_hp_base, None);
     assert_eq!(world.hit_point_basis().unwrap().current(), Some(1));
     assert!(!world.is_unconscious());
     // Neither depth of local damage nor a displayed zero can manufacture death.
@@ -141,6 +142,37 @@ fn submitted_drowning_changes_local_hp_and_a_fresh_report_replaces_it() {
         game(&mut world, report.clone());
     }
     assert!(!world.is_dead());
+}
+
+#[test]
+fn repeated_submitted_damage_uses_the_previous_clamped_base_without_changing_the_report() {
+    let mut world = admitted();
+    let mut item = chest();
+    item.details.bonuses.as_mut().unwrap().hit_points = -20;
+    game(&mut world, inventory(vec![item]));
+    game(&mut world, hit_points(9, 10_000_010, 10_000_020));
+    for (damage, expected) in [(1, 9_999_980), (2, 9_999_979)] {
+        game(
+            &mut world,
+            WorldEvent::HazardReported {
+                session_id: 1,
+                hazard: crate::hazards::Hazard::Drowning,
+                amount: 1,
+                record: false,
+            },
+        );
+        assert_eq!(world.vitals().reported_hp.unwrap().current, 10_000_010);
+        assert_eq!(world.counted_hit_points(), Some(9_999_990));
+        assert_eq!(world.vitals().local_hp_damage, damage);
+        assert_eq!(world.hit_point_basis().unwrap().current(), Some(expected));
+        assert_eq!(
+            world.hit_points(),
+            Some((u32::try_from(expected).unwrap(), 10_000_000))
+        );
+        assert!(!world.is_unconscious());
+        assert!(!world.is_dead());
+    }
+    assert_eq!(world.vitals().local_hp_base, Some(9_999_999));
 }
 
 #[test]
