@@ -226,6 +226,7 @@ impl ClientWorld {
         if self.is_player(spawn_id) {
             self.vitals.reported_hp = Some(report);
             self.vitals.local_hp_damage = 0;
+            self.vitals.local_hp_base = None;
             if let Some(control) = &mut self.own_unconscious {
                 control.basis = None;
             }

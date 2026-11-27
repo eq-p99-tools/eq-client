@@ -221,6 +221,7 @@ pub(super) fn state(
         hp_control_basis = ?online.world().hit_point_basis(),
         hp_accepted_basis = ?online.world().accepted_hit_point_basis(),
         hp_local_damage = online.world().vitals().local_hp_damage,
+        hp_local_base = ?online.world().vitals().local_hp_base,
         mana = ?online.world().vitals().mana,
         endurance = ?online.world().vitals().endurance,
         estimate = ?hud.resource_estimate,
