@@ -91,6 +91,7 @@ pub(crate) fn apply(
                     gesture.refusal(&online).is_none()
                         && online.selection.is_none()
                         && !online.world().is_dead()
+                        && !online.world().is_unconscious()
                         && (!online.enabled || online.in_world())
                 })
                 .map(|gesture| (gesture.held, gesture.delta, gesture.scroll))

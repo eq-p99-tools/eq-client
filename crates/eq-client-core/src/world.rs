@@ -53,7 +53,7 @@ pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
-pub use vitals::{ReportedHp, Vitals};
+pub use vitals::{HpGauge, ReportedHp, Vitals};
 pub use who::{GuildStatus, ZonePlayer};
 
 use crate::{
@@ -310,6 +310,9 @@ pub struct ClientWorld {
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
+    /// The posture owner's accepted HP basis and admission-scoped control.
+    own_unconscious: Option<(u64, bool, crate::control::HitPointBasis)>,
+    own_hp_count_current: bool,
     /// Latest local worker policy feedback, never a server movement ACK.
     movement_options_result: Option<(u64, Result<crate::movement::MovementOptions, String>)>,
     /// What the admission lets the player do.
@@ -936,6 +939,8 @@ impl ClientWorld {
             ),
             WorldEvent::OwnStun { session_id, revision, state } =>
                 self.project_stun(*session_id, *revision, *state, news),
+            WorldEvent::OwnUnconscious { session_id, revision, unconscious, basis } =>
+                self.project_unconscious(*session_id, *revision, *unconscious, *basis, news),
             WorldEvent::MotionSent {
                 session_id,
                 created,
@@ -2633,6 +2638,8 @@ impl ClientWorld {
         self.raid_flow = raid::RaidFlow::default();
         self.death = None;
         self.own_stun = None;
+        self.own_unconscious = None;
+        self.own_hp_count_current = false;
         self.death_threshold = None;
         self.bled_out = None;
         self.forget_zone();

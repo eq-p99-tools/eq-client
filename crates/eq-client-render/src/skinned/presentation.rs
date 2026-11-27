@@ -82,8 +82,12 @@ pub(crate) fn show(
         Query<(&super::LinesFillTint, &mut ImageNode)>,
     ),
     mut boxes: Query<(&Shows, &mut Visibility)>,
+    mut hp_images: Query<(&super::HpFillTint, &mut ImageNode)>,
 ) {
     let world = online.world();
+    for (normal, mut image) in &mut hp_images {
+        image.color = crate::unconscious::hp_tint(world).unwrap_or(normal.0);
+    }
     let load = crate::speed::load(world, &names);
     show_boxes(&mut boxes, world, &combat, &trade);
     fill_gauges(

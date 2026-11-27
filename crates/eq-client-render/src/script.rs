@@ -2720,6 +2720,7 @@ pub(super) fn drive(
             if (online.enabled && ExpectedWorld::current(&online).is_none())
                 || online.selection.is_some()
                 || online.world().is_dead()
+                || online.world().is_unconscious()
                 || players.single().is_err()
                 || cameras.single().is_err()
                 || detached_camera.iter().any(|free| free)

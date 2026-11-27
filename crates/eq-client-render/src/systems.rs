@@ -145,6 +145,7 @@ pub(super) fn schedule(app: &mut App) {
                 receive_world(),
                 online::leave,
                 online::report_bleed_out,
+                crate::unconscious::report_hp,
                 crate::poison_wait::report,
                 login::watch,
                 online::tick,

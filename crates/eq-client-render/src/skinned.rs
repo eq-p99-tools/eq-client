@@ -17,6 +17,9 @@ use tree::draw;
 use tree::{augment_section, text_box};
 
 mod presentation;
+/// The skin's normal HP fill tint, restored after a negative-HP branch.
+#[derive(Component)]
+struct HpFillTint(Color);
 pub(crate) use presentation::show;
 #[cfg(test)]
 use presentation::{fraction, gauge_text, label_text, raid_text, shown_now};
@@ -2162,6 +2165,9 @@ fn gauge_fill(
             if let Shows::LinesFill(kind) = shows {
                 image.insert(LinesFillTint(kind, tint.map_or(Color::WHITE, rgb)));
             }
+            if shows == Shows::Fill(1) {
+                image.insert(HpFillTint(tint.map_or(Color::WHITE, rgb)));
+            }
             if shows == Shows::Fill(8) && gauge.area.width > 0.0 && gauge.area.height > 0.0 {
                 image.insert(crate::breath::NativeGauge);
             }
@@ -2707,6 +2713,61 @@ mod tests {
         }
     }
     use super::*;
+
+    #[test]
+    fn skinned_hp_fill_uses_the_signed_purple_scale_and_restores_the_skin_tint() {
+        let mut app = crate::testing::app();
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::Inventory(eq_client_core::inventory::InventoryUpdate::Snapshot(
+                    Vec::new(),
+                )),
+                WorldEvent::HitPoints {
+                    spawn_id: 7,
+                    current: -5,
+                    maximum: 100,
+                    items: eq_client_core::ItemHitPoints::LeftOut,
+                },
+            ],
+        );
+        app.insert_resource(online).add_systems(Update, show);
+        let normal = Color::srgb_u8(20, 40, 60);
+        let image = app
+            .world_mut()
+            .spawn((HpFillTint(normal), ImageNode::default()))
+            .id();
+        let fill = app
+            .world_mut()
+            .spawn((Shows::Fill(1), Node::default()))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(fill).unwrap().width,
+            Val::Percent(60.0)
+        );
+        assert_eq!(
+            app.world().get::<ImageNode>(image).unwrap().color,
+            Color::srgb_u8(128, 0, 128)
+        );
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::HitPoints {
+                spawn_id: 7,
+                current: 25,
+                maximum: 100,
+                items: eq_client_core::ItemHitPoints::LeftOut,
+            }],
+        );
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(fill).unwrap().width,
+            Val::Percent(25.0)
+        );
+        assert_eq!(app.world().get::<ImageNode>(image).unwrap().color, normal);
+    }
 
     #[test]
     fn a_title_bar_shows_the_title_the_skin_gives_its_window() {

@@ -292,6 +292,46 @@ impl ClientWorld {
         self.stun_state() == Some(crate::control::StunState::Stunned)
     }
 
+    /// Whether Titanium's own-player HP control holds voluntary input. A
+    /// newly received complete count holds immediately, before the posture
+    /// owner answers. Its established hold persists until it accepts waking.
+    /// Death remains separate and cannot be cleared by an HP count.
+    #[must_use]
+    pub fn is_unconscious(&self) -> bool {
+        !self.is_dead()
+            && (self.own_unconscious.is_some_and(|(_, state, _)| state)
+                || self
+                    .hit_point_basis()
+                    .and_then(crate::control::HitPointBasis::current)
+                    .is_some_and(|current| current < 1))
+    }
+
+    /// The posture owner's last accepted HP basis, for synchronizing a new
+    /// report or equipment count. It does not acknowledge any server action.
+    #[must_use]
+    pub fn accepted_hit_point_basis(&self) -> Option<crate::control::HitPointBasis> {
+        self.own_hp_count_current.then_some(())?;
+        self.own_unconscious.map(|(_, _, basis)| basis)
+    }
+
+    /// A full received HP count ready for Titanium's posture owner. Missing
+    /// equipment facts withhold the count; displayed zero is not a substitute.
+    #[must_use]
+    pub fn hit_point_basis(&self) -> Option<crate::control::HitPointBasis> {
+        if self.generation != crate::GameDialect::Titanium || !self.in_world() || self.is_dead() {
+            return None;
+        }
+        let report = self.vitals.reported_hp?;
+        Some(crate::control::HitPointBasis {
+            reported_current: report.current,
+            reported_maximum: report.maximum,
+            item_hit_points: self.counted_hit_points()? - i64::from(report.current),
+            inventory_revision: self.inventory.revision(),
+            local_damage: self.vitals.local_hp_damage,
+            damage_floor: None,
+        })
+    }
+
     /// The zone's short name, as the server gave it.
     #[must_use]
     pub fn zone(&self) -> &str {
@@ -809,6 +849,15 @@ impl ClientWorld {
     #[must_use]
     pub fn hit_points(&self) -> Option<(u32, u32)> {
         self.vitals.hit_points(self.death.is_some())
+    }
+
+    /// Titanium's signed own-HP gauge, separate from the text's clamped HP
+    /// and from unconscious/death state. Other generations remain unread.
+    #[must_use]
+    pub fn hit_point_gauge(&self) -> Option<super::HpGauge> {
+        (self.generation == crate::GameDialect::Titanium)
+            .then(|| self.vitals.gauge(self.is_dead()))
+            .flatten()
     }
 
     /// The last signed HP report with equipped item HP counted from the

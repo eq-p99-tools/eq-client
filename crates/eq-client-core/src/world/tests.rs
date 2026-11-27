@@ -9,6 +9,7 @@ mod guild_status;
 mod levels;
 mod loot_requests;
 mod own_stun;
+mod own_unconscious;
 mod pet_buffs;
 mod qol;
 mod target_end;

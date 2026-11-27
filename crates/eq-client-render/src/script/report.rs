@@ -202,6 +202,7 @@ pub(super) fn state(
         camera_pitch = ?camera.map(crate::OrbitCamera::view_pitch),
         look_pitch = ?camera.map(crate::OrbitCamera::look_pitch),
         ?own_stun,
+        unconscious = online.world().is_unconscious(),
         air_remaining = ?breath.and_then(crate::breath::State::air)
             .map(|air| (air.remaining, air.capacity.get())),
         breath_probe = ?breath.and_then(crate::breath::State::probe),
@@ -217,6 +218,7 @@ pub(super) fn state(
         hp_reported = ?online.world().vitals().reported_hp,
         hp_item_bonus = ?online.world().vitals().item_hp,
         hp_counted = ?online.world().counted_hit_points(),
+        hp_local_damage = online.world().vitals().local_hp_damage,
         mana = ?online.world().vitals().mana,
         endurance = ?online.world().vitals().endurance,
         estimate = ?hud.resource_estimate,

@@ -233,6 +233,7 @@ pub(crate) fn look(
     let admission = online.world().session_id();
     let playing = online.selection.is_none()
         && !online.world().is_dead()
+        && !online.world().is_unconscious()
         && (!online.enabled || online.world().connected());
     let available =
         focused && playing && !script.is_some_and(|script| script.background_owns_input());
@@ -477,6 +478,7 @@ pub(super) fn orbit_camera(
     };
     let playing = online.selection.is_none()
         && !online.world().is_dead()
+        && !online.world().is_unconscious()
         && (!online.enabled || online.world().connected());
     let accepts_input = scripted.as_ref().is_some_and(|input| input.active)
         || windows.single().is_ok_and(|window| {

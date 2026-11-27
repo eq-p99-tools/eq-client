@@ -7,6 +7,29 @@ on every server. Disabled controls explain whether the server policy lacks a
 feature or this client lacks the UI. The session validates actions again before
 sending them; queueing a request is not proof of a successful game action.
 
+## Unconsciousness on Titanium
+
+Zero or negative current HP holds movement, turning, swimming, jumping and
+manual posture changes, independently of the stun and feign movement options.
+The existing posture owner lies the player down once and stands them after a
+positive HP refresh. Casts and item clicks then use their existing lying-posture
+restrictions. Unconsciousness never creates a death, corpse or bind transfer;
+those still come from the server.
+
+Successfully submitted environmental damage reduces local HP until the next
+own-HP report replaces that local count. The original received report remains
+available separately in script reports. Equipped HP must be known before a
+control transition can be counted; a raw negative report can still describe a
+living player wearing HP gear. Positive 1 HP can round down to 0% without being
+unconscious.
+
+Both HP gauges use Titanium's signed per-mille value. Negative values below
+-9 use the separate purple reserve scale; this is a display rule rather than
+a death threshold. The effect-328 damage cutoff is applied only where its
+absence is proven from complete current inputs; an unresolved effect total
+stays unknown. The native forced camera view and negative HP number-label
+behavior remain unread and are not inferred from the gauge.
+
 ## Server banners
 
 Received Titanium marquee notices appear above the scene and fade using the
