@@ -1323,6 +1323,9 @@ impl ClientWorld {
             WorldEvent::ServerFiltersKept { .. }
             | WorldEvent::ServerFiltersRefused { .. }
             | WorldEvent::MemorizationProgress { .. } => {}
+            // The network posture owner already lies down and holds movement
+            // at zero HP. The unconscious presentation layer owns storing it.
+            WorldEvent::OwnUnconscious { .. } => {}
             // A report to the staff went or was refused (6.511).
             WorldEvent::ReportSent {
                 session_id,
