@@ -47,20 +47,38 @@ pub(super) fn headroom_probe(
     world: &ClientWorld,
     stand: f32,
 ) -> eq_client_core::movement::HeadroomProbe {
+    let mut probe = headroom_dimensions(client, stand);
+    probe.permits_missing_floor = match client {
+        InstalledClient::EqMac => false,
+        InstalledClient::Titanium | InstalledClient::Rof2 => {
+            matches!(world.zone_number(), Some(0x47 | 0x4b | 0x96))
+        }
+    };
+    probe
+}
+
+pub(super) fn headroom_dimensions(
+    client: InstalledClient,
+    stand: f32,
+) -> eq_client_core::movement::HeadroomProbe {
     let mac = match client {
         InstalledClient::EqMac => true,
         InstalledClient::Titanium | InstalledClient::Rof2 => false,
     };
+    let radius = if mac { 0.25 * stand } else { 0.1 * stand };
     eq_client_core::movement::HeadroomProbe {
-        floor_radius: if mac { 0.0 } else { 0.1 * stand },
+        // Both native floor helpers use .1 only for an exactly zero product.
+        floor_radius: if radius == 0.0 { 0.1 } else { radius },
         ceiling_radius: if mac {
             0.5
         } else {
             eq_client_assets::falls::sphere_radius(stand)
         },
-        floor_bias: if mac { 0.0 } else { 0.001 },
-        floor_offset: if mac { -0.5 } else { 0.0 },
-        permits_missing_floor: !mac && matches!(world.zone_number(), Some(0x47 | 0x4b | 0x96)),
+        floor_bias: 0.001,
+        // Mac 0x504554's -.5 is cancelled by 0x4b3aa2's +.5.
+        floor_offset: 0.0,
+        retreat: if mac { 0.0 } else { 0.001 },
+        permits_missing_floor: false,
         permits_missing_ceiling: !mac,
     }
 }

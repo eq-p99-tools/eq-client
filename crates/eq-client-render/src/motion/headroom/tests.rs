@@ -450,9 +450,11 @@ fn automatic_return_tests_the_manual_origin_bound_at_the_candidate_too() {
             );
         });
     posture(&mut app, PostureState::Ducking);
-    for (height, expected) in [(6.251, false), (6.25, true)] {
-        // Both candidates pass floor+2S+r<10. The first lacks S above
-        // its origin; the equality at ceiling-origin==S permits Stand.
+    // DX9 returns .001 before the authored plane (0x1018f674), so the
+    // compared ceiling is9.999. The origin-bound equality still permits.
+    let bound = 10.0 - 0.001 - HUMAN.feet_offset;
+    for (height, expected) in [(bound + 0.001, false), (bound, true)] {
+        // Both pass the independent floor-to-ceiling return requirement.
         app.world_mut()
             .resource_scope(|world, mut controls: Mut<Controls>| {
                 assert_eq!(

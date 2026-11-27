@@ -233,22 +233,7 @@ pub(super) fn refused(
     (feet, candidate): (Vec3, Vec3),
     (ducking, mounted): (bool, bool),
 ) -> Option<Refused> {
-    let mac = match client {
-        InstalledClient::EqMac => true,
-        InstalledClient::Titanium | InstalledClient::Rof2 => false,
-    };
-    let probe = eq_client_core::movement::HeadroomProbe {
-        floor_radius: if mac { 0.0 } else { 0.1 * stand },
-        ceiling_radius: if mac {
-            0.5
-        } else {
-            eq_client_assets::falls::sphere_radius(stand)
-        },
-        floor_bias: if mac { 0.0 } else { 0.001 },
-        floor_offset: if mac { -0.5 } else { 0.0 },
-        permits_missing_floor: false,
-        permits_missing_ceiling: !mac,
-    };
+    let probe = crate::posture::headroom_dimensions(client, stand);
     refused_probe(
         client,
         world,

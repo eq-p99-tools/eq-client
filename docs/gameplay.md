@@ -62,12 +62,13 @@ A manual stand under a low ceiling silently keeps the player ducked and
 sends no posture request, whether pressed, typed or scripted. Titanium
 also tests a duck-to-sit request; Mac lets that sit through. The test uses
 the new posture's strict room requirement and needs at least S above the
-origin. Titanium headroom uses separate downward floor and upward ceiling
-spheres, with the existing estimate of the model radius. The ceiling probe
+origin. Headroom uses separate downward floor and upward ceiling spheres,
+with the existing estimate of Titanium's model radius. The ceiling probe
 covers the complete resolved stride so a thin lintel cannot be skipped by
 a long movement sample. This continuous coverage is the host's mapping of
 the native candidate probe; exact model radii and engine contact handling
-remain incomplete. Mac's downward probe remains a ray approximation.
+remain incomplete. A successful unobstructed cast retains its end bound,
+which keeps open sky and ordinary falls distinct from a failed query.
 
 A refused standing move arms automatic duck on Titanium when Allow Auto-Stand
 is enabled; Mac arms on every headroom refusal. Queued posture is not treated
