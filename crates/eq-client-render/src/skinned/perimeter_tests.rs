@@ -2,6 +2,7 @@
 //! Pixel sampling below is a CPU UV check, not a GPU/native render comparison.
 mod capture;
 mod capture_pixels;
+mod color_field;
 mod tabbed;
 
 use super::*;

@@ -4,6 +4,9 @@ use eq_client_core::movement::{Liquid, Liquids};
 use eq_network_game::movement::{GroundSampleResult, MotionSession, TITANIUM_FLAGS, UpdateGate};
 use std::{collections::VecDeque, sync::mpsc};
 
+mod camera_locked;
+mod guidance;
+mod orbit;
 mod pursuit;
 mod turn_release;
 
@@ -116,6 +119,7 @@ struct Scene {
     independent_owner: MotionSession,
     base: Instant,
     frame: u32,
+    elapsed: Duration,
     delay: u32,
     replies: VecDeque<ResultNews>,
     packets: Vec<(Instant, eq_client_core::WorldPosition, i16)>,
@@ -1487,6 +1491,7 @@ impl Scene {
             independent_owner,
             base,
             frame: 0,
+            elapsed: Duration::ZERO,
             delay,
             replies: VecDeque::new(),
             packets: Vec::new(),
@@ -1509,7 +1514,7 @@ impl Scene {
     }
 
     fn now(&self) -> Instant {
-        self.base + Duration::from_nanos(u64::from(self.frame) * 16_666_667)
+        self.base + self.elapsed
     }
 
     fn independent_admission(&self) -> Admission {
@@ -1532,6 +1537,20 @@ impl Scene {
         self.independent_owner
             .correct(position, self.now())
             .unwrap();
+    }
+
+    fn attack_on(&mut self) {
+        let world = self.app.world();
+        let stamp = world
+            .resource::<crate::outbox::Outbox>()
+            .stamp(world.resource::<online::OnlineState>().world())
+            .unwrap();
+        self.app
+            .world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .attack_asked
+            .push((stamp, true));
+        self.step(false);
     }
 
     fn reply(&mut self, created: Instant, refused: Option<String>) {
@@ -1652,7 +1671,12 @@ impl Scene {
     }
 
     fn step(&mut self, held: bool) -> Row {
+        self.step_for(held, Duration::from_nanos(16_666_667))
+    }
+
+    fn step_for(&mut self, held: bool, seconds: Duration) -> Row {
         self.frame += 1;
+        self.elapsed += seconds;
         let now = self.now();
         while self
             .replies
@@ -1687,7 +1711,7 @@ impl Scene {
         self.app
             .world_mut()
             .resource_mut::<Time>()
-            .advance_by(Duration::from_nanos(16_666_667));
+            .advance_by(seconds);
         self.app.update();
         let accepted_before_commands = self.owner.position();
         let trace_phase = std::env::var_os("EQ_LAND_PHASE_TRACE").is_some()

@@ -19,17 +19,20 @@ mod input;
 mod length;
 pub(crate) use input::AuthoredInput;
 pub use input::InputMode;
-pub(super) use input::install as install_input;
 pub(crate) use input::world::WorldInput;
 pub(super) use input::world::apply as world_input;
+pub(super) use input::{install as install_input, interrupt_walk};
 pub use length::{MAX_MINUTES, RunLength};
 pub(crate) mod language;
 pub(crate) use parse::{COMMANDS, FREE_TEXT};
+mod chase_route;
+pub(super) mod drops;
 mod parse;
 pub(crate) mod pointer;
 mod program;
 mod report;
 mod scope;
+mod screenshot;
 mod walking;
 pub(crate) use scope::ExpectedWorld;
 
@@ -54,28 +57,35 @@ use std::path::{Path, PathBuf};
 use std::time::Duration;
 
 use bevy::prelude::*;
-use bevy::render::view::screenshot::{Screenshot, save_to_disk};
+use bevy::render::view::screenshot::Screenshot;
 use bevy::window::PrimaryWindow;
 
 use crate::keys::Act;
 use parse::{MAX_STEPS, MAX_WAIT, MoveCommand};
 
 /// The command the steps that move toward something hold: forward the way
-/// the camera looks, which they turn toward their aim.
-const FORWARD: Act = Act::CameraForward;
+/// the character faces, as normal Forward-plus-Turn guidance does.
+#[cfg(test)]
+const FORWARD: Act = Act::Forward;
 
 const HEADROOM_REFUSED: &str =
     "walk refused: too little headroom over the floor ahead to stand there";
-/// Longest a `face` step waits for the server to have its heading: a half
+/// Longest a `face` step waits for admitted movement to have its heading: a half
 /// turn at the turn keys' rate takes about a second.
 const FACE_LIMIT: Duration = Duration::from_secs(5);
-/// How near the heading the server has must come to a `face` step's, in
+/// How near the admitted heading must come to a `face` step's, in
 /// heading units.
 const FACED: f32 = 0.5;
 const MAX_ONLINE_WAIT: Duration = Duration::from_mins(3);
 const FOLLOW_POLL: Duration = Duration::from_millis(250);
 /// Path positions searched per frame, keeping each frame short.
 const SEARCH_BUDGET: usize = 1500;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum DropResponse {
+    FindRoute,
+    Stop(&'static str),
+}
 /// A frame at least this long is logged while a script runs: past it, a
 /// frame shows as a hitch.
 const SLOW_FRAME: Duration = Duration::from_millis(50);
@@ -108,6 +118,8 @@ pub struct Script {
     acts: Vec<Act>,
     /// The heading a `face` step turns the player to, until it is reached.
     facing: Option<f32>,
+    /// A route's desired bearing, consumed by the normal turn owner.
+    guidance: Option<f32>,
     /// The mouse button a scripted click holds down until the next frame.
     clicked: Option<MouseButton>,
     /// A bounded semantic gesture captured over visible world space.
@@ -140,11 +152,21 @@ pub struct Script {
     length: RunLength,
     /// True only after this frame's background ownership check succeeds.
     owns_input: bool,
+    /// Explicit consent for known damaging descents, for this run only.
+    allow_drops: bool,
+    /// A live chase retains the actor selected at its start, across replans.
+    chase_actor: Option<(u64, u64)>,
+    chase_needs_route: bool,
+    chase_edges: chase_route::Edges,
+    chase_route_reason: Option<&'static str>,
+    drop_refusal_seen: Option<std::time::Instant>,
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
     walk_scope: Option<walking::Scope>,
     walk_generation: Option<walking::Generation>,
     walk_waiting: Option<&'static str>,
+    /// Detached camera time does not spend a destination's steering timeout.
+    walk_camera_pause: Option<Duration>,
     place: Option<walking::PlaceGoal>,
     place_lookup: Option<walking::FindingExit>,
     /// The closed door the walk is opening, if any.
@@ -279,6 +301,7 @@ impl Script {
             latched: Vec::new(),
             acts: Vec::new(),
             facing: None,
+            guidance: None,
             clicked: None,
             world_gesture: None,
             pressed: None,
@@ -294,10 +317,17 @@ impl Script {
             input_mode: InputMode::Attended,
             length: RunLength::Default,
             owns_input: false,
+            allow_drops: false,
+            chase_actor: None,
+            chase_needs_route: false,
+            chase_edges: chase_route::Edges::Grounded,
+            chase_route_reason: None,
+            drop_refusal_seen: None,
             route: None,
             walk_scope: None,
             walk_generation: None,
             walk_waiting: None,
+            walk_camera_pause: None,
             place: None,
             place_lookup: None,
             door_wait: None,
@@ -439,10 +469,10 @@ impl Script {
 
     /// Background runs yield their drawn pointer and carried overlay together
     /// with their input; existing attended/local pointer behavior is retained.
-    pub(crate) const fn pointer_owned(&self) -> bool {
+    pub(crate) fn pointer_owned(&self) -> bool {
         match self.input_mode {
             InputMode::Attended => true,
-            InputMode::Background => self.owns_input,
+            InputMode::Background => self.owns_input && !self.walking(),
         }
     }
 
@@ -479,8 +509,20 @@ impl Script {
     }
 
     /// Whether native pointer hit testing yields to the explicit script owner.
-    pub(crate) const fn background_owns_input(&self) -> bool {
-        matches!(self.input_mode, InputMode::Background) && self.owns_input
+    pub(crate) fn background_owns_input(&self) -> bool {
+        matches!(self.input_mode, InputMode::Background) && self.owns_input && !self.walking()
+    }
+
+    /// A destination walk shares native chat, UI and camera input.
+    pub(crate) fn walking(&self) -> bool {
+        self.current
+            .as_ref()
+            .is_some_and(|(step, _)| walking::is_step(step))
+            || (self.current.is_none()
+                && self
+                    .steps
+                    .front()
+                    .is_some_and(|step| walking::is_step(&step.step)))
     }
 
     /// The movement commands the script holds itself.
@@ -495,9 +537,90 @@ impl Script {
         self.route.is_some()
     }
 
+    /// Only explicit held-key actions may share the opt-in orbit controller.
+    pub(crate) fn orbit_keys(&self, map: &crate::keys::KeyMap) -> bool {
+        let mut keys = ButtonInput::default();
+        for key in self.held.iter().chain(&self.latched) {
+            keys.press(*key);
+        }
+        let held = map.holding(&keys, &self.acts);
+        matches!(self.progress.phase, Phase::Running | Phase::Following)
+            && self.route.is_none()
+            && self.facing.is_none()
+            && self.following.is_none()
+            && self.follow.is_none()
+            && self.guidance.is_none()
+            && self.world_gesture.is_none()
+            && self.current.as_ref().is_none_or(|(step, _)| {
+                matches!(
+                    step,
+                    Step::Hold(..)
+                        | Step::KeyDown(..)
+                        | Step::KeyUp(..)
+                        | Step::Wait(..)
+                        | Step::Move(..)
+                )
+            })
+            && [
+                Act::StrafeLeft,
+                Act::StrafeRight,
+                Act::CameraLeft,
+                Act::CameraRight,
+                Act::TurnLeft,
+                Act::TurnRight,
+            ]
+            .into_iter()
+            .any(|act| held.held(act))
+    }
+
+    /// Only authored walk/chase Forward receives the run's drop policy.
+    pub(crate) fn drop_policy(&self) -> Option<(&std::sync::Arc<()>, bool)> {
+        (self.progress.phase == Phase::Running
+            && self.acts.contains(&Act::Forward)
+            && matches!(
+                self.current,
+                Some((
+                    Step::Chase(..)
+                        | Step::Walk(..)
+                        | Step::WalkObject { .. }
+                        | Step::WalkPlace { .. },
+                    _
+                ))
+            ))
+        .then_some((&self.progress.identity, self.allow_drops))
+    }
+
+    /// Consume a proposal's refusal once. Direct chase gets a route attempt;
+    /// an unsafe routed proposal or walk stops with its actual reason.
+    pub(crate) fn drop_response(
+        &mut self,
+        report: Option<&(std::sync::Arc<()>, std::time::Instant, &'static str)>,
+    ) -> Option<DropResponse> {
+        let (identity, created, reason) = report?;
+        if !self.progress.phase.active()
+            || !std::sync::Arc::ptr_eq(identity, &self.progress.identity)
+            || self.drop_refusal_seen == Some(*created)
+        {
+            return None;
+        }
+        self.drop_refusal_seen = Some(*created);
+        if matches!(self.current, Some((Step::Chase(..), _))) && !self.chase_needs_route {
+            self.chase_needs_route = true;
+            self.chase_route_reason = Some(reason);
+            self.route = None;
+            Some(DropResponse::FindRoute)
+        } else {
+            Some(DropResponse::Stop(reason))
+        }
+    }
+
     /// The heading a `face` step turns the player to.
     pub(crate) const fn facing(&self) -> Option<f32> {
         self.facing
+    }
+
+    pub(crate) fn guidance(&self) -> Option<f32> {
+        self.guidance.or(self.facing)
     }
 
     /// A script holding these movement acts and this `face` heading, as its
@@ -506,6 +629,14 @@ impl Script {
     pub(crate) fn holding_for_test(mut self, acts: Vec<Act>, facing: Option<f32>) -> Self {
         self.acts = acts;
         self.facing = facing;
+        self
+    }
+
+    /// Declared key-down ownership for matched authored/native orbit fixtures.
+    #[cfg(test)]
+    pub(crate) fn latched_for_test(mut self, keys: Vec<KeyCode>) -> Self {
+        self.progress.phase = Phase::Running;
+        self.latched = keys;
         self
     }
 
@@ -530,12 +661,38 @@ impl Script {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn guidance_for_test(mut self, heading: f32) -> Self {
+        self.guidance = Some(heading);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn guide_for_test(&mut self, heading: f32) {
+        self.guidance = Some(heading);
+    }
+
+    #[cfg(test)]
+    pub(crate) fn drop_guard_for_test(mut self, allowed: bool, walk: bool) -> Self {
+        self.allow_drops = allowed;
+        self.progress.phase = Phase::Running;
+        let step = if walk {
+            Step::Walk(1.0, Duration::from_secs(30))
+        } else {
+            Step::Chase(1.0, Duration::from_secs(30))
+        };
+        self.current = Some((step, Duration::ZERO));
+        self.acts = vec![FORWARD];
+        self
+    }
+
     /// Whether cancellation must release input before yielding the window.
     fn holding(&self) -> bool {
         !self.held.is_empty()
             || !self.latched.is_empty()
             || !self.acts.is_empty()
             || self.facing.is_some()
+            || self.guidance.is_some()
             || self.clicked.is_some()
             || self.world_gesture.is_some()
     }
@@ -651,6 +808,7 @@ impl Script {
         }
         self.acts.clear();
         self.facing = None;
+        self.guidance = None;
         // The scene reads the real pointer again from the next frame
         // (`lease_scene`).
         self.scene = None;
@@ -693,6 +851,7 @@ impl Script {
     fn stop(&mut self, keys: &mut Keyboard, mouse: &mut ButtonInput<MouseButton>, reason: &str) {
         self.release(keys, mouse);
         self.owns_input = false;
+        self.allow_drops = false;
         self.steps.clear();
         self.language = None;
         self.current = None;
@@ -701,12 +860,18 @@ impl Script {
         self.walk_scope = None;
         self.walk_generation = None;
         self.walk_waiting = None;
+        self.walk_camera_pause = None;
         self.place = None;
         self.place_lookup = None;
         self.glide = None;
         self.scrolling = None;
         self.notch = None;
         self.awaited = None;
+        self.chase_actor = None;
+        self.chase_needs_route = false;
+        self.chase_edges = chase_route::Edges::Grounded;
+        self.chase_route_reason = None;
+        self.drop_refusal_seen = None;
         self.approached = None;
         self.progress.finish(Phase::Failed, reason);
         info!("Script stopped: {reason}");
@@ -1311,6 +1476,14 @@ pub(super) fn drive(
     }
     script.stepped_social = false;
     let now = time.elapsed();
+    match script.drop_response(observed.4.script_drop_refused.as_ref()) {
+        Some(DropResponse::FindRoute) => script.release_step(&mut keys, &mut mouse),
+        Some(DropResponse::Stop(reason)) => {
+            script.stop(&mut keys, &mut mouse, reason);
+            return;
+        }
+        None => (),
+    }
     if !script.progress.phase.active() {
         script.release(&mut keys, &mut mouse);
         script.retire(&mut commands);
@@ -1429,11 +1602,22 @@ pub(super) fn drive(
         script.retire(&mut commands);
         return;
     }
+    // A finished run only releases its own input. A native button may remain held.
+    if script.current.is_none() && script.follow.is_none() && script.exhausted() {
+        script.progress.complete_step();
+        script.release(&mut keys, &mut mouse);
+        script.progress.finish(Phase::Completed, "Script finished");
+        script.retire(&mut commands);
+        info!("Script finished");
+        return;
+    }
     let window = windows.single().ok();
     if script.input_mode == InputMode::Background {
         // Watching the window does not take input ownership. Only genuine
         // keyboard, button or wheel activity yields the background runner.
-        let native = keys.background.as_ref().is_none_or(|state| state.busy());
+        // Destination walks share native input and use the post-text movement
+        // override instead; unrelated script steps keep exclusive ownership.
+        let native = !script.walking() && keys.background.as_ref().is_none_or(|state| state.busy());
         script.owns_input = !native;
         if !script.owns_input {
             if script.holding() {
@@ -1467,13 +1651,6 @@ pub(super) fn drive(
         Phase::Running
     };
     if script.current.is_none() && script.exhausted() {
-        if script.follow.is_none() {
-            script.release(&mut keys, &mut mouse);
-            script.progress.finish(Phase::Completed, "Script finished");
-            script.retire(&mut commands);
-            info!("Script finished");
-            return;
-        }
         script.poll(now);
         if !script.progress.phase.active() {
             script.release(&mut keys, &mut mouse);
@@ -1621,6 +1798,10 @@ pub(super) fn drive(
         }
         let done = match &step {
             Step::Wait(duration) => elapsed >= *duration,
+            Step::WithDrops(allowed) => {
+                script.allow_drops = *allowed;
+                true
+            }
             Step::WorldLook { delta, duration } => {
                 let Some(gesture) = &mut script.world_gesture else {
                     script.stop(&mut keys, &mut mouse, "world look lost its input ownership");
@@ -1704,7 +1885,7 @@ pub(super) fn drive(
                 }
             }
             Step::Approach(range, duration) => {
-                let distance = face(&online, &players, &mut cameras);
+                let distance = guide_target(script, &online, &players);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
             }
             Step::Chase(range, limit) => match chase(
@@ -1720,11 +1901,44 @@ pub(super) fn drive(
                     true
                 }
                 Ok(Chase::Aim(aim)) => {
-                    let running = runs(face_toward(aim, &players, &mut cameras), *range);
+                    let body = bodies.single().ok().copied();
+                    let ground = collision
+                        .as_ref()
+                        .and_then(|collision| collision.0.as_ref());
+                    let (Some(body), Some(ground)) = (body, ground) else {
+                        script.stop(
+                            &mut keys,
+                            &mut mouse,
+                            "chase needs current collision and body",
+                        );
+                        return;
+                    };
+                    let toward = match chase_route::aim(
+                        script,
+                        &online,
+                        client,
+                        body,
+                        ground,
+                        observed.7.as_deref(),
+                        observed.4.airborne.as_ref(),
+                        aim,
+                        *range,
+                        now,
+                    ) {
+                        Ok(toward) => toward,
+                        Err(reason) => {
+                            script.stop(&mut keys, &mut mouse, &reason);
+                            return;
+                        }
+                    };
+                    let running = toward
+                        .is_some_and(|toward| runs(guide_toward(script, toward, &players), 0.0));
                     if running && script.acts.is_empty() {
-                        script.acts = vec![FORWARD];
+                        script.acts = vec![Act::Forward];
                     } else if !running && script.holding() {
+                        let guidance = script.guidance;
                         script.release_step(&mut keys, &mut mouse);
+                        script.guidance = guidance;
                     }
                     false
                 }
@@ -1736,9 +1950,7 @@ pub(super) fn drive(
             Step::ApproachObject {
                 range, duration, ..
             } => {
-                let Some(distance) =
-                    face_object(script.approached, &online, &players, &mut cameras)
-                else {
+                let Some(distance) = guide_object(script, &online, &players) else {
                     script.stop(&mut keys, &mut mouse, "approach object lost its object");
                     return;
                 };
@@ -1763,24 +1975,49 @@ pub(super) fn drive(
                     Step::WalkPlace { range, .. } => Some(*range),
                     _ => None,
                 };
-                // Only an object walk has chosen an object.
-                match walking::scene_ready(script, &online) {
-                    Ok(true) => (),
-                    Ok(false) => {
-                        script.release_step(&mut keys, &mut mouse);
-                        if elapsed >= *duration {
-                            script.stop(
-                                &mut keys,
-                                &mut mouse,
-                                "walk ran out of time waiting for current-zone geometry",
-                            );
-                        }
-                        return;
-                    }
+                // Validate admission even while detached. Geometry may wait,
+                // but the detached interval is not route steering time.
+                let ready = match walking::scene_ready(script, &online) {
+                    Ok(ready) => ready,
                     Err(reason) => {
                         script.stop(&mut keys, &mut mouse, &reason);
                         return;
                     }
+                };
+                if detached_camera.iter().any(|free| free) {
+                    script.walk_camera_pause.get_or_insert(now);
+                    script.release_step(&mut keys, &mut mouse);
+                    if let Some(route) = &mut script.route {
+                        route.pause_steering(now);
+                    }
+                    return;
+                }
+                let paused = script
+                    .walk_camera_pause
+                    .take()
+                    .map(|since| now.saturating_sub(since));
+                if let Some(paused) = paused {
+                    if let Some((_, since)) = &mut script.current {
+                        *since += paused;
+                    }
+                    // Rebuild even when the render clock did not advance: the
+                    // server may have moved the player during the detachment.
+                    script.route = None;
+                    script.following = None;
+                    script.search_frames = None;
+                    script.door_wait = None;
+                }
+                let elapsed = elapsed.saturating_sub(paused.unwrap_or(Duration::ZERO));
+                if !ready {
+                    script.release_step(&mut keys, &mut mouse);
+                    if elapsed >= *duration {
+                        script.stop(
+                            &mut keys,
+                            &mut mouse,
+                            "walk ran out of time waiting for current-zone geometry",
+                        );
+                    }
+                    return;
                 }
                 let body = bodies.single().ok().copied();
                 let world = collision
@@ -1827,6 +2064,7 @@ pub(super) fn drive(
                     script.approached,
                     script.place.as_ref(),
                     Some(world),
+                    None,
                 ) else {
                     script.stop(
                         &mut keys,
@@ -1899,9 +2137,32 @@ pub(super) fn drive(
                     .airborne
                     .as_ref()
                     .is_some_and(|airborne| airborne.peak().is_some());
-                let step = route.next_with(world, (feet, falling), goal, SEARCH_BUDGET, now);
+                // A fresh player position can reach the destination while an older path is still in flight.
+                let step = if !falling
+                    && place_range.is_some_and(|range| {
+                        walking::end(feet, goal, range, false, false) == Ok(true)
+                    }) {
+                    RouteStep::Arrived
+                } else {
+                    route.next_with(world, (feet, falling), goal, SEARCH_BUDGET, now)
+                };
                 let call = call.elapsed();
                 if let RouteStep::Toward(toward) = step {
+                    if !falling
+                        && script.following.is_none_or(|last| last.toward != toward)
+                        && let Err(reason) = drops::leg(
+                            &world.clone().with_collision_height(height),
+                            online.world(),
+                            client,
+                            body,
+                            feet,
+                            toward,
+                            script.allow_drops,
+                        )
+                    {
+                        script.stop(&mut keys, &mut mouse, reason);
+                        return;
+                    }
                     let traced = script.following.and_then(|following| following.traced);
                     let mut following = Following {
                         toward,
@@ -1915,6 +2176,12 @@ pub(super) fn drive(
                         debug!(
                             feet = ?eq_point(feet),
                             toward = ?eq_point(toward),
+                            goal = ?eq_point(goal),
+                            mesh_generation = ?observed.7.as_deref().map(crate::zone_navmesh::ZoneNavMesh::generation),
+                            profile = ?observed.7.as_deref().map(|meshes| meshes.walker_size(body, client)),
+                            polygons = ?observed.7.as_deref().and_then(|meshes| {
+                                meshes.for_zone_walker(online.world().zone(), meshes.walker_size(body, client)).ok()
+                            }).map(|mesh| (mesh.locate(feet), mesh.locate(toward), mesh.locate(goal))),
                             index = following.index,
                             ahead = following.ahead,
                             left = following.left,
@@ -1961,6 +2228,7 @@ pub(super) fn drive(
                     let timing = route.search_timing().unwrap_or_default();
                     let planned = Planned::of(route.planned());
                     info!(
+                        allow_damaging_drops = script.allow_drops,
                         waypoints,
                         waited,
                         queued = timing.queued.as_secs_f32(),
@@ -2108,11 +2376,9 @@ pub(super) fn drive(
                             info!(id, waited, "Script walk door opened");
                         }
                         let to = next - feet;
-                        for mut camera in &mut cameras {
-                            camera.yaw = super::behind(to.x.atan2(to.z));
-                        }
+                        script.guidance = Some(eq_client_core::world_heading(to.x.atan2(to.z)));
                         if script.acts.is_empty() {
-                            script.acts = vec![FORWARD];
+                            script.acts = vec![Act::Forward];
                         }
                         (false, elapsed >= *duration)
                     }
@@ -2358,6 +2624,7 @@ pub(super) fn drive(
         script.walk_scope = None;
         script.walk_generation = None;
         script.walk_waiting = None;
+        script.walk_camera_pause = None;
         script.place = None;
         script.place_lookup = None;
         script.glide = None;
@@ -2387,6 +2654,7 @@ pub(super) fn drive(
         return;
     }
     let sight = language::Sight {
+        motion: Some(&observed.4),
         world: online.world(),
         spells: observed.8.as_deref(),
         clock: client.clock(),
@@ -2405,6 +2673,17 @@ pub(super) fn drive(
     let Some(QueuedStep { step, line }) = script.steps.pop_front() else {
         return;
     };
+    // A walk may have just completed while native UI input was active. Do not
+    // hand that movement exemption to a subsequent click or authored key step.
+    if script.input_mode == InputMode::Background
+        && !walking::is_step(&step)
+        && keys.background.as_ref().is_none_or(|state| state.busy())
+    {
+        script.steps.push_front(QueuedStep { step, line });
+        script.owns_input = false;
+        script.progress.phase = Phase::WaitingForInput;
+        return;
+    }
     // An entry of the closed EQ menu: the script opens the menu with its own
     // button first, as a player would, then comes back to the entry.
     let (step, authored) = match opens_menu_first(&step, menu.open, script.menu_opening, now) {
@@ -2435,7 +2714,7 @@ pub(super) fn drive(
     } else {
         script.progress.line = line;
     }
-    info!(?step, "Script step");
+    screenshot::log_step(&step);
     match &step {
         Step::DeleteCharacter { name, confirmation } => {
             match online.script_character_deletion(name, confirmation, &observed.1) {
@@ -2935,7 +3214,7 @@ pub(super) fn drive(
         Step::Screenshot(path) => {
             commands
                 .spawn(Screenshot::primary_window())
-                .observe(save_to_disk(path.clone()));
+                .observe(screenshot::save(path.clone()));
             return;
         }
         Step::Quit => {
@@ -2952,23 +3231,32 @@ pub(super) fn drive(
             return;
         }
         Step::Approach(..) => {
-            if face(&online, &players, &mut cameras).is_none() {
+            if guide_target(script, &online, &players).is_none() {
                 script.stop(&mut keys, &mut mouse, "approach needs a visible target");
                 return;
             }
-            script.acts = vec![FORWARD];
+            script.acts = vec![Act::Forward];
         }
         Step::Chase(..) => {
+            script.chase_needs_route = false;
+            script.chase_edges = chase_route::Edges::Grounded;
+            script.chase_route_reason = None;
             script.awaited = online.world().target().selected;
+            script.chase_actor = script.awaited.and_then(|id| {
+                Some((
+                    online.world().session_id()?,
+                    online.world().spawn(id)?.revision,
+                ))
+            });
             script.chase_seen = None;
-            if face(&online, &players, &mut cameras).is_none() {
+            if guide_target(script, &online, &players).is_none() {
                 script.stop(&mut keys, &mut mouse, "chase needs a visible target");
                 return;
             }
         }
         Step::ApproachObject { kind, .. } => {
             script.approached = nearest_station(&online, *kind);
-            if face_object(script.approached, &online, &players, &mut cameras).is_none() {
+            if guide_object(script, &online, &players).is_none() {
                 script.stop(
                     &mut keys,
                     &mut mouse,
@@ -2976,7 +3264,7 @@ pub(super) fn drive(
                 );
                 return;
             }
-            script.acts = vec![FORWARD];
+            script.acts = vec![Act::Forward];
         }
         Step::Walk(range, _) | Step::WalkObject { range, .. } | Step::WalkPlace { range, .. } => {
             if let Step::WalkObject { kind, .. } = &step {
@@ -3033,6 +3321,7 @@ pub(super) fn drive(
         | Step::WaitZone(_)
         | Step::WaitRelocation(_)
         | Step::Wait(_)
+        | Step::WithDrops(_)
         | Step::Trace(_) => (),
     }
     script.current = Some((step, now));
@@ -4481,6 +4770,7 @@ fn walk_ends(
     object: Option<u32>,
     place: Option<&walking::PlaceGoal>,
     floors: Option<&eq_client_core::movement::CollisionWorld>,
+    target: Option<u16>,
 ) -> Option<(Vec3, Vec3)> {
     let world = online.world();
     let player = world.player()?;
@@ -4491,9 +4781,8 @@ fn walk_ends(
             world.objects().entries().get(&drop_id)?.position,
         ))
     } else {
-        let target = &world
-            .target()
-            .selected
+        let target = &target
+            .or(world.target().selected)
             .and_then(|id| world.spawn(id))?
             .state;
         spawn_goal(
@@ -4575,16 +4864,44 @@ fn face(
     face_toward(spawn.position, players, cameras)
 }
 
-/// [`face`] toward a world object instead of the target, or None without a
-/// player or once the object has left the zone.
-fn face_object(
-    drop_id: Option<u32>,
+/// Continuous guidance requests a normal turn, leaving the camera to its owner.
+fn guide_target(
+    script: &mut Script,
     online: &super::online::OnlineState,
     players: &Query<&Transform, With<super::Player>>,
-    cameras: &mut Query<&mut super::OrbitCamera>,
 ) -> Option<f32> {
-    let object = online.world().objects().entries().get(&drop_id?)?;
-    face_toward(object.position, players, cameras)
+    let spawn = online
+        .world()
+        .target()
+        .selected
+        .and_then(|id| online.world().spawn(id))?;
+    guide_toward(script, spawn.state.position, players)
+}
+
+fn guide_object(
+    script: &mut Script,
+    online: &super::online::OnlineState,
+    players: &Query<&Transform, With<super::Player>>,
+) -> Option<f32> {
+    let object = online
+        .world()
+        .objects()
+        .entries()
+        .get(&script.approached?)?;
+    guide_toward(script, object.position, players)
+}
+
+fn guide_toward(
+    script: &mut Script,
+    position: eq_client_core::WorldPosition,
+    players: &Query<&Transform, With<super::Player>>,
+) -> Option<f32> {
+    let transform = players.single().ok()?;
+    let to = Vec3::from_array(eq_client_core::render_position(position)) - transform.translation;
+    let flat = Vec2::new(to.x, to.z);
+    script.guidance =
+        (flat.length() > f32::EPSILON).then(|| eq_client_core::world_heading(flat.x.atan2(flat.y)));
+    Some(flat.length())
 }
 
 /// Points the camera from the player toward a position and returns the flat
@@ -4831,6 +5148,90 @@ mod tests {
     };
 
     #[test]
+    fn target_goals_keep_their_reported_floor_under_and_on_a_platform() {
+        let collision =
+            eq_client_core::movement::CollisionWorld::new([0.0, 53.0].into_iter().flat_map(|y| {
+                [
+                    [[-20.0, y, -20.0], [20.0, y, 20.0], [20.0, y, -20.0]],
+                    [[-20.0, y, -20.0], [-20.0, y, 20.0], [20.0, y, 20.0]],
+                ]
+            }))
+            .unwrap();
+        for y in [0.0, 53.0] {
+            let reported = Vec3::new(0.0, y + HUMAN.feet(), 0.0);
+            let goal = spawn_goal(Some(&collision), reported, HUMAN);
+            assert!(
+                (goal.y - y).abs() < 1e-3,
+                "wrong target floor: {reported:?} -> {goal:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn drop_permission_changes_in_the_driver_and_resets_on_stop_and_replacement() {
+        let (mut app, _) = background(vec![
+            Step::WithDrops(true),
+            Step::Wait(Duration::from_millis(30)),
+            Step::WithDrops(false),
+            Step::Wait(Duration::from_millis(30)),
+        ]);
+        let (mut saw_true, mut saw_false) = (false, false);
+        for ms in (0..200).step_by(10) {
+            frame_at(&mut app, ms);
+            if let Some(script) = app.world().get_resource::<Script>() {
+                saw_true |= script.allow_drops;
+                saw_false |= saw_true && !script.allow_drops;
+            }
+        }
+        assert!(
+            saw_true && saw_false,
+            "the explicit permission command never ran"
+        );
+        app.insert_resource(
+            Script::new(vec![
+                Step::WithDrops(true),
+                Step::Walk(1.0, Duration::from_secs(1)),
+            ])
+            .input_mode(InputMode::Background),
+        );
+        let old_identity =
+            std::sync::Arc::clone(&app.world().resource::<Script>().progress.identity);
+        let mut failed = false;
+        for ms in (200..500).step_by(10) {
+            frame_at(&mut app, ms);
+            if let Some(script) = app.world().get_resource::<Script>()
+                && script.status().phase() == Phase::Failed
+            {
+                assert!(!script.allow_drops);
+                assert!(!script.acts.contains(&FORWARD));
+                failed = true;
+                break;
+            }
+        }
+        assert!(failed, "the body/collision refusal never stopped the run");
+        app.world_mut()
+            .resource_mut::<crate::motion::Controls>()
+            .script_drop_refused = Some((
+            old_identity,
+            std::time::Instant::now(),
+            "old run drop refusal",
+        ));
+        app.insert_resource(
+            Script::new(vec![Step::Wait(Duration::from_secs(1))]).input_mode(InputMode::Background),
+        );
+        for ms in (500..600).step_by(10) {
+            frame_at(&mut app, ms);
+            let script = app.world().resource::<Script>();
+            assert!(!script.allow_drops);
+            assert_ne!(
+                script.status().phase(),
+                Phase::Failed,
+                "stale refusal stopped a replacement run"
+            );
+        }
+    }
+
+    #[test]
     fn a_walk_to_a_target_aims_at_its_soles_on_the_floor_not_its_middle() {
         use eq_client_core::movement::navmesh::{NavMesh, Settings};
         use eq_client_core::movement::{Route, RouteStep};
@@ -4905,6 +5306,7 @@ mod tests {
             None,
             None,
             Some(&world),
+            None,
         )
         .unwrap();
         assert!(goal.y.abs() < 1e-3, "{goal}");
@@ -4932,6 +5334,7 @@ mod tests {
             Some(40),
             None,
             Some(&world),
+            None,
         )
         .unwrap();
         assert_eq!(
@@ -6033,11 +6436,10 @@ mod tests {
     fn scripted_loot_buttons_reach_the_normal_request_with_both_destinations() {
         use crate::online::{OnlineState, testing};
         use eq_client_core::{
-            ClientCommand, Coins, SpawnKind, WorldEvent,
-            inventory::InventoryUpdate,
+            ClientCommand, Coins, WorldEvent,
             loot::{LootResponse, LootUpdate},
         };
-        for auto in [false, true] {
+        for (auto, own) in [(false, false), (true, false), (false, true), (true, true)] {
             let target = ClickTarget::Trade(TradeClick::Take(0));
             let click = if auto {
                 Step::RightClick(target)
@@ -6050,38 +6452,8 @@ mod tests {
                 click,
                 Step::Wait(Duration::from_secs(2)),
             ]);
-            let mut online = OnlineState::new(true);
-            testing::admit(&mut online, 5, testing::player(7));
-            testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
-            let mut corpse = testing::pet(9, 7);
-            corpse.kind = SpawnKind::NpcCorpse;
-            corpse.name = "Test corpse".into();
-            testing::spawns(&mut online, vec![corpse]);
-            online.select_target(Some(9));
-            let (tx, rx) = std::sync::mpsc::sync_channel(8);
-            app.insert_resource(online)
-                .insert_resource(crate::outbox::Outbox::new(Some(tx)))
-                .add_systems(
-                    Update,
-                    (crate::online::carry_as, crate::trade::input).chain(),
-                );
-            crate::keys::testing::install(&mut app);
-            // The direct loot command has no native default; choose one here.
-            crate::keys::testing::bind(
-                &mut app,
-                crate::keys::Act::Loot,
-                crate::keys::Chord::key(KeyCode::KeyL),
-            );
-            app.world_mut().spawn((
-                Button,
-                crate::trade::Action::Take {
-                    place: 0,
-                    auto: false,
-                },
-                Interaction::None,
-                Node::default(),
-                laid_out(Vec2::new(200.0, 200.0), 50.0, 10),
-            ));
+            let online = scripted_loot_world(own);
+            let rx = scripted_loot_input(&mut app, online);
             frame_at(&mut app, 0);
             assert!(matches!(
                 rx.try_recv(),
@@ -6089,6 +6461,9 @@ mod tests {
             ));
             let mut item = crate::preview::items().remove(0);
             item.details.flags.clear();
+            if own {
+                item.details.flags.push("NO DROP".into());
+            }
             testing::news(
                 &mut app.world_mut().resource_mut::<OnlineState>(),
                 [
@@ -6105,6 +6480,10 @@ mod tests {
             );
             for ms in [10, 120, 250, 400, 550, 700, 850, 1000] {
                 frame_at(&mut app, ms);
+                assert_eq!(
+                    app.world().resource::<crate::confirm::Asked>().question(),
+                    None
+                );
             }
             assert!(matches!(
                 rx.try_recv(),
@@ -6124,6 +6503,242 @@ mod tests {
                     .contains_key(&0)
             );
         }
+    }
+
+    fn scripted_loot_world(own: bool) -> crate::online::OnlineState {
+        use crate::online::{OnlineState, testing};
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 5, testing::player(7));
+        testing::inventory(
+            &mut online,
+            eq_client_core::inventory::InventoryUpdate::Snapshot(Vec::new()),
+        );
+        let mut corpse = testing::pet(9, 7);
+        corpse.kind = eq_client_core::SpawnKind::NpcCorpse;
+        corpse.name = if own {
+            "eXaMpLe's_corpse679"
+        } else {
+            "Test corpse"
+        }
+        .into();
+        testing::spawns(&mut online, vec![corpse]);
+        online.select_target(Some(9));
+        online
+    }
+
+    #[test]
+    fn scripted_loot_confirmation_answers_while_the_question_is_open() {
+        for auto in [false, true] {
+            for accept in [false, true] {
+                let target = ClickTarget::Trade(TradeClick::Take(0));
+                let (mut app, _) = background(vec![
+                    Step::Press(vec![KeyCode::KeyL]),
+                    Step::Wait(Duration::from_millis(100)),
+                    if auto {
+                        Step::RightClick(target)
+                    } else {
+                        Step::Click(target)
+                    },
+                    Step::Wait(Duration::from_millis(400)),
+                    Step::Click(ClickTarget::Answer(accept)),
+                ]);
+                let rx = scripted_loot_input(&mut app, scripted_loot_world(false));
+                app.add_systems(
+                    Update,
+                    (crate::confirm::buttons, crate::confirm::window)
+                        .chain()
+                        .before(crate::trade::no_drop::confirm),
+                );
+                let dialog = app
+                    .world_mut()
+                    .spawn(Node {
+                        display: Display::None,
+                        ..default()
+                    })
+                    .id();
+                app.world_mut().spawn((
+                    Button,
+                    crate::confirm::AnswerButton(accept),
+                    ChildOf(dialog),
+                    laid_out(Vec2::new(600.0, 360.0), 40.0, 20),
+                ));
+                frame_at(&mut app, 0);
+                assert!(matches!(
+                    rx.try_recv(),
+                    Ok(eq_client_core::ClientCommand::Loot { .. })
+                ));
+                scripted_loot_listing(&mut app, 0, true);
+                let mut saw_question = false;
+                for ms in (10..=1600).step_by(10) {
+                    let visible = app
+                        .world()
+                        .resource::<crate::confirm::Asked>()
+                        .question()
+                        .is_some();
+                    saw_question |= visible;
+                    app.world_mut().get_mut::<Node>(dialog).unwrap().display = if visible {
+                        Display::Flex
+                    } else {
+                        Display::None
+                    };
+                    frame_at(&mut app, ms);
+                }
+                assert!(
+                    saw_question,
+                    "another corpse must ask before the scripted answer"
+                );
+                assert_eq!(
+                    app.world().resource::<crate::confirm::Asked>().question(),
+                    None
+                );
+                if accept {
+                    assert!(
+                        matches!(rx.try_recv(), Ok(eq_client_core::ClientCommand::LootItem { auto: sent, .. }) if sent==auto)
+                    );
+                }
+                assert!(rx.try_recv().is_err(), "No sends nothing; Yes sends once");
+                assert!(
+                    app.world()
+                        .resource::<crate::online::OnlineState>()
+                        .world()
+                        .loot()
+                        .unwrap()
+                        .items
+                        .contains_key(&0)
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn script_right_click_on_row_one_ignores_an_empty_row_zero_hover() {
+        for competing_hover in [false, true] {
+            let steps = parse::parse(
+                "press(\"L\")\nwait(100)\nright_click(\"loot\", 1)\nwait(1000)",
+                Path::new("synthetic"),
+            )
+            .unwrap();
+            let (mut app, _) = background(steps);
+            let rx = scripted_loot_input(&mut app, scripted_loot_world(false));
+            app.world_mut().spawn((
+                Button,
+                crate::trade::Action::Take {
+                    place: 1,
+                    auto: false,
+                },
+                Node::default(),
+                Interaction::None,
+                laid_out(Vec2::new(300.0, 200.0), 50.0, 10),
+            ));
+            frame_at(&mut app, 0);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(eq_client_core::ClientCommand::Loot { corpse_id: 9, .. })
+            ));
+            // The first pickup's server result left only row one populated.
+            scripted_loot_listing(&mut app, 1, false);
+            if competing_hover {
+                let world = app.world_mut();
+                let mut controls = world.query::<(&crate::trade::Action, &mut Interaction)>();
+                for (action, mut interaction) in controls.iter_mut(world) {
+                    if matches!(action, crate::trade::Action::Take { place: 0, .. }) {
+                        *interaction = Interaction::Hovered;
+                    }
+                }
+            }
+            for ms in (10..=1500).step_by(10) {
+                frame_at(&mut app, ms);
+            }
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(eq_client_core::ClientCommand::LootItem {
+                    place: 1,
+                    auto: true,
+                    ..
+                })
+            ));
+            assert!(rx.try_recv().is_err());
+            let world = app.world().resource::<crate::online::OnlineState>().world();
+            assert!(world.loot().unwrap().items.contains_key(&1));
+            assert!(
+                !world
+                    .inventory()
+                    .items()
+                    .contains_key(&eq_client_core::inventory::InventorySlot::CURSOR)
+            );
+        }
+    }
+
+    fn scripted_loot_listing(app: &mut App, place: u16, no_drop: bool) {
+        use eq_client_core::{
+            Coins, WorldEvent,
+            loot::{LootResponse, LootUpdate},
+        };
+        let mut item = crate::preview::items().remove(0);
+        item.details.flags = if no_drop {
+            vec!["NO DROP".into()]
+        } else {
+            Vec::new()
+        };
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [
+                WorldEvent::Loot(LootUpdate::Opened {
+                    response: LootResponse::Normal,
+                    coins: Coins::default(),
+                }),
+                WorldEvent::Loot(LootUpdate::Item {
+                    place,
+                    item: Box::new(item),
+                }),
+                WorldEvent::Loot(LootUpdate::Listed { corpse_id: 9 }),
+            ],
+        );
+    }
+
+    fn scripted_loot_input(
+        app: &mut App,
+        online: crate::online::OnlineState,
+    ) -> std::sync::mpsc::Receiver<eq_client_core::ClientCommand> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+            .init_resource::<crate::confirm::Asked>()
+            .add_systems(
+                Update,
+                (
+                    crate::online::carry_as,
+                    crate::trade::input,
+                    crate::trade::no_drop::confirm,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = eq_client_assets::ui::InstalledClient::Titanium;
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .loot_no_drop = eq_client_core::no_drop::LootNoDrop::Ask;
+        crate::keys::testing::install(app);
+        // Direct looting has no native default. Bind the key that the fixture presses.
+        crate::keys::testing::bind(
+            app,
+            crate::keys::Act::Loot,
+            crate::keys::Chord::key(KeyCode::KeyL),
+        );
+        app.world_mut().spawn((
+            Button,
+            crate::trade::Action::Take {
+                place: 0,
+                auto: false,
+            },
+            Interaction::None,
+            Node::default(),
+            laid_out(Vec2::new(200.0, 200.0), 50.0, 10),
+        ));
+        rx
     }
 
     #[test]
@@ -7693,7 +8308,8 @@ mod tests {
                 .add_systems(Update, slide.after(drive));
             app.world_mut().spawn((
                 Button,
-                SkinSlider::test_level(level),
+                crate::skinned::color_picker::ScriptChannel,
+                SkinSlider::channel(level),
                 RelativeCursorPosition::default(),
                 laid_out(Vec2::new(240.0, 360.0), 80.0, 1),
             ));

@@ -19,52 +19,6 @@ pub(super) const UI_SCALE_VALUE: &str = "EQC_QoL_UiScaleValueLabel";
 pub(super) const RUN_SPEED_SLIDER: &str = "EQC_QoL_RunSpeedSlider";
 pub(super) const RUN_SPEED_VALUE: &str = "EQC_QoL_RunSpeedValueLabel";
 
-/// Generated colour controls: caption, slider, value, title and setting.
-pub(super) const COMBAT_TEXT_COLORS: [(&str, &str, &str, &str, Level); 6] = [
-    (
-        "EQC_QoL_CombatTextOutgoingRedLabel",
-        "EQC_QoL_CombatTextOutgoingRedSlider",
-        "EQC_QoL_CombatTextOutgoingRedValueLabel",
-        "Other damage: red",
-        Level::CombatTextOutgoingRed,
-    ),
-    (
-        "EQC_QoL_CombatTextIncomingRedLabel",
-        "EQC_QoL_CombatTextIncomingRedSlider",
-        "EQC_QoL_CombatTextIncomingRedValueLabel",
-        "Damage to you: red",
-        Level::CombatTextIncomingRed,
-    ),
-    (
-        "EQC_QoL_CombatTextOutgoingGreenLabel",
-        "EQC_QoL_CombatTextOutgoingGreenSlider",
-        "EQC_QoL_CombatTextOutgoingGreenValueLabel",
-        "Other damage: green",
-        Level::CombatTextOutgoingGreen,
-    ),
-    (
-        "EQC_QoL_CombatTextIncomingGreenLabel",
-        "EQC_QoL_CombatTextIncomingGreenSlider",
-        "EQC_QoL_CombatTextIncomingGreenValueLabel",
-        "Damage to you: green",
-        Level::CombatTextIncomingGreen,
-    ),
-    (
-        "EQC_QoL_CombatTextOutgoingBlueLabel",
-        "EQC_QoL_CombatTextOutgoingBlueSlider",
-        "EQC_QoL_CombatTextOutgoingBlueValueLabel",
-        "Other damage: blue",
-        Level::CombatTextOutgoingBlue,
-    ),
-    (
-        "EQC_QoL_CombatTextIncomingBlueLabel",
-        "EQC_QoL_CombatTextIncomingBlueSlider",
-        "EQC_QoL_CombatTextIncomingBlueValueLabel",
-        "Damage to you: blue",
-        Level::CombatTextIncomingBlue,
-    ),
-];
-
 /// The Options window's sliders this client keeps settings for, with the
 /// labels that show their values, by screen ID.
 const LEVEL_SLIDERS: [(&str, &str, Level); 7] = [
@@ -125,13 +79,7 @@ pub(super) fn slider_sets(id: Option<&str>, owner: WindowId) -> Option<Sets> {
         WindowId::Options => LEVEL_SLIDERS
             .iter()
             .find(|(slider, _, _)| *slider == id)
-            .map(|(_, _, level)| Sets::Level(*level))
-            .or_else(|| {
-                COMBAT_TEXT_COLORS
-                    .iter()
-                    .find(|(_, slider, _, _, _)| *slider == id)
-                    .map(|(_, _, _, _, level)| Sets::Level(*level))
-            }),
+            .map(|(_, _, level)| Sets::Level(*level)),
         WindowId::Quantity => (id == QUANTITY_SLIDER).then_some(Sets::Quantity),
         _ => None,
     }
@@ -166,12 +114,6 @@ pub(super) fn value_label(name: &str, owner: WindowId) -> Option<ValueLabel> {
             .iter()
             .find(|(_, label, _)| *label == name)
             .map(|(_, _, level)| *level)
-            .or_else(|| {
-                COMBAT_TEXT_COLORS
-                    .iter()
-                    .find(|(_, _, value, _, _)| *value == name)
-                    .map(|(_, _, _, _, level)| *level)
-            })
             .map_or(ValueLabel::Blank, ValueLabel::Shows),
     )
 }
@@ -193,6 +135,16 @@ pub(crate) struct SkinSlider {
 }
 
 impl SkinSlider {
+    /// A semantic channel target for scripts using the original option keys.
+    pub(crate) const fn channel(level: Level) -> Self {
+        Self {
+            sets: Sets::Level(level),
+            width: 1.0,
+            thumb: 0.0,
+            held: None,
+        }
+    }
+
     #[cfg(test)]
     pub(crate) const fn test_level(level: Level) -> Self {
         Self {
@@ -336,6 +288,18 @@ pub(super) fn slider(
     });
 }
 
+type SliderInputs<'w, 's> = Query<
+    'w,
+    's,
+    (
+        &'static Interaction,
+        &'static mut SkinSlider,
+        &'static RelativeCursorPosition,
+        Has<super::color_picker::ScriptChannel>,
+        Has<crate::tooltip::ScriptPressed>,
+    ),
+>;
+
 /// Sets a slider's setting from where the pointer presses or drags it.
 ///
 /// A setting that rescales the layout ([`Level::rescales_layout`]) is held
@@ -347,7 +311,7 @@ pub(super) fn slider(
 /// slider returns the setting to its default.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn slide(
-    mut sliders: Query<(&Interaction, &mut SkinSlider, &RelativeCursorPosition)>,
+    mut sliders: SliderInputs,
     online: Res<crate::online::OnlineState>,
     mouse: Option<Res<ButtonInput<MouseButton>>>,
     mut state: ResMut<OptionsState>,
@@ -362,7 +326,11 @@ pub(crate) fn slide(
             .as_ref()
             .is_some_and(|mouse| mouse.just_pressed(MouseButton::Right));
     let right_held = !left && down(MouseButton::Right);
-    for (interaction, mut slider, cursor) in &mut sliders {
+    for (interaction, mut slider, cursor, picker, scripted) in &mut sliders {
+        if picker && !scripted {
+            continue;
+        }
+
         let pressed = (*interaction == Interaction::Pressed)
             .then_some(cursor.normalized)
             .flatten()

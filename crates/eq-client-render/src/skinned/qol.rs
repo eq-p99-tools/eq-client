@@ -17,6 +17,7 @@ pub(super) mod tests;
 
 /// This client's Look Spring checkbox, for a skin without one.
 pub(super) const LOOK_SPRING_FALLBACK: &str = "EQC_LookSpringCheckbox";
+pub(super) const OUTLINE_TRACKED: &str = "EQC_OutlineTrackedNames";
 const LOOK_SPRING_TEXT: &str = "Look Spring";
 const LOOK_SPRING_TOOLTIP: &str = "Bring the first-person view back level when no look key or mouse look holds it, as the official client's Look Spring does.";
 
@@ -139,9 +140,11 @@ pub(super) fn pages<'a>(
     // a usable label take both metrics and typography from the checkbox.
     let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
     let layout = Layout::new(checkbox, heading_height, room, choices.len());
+    // The Map section follows Dangerous without changing its existing row/column layout.
+    choices.push(Control::Checkbox(Choice::OutlineTracked));
     let mut pieces = Vec::new();
     let mut y = MARGIN;
-    for section in [Section::Ordinary, Section::Dangerous] {
+    for section in [Section::Ordinary, Section::Dangerous, Section::Map] {
         pieces.push(section.heading(
             checkbox,
             caption,
@@ -165,15 +168,7 @@ pub(super) fn pages<'a>(
         ) + SECTION_GAP;
     }
     // Append the palette after existing controls, preserving their column/row positions.
-    if let Some((slider, value)) = slider.zip(value) {
-        append_palette(
-            &mut pieces,
-            &layout,
-            (checkbox, caption),
-            (slider, value),
-            y,
-        );
-    }
+    append_palette(&mut pieces, &layout, checkbox, caption, y);
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
 }
@@ -208,34 +203,30 @@ fn option_sliders<'a>(slider: &'a Slider, value: &'a Label) -> [Control<'a>; 2] 
 fn append_palette(
     pieces: &mut Vec<(String, Element)>,
     layout: &Layout,
-    (checkbox, caption): (&Button, Option<&Label>),
-    (slider, value): (&Slider, &Label),
-    y: f32,
+    checkbox: &Button,
+    caption: Option<&Label>,
+    mut y: f32,
 ) {
-    let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
-    pieces.push(Section::CombatText.heading(
-        checkbox,
-        caption,
-        Area {
-            x: layout.margin,
-            y,
-            width: layout.available,
-            height: heading_height,
-        },
-    ));
-    let colors: Vec<_> = controls::COMBAT_TEXT_COLORS
-        .into_iter()
-        .map(
-            |(caption_id, slider_id, value_id, text, _)| Control::Slider {
-                section: Section::CombatText,
-                slider,
-                value,
-                ids: (caption_id, slider_id, value_id),
-                text,
-            },
-        )
-        .collect();
-    layout.append_controls(pieces, &colors, checkbox, y + heading_height + GAP);
+    let mut area = Area {
+        x: layout.margin,
+        y,
+        width: layout.available,
+        height: caption.map_or(checkbox.area.height, |label| label.area.height),
+    };
+    let (id, template) = Section::CombatText.caption(checkbox, caption, area);
+    pieces.push((id, Element::Label(template.clone())));
+    y += area.height + GAP;
+    for (id, title, _) in super::color_picker::COMBAT_COLORS {
+        area.y = y;
+        let mut label = template.clone();
+        label.area = area;
+        title.clone_into(&mut label.text);
+        pieces.push((format!("{id}Caption"), Element::Label(label.clone())));
+        label.area.y += area.height;
+        label.area.height = super::color_picker::height(area.width);
+        y = label.area.y + label.area.height + GAP;
+        pieces.push((id.to_owned(), Element::Label(label)));
+    }
 }
 
 /// Cuts a caption, slider and value label from the skin and returns their bottom edge.
@@ -313,19 +304,26 @@ fn qol_slider(
 enum Section {
     Ordinary,
     Dangerous,
+    Map,
     CombatText,
 }
 
 impl Section {
     fn heading(self, checkbox: &Button, style: Option<&Label>, area: Area) -> (String, Element) {
+        let (id, label) = self.caption(checkbox, style, area);
+        (id, Element::Label(label))
+    }
+
+    fn caption(self, checkbox: &Button, style: Option<&Label>, area: Area) -> (String, Label) {
         let (id, text) = match self {
             Self::Ordinary => ("EQC_QoL_SettingsCaption", "Quality of Life"),
             Self::Dangerous => ("EQC_QoL_UnsafeCaption", "Dangerous"),
+            Self::Map => ("EQC_QoL_MapCaption", "Map"),
             Self::CombatText => ("EQC_QoL_CombatTextCaption", "Combat text colors"),
         };
         (
             id.to_owned(),
-            Element::Label(Label {
+            Label {
                 client_value: None,
                 area,
                 anchors: None,
@@ -335,7 +333,7 @@ impl Section {
                 align: Align::Left,
                 font: style.map_or(checkbox.font, |label| label.font),
                 wraps: false,
-            }),
+            },
         )
     }
 }
@@ -344,6 +342,7 @@ impl Section {
 #[derive(Clone, Copy)]
 enum Choice {
     Fix(Fix),
+    OutlineTracked,
     /// One of the official client's options, where the skin has no
     /// checkbox for it.
     Official {
@@ -357,6 +356,11 @@ impl Choice {
     /// The checkbox's screen ID, text and tooltip.
     fn parts(self) -> (String, &'static str, &'static str) {
         match self {
+            Self::OutlineTracked => (
+                OUTLINE_TRACKED.to_owned(),
+                "Outline tracked names",
+                crate::map::OUTLINES_TOOLTIP,
+            ),
             Self::Fix(fix) => (qol_checkbox_id(fix), fix.label(), fix.tooltip()),
             Self::Official { id, text, tooltip } => (id.to_owned(), text, tooltip),
         }
@@ -379,6 +383,7 @@ impl Control<'_> {
     fn section(self) -> Section {
         match self {
             Self::Checkbox(Choice::Fix(fix)) if fix.is_unsafe() => Section::Dangerous,
+            Self::Checkbox(Choice::OutlineTracked) => Section::Map,
             Self::Checkbox(_) => Section::Ordinary,
             Self::Slider { section, .. } => section,
         }

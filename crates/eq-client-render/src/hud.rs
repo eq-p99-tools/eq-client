@@ -4,6 +4,8 @@ pub(super) mod action_bar;
 pub(crate) mod hotbar;
 pub(crate) mod melody;
 pub(crate) mod messages;
+#[cfg(test)]
+pub(crate) mod p99_tests;
 pub(crate) mod requests;
 #[cfg(test)]
 mod tests;
@@ -21,7 +23,11 @@ pub(super) struct HudState {
 #[derive(Component)]
 pub(super) struct HudRoot;
 #[derive(Component)]
+#[require(crate::skinned::gem::Refresh)]
 pub(crate) struct SpellGem(pub(crate) u8);
+
+#[derive(Component)]
+pub(crate) struct FallbackGem;
 
 /// Follows the active profile's class before either skin or fallback HUD
 /// frames are presented. An unknown profile retains the previous neutral
@@ -288,16 +294,15 @@ pub(super) fn spawn(commands: &mut Commands) {
     commands.entity(casting).insert(HudLabel::Casting);
     for number in 1..=8 {
         let slot = slot(commands, gems, &number.to_string(), 38.0, true);
-        commands
-            .entity(slot)
-            .with_child(super::spell_icons::artwork(
-                super::spell_icons::Source::Gem(number - 1),
-                30.0,
-            ));
+        commands.entity(slot).with_child((
+            super::spell_icons::artwork(super::spell_icons::Source::Gem(number - 1), 30.0),
+            crate::skinned::gem::GemPiece::Icon,
+        ));
         let gem = u8::try_from(number - 1).expect("eight gems");
         commands.entity(slot).insert((
             Button,
             SpellGem(gem),
+            FallbackGem,
             hotbar::Pickable(hotbar::Source::Gem(gem)),
             crate::outbox::Needs::Capability(eq_client_core::Capability::Casting),
         ));
@@ -393,14 +398,22 @@ pub(super) fn spell_details(
     map: Res<super::keys::KeyMap>,
     online: Res<super::online::OnlineState>,
     names: Res<super::spellbook::SpellNames>,
-    mut gems: Query<(&Interaction, &SpellGem, &mut BackgroundColor)>,
+    settings: Option<Res<crate::ViewerSettings>>,
+    mut gems: Query<(
+        &Interaction,
+        &SpellGem,
+        &crate::skinned::gem::Refresh,
+        Option<&FallbackGem>,
+        &mut BackgroundColor,
+    )>,
     mut labels: Query<&mut Text, With<SpellDetails>>,
 ) {
     let now = std::time::Instant::now();
     let casting = online.world().casting();
     let held = online.world().gems();
     let mut hovered = None;
-    for (interaction, SpellGem(gem), mut background) in &mut gems {
+    let titanium = settings.is_none_or(|s| s.0.installed_client.fades_blocked_gems());
+    for (interaction, SpellGem(gem), refresh, fallback, mut background) in &mut gems {
         let spell = held.get(usize::from(*gem)).copied().flatten();
         let waiting = casting.cast.is_some()
             || casting.pending.is_some()
@@ -414,7 +427,11 @@ pub(super) fn spell_details(
         if pointed {
             hovered = Some((*gem, spell));
         }
-        background.0 = theme::readiness(pointed, spell.is_none(), waiting);
+        background.0 = if titanium && fallback.is_some() {
+            refresh.background(theme::readiness(pointed, spell.is_none(), false))
+        } else {
+            theme::readiness(pointed, spell.is_none(), waiting)
+        };
     }
     let text = match hovered {
         None => String::new(),

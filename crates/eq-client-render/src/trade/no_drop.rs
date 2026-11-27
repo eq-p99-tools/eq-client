@@ -14,7 +14,7 @@ use crate::{
 };
 use bevy::prelude::*;
 use eq_client_core::{
-    ClientCommand, SpawnKind, inventory::InventoryItem, no_drop::LootNoDrop, world::ClientWorld,
+    ClientCommand, inventory::InventoryItem, no_drop::LootNoDrop, world::ClientWorld,
 };
 use std::time::{Duration, Instant};
 
@@ -42,16 +42,15 @@ impl Confirm {
     }
 }
 
-/// Whether the corpse is the player's own. How the program tells is
-/// unread; a player corpse named for the player stands in (checklist 6.487).
+/// Whether the corpse is the player's own. The native owner-name comparison
+/// is independent of the corpse-kind byte; do not exclude an own corpse
+/// reported as the other corpse kind.
 fn own_corpse(world: &ClientWorld, corpse_id: u16) -> bool {
-    let shown = |raw: &str| eq_client_core::entities::display_name(&raw.replace('`', "'"));
     world
         .player()
         .zip(world.spawn(corpse_id))
         .is_some_and(|(player, corpse)| {
-            corpse.state.kind == SpawnKind::PlayerCorpse
-                && shown(&corpse.state.name) == format!("{}'s corpse", shown(&player.name))
+            eq_client_core::entities::owns_corpse(&player.name, &corpse.state)
         })
 }
 

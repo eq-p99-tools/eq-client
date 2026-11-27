@@ -7,6 +7,13 @@ use crate::{
 use bevy::prelude::*;
 use std::time::Instant;
 
+/// Help shared by the Map and Options controls.
+pub(crate) const OUTLINES_TOOLTIP: &str = "Outline tracked names through walls in the game view.";
+
+/// The Options checkbox for the Map's per-profile outline preference.
+#[derive(Component)]
+pub(crate) struct OutlineCheckbox;
+
 const SHARED: &str = "map-view.txt";
 /// Neutral dark backing for a map left over the world, faded by the BG control.
 pub(super) const OVERLAY: Color = Color::srgb_u8(16, 20, 26);
@@ -170,8 +177,16 @@ fn save(state: &mut Presentation) {
 }
 
 #[allow(clippy::needless_pass_by_value)]
-pub(crate) fn actions(clicks: crate::clicks::Clicks<Action>, mut state: ResMut<Presentation>) {
-    for action in clicks.iter() {
+pub(crate) fn actions(
+    clicks: crate::clicks::Clicks<Action>,
+    checkboxes: crate::clicks::Clicks<OutlineCheckbox>,
+    mut state: ResMut<Presentation>,
+) {
+    for action in clicks
+        .iter()
+        .copied()
+        .chain(checkboxes.iter().map(|_| Action::Outlines))
+    {
         match action {
             Action::Less => state.options.opacity = state.options.opacity.saturating_sub(10),
             Action::More => {
@@ -227,9 +242,9 @@ pub(crate) fn update(
             }
             .into(),
             Label::Outlines => if state.options.outlines {
-                "3D On"
+                "Outline tracked: On"
             } else {
-                "3D Off"
+                "Outline tracked: Off"
             }
             .into(),
         };
@@ -237,6 +252,16 @@ pub(crate) fn update(
             text.0 = value;
         }
     }
+}
+
+/// Shown beside the Map's tracked list, outside the style toolbar.
+pub(super) fn outline_button(row: &mut ChildSpawnerCommands) {
+    row.spawn((
+        Label::Outlines,
+        Action::Outlines,
+        super::controls::button("Outline tracked: Off"),
+        crate::tooltip::Tooltip(OUTLINES_TOOLTIP.into()),
+    ));
 }
 
 /// The same compact controls appear on native and installed-skin maps.
@@ -304,14 +329,6 @@ pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
                 ),
             ));
             row.spawn((super::landmarks::Action::Toggle, button("Landmarks")));
-            row.spawn((
-                Label::Outlines,
-                Action::Outlines,
-                button("3D On"),
-                Tooltip(
-                    "Show an outline of tracked names through scenery in the main view (a gameplay departure, off by default).".into(),
-                ),
-            ));
         });
 }
 

@@ -22,6 +22,7 @@ mod rider_animation_tests;
 mod teleport_camera_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod frame_swim;
 mod ground;
 #[cfg(test)]
 mod ground_tests;
@@ -205,9 +206,9 @@ pub(super) struct Controls {
     suppress_ground: bool,
     #[cfg(test)]
     test_melee: MeleeObservations,
-    /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
-    test_span: Option<f32>,
+    sampling: TestSampling,
+    /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
     suppress_release_catchup: bool,
     #[cfg(test)]
@@ -215,10 +216,6 @@ pub(super) struct Controls {
     /// Deterministic frame clock for the command-parity fixture only.
     #[cfg(test)]
     test_now: Option<Instant>,
-    #[cfg(test)]
-    test_proposal_path: Option<f64>,
-    #[cfg(test)]
-    test_motion_intent: Option<(MovementMode, Vec3, f32, f32, bool)>,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
@@ -229,6 +226,8 @@ pub(super) struct Controls {
     surface_rollback: Option<SurfaceRollback>,
     /// Why the movement guard refused the latest sample, until one is sent.
     pub refused: Option<String>,
+    /// A script-owned proposal refused before it could step off an unsafe edge.
+    pub(crate) script_drop_refused: Option<(std::sync::Arc<()>, Instant, &'static str)>,
     /// When a jump was pressed since the last sample; only where falls are simulated.
     pub jump: Option<Instant>,
     /// When the latest jump started; it outlasts a reset, so a new
@@ -295,6 +294,9 @@ pub(super) struct Controls {
     wet: eq_client_core::movement::water::WetVelocity,
     /// Matched worker state and the actual physical call ledger.
     swim_owner: owned_swim::Owner,
+    floor_swim: frame_swim::Control,
+    #[cfg(test)]
+    suppress_floor_swim: bool,
     /// Explicit departures; the session checks the same choices independently.
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
@@ -425,23 +427,20 @@ impl Default for Controls {
             #[cfg(test)]
             test_melee: MeleeObservations::default(),
             #[cfg(test)]
-            test_span: None,
+            sampling: TestSampling::default(),
             #[cfg(test)]
             suppress_release_catchup: false,
             #[cfg(test)]
             suppress_surface: false,
             #[cfg(test)]
             test_now: None,
-            #[cfg(test)]
-            test_proposal_path: None,
-            #[cfg(test)]
-            test_motion_intent: None,
             airborne: None,
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
             surface: surface::Control::default(),
             surface_rollback: None,
             refused: None,
+            script_drop_refused: None,
             jump: None,
             last_jump: None,
             endurance_spent: None,
@@ -469,6 +468,9 @@ impl Default for Controls {
             surface_hop_applied: None,
             wet: eq_client_core::movement::water::WetVelocity::default(),
             swim_owner: owned_swim::Owner::default(),
+            floor_swim: frame_swim::Control::default(),
+            #[cfg(test)]
+            suppress_floor_swim: false,
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
             melee: melee::Assist::default(),
@@ -556,6 +558,46 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
+    fn melee_input(&self, side: f32) -> melee::OrbitInput {
+        melee::OrbitInput {
+            side,
+            strafe: if self.walking {
+                self.strafe_walk_speed.or(self.strafe_speed)
+            } else {
+                self.strafe_speed
+            }
+            .unwrap_or(0.)
+            .min(self.speed.unwrap_or(0.).max(0.)),
+            walking: self.walking,
+            ..Default::default()
+        }
+    }
+
+    pub(crate) fn melee_camera_locked(&self, world: &ClientWorld) -> bool {
+        self.melee.camera_locked(world, self.now())
+    }
+
+    pub(crate) fn melee_status(&self) -> (&'static str, &'static str, Option<u16>) {
+        let (state, reason) = self.melee.status();
+        (state, reason, self.melee.target_id())
+    }
+
+    pub(crate) fn melee_report(&self) -> serde_json::Value {
+        let (state, reason, target) = self.melee_status();
+        serde_json::json!({"state":state,"reason":reason,"target_id":target,
+            "admission_id":self.melee.admission_id(), "motion_proposed":self.melee.proposed(),
+            "radius":self.melee.radius(),"facing_owner":self.melee.owns_facing_name()})
+    }
+
+    pub(crate) fn melee_admission(&self) -> Option<u64> {
+        self.melee.admission_id()
+    }
+    pub(crate) fn melee_proposed(&self) -> bool {
+        self.melee.proposed()
+    }
+    pub(crate) fn melee_facing_owner(&self) -> &'static str {
+        self.melee.owns_facing_name()
+    }
     #[cfg_attr(
         not(test),
         allow(
@@ -1115,6 +1157,8 @@ impl Controls {
             #[cfg(test)]
             suppress_surface: self.suppress_surface,
             #[cfg(test)]
+            suppress_floor_swim: self.suppress_floor_swim,
+            #[cfg(test)]
             test_now: self.test_now,
             #[cfg(test)]
             last_accepted: self.now(),
@@ -1262,7 +1306,7 @@ impl Controls {
     /// becomes a jump.
     fn span(&self, elapsed: Duration) -> f32 {
         #[cfg(test)]
-        if let Some(span) = self.test_span {
+        if let Some(span) = self.sampling.span {
             return span;
         }
         elapsed.as_secs_f32().min(self.span_limit().as_secs_f32())
@@ -1353,8 +1397,10 @@ impl Controls {
         // Following outlasts a change of speed, and a withdrawal while the
         // session places the player; a root ends it in `input`.
         let reset = self.swim_owner.untouched_reset(self.wet);
+        let floor_reset = self.floor_swim.untouched_reset(self.wet);
         self.reset(grant.units_per_second);
         self.swim_owner = reset;
+        self.floor_swim = floor_reset;
         self.pad = pad;
         self.pad_landing = pad_landing;
         self.autorun = autorun;
@@ -1540,6 +1586,7 @@ impl Controls {
         position: eq_client_core::WorldPosition,
     ) {
         self.swim_owner.reset_observed(session, position);
+        self.floor_swim.reset(session, position);
     }
 
     pub(super) fn swim_receipt(
@@ -1549,8 +1596,35 @@ impl Controls {
         created: Option<Instant>,
         basis: Option<eq_client_core::movement::SwimBasis>,
     ) {
+        self.floor_swim
+            .receipt(session, position, created, basis, self.wet);
         self.swim_owner
             .receipt(session, position, created, basis, &mut self.wet);
+    }
+
+    pub(super) fn floor_swim_result(
+        &mut self,
+        session: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: Option<&str>,
+    ) -> bool {
+        let Some(wet) = self
+            .floor_swim
+            .resolved(session, created, position, refused.is_some())
+        else {
+            return false;
+        };
+        self.wet = wet;
+        let (horizontal, _) = wet.units_per_second();
+        self.moving = horizontal[0].hypot(horizontal[1]) > 0.001;
+        if refused.is_some() {
+            self.sample_pose = None;
+        }
+        self.last_accepted = self.now();
+        self.last_answer = Some(self.now());
+        self.refused = refused.map(str::to_owned);
+        true
     }
 
     pub(super) fn resolve_swim(&mut self, session: Option<u64>, created: Instant, refused: bool) {
@@ -1801,6 +1875,7 @@ impl Controls {
     fn wait_for(&mut self, session_id: Option<u64>, created: Instant, kind: PendingKind) {
         if matches!(kind, PendingKind::Move) {
             self.swim_owner.invalidate_reset("submitted_motion");
+            self.floor_swim.invalidate_reset();
         }
         self.pending = session_id.map(|session_id| Pending {
             session_id,
@@ -1811,7 +1886,9 @@ impl Controls {
 
     /// Whether a movement or crossing request still owns the slot.
     pub fn waiting(&self) -> bool {
-        self.pending.is_some() || self.ground.active() && !self.ground.settled()
+        self.pending.is_some()
+            || self.floor_swim.pending()
+            || self.ground.active() && !self.ground.settled()
     }
 
     pub(super) fn liquid_basis(&self, session_id: Option<u64>, now: Instant) -> LiquidBasis {
@@ -1856,6 +1933,14 @@ impl Controls {
     pub(crate) fn set_test_pose(&mut self, pose: Option<pose::Snapshot>) {
         self.drawn_pose = pose;
     }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestSampling {
+    span: Option<f32>,
+    proposal_path: Option<f64>,
+    motion_intent: Option<(MovementMode, Vec3, f32, f32, bool)>,
 }
 
 #[cfg(test)]
@@ -2218,6 +2303,7 @@ pub(super) fn input(
     (look, aim, spells): Pointing,
 ) {
     let trace_melee = options.options.qol.on(Fix::MeleePositioning);
+    controls.melee.begin_frame();
     let (sequence, elapsed, gap) = input_trace.entered(controls.now());
     trace!(target: "eq_client_render::motion::melee", input_sequence = sequence,
         input_elapsed_seconds = elapsed, input_gap_seconds = ?gap,
@@ -2371,9 +2457,25 @@ pub(super) fn input(
         controls.held = Some(Held::Withdrawn);
         return;
     }
-    let focused = keys.focused() && !detached && !stunned && controls.speed.is_some();
+    let native_focused = keys.focused();
+    let focused = (native_focused || keys.script_walk_available())
+        && !detached
+        && !stunned
+        && controls.speed.is_some();
     let melee_available =
         keys.automatic_input_available() && !detached && !stunned && controls.speed.is_some();
+    let melee_requested = trace_melee
+        && combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(session_id));
+    let melee_enabled = melee_requested
+        && [
+            Capability::GameplayDepartures,
+            Capability::Moving,
+            Capability::Combat,
+        ]
+        .into_iter()
+        .all(|capability| online.world().can(capability));
     // Where the program holds a lying player still (read R19 c), the keys
     // neither move nor turn them, nor jump; mouse look turns them in the
     // chase views only.
@@ -2393,6 +2495,12 @@ pub(super) fn input(
         .then(|| keys.scripted_facing())
         .flatten()
         .filter(|_| !lying);
+    let script_guidance = focused
+        .then(|| keys.scripted_guidance())
+        .flatten()
+        .filter(|_| {
+            !lying && (scripted_facing.is_some() || look.as_ref().is_none_or(|look| !look.held))
+        });
     let scripted = keys.scripted();
     let scripted_turn =
         !lying && (scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight));
@@ -2482,6 +2590,20 @@ pub(super) fn input(
     let now = controls.now();
     controls.restore_surface_trial();
     controls.settle(now);
+    controls.melee.observe(
+        online.world(),
+        trace_melee,
+        combat
+            .as_deref()
+            .filter(|combat| combat.requested_in(session_id))
+            .map(crate::combat::CombatState::positioning_intent),
+        now,
+    );
+    let locked_camera = controls.melee.camera_locked(online.world(), now);
+    if locked_camera && !look.as_ref().is_some_and(|look| look.held && look.left) {
+        controls.mouse_heading = None;
+        controls.mouse_turn = 0.;
+    }
     let water_enabled = match client {
         InstalledClient::Titanium => true,
         // RoF2's water is not read yet.
@@ -2619,10 +2741,13 @@ pub(super) fn input(
         controls.crouch = Some(Crouch::Over);
     }
     let map = &*keys.map;
-    let keyboard = navigation.sample(&keys.input);
+    let mut keyboard = navigation.sample(&keys.input);
+    if !native_focused {
+        keyboard.reset_all();
+    }
     // The turn keys ramp up from the frame one is first held, and start
     // over when the way changes or both are let go.
-    let turning = if focused && look.as_deref().is_none_or(|look| !look.held) {
+    let turning = if focused && (locked_camera || look.as_deref().is_none_or(|look| !look.held)) {
         let held = |act| scripted.contains(&act) || map.held(&keyboard, act);
         f32::from(held(Act::TurnLeft)) - f32::from(held(Act::TurnRight))
     } else {
@@ -2633,10 +2758,158 @@ pub(super) fn input(
         turning,
         now,
         cap,
-        focused && !lying && look.as_deref().is_none_or(|look| !look.held),
+        focused && !lying && (locked_camera || look.as_deref().is_none_or(|look| !look.held)),
     );
     // Poll actual held input before the worker/sample gates. Position remains
     // on its ordinary path; facing consumes only frames with a held turn.
+    let mut movement_keys = map.movement_keys();
+    if flying {
+        movement_keys.extend(
+            [Act::Jump, Act::Duck]
+                .into_iter()
+                .flat_map(|act| map.keys(act)),
+        );
+    }
+    controls
+        .taps
+        .observe(&keyboard, &movement_keys, focused, now);
+    // Decide ownership before native ground can retain an idle frame. Observe
+    // buffered taps without consuming them or giving them a physical duration.
+    let ownership_keys = controls.taps.sample(&keyboard);
+    let orbit_side = if focused {
+        melee::side(map, &ownership_keys, scripted)
+    } else {
+        0.
+    };
+    let break_lock = controls.autorun
+        || (focused
+            && (melee::breaks(map, &ownership_keys, scripted)
+                || look.as_ref().is_some_and(|look| look.held && look.left)));
+    if break_lock {
+        controls.melee.release("forward_or_back");
+    }
+    let orbit_active = controls.melee.active();
+    let manual = break_lock
+        || keys.script_active() && !(orbit_active && keys.script_orbit_keys())
+        || (focused
+            && ((!orbit_active
+                && crate::keys::movement::requested(
+                    map,
+                    &ownership_keys,
+                    scripted,
+                    !locked_camera && look.as_ref().is_some_and(|look| look.held),
+                ))
+                || [Act::Jump, Act::Duck]
+                    .into_iter()
+                    .any(|act| map.holding(&ownership_keys, scripted).held(act))
+                || !locked_camera
+                    && (look.as_ref().is_some_and(|look| look.held)
+                        || mouse_aim.is_some_and(|yaw| yaw != 0.)
+                        || controls.mouse_turn != 0.
+                        || controls.mouse_heading.is_some_and(|heading| {
+                            online
+                                .world()
+                                .player()
+                                .is_some_and(|player| arc(player.position.heading, heading) != 0.)
+                        }))
+                || !orbit_active && controls.released_turn != 0.
+                || keys.pressed(Act::Walk)
+                || scripted_facing.is_some()));
+    // While orbit owns lateral input, a paused cast or modal question must not
+    // replay that same input as manual strafe through the ordinary controller.
+    let orbit_input_paused = orbit_active
+        && !manual
+        && (online.world().casting().holds_actions()
+            || asked
+                .as_deref()
+                .is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer()));
+    let context_holds = !melee_enabled
+        || controls.speed == Some(0.)
+        || !standing
+        || stunned
+        || flying
+        || swimming
+        || online.world().camp().is_some()
+        || online.world().casting().holds_actions()
+        || asked
+            .as_deref()
+            .is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer())
+        || controls.jump.is_some()
+        || controls.crouch.is_some()
+        || controls.riding.is_some()
+        || controls.boat.is_some()
+        || controls.visual_boat.is_some()
+        || controls
+            .airborne
+            .as_ref()
+            .is_some_and(|airborne| airborne.velocity() != 0. || airborne.peak().is_some());
+    if manual || !melee_available || controls.following.is_some() {
+        controls.melee.yield_input(now);
+        controls.melee.suspend("input_owner");
+    } else if context_holds {
+        controls.melee.suspend("context");
+    } else {
+        controls.melee.resume(now);
+    }
+    let orbit_eligible = orbit_active
+        && melee_available
+        && !manual
+        && !context_holds
+        && controls.following.is_none()
+        && controls.melee.ready(now);
+    let observed_side = if focused {
+        melee::side(map, &keyboard, scripted)
+    } else {
+        0.
+    };
+    controls
+        .melee
+        .observe_orbit(observed_side, now, orbit_eligible);
+    let melee_waiting = orbit_active
+        && !context_holds
+        && melee_available
+        && !manual
+        && controls.following.is_none()
+        && controls.melee.ready(now)
+        && !controls.melee.native_idle(online.world(), orbit_side, now);
+
+    let guidance = script_guidance
+        .as_ref()
+        .map(|(goal, run)| (*goal, key_turn::Source::Script(run.clone())))
+        .or_else(|| {
+            if manual || context_holds || !focused || controls.following.is_some() {
+                return None;
+            }
+            let player = online.world().player()?;
+            let (body, _) = players.single().ok()?;
+            let goal_body = melee::Body {
+                position: player.position,
+                height: body.height,
+                offset: body.feet_offset,
+                seconds: controls.next_span(now),
+                speeds: (
+                    controls.speed.unwrap_or(0.),
+                    controls.walk_speed.or(controls.speed).unwrap_or(0.),
+                ),
+                walking: controls.walking,
+            };
+            let goal = controls.melee.facing_goal(
+                online.world(),
+                &goal_body,
+                controls.melee_input(orbit_side),
+                now,
+            )?;
+            Some((
+                goal,
+                key_turn::Source::Melee {
+                    admission: online.world().session_id()?,
+                    attack: combat
+                        .as_deref()
+                        .map_or(0, crate::combat::CombatState::positioning_intent),
+                    choice: online.world().next_target_request(),
+                },
+            ))
+        });
     let frame_turns = match online.world().generation() {
         eq_client_core::GameDialect::Titanium => time.is_some(),
         eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
@@ -2644,7 +2917,7 @@ pub(super) fn input(
     #[cfg(test)]
     let frame_turns = frame_turns && !controls.suppress_key_facing;
     if let (true, Some(player), Ok((_, drawn)), Ok((camera, _))) = (
-        frame_turns,
+        frame_turns || guidance.is_some(),
         online.world().player(),
         players.single(),
         cameras.single(),
@@ -2664,10 +2937,70 @@ pub(super) fn input(
             && !controls.stun_active
             && moving_world.is_some()
             && controls.following.is_none()
+            && !controls.melee.owns_facing()
             && scripted_facing.is_none()
             && controls.mouse_heading.is_none()
             && (intent.preserve_facing || intent.direction == Vec3::ZERO);
-        if own {
+        if let Some((goal, source)) = guidance.as_ref().filter(|_| {
+            focused
+                && !controls.stun_active
+                && moving_world.is_some()
+                && controls.following.is_none()
+                && controls.mouse_heading.is_none()
+        }) {
+            let carrier = controls.visual_boat.and_then(|frame| {
+                online
+                    .world()
+                    .carriers()
+                    .latest(frame.sample.spawn_id)
+                    .filter(|report| report.sample().incarnation == frame.sample.incarnation)
+                    .map(|report| boats::DisplayFrame {
+                        sample: report.sample(),
+                        pose: report.pose(now),
+                    })
+            });
+            let restoring = controls.restore_key_facing;
+            if controls
+                .key_facing
+                .as_ref()
+                .is_none_or(|facing| facing.source.as_ref() != Some(source))
+            {
+                controls.yield_key_facing(*drawn);
+                let forward = drawn.rotation * Vec3::Z;
+                let heading = if std::mem::take(&mut controls.restore_key_facing) {
+                    controls
+                        .boat
+                        .and_then(|riding| riding.carried(online.world().carriers(), now))
+                        .map_or(player.position.heading, |riding| riding.position.heading)
+                } else {
+                    eq_client_core::world_heading(forward.x.atan2(forward.z))
+                };
+                controls.key_facing = Some(key_turn::Facing::new(heading, now, carrier));
+            }
+            let facing = controls.key_facing.as_mut().expect("guidance facing owner");
+            facing.source = Some(source.clone());
+            facing.carry(carrier);
+            facing.guide(
+                now,
+                if restoring {
+                    Duration::ZERO
+                } else {
+                    time.as_deref().map_or(Duration::ZERO, Time::delta)
+                },
+                *goal,
+                cap,
+            );
+            controls.facing = None;
+            controls.released_turn = 0.;
+        } else if own {
+            if controls
+                .key_facing
+                .as_ref()
+                .is_some_and(|facing| facing.source.is_some())
+            {
+                controls.yield_key_facing(*drawn);
+                controls.released_turn = 0.;
+            }
             let carrier = controls.visual_boat.and_then(|frame| {
                 online
                     .world()
@@ -2836,60 +3169,127 @@ pub(super) fn input(
     if !water_enabled || !focused || !standing || controls.stun_active || !surface_input {
         controls.surface.pause();
     }
-    let mut movement_keys = map.movement_keys();
-    if flying {
-        movement_keys.extend(
-            [Act::Jump, Act::Duck]
-                .into_iter()
-                .flat_map(|act| map.keys(act)),
+    if let (Some(time), Some(world), Some(player), Ok((body, _)), Ok((camera, _))) = (
+        time.as_deref(),
+        moving_world,
+        online.world().player(),
+        players.single(),
+        cameras.single(),
+    ) {
+        let feet = Vec3::from_array(eq_client_core::render_position(player.position))
+            - Vec3::Y * body.feet_offset;
+        if matches!(
+            world.liquid_contact(feet, body.height),
+            eq_client_core::movement::LiquidContact::Unmarked
+                | eq_client_core::movement::LiquidContact::Wading
+                | eq_client_core::movement::LiquidContact::Lava
+        ) {
+            controls.floor_swim.invalidate_reset();
+        }
+        let mut physical = keyboard.clone();
+        physical.clear();
+        let facing = controls
+            .mouse_heading
+            .or(controls.key_facing.as_ref().map(|f| f.heading))
+            .or(controls.facing)
+            .or(controls.floor_swim.heading())
+            .unwrap_or(player.position.heading);
+        let yaw = controls.mouse_heading.map_or(camera.yaw, |heading| {
+            crate::camera::behind(eq_client_core::render_heading(heading))
+        });
+        let intent = controls.intent(
+            &physical,
+            map,
+            scripted,
+            focused,
+            (yaw, facing),
+            look.as_deref(),
         );
+        let pitch = stroke_pitch(
+            intent.direction,
+            intent.mode,
+            (map, &physical, scripted),
+            (camera, look.as_deref()),
+            controls.autorun,
+        )
+        .map_or(0.0, |(pitch, _)| pitch);
+        let held = map.holding(&physical, scripted);
+        let placement_blocked = controls.placement.holds(
+            online.server_placement(),
+            player.position,
+            world,
+            body,
+            &mut chat,
+            now,
+        );
+        let at_line = online
+            .regions
+            .zone_line_at(eq_client_core::render_position(player.position))
+            .is_some();
+        if swimming && !at_line {
+            controls.boundary.observe(None);
+        }
+        let between_frame_tap = movement_keys
+            .iter()
+            .any(|key| keyboard.just_pressed(*key) && !keyboard.pressed(*key));
+        let eligible = match online.world().generation() {
+            eq_client_core::GameDialect::Titanium => true,
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+        } && focused
+            && !between_frame_tap
+            && !at_line
+            && controls.jump.is_none()
+            && controls.crouch.is_none()
+            && frame_swim::supports(&controls, &intent, facing, pitch)
+            && standing
+            && swimming
+            && !flying
+            && !placement_blocked
+            && controls.pad.is_none()
+            && controls.riding.is_none()
+            && controls.boat.is_none()
+            && controls.visual_boat.is_none()
+            && !controls.stun_active
+            && !shoreline_active
+            && controls
+                .straddle
+                .is_none_or(|(_, latest)| controls.speeds() == latest)
+            && controls.following.is_none()
+            && !keys.script_routing()
+            && scripted_facing.is_none()
+            && !held.held(Act::Jump)
+            && !held.held(Act::Duck)
+            && controls.water_jump.is_none()
+            && controls.surface_hop_applied.is_none()
+            && controls.ground.current.is_none()
+            && !controls.movement_options.fly;
+        #[cfg(test)]
+        let eligible = eligible && !controls.suppress_floor_swim;
+        if frame_swim::input(
+            &mut controls,
+            frame_swim::Context {
+                world,
+                online: &online,
+                outbox: &outbox,
+                now,
+                delta: time.delta(),
+                height: body.height,
+                offset: body.feet_offset,
+                eligible,
+                facing,
+                pitch,
+                body_pitch: camera.look_pitch(),
+            },
+            intent,
+        ) {
+            return;
+        }
+    } else if controls.floor_swim.active() || controls.floor_swim.pending() {
+        controls.floor_swim.unavailable(now);
+        if controls.floor_swim.pending() {
+            return;
+        }
     }
-    controls
-        .taps
-        .observe(&keyboard, &movement_keys, focused, now);
-    let melee_enabled = trace_melee
-        && combat
-            .as_deref()
-            .is_some_and(|combat| combat.requested_in(session_id))
-        && [
-            Capability::GameplayDepartures,
-            Capability::Moving,
-            Capability::Combat,
-        ]
-        .into_iter()
-        .all(|capability| online.world().can(capability));
-    // Decide ownership before native ground can retain an idle frame. Observe
-    // buffered taps without consuming them or giving them a physical duration.
-    let ownership_keys = controls.taps.sample(&keyboard);
-    let manual = controls.autorun
-        || keys.script_active()
-        || (focused
-            && (follow::moves(map, &ownership_keys, scripted)
-                || [Act::Jump, Act::Duck]
-                    .into_iter()
-                    .any(|act| map.holding(&ownership_keys, scripted).held(act))
-                || look.as_ref().is_some_and(|look| look.held)
-                || mouse_aim.is_some_and(|yaw| yaw != 0.)
-                || controls.mouse_turn != 0.
-                || controls.mouse_heading.is_some_and(|heading| {
-                    online
-                        .world()
-                        .player()
-                        .is_some_and(|player| arc(player.position.heading, heading) != 0.)
-                })
-                || controls.released_turn != 0.
-                || keys.pressed(Act::Walk)
-                || scripted_facing.is_some()));
-    if !melee_enabled {
-        controls.melee.clear();
-    } else if manual || !melee_available || controls.following.is_some() {
-        controls.melee.yield_input(now);
-    }
-    let melee_waiting = melee_enabled
-        && melee_available
-        && !manual
-        && controls.following.is_none()
-        && controls.melee.ready(now);
     // A completed-frame producer runs before the legacy future-endpoint gates.
     // Its input sample deliberately excludes the tap buffer and press-only
     // edges: no duration is invented for a tap absent from an observed frame.
@@ -2907,6 +3307,7 @@ pub(super) fn input(
             .map_or(player.position.heading, |frame| frame.facing);
         let heading = controls
             .mouse_heading
+            .or_else(|| controls.key_facing.as_ref().map(|facing| facing.heading))
             .or(controls.facing)
             .unwrap_or(heading);
         let yaw = controls.mouse_heading.map_or(camera.yaw, |heading| {
@@ -2916,7 +3317,7 @@ pub(super) fn input(
             &physical,
             map,
             scripted,
-            focused,
+            focused && !orbit_input_paused,
             (yaw, heading),
             look.as_deref(),
         );
@@ -3009,6 +3410,7 @@ pub(super) fn input(
                 });
             }
             controls.swim_owner.invalidate_reset("ground_owner");
+            controls.floor_swim.invalidate_reset();
             return;
         }
     }
@@ -3201,15 +3603,17 @@ pub(super) fn input(
     if mouse_snapshot.is_none() {
         controls.mouse_heading = None;
     }
-    // A script's `face` step turns the player as moving with the
-    // camera-relative keys does: the facing it names at once, the heading
-    // sent toward it at the turn keys' rate.
-    if let Some(heading) = scripted_facing {
-        controls.facing = Some(heading.rem_euclid(512.0));
-    } else if mouse_steering {
+    // Guidance already advanced the normal per-frame turn owner. Sampling
+    // consumes its achieved facing, never the desired waypoint heading.
+    if mouse_steering {
         controls.facing = None;
     }
-    let shown = controls.facing.unwrap_or(steered_heading);
+    let shown = controls
+        .key_facing
+        .as_ref()
+        .map(|facing| facing.heading)
+        .or(controls.facing)
+        .unwrap_or(steered_heading);
     let yaw = if mouse_steering {
         crate::camera::behind(eq_client_core::render_heading(steered_heading))
     } else {
@@ -3220,7 +3624,7 @@ pub(super) fn input(
         &sampled,
         map,
         scripted,
-        focused,
+        focused && !orbit_input_paused,
         (yaw, shown),
         look.as_deref(),
     );
@@ -3287,14 +3691,13 @@ pub(super) fn input(
     } else {
         None
     };
-    let melee_step = if !melee_enabled {
+    let steering = if !melee_enabled || !controls.melee.active() {
         if trace_melee {
             trace!(target: "eq_client_render::motion::melee", reason = "attack_or_provider_unavailable", forward = false,
                 attack_requested = combat.as_deref().is_some_and(|combat| combat.requested_in(session_id)),
                 moving = online.world().can(Capability::Moving), combat = online.world().can(Capability::Combat),
                 departures = online.world().can(Capability::GameplayDepartures), "Melee positioning held");
         }
-        controls.melee.clear();
         None
     } else if manual || !melee_available || controls.following.is_some() {
         trace!(target: "eq_client_render::motion::melee", reason = "input_owner", forward = false,
@@ -3337,7 +3740,7 @@ pub(super) fn input(
             airborne_velocity = ?controls.airborne.as_ref().map(AirborneController::velocity),
             airborne_peak = ?controls.airborne.as_ref().and_then(AirborneController::peak),
             "Melee positioning held");
-        controls.melee.clear();
+        controls.melee.suspend("context");
         None
     } else {
         let body = melee::Body {
@@ -3355,12 +3758,72 @@ pub(super) fn input(
         {
             controls.test_melee.decisions += 1;
         }
-        controls
-            .melee
-            .step(online.world(), world, &online.regions, &body, now)
+        let orbit_input = melee::OrbitInput {
+            observed_seconds: Some(controls.melee.orbit_seconds(now, span)),
+            side: orbit_side,
+            strafe: if controls.walking {
+                controls.strafe_walk_speed.or(controls.strafe_speed)
+            } else {
+                controls.strafe_speed
+            }
+            .unwrap_or(0.)
+            .min(controls.speed.unwrap_or(0.).max(0.)),
+            walking: controls.walking,
+            turn_budget: Some(
+                if [
+                    Act::StrafeLeft,
+                    Act::StrafeRight,
+                    Act::CameraLeft,
+                    Act::CameraRight,
+                ]
+                .into_iter()
+                .any(|act| map.holding(&ownership_keys, scripted).held(act))
+                {
+                    TURN_RATE.min(cap * TURN_STEP) * span
+                } else {
+                    controls.turn_held.map_or(0., |(_, since)| {
+                        let held = now.saturating_duration_since(since).as_secs_f32()
+                            + 1. / TURN_STEPS_PER_SECOND;
+                        ramped_turn(held - span, held, cap).min(TURN_RATE * span)
+                    })
+                },
+            ),
+        };
+        let turn_budget = controls
+            .key_facing
+            .as_ref()
+            .filter(|facing| matches!(facing.source, Some(key_turn::Source::Melee { .. })))
+            .map_or(0., |facing| {
+                arc(accepted.position.heading, facing.heading).abs()
+            });
+        controls.melee.steer(
+            online.world(),
+            world,
+            &online.regions,
+            &body,
+            melee::OrbitInput {
+                turn_budget: Some(
+                    orbit_input
+                        .turn_budget
+                        .unwrap_or(turn_budget)
+                        .min(turn_budget),
+                ),
+                ..orbit_input
+            },
+            now,
+        )
     };
+    let melee_orbit = steering
+        .as_ref()
+        .and_then(|steering| steering.orbit.as_ref());
+    let melee_step = steering.as_ref().map(|steering| steering.follow);
     if let Some(step) = melee_step {
-        let radians = eq_client_core::render_heading(step.heading);
+        let achieved = controls
+            .key_facing
+            .as_ref()
+            .filter(|facing| matches!(facing.source, Some(key_turn::Source::Melee { .. })))
+            .map_or(step.heading, |facing| facing.heading);
+        let radians = eq_client_core::render_heading(achieved);
         intent = MotionInput {
             mode: if !step.run && controls.walk_speed.is_some() {
                 MovementMode::Walk
@@ -3386,9 +3849,23 @@ pub(super) fn input(
             heading_update = HeadingUpdate::Snapshot;
         }
     }
+    if let Some(orbit) = melee_orbit {
+        intent = MotionInput {
+            mode: orbit.motion.mode,
+            speed: orbit.motion.speed,
+            direction: orbit.motion.direction,
+            turn: 0.,
+            preserve_facing: true,
+            diagonal: None,
+        };
+    }
     let follow_step = follow_step.or(melee_step);
     let follow_heading = follow_step.map(|step| step.heading);
     if follow_heading.is_some()
+        && !controls
+            .key_facing
+            .as_ref()
+            .is_some_and(|facing| matches!(facing.source, Some(key_turn::Source::Melee { .. })))
         && let Ok((_, drawn)) = players.single()
     {
         controls.yield_key_facing(*drawn);
@@ -3445,7 +3922,7 @@ pub(super) fn input(
     } = intent;
     #[cfg(test)]
     {
-        controls.test_motion_intent = Some((mode, direction, speed, turn, preserve_facing));
+        controls.sampling.motion_intent = Some((mode, direction, speed, turn, preserve_facing));
     }
     let surface_before_wet = controls.wet;
     let surface_before_airborne = controls.airborne.clone();
@@ -3647,6 +4124,7 @@ pub(super) fn input(
                 capture.applied(kind, piece);
             }
             controls.swim_owner.invalidate_reset("wet_model_advanced");
+            controls.floor_swim.invalidate_reset();
             let (across, up) = controls.wet.advance(set, input, piece);
             travel += Vec3::new(across[0], up, across[1]);
             left -= piece;
@@ -3701,7 +4179,7 @@ pub(super) fn input(
     } else {
         controls.water_jump = None;
     }
-    if let Some(step) = follow_step.filter(|_| wet_travel.is_none()) {
+    if let Some(step) = follow_step.filter(|_| wet_travel.is_none() && melee_orbit.is_none()) {
         // Stop within one frame of reach at the selected movement rate.
         // Water selects its ordinary swim rate above, so it shares this
         // limit rather than replacing an already limited land speed.
@@ -3783,6 +4261,9 @@ pub(super) fn input(
         && !shoreline_active
         && controls.jump.is_none()
         && controls.facing.is_none()
+        && controls.key_facing.as_ref().is_none_or(|facing| {
+            facing.source.is_none() || arc(current_heading, facing.heading).abs() <= f32::EPSILON
+        })
         && mouse_step == 0.0
         && mouse_snapshot.is_none()
         && diagonal.is_none()
@@ -3924,7 +4405,7 @@ pub(super) fn input(
     // cancels it. The jump a finished crouch hands on goes as it is. A
     // strafe-only jump counts as moving and goes at once: the read covered
     // the forward input only (inferred, recording checklist 6.417).
-    let jump = match client.standing_jump_crouch().filter(|_| !crouched) {
+    let mut jump = match client.standing_jump_crouch().filter(|_| !crouched) {
         Some(_) if jump && mode == MovementMode::Backward => {
             debug!("Jump cancelled: backing up");
             false
@@ -3996,6 +4477,44 @@ pub(super) fn input(
     let world = jumping_world.as_ref().unwrap_or(world);
     let walking_world = carrier_walking_world(world, client, body.feet_offset, flying, swimming);
     let world = walking_world.as_ref().unwrap_or(world);
+    // Probe the same pose and walking collision world as the actual step.
+    let script_drop_blocked = if !flying
+        && !swimming
+        && !placement_blocked
+        && delta.with_y(0.0).length_squared() > 1e-12
+        && previous_airborne
+            .as_ref()
+            .is_none_or(|state| state.peak().is_none() || physics.steers_in_air)
+        && let Some((identity, allowed)) = keys.script_drop_policy()
+        && let Err(reason) = crate::script::drops::input(
+            world,
+            online.world(),
+            client,
+            previous_airborne.as_ref(),
+            crate::script::drops::Probe {
+                feet,
+                delta,
+                seconds: span,
+                height: body.height,
+                jump,
+                physics,
+            },
+            allowed,
+        ) {
+        controls.script_drop_refused = Some((std::sync::Arc::clone(identity), now, reason));
+        true
+    } else {
+        false
+    };
+    if script_drop_blocked {
+        // Keep the ordinary standing sample/authority path, with no authored
+        // displacement or alternate shoreline/diagonal proposal this frame.
+        delta = Vec3::ZERO;
+        direction = Vec3::ZERO;
+        speed = 0.0;
+        jump = false;
+        shore = None;
+    }
     let diagonal_heading = mouse_snapshot.unwrap_or(current_heading);
     // A combined input keeps one body heading and both signed component
     // budgets. Run the usual sweep on a copy before selecting that sample.
@@ -4005,7 +4524,8 @@ pub(super) fn input(
     // grant's diagonal rates being the standing ones (read R28).
     let combined = diagonal
         .filter(|_| {
-            (standing || moves_ducked)
+            !script_drop_blocked
+                && (standing || moves_ducked)
                 && !jump
                 && !airborne
                 && !swimming
@@ -4022,6 +4542,28 @@ pub(super) fn input(
         })
         .and_then(|intent| {
             let displacement = intent.velocity * span;
+            // A combined proposal may reach an edge the cardinal fallback
+            // does not. It must satisfy the same consent before selection.
+            if let Some((_, allowed)) = keys.script_drop_policy()
+                && crate::script::drops::input(
+                    world,
+                    online.world(),
+                    client,
+                    previous_airborne.as_ref(),
+                    crate::script::drops::Probe {
+                        feet,
+                        delta: displacement,
+                        seconds: span,
+                        height: body.height,
+                        jump: false,
+                        physics,
+                    },
+                    allowed,
+                )
+                .is_err()
+            {
+                return None;
+            }
             let mut trial = previous_airborne.clone();
             let landing = if let Some(controller) = trial.as_mut() {
                 let landed = fall_step_with_water(
@@ -4319,7 +4861,17 @@ pub(super) fn input(
     // The turn keys turn at their own rate. Camera-relative movement faces
     // its direction unless mouse-look is steering the body. The sent heading
     // follows the facing within the same sample budget as the position.
-    let facing = if let Some(heading) = follow_heading {
+    let facing = if let Some(orbit) = melee_orbit {
+        // Use the bearing of the actual bounded chord. The look-ahead can
+        // already face beyond it when the held strafe interval was shorter.
+        orbit.heading
+    } else if let Some(facing) = controls
+        .key_facing
+        .as_ref()
+        .filter(|facing| facing.source.is_some() && !mouse_steering)
+    {
+        facing.heading
+    } else if let Some(heading) = follow_heading {
         heading
     } else if let Some(facing) = controls.key_facing.as_ref().filter(|_| !mouse_steering) {
         facing.heading
@@ -4338,7 +4890,11 @@ pub(super) fn input(
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
-    let heading = if mouse_steering || follow_heading.is_some() {
+    let guided = controls
+        .key_facing
+        .as_ref()
+        .is_some_and(|facing| facing.source.is_some());
+    let heading = if mouse_steering || follow_heading.is_some() && !guided {
         facing
     } else {
         turn_toward(current_heading, facing, TURN_RATE * span)
@@ -4357,7 +4913,7 @@ pub(super) fn input(
         // This disposable assist proposal sent nothing. Keep ordinary manual
         // crossing, boarding and authoritative corrections on their own path.
         controls.airborne = previous_airborne;
-        controls.melee.clear();
+        controls.melee.suspend(reason);
         melee::held(reason);
         controls.held = Some(Held::NoSpeed);
         return;
@@ -4487,9 +5043,12 @@ pub(super) fn input(
         controls.held = Some(Held::Refused);
         return;
     }
+    if melee_step.is_some() {
+        controls.melee.submitted();
+    }
     #[cfg(test)]
     {
-        controls.test_proposal_path = Some(if surface_selected {
+        controls.sampling.proposal_path = Some(if surface_selected {
             surface_plan.as_ref().expect("selected surface plan").path
         } else if !poses.test_steps.is_empty() {
             poses
@@ -5076,7 +5635,7 @@ pub(super) fn walking(
     })
 }
 
-fn carrier_walking_world(
+pub(super) fn carrier_walking_world(
     world: &CollisionWorld,
     client: InstalledClient,
     feet_offset: f32,
@@ -5216,7 +5775,7 @@ fn observe_landing(
 /// fall did damage for it to lessen (Titanium: recording checklist item
 /// 6.148). The rank of the ability that raises Safe Fall is not in what the
 /// sessions decode, so it counts as none (unsure).
-fn landing_cost(
+pub(super) fn landing_cost(
     client: InstalledClient,
     collision: &CollisionWorld,
     feet: Vec3,
@@ -5540,6 +6099,7 @@ pub(super) fn interpolate(
         &mut players,
         &mut cameras,
         &mut displayed_mouse,
+        online.world(),
     ) {
         return;
     }
@@ -5615,7 +6175,7 @@ pub(super) fn interpolate(
     for (mut camera, free) in &mut cameras {
         camera.focus = transform.translation;
         let follow = key_follow.unwrap_or(follow_heading || preview.is_some() || had_preview);
-        if follow && !free {
+        if follow && !free && !controls.melee_camera_locked(online.world()) {
             crate::camera::start_behind(&mut camera, &transform);
         }
     }
@@ -8830,6 +9390,204 @@ pub(super) mod tests {
         })
     }
 
+    fn scripted_drop_app(
+        allowed: bool,
+        enabled: bool,
+        walk: bool,
+    ) -> (App, mpsc::Receiver<ClientCommand>, Vec3) {
+        let (mut app, receiver) = app();
+        let upper = [
+            [
+                [-100.0, 53.0, -100.0],
+                [100.0, 53.0, 0.0],
+                [100.0, 53.0, -100.0],
+            ],
+            [
+                [-100.0, 53.0, -100.0],
+                [-100.0, 53.0, 0.0],
+                [100.0, 53.0, 0.0],
+            ],
+        ];
+        app.insert_resource(Collision(Some(
+            CollisionWorld::new(
+                flat_surface(0.0)
+                    .map(|triangle| triangle.map(|[x, y, z]| [x * 10., y, z * 10.]))
+                    .into_iter()
+                    .chain(upper),
+            )
+            .unwrap(),
+        )));
+        // The footprint still has support, but this first actual 0.3-unit
+        // input leaves it completely. Merely crossing the center is harmless.
+        let start = Vec3::new(0.0, 56.0, 0.3);
+        assert!(
+            app.world()
+                .resource::<Collision>()
+                .0
+                .as_ref()
+                .unwrap()
+                .support(start - Vec3::Y * 3.0)
+                .is_some()
+        );
+        let world = app.world_mut();
+        world
+            .query_filtered::<&mut Transform, With<Player>>()
+            .single_mut(world)
+            .unwrap()
+            .translation = start;
+        let mut player = world
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .clone();
+        player.position = world_position(start.to_array(), 384.0);
+        online::testing::admit(&mut world.resource_mut::<online::OnlineState>(), 11, player);
+        world.resource_mut::<online::OnlineState>().enabled = enabled;
+        world
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = InstalledClient::Titanium;
+        world.resource_mut::<Controls>().airborne = Some(AirborneController::default());
+        world.insert_resource(
+            crate::script::Script::new(Vec::new()).drop_guard_for_test(allowed, walk),
+        );
+        (app, receiver, start)
+    }
+
+    fn assert_scripted_drop_sample(allowed: bool, enabled: bool) {
+        for walk in [false, true] {
+            let (mut app, receiver, start) = scripted_drop_app(allowed, enabled, walk);
+            app.update();
+            let moves: Vec<_> = receiver
+                .try_iter()
+                .filter_map(|command| match command {
+                    ClientCommand::Move(request) => Some(request),
+                    _ => None,
+                })
+                .collect();
+            if !enabled {
+                assert_eq!(moves.len(), 0, "drop consent bypassed the session gate");
+                continue;
+            }
+            let controls = app.world().resource::<Controls>();
+            if allowed {
+                assert_eq!(moves.len(), 1);
+                let at = Vec3::from_array(eq_client_core::render_position(moves[0].position));
+                assert!(
+                    at.z > start.z,
+                    "consented descent never moved toward the known landing"
+                );
+            } else {
+                for request in moves {
+                    assert!(
+                        (Vec3::from_array(eq_client_core::render_position(request.position))
+                            - start)
+                            .length()
+                            < 1e-3,
+                        "refused input stepped off the edge: {request:?}"
+                    );
+                }
+                assert!(controls.airborne.as_ref().unwrap().peak().is_none());
+            }
+        }
+    }
+
+    #[test]
+    fn scripted_drops_refuse_damaging_actual_input_without_consent() {
+        assert_scripted_drop_sample(false, true);
+    }
+
+    #[test]
+    fn scripted_drops_with_consent_move_toward_the_known_landing() {
+        assert_scripted_drop_sample(true, true);
+    }
+
+    #[test]
+    fn scripted_drops_cannot_bypass_a_disabled_session() {
+        assert_scripted_drop_sample(true, false);
+    }
+
+    #[test]
+    fn an_actual_script_drop_refusal_names_the_current_run() {
+        let (mut app, _receiver, _) = scripted_drop_app(false, true, false);
+        app.update();
+        let report = app
+            .world()
+            .resource::<Controls>()
+            .script_drop_refused
+            .clone()
+            .unwrap();
+        let mut script = app.world_mut().resource_mut::<crate::script::Script>();
+        assert!(std::sync::Arc::ptr_eq(
+            &report.0,
+            script.drop_policy().unwrap().0
+        ));
+        assert!(report.2.starts_with("drop too high"));
+        assert_eq!(
+            script.drop_response(Some(&report)),
+            Some(crate::script::DropResponse::FindRoute)
+        );
+        assert_eq!(
+            script.drop_response(Some(&report)),
+            None,
+            "the same refusal restarted its search"
+        );
+        let next = (
+            std::sync::Arc::clone(&report.0),
+            report.1 + Duration::from_millis(1),
+            report.2,
+        );
+        assert_eq!(
+            script.drop_response(Some(&next)),
+            Some(crate::script::DropResponse::Stop(report.2))
+        );
+    }
+
+    #[test]
+    fn explicit_drop_consent_refuses_unknown_native_damage() {
+        let (mut app, _, start) = scripted_drop_app(true, true, false);
+        {
+            let mut online = app.world_mut().resource_mut::<online::OnlineState>();
+            hold_drop(&mut online, 1_500, std::iter::empty());
+            online::testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::PurseUncertain { session_id: 11 }],
+            );
+            assert!(online.world().fall_weight().is_none());
+        }
+        let body = PlayerBody {
+            feet_offset: 3.0,
+            height: 6.0,
+            size: 6.0,
+        };
+        let physics = walking(
+            physics(InstalledClient::Titanium, None),
+            InstalledClient::Titanium,
+            &body,
+            1,
+            (true, false),
+        );
+        let collision = app.world().resource::<Collision>().0.as_ref().unwrap();
+        let online = app.world().resource::<online::OnlineState>();
+        let result = crate::script::drops::input(
+            collision,
+            online.world(),
+            InstalledClient::Titanium,
+            None,
+            crate::script::drops::Probe {
+                feet: start - Vec3::Y * body.feet_offset,
+                delta: Vec3::Z * 1.5,
+                seconds: 0.05,
+                height: body.height,
+                jump: false,
+                physics,
+            },
+            true,
+        );
+        assert_eq!(result, Err("drop damage is unavailable"));
+    }
+
     pub(crate) fn fixture() -> (App, mpsc::Receiver<ClientCommand>) {
         let (sender, receiver) = mpsc::sync_channel(2);
         let mut app = App::new();
@@ -11416,6 +12174,9 @@ pub(super) mod tests {
                 );
             }
             Attempt::Face(heading) => {
+                let mut time = Time::<()>::default();
+                time.advance_by(Duration::from_nanos(16_666_667));
+                app.insert_resource(time);
                 app.insert_resource(
                     crate::script::Script::new(Vec::new())
                         .holding_for_test(Vec::new(), Some(heading)),
@@ -11496,6 +12257,9 @@ pub(super) mod tests {
                 );
             }
             Attempt::Face(heading) => {
+                let mut time = Time::<()>::default();
+                time.advance_by(Duration::from_nanos(16_666_667));
+                app.insert_resource(time);
                 app.insert_resource(
                     crate::script::Script::new(Vec::new())
                         .holding_for_test(Vec::new(), Some(heading)),

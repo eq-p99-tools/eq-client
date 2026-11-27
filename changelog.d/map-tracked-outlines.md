@@ -1,0 +1,1 @@
+- The Map now labels its tracked-name outline switch explicitly. Options > QoL also controls the same saved per-character setting.

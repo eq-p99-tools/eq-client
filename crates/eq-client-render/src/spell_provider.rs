@@ -148,6 +148,9 @@ pub(super) struct Provider {
 }
 
 impl Provider {
+    pub(super) fn p99_gem_start(&self) -> bool {
+        self.binding.policy() == eq_client_core::spell_tables::Policy::Project1999
+    }
     pub(super) fn new(binding: Binding, base: Arc<Definitions>) -> Self {
         let readiness = if binding.policy().requires_server_tables() {
             Readiness::AwaitingRegistration

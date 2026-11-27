@@ -158,6 +158,10 @@ fn right_release(app: &mut App, over: Option<Entity>) {
 }
 
 fn request(app: &App, rx: &Receiver<ClientCommand>, auto: bool) {
+    request_at(app, rx, 0, auto);
+}
+
+fn request_at(app: &App, rx: &Receiver<ClientCommand>, expected_place: u16, auto: bool) {
     let ClientCommand::LootItem {
         session_id,
         corpse_id,
@@ -171,7 +175,7 @@ fn request(app: &App, rx: &Receiver<ClientCommand>, auto: bool) {
     };
     assert_eq!(
         (session_id, corpse_id, own_id, place, sent),
-        (5, 9, 7, 0, auto)
+        (5, 9, 7, expected_place, auto)
     );
     let body = eq_client_core::loot::item_request(corpse_id, own_id, place, sent).unwrap();
     assert_eq!(&body[12..], &u32::from(auto).to_le_bytes());
@@ -198,7 +202,7 @@ fn request(app: &App, rx: &Receiver<ClientCommand>, auto: bool) {
     assert!(rx.try_recv().is_err(), "one gesture queues one request");
     let world = app.world().resource::<crate::online::OnlineState>().world();
     assert!(
-        world.loot().unwrap().items.contains_key(&0),
+        world.loot().unwrap().items.contains_key(&expected_place),
         "no optimistic removal"
     );
     assert!(
@@ -208,6 +212,98 @@ fn request(app: &App, rx: &Receiver<ClientCommand>, auto: bool) {
             .contains_key(&InventorySlot::CURSOR),
         "no invented cursor delivery"
     );
+}
+
+#[test]
+fn competing_hover_cannot_redirect_a_right_gesture_or_hide_a_scripted_press() {
+    for skin in [false, true] {
+        for scripted in [false, true] {
+            for no_drop in [false, true] {
+                let (mut app, rx, cells) = fixture(skin, no_drop);
+                // A populated row-one press must survive an empty row-zero hover.
+                crate::online::testing::news(
+                    &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                    [WorldEvent::Loot(LootUpdate::Taken {
+                        place: 0,
+                        accepted: true,
+                    })],
+                );
+                if scripted {
+                    *app.world_mut().get_mut::<Interaction>(cells[0]).unwrap() =
+                        Interaction::Hovered;
+                }
+                right_press(&mut app, cells[1], scripted);
+                assert!(rx.try_recv().is_err());
+                // Check the original cell on release, independent of query order.
+                for cell in cells {
+                    *app.world_mut().get_mut::<Interaction>(cell).unwrap() = Interaction::Hovered;
+                }
+                app.world_mut()
+                    .resource_mut::<ButtonInput<MouseButton>>()
+                    .release(MouseButton::Right);
+                app.update();
+                if no_drop {
+                    assert!(rx.try_recv().is_err());
+                    assert!(matches!(
+                        app.world().resource::<crate::confirm::Asked>().question(),
+                        Some(crate::confirm::Question::LootNoDrop {
+                            place: 1,
+                            auto: true,
+                            ..
+                        })
+                    ));
+                    app.world_mut()
+                        .resource_mut::<crate::confirm::Asked>()
+                        .give(true);
+                    app.update();
+                }
+                request_at(&app, &rx, 1, true);
+            }
+        }
+    }
+}
+
+#[test]
+fn own_no_drop_loot_never_asks_in_either_ui_or_destination() {
+    use crate::online::{OnlineState, testing};
+    use eq_client_core::{SpawnKind, no_drop::LootNoDrop};
+    for skin in [false, true] {
+        for auto in [false, true] {
+            for own in [false, true] {
+                let (mut app, rx, cells) = fixture(skin, true);
+                let mut corpse = testing::pet(9, 0);
+                corpse.kind = SpawnKind::NpcCorpse;
+                corpse.name = if own {
+                    "eXaMpLe's_corpse679"
+                } else {
+                    "Other's_corpse9"
+                }
+                .into();
+                testing::spawns(
+                    &mut app.world_mut().resource_mut::<OnlineState>(),
+                    vec![corpse],
+                );
+                app.world_mut()
+                    .resource_mut::<crate::options::OptionsState>()
+                    .options
+                    .loot_no_drop = LootNoDrop::Ask;
+                if auto {
+                    right_press(&mut app, cells[0], false);
+                    right_release(&mut app, Some(cells[0]));
+                } else {
+                    crate::clicks::testing::press(&mut app, Some(cells[0]));
+                }
+                let question = app.world().resource::<crate::confirm::Asked>().question();
+                if own {
+                    assert_eq!(question, None, "own corpse must never ask, even Always Ask");
+                    request(&app, &rx, auto);
+                } else {
+                    assert!(question.is_some(), "another corpse remains the control");
+                    assert!(rx.try_recv().is_err());
+                }
+            }
+        }
+    }
 }
 
 #[test]

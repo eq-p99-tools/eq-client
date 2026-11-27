@@ -234,13 +234,33 @@ pub(super) fn prepare(
         script.approached,
         script.place.as_ref(),
         Some(world),
+        matches!(step, Step::Chase(..))
+            .then_some(script.awaited)
+            .flatten(),
     )
     .ok_or("walk needs its current destination and collision")?;
+    // OffMesh can mean a missing bake polygon on otherwise usable ground.
+    // Refuse a coordinate with no actual floor before either planner moves
+    // toward a closest partial route. Keep the same floor tolerance as end().
+    if matches!(
+        step,
+        Step::WalkPlace {
+            destination: PlaceDestination::Coordinates(_),
+            ..
+        }
+    ) {
+        let tolerance = range.min(eq_client_core::movement::MAX_GROUNDED_STEP);
+        if world.ground(goal, tolerance, tolerance).is_none()
+            && !world.in_swimmable_water(goal, body.height)
+        {
+            return Err("walk destination has no supported floor at the requested height".into());
+        }
+    }
     let mut route = Route::new(feet, goal, range, body.height)
         .with_drops(falls)
         .with_doors(openable_doors(online))
         .with_background(Arc::new(crate::background::ComputePool));
-    if script.place.is_some() {
+    if script.place.is_some() || matches!(step, Step::Chase(..)) {
         route = route.with_exact_height();
     }
     if let Some(mesh) = mesh {
@@ -381,4 +401,12 @@ fn choose_exit(
         }
     }
     Err("no reachable floor in the requested authored zone line".into())
+}
+
+/// Only routed destination walks have movement-only native takeover.
+pub(super) fn is_step(step: &Step) -> bool {
+    matches!(
+        step,
+        Step::Walk(..) | Step::WalkObject { .. } | Step::WalkPlace { .. }
+    )
 }

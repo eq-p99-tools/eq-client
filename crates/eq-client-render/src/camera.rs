@@ -299,7 +299,10 @@ fn mouse_turn_capped(yaw: f32, race: Option<u32>, seconds: f32) -> f32 {
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn turn(
     look: Res<MouseLook>,
-    online: Res<online::OnlineState>,
+    (online, controller): (
+        Res<online::OnlineState>,
+        Option<Res<crate::motion::Controls>>,
+    ),
     options: Res<options::OptionsState>,
     mut aim: ResMut<MouseAim>,
     (mut motion, scripted): (
@@ -327,7 +330,18 @@ pub(super) fn turn(
             online.world().player().map(|player| player.race),
             time.map_or(0.0, |time| time.delta_secs()),
         );
-        if online.enabled {
+        if online.enabled
+            && !look.left
+            && options
+                .options
+                .qol
+                .on(eq_client_core::qol::Fix::MeleePositioning)
+            && controller
+                .as_deref()
+                .is_some_and(|controller| controller.melee_camera_locked(online.world()))
+        {
+            camera.yaw += yaw;
+        } else if online.enabled {
             aim.horizontal = Some(yaw);
             if yaw != 0.0 || acquired {
                 // [I] Acquiring right look faces along the existing camera.
@@ -430,6 +444,15 @@ struct CameraBody {
 }
 
 impl CameraBody {
+    fn from_player(body: Option<&crate::PlayerBody>) -> Self {
+        Self {
+            head: body.map_or(0., |body| body.height * HEAD_LINE),
+            feet: body.map(|body| body.feet_offset),
+        }
+    }
+}
+
+impl CameraBody {
     /// Shared eye point for chase and first person, shortened by low ceilings.
     fn eye(self, center: Vec3, world: Option<&CollisionWorld>) -> Vec3 {
         let head = self.head.max(0.0);
@@ -470,13 +493,10 @@ pub(super) fn orbit_camera(
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
     preview: Option<Res<crate::select_preview::Preview>>,
+    controller: Option<Res<crate::motion::Controls>>,
 ) {
     let player = players.single().ok();
-    let body = player.map(|(body, _)| body);
-    let body = CameraBody {
-        head: body.map_or(0.0, |body| body.height * HEAD_LINE),
-        feet: body.map(|body| body.feet_offset),
-    };
+    let body = CameraBody::from_player(player.map(|(body, _)| body));
     let playing = online.selection.is_none()
         && !online.world().is_dead()
         && !online.world().is_unconscious()
@@ -529,6 +549,9 @@ pub(super) fn orbit_camera(
         }
         if playing
             && online.enabled
+            && !controller
+                .as_deref()
+                .is_some_and(|controller| controller.melee_camera_locked(online.world()))
             && !online.world().generation().supports_heading_snapshots()
             && look.held
             && let Some((_, player)) = player

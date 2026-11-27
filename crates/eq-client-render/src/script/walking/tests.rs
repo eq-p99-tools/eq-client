@@ -5,6 +5,7 @@ use crate::script::{
     FORWARD, InputMode, Phase,
     tests::{background, frame_at},
 };
+use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use std::time::{Duration, Instant};
 
@@ -15,7 +16,112 @@ fn floor() -> Vec<[[f32; 3]; 3]> {
     ]
 }
 
+#[test]
+fn an_unsupported_coordinate_refuses_before_off_mesh_fallback_can_move() {
+    let mut app = pending_walk();
+    app.insert_resource(
+        Script::new(vec![Step::WalkPlace {
+            destination: PlaceDestination::Coordinates([0.0, -40.0, 0.0]),
+            range: 3.0,
+            duration: Duration::from_secs(20),
+        }])
+        .offline_preview(true)
+        .input_mode(InputMode::Background),
+    );
+    let mesh = NavMesh::build(
+        &floor(),
+        &eq_client_core::movement::navmesh::Settings::walker(6.0),
+        1,
+        &AtomicBool::new(false),
+    )
+    .unwrap()
+    .0;
+    app.world_mut()
+        .resource_mut::<ZoneNavMesh>()
+        .complete_for_test(Some(mesh));
+    let began = Instant::now();
+    for ms in 0.. {
+        frame_at(&mut app, ms);
+        let script = app.world().resource::<Script>();
+        assert!(!script.acts.contains(&FORWARD));
+        assert!(script.route.is_none());
+        if script.status().phase() == Phase::Failed {
+            assert_eq!(
+                script.status().events().back().unwrap().message,
+                "walk destination has no supported floor at the requested height"
+            );
+            break;
+        }
+        assert!(began.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn a_supported_coordinate_still_walks_when_the_mesh_goal_needs_grid_fallback() {
+    let mut app = pending_walk();
+    let from = Vec3::new(-10.0, 3.75, 0.0);
+    let world = app.world_mut();
+    world
+        .query_filtered::<&mut Transform, With<crate::Player>>()
+        .single_mut(world)
+        .unwrap()
+        .translation = from;
+    testing::place(
+        &mut world.resource_mut::<OnlineState>(),
+        eq_client_core::world_position(from.to_array(), 0.0),
+    );
+    app.insert_resource(
+        Script::new(vec![Step::WalkPlace {
+            destination: PlaceDestination::Coordinates([0.0, 20.0, 0.0]),
+            range: 1.0,
+            duration: Duration::from_secs(20),
+        }])
+        .offline_preview(true)
+        .input_mode(InputMode::Background),
+    );
+    let left = vec![
+        [[-30.0, 0.0, -30.0], [-30.0, 0.0, 30.0], [0.0, 0.0, 30.0]],
+        [[-30.0, 0.0, -30.0], [0.0, 0.0, 30.0], [0.0, 0.0, -30.0]],
+    ];
+    let mesh = NavMesh::build(
+        &left,
+        &eq_client_core::movement::navmesh::Settings::walker(6.0),
+        1,
+        &AtomicBool::new(false),
+    )
+    .unwrap()
+    .0;
+    assert!(mesh.locate(Vec3::new(-10.0, 0.0, 0.0)).is_some());
+    assert!(mesh.locate(Vec3::new(20.0, 0.0, 0.0)).is_none());
+    app.world_mut()
+        .resource_mut::<ZoneNavMesh>()
+        .complete_for_test(Some(mesh));
+    let began = Instant::now();
+    for ms in 0.. {
+        frame_at(&mut app, ms);
+        let script = app.world().resource::<Script>();
+        assert_eq!(script.status().phase(), Phase::Running);
+        if script.acts.contains(&FORWARD) {
+            assert!(
+                script
+                    .status()
+                    .events()
+                    .iter()
+                    .any(|e| e.message == "Walk fell back to grid search: OffMesh")
+            );
+            break;
+        }
+        assert!(began.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+}
+
 fn pending_walk() -> App {
+    place_walk(true)
+}
+
+fn place_walk(mesh_pending: bool) -> App {
     let (mut app, _) = background(Vec::new());
     let body = PlayerBody {
         feet_offset: 3.75,
@@ -35,10 +141,12 @@ fn pending_walk() -> App {
         assert!(online.world().target().selected.is_none());
         online.world().zone().to_owned()
     };
-    crate::zone_navmesh::install(&mut app, true);
-    app.world_mut()
-        .resource_mut::<ZoneNavMesh>()
-        .hold_for_test(&zone, floor());
+    crate::zone_navmesh::install(&mut app, mesh_pending);
+    if mesh_pending {
+        app.world_mut()
+            .resource_mut::<ZoneNavMesh>()
+            .hold_for_test(&zone, floor());
+    }
     // Use the same header-dependent settings as production refresh so it
     // does not replace our deliberately pending task on the first frame.
     let viewer = app.world().resource::<crate::ViewerSettings>();
@@ -49,9 +157,11 @@ fn pending_walk() -> App {
         },
     );
     // The helper accepts a production-shaped input without executing a bake.
-    app.world_mut()
-        .resource_mut::<ZoneNavMesh>()
-        .set_test_settings(settings);
+    if mesh_pending {
+        app.world_mut()
+            .resource_mut::<ZoneNavMesh>()
+            .set_test_settings(settings);
+    }
     app.insert_resource(
         Script::new(vec![Step::WalkPlace {
             destination: PlaceDestination::Coordinates([0.0, -20.0, 0.0]),
@@ -62,6 +172,107 @@ fn pending_walk() -> App {
         .input_mode(InputMode::Background),
     );
     app
+}
+
+fn authored_camera(app: &mut App) -> Entity {
+    app.world_mut()
+        .run_system_once(|mut commands: Commands| {
+            crate::camera::spawn_camera(
+                &mut commands,
+                Transform::from_xyz(0., 3.75, 0.),
+                30.,
+                crate::ProjectionStyle::Perspective,
+            );
+        })
+        .unwrap();
+    let world = app.world_mut();
+    let entity = world
+        .query_filtered::<Entity, With<crate::OrbitCamera>>()
+        .single(world)
+        .unwrap();
+    world.get_mut::<crate::OrbitCamera>(entity).unwrap().yaw = 0.83;
+    entity
+}
+
+#[test]
+fn grid_and_navmesh_walk_entry_publish_guidance_without_writing_camera_yaw() {
+    for mesh in [false, true] {
+        let mut app = place_walk(mesh);
+        let camera = authored_camera(&mut app);
+        frame_at(&mut app, 0);
+        if mesh {
+            let ready = NavMesh::build(
+                &floor(),
+                &eq_client_core::movement::navmesh::Settings::walker(6.),
+                1,
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .0;
+            app.world_mut()
+                .resource_mut::<ZoneNavMesh>()
+                .complete_for_test(Some(ready));
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut ms = 50;
+        loop {
+            frame_at(&mut app, ms);
+            assert!(
+                Instant::now() < deadline,
+                "normal route did not publish guidance"
+            );
+            let script = app.world().resource::<Script>();
+            assert_eq!(script.status().phase(), Phase::Running);
+            if let Some(goal) = script.guidance {
+                assert!((goal.rem_euclid(512.) - 256.).abs() < 0.001);
+                assert_eq!(script.acts(), &[crate::keys::Act::Forward]);
+                assert!(
+                    (app.world().get::<crate::OrbitCamera>(camera).unwrap().yaw - 0.83).abs()
+                        < 1e-5
+                );
+                break;
+            }
+            ms += 1;
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[test]
+fn explicit_camera_only_face_keeps_its_existing_instant_view_semantics() {
+    let mut app = place_walk(false);
+    let camera = authored_camera(&mut app);
+    {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        let mut target = testing::pet(9, 0);
+        target.position = eq_client_core::world_position([20., 3.75, 0.], 0.);
+        testing::spawn_entry(&mut online, 9, target);
+        online.select_target(Some(9));
+        let request_id = online.world().next_target_request() - 1;
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::TargetChanged {
+                session_id: 1,
+                request_id,
+                state: eq_network_game::targets::TargetState {
+                    revision: 1,
+                    spawn_id: Some(9),
+                    available: true,
+                },
+            }],
+        );
+    }
+    app.insert_resource(Script::new(vec![Step::Face]).input_mode(InputMode::Background));
+    frame_at(&mut app, 0);
+    let script = app.world().resource::<Script>();
+    assert!(script.guidance().is_none());
+    assert!((app.world().get::<crate::OrbitCamera>(camera).unwrap().yaw - 0.83).abs() > 0.1);
+    let world = app.world_mut();
+    let player = world
+        .query_filtered::<&Transform, With<crate::Player>>()
+        .single(world)
+        .unwrap();
+    assert!(player.rotation.angle_between(Quat::IDENTITY) < 0.001);
 }
 
 #[test]
@@ -410,3 +621,5 @@ fn explicit_grid_only_walk_still_runs_for_a_body_outside_mesh_profiles() {
         std::thread::yield_now();
     }
 }
+
+mod movement_input;

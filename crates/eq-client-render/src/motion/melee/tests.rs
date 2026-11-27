@@ -6,6 +6,7 @@ use crate::{
 use eq_client_core::{ClientCommand, SpawnState, WorldEvent, qol::Fix};
 
 mod cadence;
+mod lock;
 mod stand_off;
 mod transitions;
 
@@ -360,14 +361,24 @@ fn runtime() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
             (crate::options::toggle, crate::combat::input, motion::input).chain(),
         );
     app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_nanos(16_666_667));
+    app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .reset_all();
     crate::clicks::testing::install(&mut app);
+    // The drawn model and session both start facing the straight test lane.
+    let world = app.world_mut();
+    world
+        .query_filtered::<&mut Transform, With<crate::Player>>()
+        .single_mut(world)
+        .unwrap()
+        .rotation = Quat::from_rotation_y(eq_client_core::render_heading(0.));
     let now = Instant::now();
     {
         let mut controls = app.world_mut().resource_mut::<motion::Controls>();
         controls.test_now = Some(now);
-        controls.test_span = Some(0.1);
+        controls.sampling.span = Some(0.1);
         controls.walk_speed = Some(3.);
         controls.last_accepted = now.checked_sub(Duration::from_millis(100)).unwrap();
     }
@@ -475,14 +486,18 @@ fn melee_positioning_replaces_the_released_keyboard_facing_owner() {
     crate::clicks::testing::click(&mut app, attack);
     let sent = moves(&rx);
     assert_eq!(sent.len(), 1);
-    // Melee first turns at its existing bounded rate before approaching.
+    // Melee starts the actual keyboard ramp before approaching.
     assert_eq!((sent[0].position.x, sent[0].position.y), (0., 0.));
-    assert!((sent[0].position.heading - motion::TURN_RATE * 0.1).abs() < 0.000_1);
+    assert!((sent[0].position.heading - 1. / 3.).abs() < 0.000_1);
     assert!(
         app.world()
             .resource::<motion::Controls>()
             .key_facing
-            .is_none(),
+            .as_ref()
+            .is_some_and(|facing| matches!(
+                facing.source,
+                Some(motion::key_turn::Source::Melee { .. })
+            )),
         "a finished keyboard turn must not override the next melee facing"
     );
 }
@@ -593,7 +608,7 @@ fn melee_received_target_loss_both_deaths_zone_and_off_stop_new_samples() {
             let mut controls = app.world_mut().resource_mut::<motion::Controls>();
             controls.last_accepted = now.checked_sub(Duration::from_millis(100)).unwrap();
             controls.last_sent = None;
-            controls.test_span = Some(0.1);
+            controls.sampling.span = Some(0.1);
             controls.walk_speed = Some(3.);
         }
         let frame = |app: &mut App, now| {

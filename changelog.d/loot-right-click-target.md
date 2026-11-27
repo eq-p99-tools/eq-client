@@ -1,0 +1,1 @@
+Keep right-click loot bound to the original cell when another cell remains hovered, and prefer the control a script actually presses. Pending requests, empty-cursor checks and NO DROP confirmation still apply.

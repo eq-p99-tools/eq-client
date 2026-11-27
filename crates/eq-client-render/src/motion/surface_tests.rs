@@ -186,7 +186,7 @@ impl Native {
         {
             let mut c = self.app.world_mut().resource_mut::<Controls>();
             c.test_now = Some(self.time);
-            c.test_span = Some(Duration::from_millis(ms).as_secs_f32());
+            c.sampling.span = Some(Duration::from_millis(ms).as_secs_f32());
             c.last_accepted = self.time.checked_sub(Duration::from_millis(100)).unwrap();
             c.last_sent = self.time.checked_sub(Duration::from_millis(ms));
         }
@@ -320,7 +320,7 @@ fn surface_dispatch_busy_rolls_back_and_correction_fences_delayed_result() {
     {
         let mut c = f.app.world_mut().resource_mut::<Controls>();
         c.test_now = Some(f.time);
-        c.test_span = Some(0.1);
+        c.sampling.span = Some(0.1);
         c.last_accepted = f.time.checked_sub(Duration::from_millis(100)).unwrap();
     }
     f.app.update();
@@ -986,12 +986,13 @@ fn surface_h4_redundant_forward_stays_eligible_without_compounding_gain() {
                 let actual_controls = alternating.app.world().resource::<Controls>();
                 let reference_controls = continuous.app.world().resource::<Controls>();
                 assert_eq!(
-                    actual_controls.test_motion_intent, reference_controls.test_motion_intent,
+                    actual_controls.sampling.motion_intent,
+                    reference_controls.sampling.motion_intent,
                     "physical eligibility pulse changed motion intent"
                 );
                 assert_eq!(actual.position.heading, reference.position.heading);
-                actual_path += actual_controls.test_proposal_path.unwrap();
-                reference_path += reference_controls.test_proposal_path.unwrap();
+                actual_path += actual_controls.sampling.proposal_path.unwrap();
+                reference_path += reference_controls.sampling.proposal_path.unwrap();
                 let active = actual_controls.surface.active();
                 assert!(active, "ordinary redundant forward lost continuation");
                 active_samples += usize::from(active);
@@ -1057,10 +1058,10 @@ fn assert_ordinary_input(action: &str, controls: &Controls) {
         "autorun" => assert!(controls.autorun, "ordinary physical toggle must latch"),
         "diagonal" => assert!(controls.diagonal_rates.run.is_some()),
         "strafe" => assert!(matches!(
-            controls.test_motion_intent.unwrap().0,
+            controls.sampling.motion_intent.unwrap().0,
             MovementMode::Strafe(_)
         )),
-        "turn" => assert_ne!(controls.test_motion_intent.unwrap().3, 0.),
+        "turn" => assert_ne!(controls.sampling.motion_intent.unwrap().3, 0.),
         _ => (),
     }
 }

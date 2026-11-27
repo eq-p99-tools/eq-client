@@ -460,6 +460,15 @@ impl InstalledClient {
         }
     }
 
+    /// Whether a blocked gem uses the ten-step refresh fade.
+    #[must_use]
+    pub const fn fades_blocked_gems(self) -> bool {
+        match self {
+            Self::Titanium => true,
+            Self::EqMac | Self::Rof2 => false,
+        }
+    }
+
     /// Where this client's spell file is and how its lines are laid out.
     #[must_use]
     pub const fn spell_file(self) -> crate::spells::Layout {

@@ -147,6 +147,15 @@ impl eq_client_core::world::SpellCatalog for SpellNames {
         })
     }
 
+    fn p99_gem_start(&self) -> bool {
+        self.0.p99_gem_start()
+    }
+
+    fn cast_duration(&self, spell: u32) -> Option<std::time::Duration> {
+        self.spell(spell)?
+            .cast_ms
+            .map(|ms| std::time::Duration::from_millis(u64::from(ms)))
+    }
     fn timing(&self, spell: u32) -> Option<SpellTiming> {
         Self::timing(self, spell)
     }

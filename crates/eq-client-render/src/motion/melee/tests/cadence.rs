@@ -65,7 +65,7 @@ fn ten_seconds(assisted: bool, delays: &[u64]) -> Measurement {
     {
         let mut controls = app.world_mut().resource_mut::<motion::Controls>();
         controls.test_now = Some(start);
-        controls.test_span = None;
+        controls.sampling.span = None;
         controls.last_accepted = start;
         controls.last_sent = None;
         controls.speed = Some(RUN);
@@ -73,6 +73,11 @@ fn ten_seconds(assisted: bool, delays: &[u64]) -> Measurement {
     }
     {
         let world = app.world_mut();
+        world
+            .query_filtered::<&mut Transform, With<crate::Player>>()
+            .single_mut(world)
+            .unwrap()
+            .rotation = Quat::from_rotation_y(eq_client_core::render_heading(0.));
         let mut cameras = world.query::<&mut crate::camera::OrbitCamera>();
         cameras.single_mut(world).unwrap().yaw =
             crate::camera::behind(eq_client_core::render_heading(0.));

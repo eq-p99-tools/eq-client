@@ -286,6 +286,7 @@ fn section_headings_use_checkbox_typography_if_the_skin_has_no_label() {
     for (id, text) in [
         ("EQC_QoL_SettingsCaption", "Quality of Life"),
         ("EQC_QoL_UnsafeCaption", "Dangerous"),
+        ("EQC_QoL_MapCaption", "Map"),
     ] {
         let heading = label(page, id);
         assert_eq!(heading.text, text);
@@ -299,8 +300,8 @@ fn section_headings_use_checkbox_typography_if_the_skin_has_no_label() {
             .iter()
             .filter(|(_, piece)| matches!(piece, Element::Button(_)))
             .count(),
-        Fix::settings().count() + 1,
-        "the fixes and Look Spring, which this skin lacks"
+        Fix::settings().count() + 2,
+        "the fixes, Look Spring and the tracked-name outline checkbox"
     );
     assert!(
         page.pieces
@@ -335,6 +336,6 @@ fn wrapped_slider_values_extend_the_sections_and_scroll_extent() {
     assert!(speed_value.y > speed.y + speed.height);
     let colors = label(page, "EQC_QoL_CombatTextCaption");
     assert!(colors.area.y > speed_value.y + speed_value.height);
-    let last = label(page, controls::COMBAT_TEXT_COLORS[5].2).area;
+    let last = label(page, super::super::color_picker::COMBAT_COLORS[1].0).area;
     assert_eq!(content_height(page), Some(last.y + last.height + MARGIN));
 }

@@ -24,6 +24,10 @@ struct Pending {
 }
 
 impl Owner {
+    pub fn withdraw(&mut self) {
+        self.basis = None;
+        self.reset = None;
+    }
     pub fn span(&self, now: Instant, span: f32) -> f32 {
         self.basis.map_or(span, |(_, _, basis)| {
             span.min(

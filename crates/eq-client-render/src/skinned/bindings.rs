@@ -109,6 +109,8 @@ pub(super) enum Does {
     Buff(EffectWindow, u32),
     /// Turns an option on or off, and shows which.
     Option(eq_client_core::options::Toggle),
+    /// The Map preference for outlining tracked names.
+    OutlineTracked,
     /// Steps the mode of one kind of server filter, on this client's
     /// Filters page.
     Filter(eq_client_core::filters::FilterCategory),
@@ -297,15 +299,8 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
             _ => None,
         };
     }
-    // The skin overlaps its two mode buttons; the keyboard action switches modes.
-    if owner == WindowId::Options && id == "ODP_SetWindowedButton" {
-        return None;
-    }
     if owner == WindowId::Options {
-        if let Some(category) = super::filters::filter_button(id) {
-            return Some(Does::Filter(category));
-        }
-        return Some(option_checkbox(id).map_or(Does::Nothing, Does::Option));
+        return options_button(id);
     }
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
@@ -404,6 +399,18 @@ pub(super) fn character_button(id: &str) -> Does {
             .and_then(|number| number.parse::<u8>().ok())
             .filter(|number| (1..=8).contains(number))
             .map_or(Does::Nothing, |number| Does::CharacterSlot(number - 1)),
+    }
+}
+
+fn options_button(id: &str) -> Option<Does> {
+    match id {
+        // The skin overlaps its two mode buttons; the keyboard action switches modes.
+        "ODP_SetWindowedButton" => None,
+        super::qol::OUTLINE_TRACKED => Some(Does::OutlineTracked),
+        _ => Some(super::filters::filter_button(id).map_or_else(
+            || option_checkbox(id).map_or(Does::Nothing, Does::Option),
+            Does::Filter,
+        )),
     }
 }
 

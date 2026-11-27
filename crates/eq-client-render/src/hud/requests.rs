@@ -194,7 +194,30 @@ pub(super) fn spell(
     wording: (&super::messages::Messages, &crate::keys::KeyMap),
     before: impl FnOnce() -> Vec<eq_client_core::chat::ChatLine>,
 ) -> bool {
-    let now = Instant::now();
+    spell_at(
+        chat,
+        world,
+        player,
+        outbox,
+        request,
+        wording,
+        before,
+        Instant::now(),
+    )
+}
+
+/// The normal request path with an injected clock for exact boundary checks.
+#[allow(clippy::too_many_arguments)] // Same input path plus its monotonic instant.
+pub(super) fn spell_at(
+    chat: &mut crate::chat::ChatState,
+    world: &eq_client_core::world::ClientWorld,
+    player: &PlayerState,
+    outbox: &crate::outbox::Outbox,
+    request: &Request,
+    wording: (&super::messages::Messages, &crate::keys::KeyMap),
+    before: impl FnOnce() -> Vec<eq_client_core::chat::ChatLine>,
+    now: Instant,
+) -> bool {
     let Request {
         gem,
         target_id,

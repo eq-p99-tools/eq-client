@@ -252,19 +252,56 @@ impl CollisionWorld {
         self.stroke(feet, delta, height, Exit::Any)
     }
 
+    /// The supported query used by independent replay. Unknown sweeps are not
+    /// certified as blocked movement; the ordinary API retains its old fallback.
+    pub(super) fn wet_step_checked(
+        &self,
+        feet: Vec3,
+        delta: Vec3,
+        height: f32,
+    ) -> Result<Vec3, ()> {
+        self.stroke_query(feet, delta, height, Exit::Any, true)
+            .map_err(|_| ())
+    }
+
+    /// First conservative sweep plus ordinary water-gap clipping, without
+    /// projecting gravity along a solid slope into unearned horizontal travel.
+    pub(super) fn wet_vertical_step_checked(
+        &self,
+        feet: Vec3,
+        delta: Vec3,
+        height: f32,
+    ) -> Result<Vec3, ()> {
+        self.stroke_query(feet, delta, height, Exit::Any, false)
+            .map_err(|_| ())
+    }
+
     fn stroke(&self, feet: Vec3, delta: Vec3, height: f32, level: Exit) -> Vec3 {
-        if !self.in_swimmable_water(feet, height)
-            || !delta.is_finite()
-            || delta.length_squared() <= 1e-10
-        {
-            return feet;
+        match self.stroke_query(feet, delta, height, level, true) {
+            Ok(position) | Err(position) => position,
         }
-        let Some((contact, normal)) = self.swim_sweep(feet, delta, height) else {
-            return feet;
-        };
+    }
+
+    // The error retains the exact conservative endpoint the legacy API used
+    // before an unsupported first or second sweep. It is not replay evidence.
+    fn stroke_query(
+        &self,
+        feet: Vec3,
+        delta: Vec3,
+        height: f32,
+        level: Exit,
+        slide: bool,
+    ) -> Result<Vec3, Vec3> {
+        if !self.in_swimmable_water(feet, height) || !delta.is_finite() {
+            return Err(feet);
+        }
+        if delta.length_squared() <= 1e-10 {
+            return Ok(feet);
+        }
+        let (contact, normal) = self.swim_sweep(feet, delta, height).ok_or(feet)?;
         let position = self.limit_swim(feet, contact, height, level);
-        if !self.in_swimmable_water(position, height) {
-            return position;
+        if !slide || !self.in_swimmable_water(position, height) {
+            return Ok(position);
         }
         let remaining = delta - (position - feet);
         let slide = if position.distance_squared(contact) > 1e-10 {
@@ -272,18 +309,21 @@ impl CollisionWorld {
         } else if let Some(normal) = normal {
             remaining - normal * remaining.dot(normal)
         } else {
-            return position;
+            return Ok(position);
         };
         if slide.length_squared() <= 1e-10 {
-            return position;
+            return Ok(position);
         }
-        self.swim_sweep(position, slide, height)
-            .map_or(position, |(end, _)| {
-                self.limit_swim(position, end, height, level)
-            })
+        let (end, _) = self.swim_sweep(position, slide, height).ok_or(position)?;
+        Ok(self.limit_swim(position, end, height, level))
     }
 
-    fn swim_sweep(&self, from: Vec3, delta: Vec3, height: f32) -> Option<(Vec3, Option<Vec3>)> {
+    pub(super) fn swim_sweep(
+        &self,
+        from: Vec3,
+        delta: Vec3,
+        height: f32,
+    ) -> Option<(Vec3, Option<Vec3>)> {
         match self.flight_sweep(from, delta, height).ok()? {
             None => Some((from + delta, None)),
             Some(hit) => {

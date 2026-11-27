@@ -270,7 +270,7 @@ pub(super) fn button(label: &str) -> impl Bundle {
     )
 }
 
-pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
+pub(crate) fn chrome(parent: &mut ChildSpawnerCommands) {
     super::presentation::chrome(parent);
     landmarks::chrome(parent);
     parent.spawn((Node { position_type: PositionType::Absolute, left: px(6), right: px(6), top: px(6),
@@ -282,6 +282,7 @@ pub(super) fn chrome(parent: &mut ChildSpawnerCommands) {
         row.spawn((Control::ClearSearch, button("Clear")));
         row.spawn((Control::WatchQuery, button("Track name"), Tooltip("Track this exact displayed name and alert on appearances, even when currently absent.".into())));
         row.spawn((Control::ToggleList, Label::Watches, button("Tracked (0)")));
+        super::presentation::outline_button(row);
     });
     parent.spawn((
         WatchList,

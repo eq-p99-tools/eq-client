@@ -414,7 +414,7 @@ impl Fix {
                 "Open newly slain NPC corpses naming you as killer within 20 units and use Loot All. Leave NO DROP items for manual looting. Stop on refusal; supported item results are required."
             }
             Self::MeleePositioning => {
-                "While you have auto-attack on, face your current target and move into estimated melee reach on clear ground. Your movement, mouse look, scripts and /follow take priority. Stops at obstacles; never selects a target or turns attack on."
+                "While auto-attack is on, approach and face the current target on clear ground, then use strafe/turn keys to circle it. RMB turns only the camera while locked. Forward/back or autorun releases follow; attack on, a new target choice or toggling this setting rearms it. Jump suspends until landing. Typing, casting, questions and other steering keep priority. Stops at obstacles and zone/carrier boundaries; never selects a target or enables attack."
             }
             Self::FloatingCombatText => {
                 "Draw positive damage reported by the server above known targets. Chat remains available and no combat outcome is predicted."

@@ -15,6 +15,7 @@ use std::collections::{BTreeMap, HashSet};
 pub(crate) mod bindings;
 mod installed;
 pub(crate) mod modifiers;
+pub(crate) mod movement;
 pub(crate) mod presses;
 pub(crate) mod search;
 
@@ -651,6 +652,8 @@ pub(crate) struct Typing {
     pub logging_in: bool,
     /// The map's local entity search owns text input.
     pub map_search: bool,
+    /// The Options color editor owns keyboard input this frame.
+    pub color_hex: bool,
     /// The bug report or feedback window's box owns text input.
     pub reporting: bool,
     /// The spellbook's local search owns text input.
@@ -678,6 +681,21 @@ pub(crate) struct Typing {
 }
 
 impl Typing {
+    /// Whether a text field or key editor currently owns native keyboard input.
+    pub(crate) fn gameplay_available(&self) -> bool {
+        !self.composing
+            && !self.creating_character
+            && !self.editing_script
+            && !self.counting
+            && !self.logging_in
+            && !self.color_hex
+            && !self.map_search
+            && !self.reporting
+            && !self.spell_search
+            && !self.spell_set_name
+            && !self.rebinding
+    }
+
     /// Whether another reader should skip keyboard input owned by the book.
     pub(crate) fn spell_search_captured(&self, id: MessageId<KeyboardInput>) -> bool {
         self.spell_search_claimed || self.spell_search_events.contains(&id)
@@ -722,16 +740,12 @@ impl Keys<'_, '_> {
 
     /// Text entry still owns input when automatic positioning runs unfocused.
     pub(crate) fn automatic_input_available(&self) -> bool {
-        !self.typing.composing
-            && !self.typing.creating_character
-            && !self.typing.editing_script
-            && !self.typing.counting
-            && !self.typing.logging_in
-            && !self.typing.map_search
-            && !self.typing.reporting
-            && !self.typing.spell_search
-            && !self.typing.spell_set_name
-            && !self.typing.rebinding
+        self.typing.gameplay_available()
+    }
+
+    /// A routed walk keeps its own acts while a text field owns native keys.
+    pub(crate) fn script_walk_available(&self) -> bool {
+        self.window_focused() && self.script.as_ref().is_some_and(|script| script.walking())
     }
 
     /// The movement acts a running script holds itself.
@@ -745,6 +759,12 @@ impl Keys<'_, '_> {
         self.script.as_ref().is_some_and(|script| script.routing())
     }
 
+    pub(crate) fn script_drop_policy(&self) -> Option<(&std::sync::Arc<()>, bool)> {
+        self.script
+            .as_deref()
+            .and_then(crate::script::Script::drop_policy)
+    }
+
     /// A queued or paused run keeps its input sequence ahead of automatic
     /// melee positioning, even on frames when it holds no movement key.
     pub(crate) fn script_active(&self) -> bool {
@@ -753,9 +773,21 @@ impl Keys<'_, '_> {
             .is_some_and(|script| script.status().phase().active())
     }
 
+    pub(crate) fn script_orbit_keys(&self) -> bool {
+        self.script
+            .as_ref()
+            .is_some_and(|script| script.orbit_keys(&self.map))
+    }
+
     /// The heading a running script's `face` step turns the player to.
     pub(crate) fn scripted_facing(&self) -> Option<f32> {
         self.script.as_ref().and_then(|script| script.facing())
+    }
+
+    /// Desired guidance is distinct from a mouse/camera orientation write.
+    pub(crate) fn scripted_guidance(&self) -> Option<(f32, std::sync::Arc<()>)> {
+        let script = self.script.as_ref()?;
+        Some((script.guidance()?, script.status().run().clone()))
     }
 
     /// Whether this frame's Escape belongs to the game, not to closing the chat.

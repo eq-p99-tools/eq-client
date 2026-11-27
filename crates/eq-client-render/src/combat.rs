@@ -101,6 +101,8 @@ pub(super) struct CombatState {
     last_sent: Option<bool>,
     /// The assist answers seen ([`eq_client_core::world::ClientWorld::assist_answer`]).
     seen_assists: u32,
+    /// Explicit attack-on intent, independent of duplicate packet suppression.
+    positioning_intent: u64,
     /// The spawn an assist answer named while Attack On Assist was on, and
     /// when: auto attack starts once the target is that spawn.
     assist_attack: Option<(u16, std::time::Instant)>,
@@ -113,6 +115,9 @@ pub(super) struct CombatState {
 const ASSIST_ATTACK_WAIT: std::time::Duration = std::time::Duration::from_secs(1);
 
 impl CombatState {
+    pub(super) const fn positioning_intent(&self) -> u64 {
+        self.positioning_intent
+    }
     /// Only an attack requested in this admission may drive positioning.
     pub(super) fn requested_in(&self, session: Option<u64>) -> bool {
         self.auto_attack && session.is_some() && self.session_id == session
@@ -437,6 +442,19 @@ fn set_attack(
     toggle: eq_client_assets::ui::AttackToggle,
 ) {
     if enabled == combat.auto_attack {
+        if enabled
+            && combat.requested_in(world.session_id())
+            && world.player().is_some_and(|player| {
+                world
+                    .posture(player.spawn_id)
+                    .is_none_or(|posture| posture == PostureState::Standing)
+                    && !(toggle.self_target.is_some()
+                        && world.target().selected == Some(player.spawn_id))
+            })
+            && outbox.stamp(world).is_ok()
+        {
+            combat.positioning_intent = combat.positioning_intent.saturating_add(1);
+        }
         return;
     }
     let Some(player) = world.player() else {
@@ -474,6 +492,9 @@ fn set_attack(
         return;
     }
     combat.auto_attack = enabled;
+    if enabled {
+        combat.positioning_intent = combat.positioning_intent.saturating_add(1);
+    }
     combat.last_sent = Some(enabled);
     combat.idle = IdleSwings::default();
     chat.history.push(toggle_line(toggle, enabled, messages));
@@ -798,11 +819,13 @@ mod tests {
                 off_unsent: true,
                 off_quiet: true,
                 last_sent,
+                positioning_intent: 2,
                 seen_assists: 9,
                 assist_attack: Some((30, std::time::Instant::now())),
             };
             combat.reset();
             assert_eq!(combat.last_sent, last_sent);
+            assert_eq!(combat.positioning_intent(), 0);
             assert!(!combat.auto_attack);
             assert_eq!(combat.idle, IdleSwings::default());
             assert!(combat.session_id.is_none());
@@ -993,15 +1016,19 @@ mod tests {
     fn explicit_attack_forms_are_idempotent_through_typed_and_button_routes() {
         for button in [false, true] {
             let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
-            for (line, expected) in [
-                ("/AtTaCk On", Some(true)),
-                ("/attack on", None),
-                ("/attack off", Some(false)),
-                ("/attack OFF", None),
+            for (line, expected, intent) in [
+                ("/AtTaCk On", Some(true), 1),
+                ("/attack on", None, 2),
+                ("/attack off", Some(false), 2),
+                ("/attack OFF", None, 2),
             ] {
                 attack_line(&mut app, line, button).unwrap();
                 app.update();
                 assert_eq!(sent(&rx), expected);
+                assert_eq!(
+                    app.world().resource::<CombatState>().positioning_intent(),
+                    intent
+                );
             }
             assert_eq!(lines(&app).len(), 2);
             assert!(!app.world().resource::<CombatState>().auto_attack);

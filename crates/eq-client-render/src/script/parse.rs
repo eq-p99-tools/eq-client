@@ -149,24 +149,26 @@ pub enum Step {
     /// current target.
     Face,
     /// Turns the player to an EQ heading (0..512), whatever the camera does,
-    /// as moving with the camera-relative keys turns them: the heading sent
-    /// turns at the turn keys' rate. It ends once the server has the heading.
+    /// through the ordinary keyboard turn owner and ramp. It ends once the
+    /// admitted movement state has the heading.
     FaceHeading(f32),
     /// Holds a movement command for a bounded duration, as holding its key
     /// does, whatever keys the key table gives it; traced as `hold` is.
     Move(MoveCommand, Duration),
-    /// Moves forward the way the camera looks toward the current target until it is within a distance, for a
-    /// bounded duration.
+    /// Allows known damaging drops for this script run, never unknown landings.
+    WithDrops(bool),
+    /// Moves forward while ordinary keyboard turns guide toward the current
+    /// target, until it is within a distance, for a bounded duration.
     Approach(f32, Duration),
     /// Chases the current target as a player's hands would: every frame it
-    /// faces where the target is drawn now (its last reported position
+    /// turns toward where the target is drawn now (its last reported position
     /// carried on as the generation's program carries it) and moves forward while the target
     /// is beyond the distance, standing within it. It ends only when the
     /// target dies or leaves the zone, or when the time runs out, never
     /// merely on reaching the target; auto-attack is the script's to turn on
     /// first.
     Chase(f32, Duration),
-    /// Moves forward the way the camera looks toward the nearest world container of one tradeskill kind
+    /// Moves forward while ordinary turns guide toward the nearest world container of one tradeskill kind
     /// (its container type, such as a pottery wheel's), chosen as the step
     /// starts, until it is within a distance, for a bounded duration.
     ApproachObject {
@@ -662,6 +664,7 @@ pub(crate) const COMMANDS: &[&str] = &[
     "trace",
     "face",
     "move",
+    "with_drops",
     "approach",
     "chase",
     "walk",
@@ -811,6 +814,8 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
         ("chase", [range, limit]) => {
             Step::Chase(number(range, 1.0, 200.0)?, millis(limit, MAX_WAIT)?)
         }
+        ("with_drops", ["True" | "true"]) => Step::WithDrops(true),
+        ("with_drops", ["False" | "false"]) => Step::WithDrops(false),
         ("walk_to", [x, y, z, range, duration]) => Step::WalkPlace {
             destination: PlaceDestination::Coordinates([
                 number(x, -1_000_000.0, 1_000_000.0)?,
@@ -2027,6 +2032,18 @@ mod tests {
             ),
             Ok(vec![Step::Click(target), Step::RightClick(target)])
         );
+    }
+
+    #[test]
+    fn damaging_drop_consent_requires_an_explicit_boolean_command() {
+        let base = Path::new(".");
+        assert_eq!(
+            parse("with_drops(True)\nwith_drops(False)\n", base).unwrap(),
+            vec![Step::WithDrops(true), Step::WithDrops(false)]
+        );
+        for text in ["with_drops()", "with_drops(1)", "with_drops(yes)"] {
+            assert!(parse(text, base).is_err(), "{text}");
+        }
     }
 
     #[test]

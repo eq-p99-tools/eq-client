@@ -129,6 +129,7 @@ impl Native {
             c.swim = grant.swim;
             c.airborne = Some(AirborneController::default());
             c.test_now = Some(now);
+            c.suppress_floor_swim = true;
             c.last_sent = Some(start);
             c.last_accepted = start;
             (camera, player)

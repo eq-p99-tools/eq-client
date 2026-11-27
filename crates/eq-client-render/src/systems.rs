@@ -97,6 +97,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<windows::Stack>()
         .init_resource::<windows::menu::Menu>()
         .init_resource::<keys::Typing>()
+        .init_resource::<skinned::color_picker::HexEdit>()
         .init_resource::<keys::presses::Presses>()
         .init_resource::<crate::window_mode::Windowed>()
         .init_resource::<character_create::Editor>()
@@ -195,7 +196,7 @@ pub(super) fn schedule(app: &mut App) {
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
-                map::search_focus,
+                (map::search_focus, skinned::color_picker::focus).chain(),
                 spellbook::sets::follow,
                 spellbook::search::focus,
                 spellbook::search::capture,
@@ -208,6 +209,7 @@ pub(super) fn schedule(app: &mut App) {
                 login::depart,
                 skinned::type_amount,
                 (
+                    skinned::color_picker::edit_hex,
                     map::search_input,
                     crate::report_windows::focus,
                     crate::report_windows::input,
@@ -440,7 +442,7 @@ pub(super) fn schedule(app: &mut App) {
             (
                 resources::update,
                 hud::update,
-                hud::spell_details,
+                (skinned::gem::refresh, hud::spell_details).chain(),
                 hud::key_help,
                 target::key_help,
                 hud::hotbar::item_artwork,
@@ -459,7 +461,11 @@ pub(super) fn schedule(app: &mut App) {
                     buffs::cancel,
                 ),
                 (
-                    (spell_icons::update, skinned::gem::pieces),
+                    (
+                        spell_icons::update,
+                        skinned::gem::pieces.after(skinned::gem::refresh),
+                    )
+                        .chain(),
                     (logs::write, logs::trace_lines).chain(),
                     options::tell_session,
                 ),
@@ -500,7 +506,12 @@ pub(super) fn schedule(app: &mut App) {
                     (skinned::open_filters, skinned::tabs).chain(),
                     (abilities::present, crate::combat_abilities::present),
                     (
-                        skinned::slide,
+                        (
+                            skinned::slide,
+                            skinned::color_picker::pick,
+                            skinned::color_picker::present,
+                        )
+                            .chain(),
                         skinned::drop_downs,
                         skinned::light_choices,
                         skinned::show_sliders,
@@ -612,6 +623,7 @@ pub(super) fn liquid_and_movement()
         crate::breath::update,
         crate::arrival::place,
         crate::piloting::update,
+        crate::script::interrupt_walk.run_if(resource_exists::<crate::script::Script>),
         motion::stop_autorun_after_failed_script,
         motion::input,
         motion::spend_endurance,

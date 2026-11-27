@@ -178,6 +178,8 @@ impl ClientWorld {
                 now,
             )
         });
+        self.casting.p99_gems =
+            super::p99_gems::Gems::restore(&player.memorized_spells, player.spell_refresh_ms, now);
         // Titanium Bards use the program's recovery rule. Other dialects
         // retain the existing session capability policy.
         self.casting.bard_refresh = player.class == Some(super::casting::BARD)

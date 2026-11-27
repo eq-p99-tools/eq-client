@@ -18,6 +18,8 @@ pub use instances::CollisionInstance;
 use instances::Surface;
 mod liquids;
 mod navigator;
+mod swim_scene;
+pub use swim_scene::SwimCollision;
 mod observations;
 pub use observations::{ContactReport, MotionObservation};
 pub mod navmesh;
@@ -38,7 +40,9 @@ pub use eq_network_game::movement::{
     SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES, ShorelineFrame, ShorelineStroke,
     ShorelineTrace, ShorelineVelocity,
 };
-pub use eq_network_game::movement::{SwimBasis, SwimControl, SwimControls, SwimInput};
+pub use eq_network_game::movement::{
+    SwimBasis, SwimControl, SwimControls, SwimInput, SwimSceneHandle, SwimSceneMotion,
+};
 pub use falls::{HARMLESS_DROP, fall_damage};
 use liquids::LiquidGuard;
 pub use liquids::{GuardView, Liquid, Liquids, SurfaceRegion};
@@ -96,6 +100,12 @@ const LIFT: f32 = 0.85;
 
 /// The collision capsule's radius.
 const CAPSULE_RADIUS: f32 = 0.4;
+
+/// Radius of the ordinary collision capsule used by local movement.
+#[must_use]
+pub const fn capsule_radius() -> f32 {
+    CAPSULE_RADIUS
+}
 /// How far a sweep stops short of what it hits.
 const SKIN: f32 = 0.03;
 /// How far from the capsule's centre the ground under it is sampled.

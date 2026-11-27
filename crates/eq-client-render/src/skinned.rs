@@ -29,6 +29,7 @@ pub(crate) use bindings::PET_COMMANDS;
 use bindings::{Does, buff_label, does, pet_posture_button};
 #[cfg(test)]
 use bindings::{GroupButton, RaidButton, effect_label, selector_button};
+pub(crate) mod color_picker;
 mod controls;
 mod fit;
 mod frame;
@@ -39,6 +40,8 @@ pub(crate) use items::testing_loot_slot;
 pub(crate) mod looks;
 #[cfg(test)]
 mod merchant_grid_tests;
+#[cfg(test)]
+mod outline_checkbox_tests;
 mod perimeter;
 mod reflow;
 pub(crate) use reflow::update as reflow_layout;
@@ -976,10 +979,9 @@ fn spell_gem(
                 }
             };
             piece(gem_node, gem.background.as_ref(), gem::GemPiece::Background);
-            gem_node.spawn(super::spell_icons::gem_artwork(
-                usize::from(index),
-                gem,
-                skin,
+            gem_node.spawn((
+                super::spell_icons::gem_artwork(usize::from(index), gem, skin),
+                gem::GemPiece::Icon,
             ));
             piece(gem_node, gem.highlight.as_ref(), gem::GemPiece::Highlight);
             piece(gem_node, gem.holder.as_ref(), gem::GemPiece::Holder);
@@ -1242,6 +1244,7 @@ fn behave(
         Does::Filter(category) => {
             drawn.insert((Button, super::options::FilterButton(category), skin()))
         }
+        Does::OutlineTracked => drawn.insert((Button, crate::map::OutlineCheckbox, skin())),
         Does::Option(toggle) => {
             drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()));
             // Greyed where the session does not offer what it is for.
@@ -1530,6 +1533,7 @@ fn caption(
         | Does::Raid(_)
         | Does::RaidAction(_)
         | Does::Unoffered(_)
+        | Does::OutlineTracked
         | Does::Option(_)
         | Does::Filter(_)
         | Does::Trains
@@ -1630,6 +1634,7 @@ type Stateful<'w, 's> = Query<
         Option<&'static super::windows::SelectorButton>,
         Has<AttackButton>,
         Option<&'static super::options::OptionCheckbox>,
+        Has<crate::map::OutlineCheckbox>,
         (
             Has<Greyed>,
             Has<crate::hud::hotbar::scripts::Latched>,
@@ -1658,6 +1663,7 @@ pub(crate) fn buttons(
         Res<crate::report_windows::ReportWindows>,
     ),
     mut art: crate::sheets::Art,
+    map: Res<crate::map::Presentation>,
     mut buttons: Stateful,
 ) {
     let chosen = online
@@ -1669,6 +1675,7 @@ pub(crate) fn buttons(
         selector,
         attack,
         checkbox,
+        outline_checkbox,
         (greyed, latched, arrow, character, report),
         interaction,
         mut image,
@@ -1677,6 +1684,7 @@ pub(crate) fn buttons(
         let on = match (selector, checkbox, character) {
             // The bug report's check boxes show what they carry.
             _ if let Some(report) = report => reports.checked(*report),
+            _ if outline_checkbox => map.outlines(),
             (Some(selector), ..) => shown.displayed(selector.0),
             (None, Some(checkbox), _) => options.on(checkbox.0),
             (None, None, Some(crate::character_select::Action::Choose(slot))) => {
@@ -2518,6 +2526,12 @@ fn plain_label(
     geometry: Option<reflow::Geometry>,
     owner: WindowId,
 ) {
+    if owner == WindowId::Options
+        && let Some(channels) = color_picker::binding(name)
+    {
+        color_picker::draw(window, channels, node, label.area.width, font(label.font));
+        return;
+    }
     match controls::value_label(name, owner) {
         Some(controls::ValueLabel::Shows(level)) => aligned_in(
             window,
@@ -4289,7 +4303,7 @@ mod tests {
         mouse.pieces[0].0 = "OMP_LookSpringCheckbox".into();
         let skin = [general.clone(), mouse];
         let own = with_qol_page(&skin, WindowId::Options, Vec2::new(5000.0, inside), None);
-        assert_eq!(qol_page_checkboxes(&own[2]).len(), settings);
+        assert_eq!(qol_page_checkboxes(&own[2]).len(), settings + 1);
         assert!(matches!(
             does("OMP_LookSpringCheckbox", WindowId::Options),
             Some(Does::Option(Toggle::LookSpring))
@@ -4299,7 +4313,7 @@ mod tests {
         mouse.pieces[0].0 = "OMP_InvertYAxisCheckbox".into();
         let skin = [general.clone(), mouse];
         let added = with_qol_page(&skin, WindowId::Options, Vec2::new(5000.0, inside), None);
-        assert_eq!(qol_page_checkboxes(&added[2]).len(), settings);
+        assert_eq!(qol_page_checkboxes(&added[2]).len(), settings + 1);
         let mouse = qol_page_checkboxes(&added[1]);
         assert_eq!(mouse.len(), 2);
         assert_eq!(mouse[1].text.as_deref(), Some("Look Spring"));
@@ -4347,7 +4361,7 @@ mod tests {
         assert_eq!(pages[1].title.as_deref(), Some("QoL"));
         let buttons = qol_page_checkboxes(&pages[1]);
         // This skin's Mouse page has no Look Spring, so the page leads with it.
-        assert_eq!(buttons.len(), settings.len() + 1);
+        assert_eq!(buttons.len(), settings.len() + 2);
         assert_eq!(buttons[0].text.as_deref(), Some("Look Spring"));
         assert!(matches!(
             does(buttons[0].id.as_deref().unwrap(), WindowId::Options),
