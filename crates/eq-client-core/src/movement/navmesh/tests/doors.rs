@@ -56,6 +56,7 @@ fn search(
         doors,
         drops: false,
         scope: Scope::Whole,
+        goal_height: None,
     });
     for _ in 0..1000 {
         match search.advance(world, 256) {
@@ -234,4 +235,68 @@ fn a_refused_door_loses_its_connection_and_never_crosses_the_closed_leaf() {
         }
     }
     panic!("refused door did not end the route");
+}
+
+#[test]
+fn an_exact_neutral_place_routes_around_a_known_solid_without_a_target() {
+    let mut faces = rectangle(-30.0, 30.0);
+    faces.extend(block([-2.0, 0.0, -4.0], [2.0, 12.0, 4.0]));
+    let world = CollisionWorld::new(faces.clone()).unwrap();
+    let (mesh, _) = build(&faces);
+    let (start, goal) = (Vec3::new(-20.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 0.0));
+    let mut route = Route::new(start, goal, 1.0, 6.0)
+        .with_exact_height()
+        .with_navigator(Box::new(MeshNavigator::new(Arc::new(mesh))));
+    let mut feet = start;
+    let mut went_around = false;
+    for tick in 0..2000 {
+        match route.next(&world, feet, goal, 256, Duration::from_millis(tick * 50)) {
+            RouteStep::Searching => (),
+            RouteStep::Toward(to) => {
+                feet = world.step(
+                    feet,
+                    ((to - feet) * Vec3::new(1.0, 0.0, 1.0)).clamp_length_max(0.5),
+                    6.0,
+                );
+                went_around |= feet.z.abs() > 4.0;
+                assert!(!(feet.x.abs() < 2.0 && feet.z.abs() < 4.0));
+            }
+            RouteStep::Arrived => {
+                assert!(went_around);
+                assert!(feet.distance(goal) <= 1.0);
+                return;
+            }
+            other => panic!("{other:?} at {feet:?}"),
+        }
+    }
+    panic!("neutral place did not arrive");
+}
+
+#[test]
+fn an_exact_place_does_not_arrive_on_the_floor_under_its_goal() {
+    let world = CollisionWorld::new(rectangle(-30.0, 30.0)).unwrap();
+    let (start, goal) = (Vec3::ZERO, Vec3::new(0.0, 8.0, 0.0));
+    let mut route = Route::new(start, goal, 1.0, 6.0).with_exact_height();
+    assert_eq!(
+        route.next(&world, start, goal, 0, Duration::ZERO),
+        RouteStep::Searching
+    );
+    let mut search = crate::movement::GridNavigator.search(SearchRequest {
+        start,
+        goal,
+        reach: 1.0,
+        height: 6.0,
+        doors: Vec::new(),
+        drops: false,
+        scope: Scope::Local,
+        goal_height: Some(1.0),
+    });
+    for _ in 0..100 {
+        match search.advance(&world, 256) {
+            PathProgress::Searching => (),
+            PathProgress::Failed => return,
+            PathProgress::Found(path) => panic!("wrong-floor path {path:?}"),
+        }
+    }
+    panic!("unreachable floor search did not end");
 }

@@ -123,6 +123,7 @@ pub struct PathSearch {
     origin: Vec2,
     goal: Vec3,
     reach: f32,
+    goal_height: Option<f32>,
     height: f32,
     nodes: HashMap<Key, Node>,
     open: BinaryHeap<Open>,
@@ -167,6 +168,7 @@ impl PathSearch {
             origin: Vec2::new(start.x, start.z),
             goal,
             reach: reach.max(0.5),
+            goal_height: None,
             height,
             nodes,
             open,
@@ -185,6 +187,19 @@ impl PathSearch {
     #[must_use]
     pub fn with_doors(mut self, doors: Vec<u8>) -> Self {
         self.doors = doors;
+        self
+    }
+
+    /// Tightens only final goal height for a place whose floor is known.
+    #[must_use]
+    pub fn with_goal_height(mut self, height: Option<f32>) -> Self {
+        self.goal_height = height.map(|height| {
+            if height.is_finite() {
+                height.max(0.0)
+            } else {
+                0.0
+            }
+        });
         self
     }
 
@@ -384,6 +399,9 @@ impl PathSearch {
 
     fn arrived(&self, feet: Vec3) -> bool {
         within_reach(feet, self.goal, self.reach)
+            && self
+                .goal_height
+                .is_none_or(|height| (feet.y - self.goal.y).abs() <= height)
     }
 
     fn trace(&self, mut key: Key) -> Vec<Vec3> {

@@ -1958,6 +1958,7 @@ fn inspect_mesh_routes() {
                 doors: doors.clone(),
                 drops,
                 scope: Scope::Whole,
+                goal_height: None,
             });
             let progress = loop {
                 match search.advance(&world, 5000) {
@@ -2332,6 +2333,7 @@ fn inspect_mesh_sizes() {
             doors: Vec::new(),
             drops: false,
             scope: Scope::Whole,
+            goal_height: None,
         });
         let progress = loop {
             match search.advance(&world, 5000) {
@@ -2494,6 +2496,7 @@ fn inspect_mesh_leg() {
             doors: Vec::new(),
             drops: false,
             scope: Scope::Whole,
+            goal_height: None,
         });
         let progress = loop {
             match search.advance(&world, 5000) {

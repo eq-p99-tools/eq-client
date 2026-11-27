@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The rerecast version the mesh is built with, as pinned in Cargo.toml.
 const RERECAST: &str = "0.4.0";
 /// This format's version; raised whenever the bytes or the build change.
-const FORMAT: u32 = 10;
+const FORMAT: u32 = 11;
 const MAGIC: &[u8; 4] = b"EQNM";
 
 /// Where a mesh came from.
@@ -313,6 +313,7 @@ fn encode(mesh: &NavMesh, out: &mut Vec<u8>) {
             out.extend_from_slice(&f.to_le_bytes());
         }
     };
+    out.extend_from_slice(&u32::from(mesh.incomplete).to_le_bytes());
     count(out, mesh.polygons.len());
     for polygon in &mesh.polygons {
         count(out, polygon.vertices.len());
@@ -340,6 +341,11 @@ fn encode(mesh: &NavMesh, out: &mut Vec<u8>) {
 /// file, trailing bytes or a link to no polygon.
 fn decode(bytes: &[u8], header: &[u8]) -> Option<NavMesh> {
     let mut reader = Reader(bytes.strip_prefix(header)?);
+    let incomplete = match reader.u32()? {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
     let count = reader.u32()?;
     let mut polygons = Vec::new();
     for _ in 0..count {
@@ -376,10 +382,11 @@ fn decode(bytes: &[u8], header: &[u8]) -> Option<NavMesh> {
             })
         })
         .collect::<Option<_>>()?;
-    reader
-        .0
-        .is_empty()
-        .then(|| NavMesh::from_parts(polygons, drops))
+    reader.0.is_empty().then(|| {
+        let mut mesh = NavMesh::from_parts(polygons, drops);
+        mesh.incomplete = incomplete;
+        mesh
+    })
 }
 
 struct Reader<'a>(&'a [u8]);

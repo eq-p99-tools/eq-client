@@ -40,6 +40,8 @@ pub struct SearchRequest {
     pub goal: Vec3,
     /// How near the goal counts as there.
     pub reach: f32,
+    /// A known place's vertical reach; None retains the historical spawn-height allowance.
+    pub goal_height: Option<f32>,
     /// The walker's collision height.
     pub height: f32,
     /// Closed doors the path may pass by opening them.
@@ -147,6 +149,7 @@ pub struct GridNavigator;
 impl Navigator for GridNavigator {
     fn search(&self, request: SearchRequest) -> Box<dyn RouteSearch> {
         let search = PathSearch::new(request.start, request.goal, request.reach, request.height)
+            .with_goal_height(request.goal_height)
             .with_drops(request.drops)
             .with_doors(request.doors);
         Box::new(match request.scope {
