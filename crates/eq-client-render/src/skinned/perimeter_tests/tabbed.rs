@@ -393,7 +393,13 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
             for (level, text) in [
                 (Level::UiScale, "Interface scale"),
                 (Level::RunSpeed, "Run a Little Faster"),
-            ] {
+            ]
+            .into_iter()
+            .chain(
+                controls::COMBAT_TEXT_COLORS
+                    .into_iter()
+                    .map(|(_, _, _, text, level)| (level, text)),
+            ) {
                 let slider = sliders
                     .iter(app.world())
                     .find(|(_, slider)| slider.sets == Sets::Level(level))
@@ -417,17 +423,13 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                     assert!(rect.min.x >= viewport.min.x && rect.max.x <= viewport.max.x);
                 }
 
-                // Reach Interface scale within its section, then exercise
-                // the end of the page's scroll extent for the run speed slider.
-                let pixels = if level == Level::UiScale {
-                    let bottom_edge = controls
-                        .into_iter()
-                        .map(|control| bounds(app.world(), control).max.y)
-                        .fold(viewport.max.y, f32::max);
-                    (viewport.max.y - bottom_edge) / scale - 2.0
-                } else {
-                    -100_000.0
-                };
+                // Scroll each complete control into view, including the new
+                // palette below Run Speed; the page owns the sole scroll range.
+                let bottom_edge = controls
+                    .into_iter()
+                    .map(|control| bounds(app.world(), control).max.y)
+                    .fold(viewport.max.y, f32::max);
+                let pixels = (viewport.max.y - bottom_edge) / scale - 2.0;
                 *app.world_mut().resource_mut::<Wheel>() = Wheel {
                     surface: Some(page),
                     pixels,

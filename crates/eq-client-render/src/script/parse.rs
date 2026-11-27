@@ -1222,7 +1222,7 @@ fn slider(name: &str) -> Result<SliderClick, String> {
         .into_iter()
         .find(|level| level.key() == name)
         .map(SliderClick::Level)
-        .ok_or_else(|| "expected clip_plane, max_fps, mouse_sensitivity or quantity".into())
+        .ok_or_else(|| "expected an Options slider key or quantity".into())
 }
 
 /// The quantity picker's control a script names.

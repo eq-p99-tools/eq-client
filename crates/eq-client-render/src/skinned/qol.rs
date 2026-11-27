@@ -187,6 +187,32 @@ pub(super) fn pages<'a>(
             y + heading_height + GAP,
         ) + SECTION_GAP;
     }
+    // Append the palette after existing controls, preserving their column/row positions.
+    if let Some((slider, value)) = slider.zip(value) {
+        pieces.push(Section::CombatText.heading(
+            checkbox,
+            caption,
+            Area {
+                x: layout.margin,
+                y,
+                width: layout.available,
+                height: heading_height,
+            },
+        ));
+        let colors: Vec<_> = controls::COMBAT_TEXT_COLORS
+            .into_iter()
+            .map(
+                |(caption_id, slider_id, value_id, text, _)| Control::Slider {
+                    section: Section::CombatText,
+                    slider,
+                    value,
+                    ids: (caption_id, slider_id, value_id),
+                    text,
+                },
+            )
+            .collect();
+        layout.append_controls(&mut pieces, &colors, checkbox, y + heading_height + GAP);
+    }
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
 }
@@ -266,6 +292,7 @@ fn qol_slider(
 enum Section {
     Ordinary,
     Dangerous,
+    CombatText,
 }
 
 impl Section {
@@ -273,6 +300,7 @@ impl Section {
         let (id, text) = match self {
             Self::Ordinary => ("EQC_QoL_SettingsCaption", "Quality of Life"),
             Self::Dangerous => ("EQC_QoL_UnsafeCaption", "Dangerous"),
+            Self::CombatText => ("EQC_QoL_CombatTextCaption", "Combat text colors"),
         };
         (
             id.to_owned(),
@@ -338,7 +366,8 @@ impl Control<'_> {
 
 const MARGIN: f32 = 10.0;
 const GAP: f32 = 6.0;
-const SECTION_GAP: f32 = 16.0;
+// Keep Run Speed reachable after four wheel lines below wrapped tabs.
+const SECTION_GAP: f32 = 12.0;
 
 /// Columns must fit the inner width. A short or narrow page grows downward,
 /// where its existing viewport can scroll, rather than adding hidden columns.

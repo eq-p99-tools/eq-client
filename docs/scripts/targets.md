@@ -79,6 +79,14 @@ merchant action.
 - `option name`: an option toggle by its settings-file name.
 - `filter kind`: a Filters page row's button by its kind's stable name, such as `ooc` or `bard_songs`: a click steps the row to its next choice, as the player's does.
 - `slider name percent` sets a slider by its position from 0 to 100 percent. Names include `clip_plane`, `max_fps`, `mouse_sensitivity`, `ui_scale`, `run_boost`, `sound_volume`, and `quantity`. On the QoL page, `click("slider", "run_boost", 50)` selects 1.20x and `click("slider", "run_boost", 100)` selects 1.40x.
+
+  The QoL page also has RGB percentage sliders for floating combat text:
+  `combat_text_incoming_red`, `combat_text_incoming_green`, `combat_text_incoming_blue`
+  (damage to you) and `combat_text_outgoing_red`, `combat_text_outgoing_green`,
+  `combat_text_outgoing_blue` (damage to other known targets). For example,
+  `click("slider", "combat_text_incoming_blue", 75)` sets the blue channel to 75%.
+  These use ordinary slider input and save per character. Defaults remain red
+  (100/30/25) and gold (100/90/30); floating combat text starts off.
 - `dropdown key_filter`: the options key-binding filter.
 - `dropdown bug_type`: the bug report window's category drop-down.
 - `report bug_text` or `report feedback_text`: the bug report or feedback window's text box, which then takes `press(...)` keys as a player's click does. The windows' buttons are `button bug-report ScreenID` (`LocationButton`, `DupButton`, `CrashButton`, `FlagsButton`, `TargetButton`, `CancelButton`, `SendButton`) and `button feedback FBKW_SendButton` or `FBKW_CancelButton`.

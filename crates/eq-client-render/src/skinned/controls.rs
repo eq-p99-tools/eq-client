@@ -19,6 +19,52 @@ pub(super) const UI_SCALE_VALUE: &str = "EQC_QoL_UiScaleValueLabel";
 pub(super) const RUN_SPEED_SLIDER: &str = "EQC_QoL_RunSpeedSlider";
 pub(super) const RUN_SPEED_VALUE: &str = "EQC_QoL_RunSpeedValueLabel";
 
+/// Generated colour controls: caption, slider, value, title and setting.
+pub(super) const COMBAT_TEXT_COLORS: [(&str, &str, &str, &str, Level); 6] = [
+    (
+        "EQC_QoL_CombatTextOutgoingRedLabel",
+        "EQC_QoL_CombatTextOutgoingRedSlider",
+        "EQC_QoL_CombatTextOutgoingRedValueLabel",
+        "Other damage: red",
+        Level::CombatTextOutgoingRed,
+    ),
+    (
+        "EQC_QoL_CombatTextIncomingRedLabel",
+        "EQC_QoL_CombatTextIncomingRedSlider",
+        "EQC_QoL_CombatTextIncomingRedValueLabel",
+        "Damage to you: red",
+        Level::CombatTextIncomingRed,
+    ),
+    (
+        "EQC_QoL_CombatTextOutgoingGreenLabel",
+        "EQC_QoL_CombatTextOutgoingGreenSlider",
+        "EQC_QoL_CombatTextOutgoingGreenValueLabel",
+        "Other damage: green",
+        Level::CombatTextOutgoingGreen,
+    ),
+    (
+        "EQC_QoL_CombatTextIncomingGreenLabel",
+        "EQC_QoL_CombatTextIncomingGreenSlider",
+        "EQC_QoL_CombatTextIncomingGreenValueLabel",
+        "Damage to you: green",
+        Level::CombatTextIncomingGreen,
+    ),
+    (
+        "EQC_QoL_CombatTextOutgoingBlueLabel",
+        "EQC_QoL_CombatTextOutgoingBlueSlider",
+        "EQC_QoL_CombatTextOutgoingBlueValueLabel",
+        "Other damage: blue",
+        Level::CombatTextOutgoingBlue,
+    ),
+    (
+        "EQC_QoL_CombatTextIncomingBlueLabel",
+        "EQC_QoL_CombatTextIncomingBlueSlider",
+        "EQC_QoL_CombatTextIncomingBlueValueLabel",
+        "Damage to you: blue",
+        Level::CombatTextIncomingBlue,
+    ),
+];
+
 /// The Options window's sliders this client keeps settings for, with the
 /// labels that show their values, by screen ID.
 const LEVEL_SLIDERS: [(&str, &str, Level); 7] = [
@@ -79,7 +125,13 @@ pub(super) fn slider_sets(id: Option<&str>, owner: WindowId) -> Option<Sets> {
         WindowId::Options => LEVEL_SLIDERS
             .iter()
             .find(|(slider, _, _)| *slider == id)
-            .map(|(_, _, level)| Sets::Level(*level)),
+            .map(|(_, _, level)| Sets::Level(*level))
+            .or_else(|| {
+                COMBAT_TEXT_COLORS
+                    .iter()
+                    .find(|(_, slider, _, _, _)| *slider == id)
+                    .map(|(_, _, _, _, level)| Sets::Level(*level))
+            }),
         WindowId::Quantity => (id == QUANTITY_SLIDER).then_some(Sets::Quantity),
         _ => None,
     }
@@ -113,7 +165,14 @@ pub(super) fn value_label(name: &str, owner: WindowId) -> Option<ValueLabel> {
         LEVEL_SLIDERS
             .iter()
             .find(|(_, label, _)| *label == name)
-            .map_or(ValueLabel::Blank, |(_, _, level)| ValueLabel::Shows(*level)),
+            .map(|(_, _, level)| *level)
+            .or_else(|| {
+                COMBAT_TEXT_COLORS
+                    .iter()
+                    .find(|(_, _, value, _, _)| *value == name)
+                    .map(|(_, _, _, _, level)| *level)
+            })
+            .map_or(ValueLabel::Blank, ValueLabel::Shows),
     )
 }
 

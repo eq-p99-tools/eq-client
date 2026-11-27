@@ -90,6 +90,42 @@ pub(crate) struct Number {
     position: Vec3,
     age: f32,
     invisible: bool,
+    incoming: bool,
+}
+
+#[derive(Component)]
+struct Ink {
+    outline: bool,
+}
+
+const OUTLINE: [(f32, f32); 8] = [
+    (-1.0, -1.0),
+    (0.0, -1.0),
+    (1.0, -1.0),
+    (-1.0, 0.0),
+    (1.0, 0.0),
+    (-1.0, 1.0),
+    (0.0, 1.0),
+    (1.0, 1.0),
+];
+
+fn ink_color(
+    options: &eq_client_core::options::Options,
+    incoming: bool,
+    outline: bool,
+    alpha: f32,
+) -> Color {
+    if outline {
+        Color::srgba(0.0, 0.0, 0.0, 0.55 * alpha)
+    } else {
+        let channels = if incoming {
+            options.combat_text_incoming
+        } else {
+            options.combat_text_outgoing
+        };
+        let [red, green, blue] = channels.map(|value| f32::from(value.min(100)) / 100.0);
+        Color::srgba(red, green, blue, alpha)
+    }
 }
 
 /// Numbers expire, disappear on disable/reset, and never generate combat outcomes.
@@ -107,9 +143,10 @@ pub(crate) fn update(
         Entity,
         &mut Number,
         &mut Node,
-        &mut TextColor,
+        Option<&Children>,
         &mut Visibility,
     )>,
+    mut inks: Query<(&Ink, &mut TextColor)>,
 ) {
     let world = online.world();
     let session = world.session_id();
@@ -126,7 +163,7 @@ pub(crate) fn update(
         state.pending.clear();
         state.session = session;
     }
-    for (entity, mut number, mut node, mut color, mut visibility) in &mut numbers {
+    for (entity, mut number, mut node, children, mut visibility) in &mut numbers {
         number.age += time.delta_secs().max(0.0);
         if !enabled
             || Some(number.session) != session
@@ -171,9 +208,12 @@ pub(crate) fn update(
         } else {
             Visibility::Hidden
         };
-        color.0 = color
-            .0
-            .with_alpha((1.0 - number.age / LIFETIME).clamp(0.0, 1.0));
+        let alpha = (1.0 - number.age / LIFETIME).clamp(0.0, 1.0);
+        for child in children.into_iter().flatten() {
+            if let Ok((ink, mut color)) = inks.get_mut(*child) {
+                color.0 = ink_color(&options.options, number.incoming, ink.outline, alpha);
+            }
+        }
     }
     let Some(session) = session.filter(|_| enabled) else {
         return;
@@ -185,39 +225,63 @@ pub(crate) fn update(
         .filter(|hit| !hit.invisible || show_invisible)
         .take(room)
     {
-        draw(&mut commands, session, &hit);
+        draw(&mut commands, session, &hit, &options.options);
     }
 }
 
-fn draw(commands: &mut Commands, session: u64, hit: &Hit) {
-    commands.spawn((
-        Number {
-            session,
-            position: hit.position,
-            age: 0.0,
-            invisible: hit.invisible,
-        },
-        Text::new(hit.points.to_string()),
-        crate::theme::bold_font(crate::theme::Size::Display),
-        TextColor(if hit.incoming {
-            Color::srgb(1.0, 0.3, 0.25)
-        } else {
-            Color::srgb(1.0, 0.9, 0.3)
-        }),
-        TextShadow {
-            offset: Vec2::ONE,
-            color: Color::BLACK,
-        },
-        TextLayout::new(Justify::Center, LineBreak::NoWrap),
-        Node {
-            position_type: PositionType::Absolute,
-            ..default()
-        },
-        UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
-        GlobalZIndex(2),
-        bevy::ui::FocusPolicy::Pass,
-        Visibility::Hidden,
-    ));
+fn draw(
+    commands: &mut Commands,
+    session: u64,
+    hit: &Hit,
+    options: &eq_client_core::options::Options,
+) {
+    commands
+        .spawn((
+            Number {
+                session,
+                position: hit.position,
+                age: 0.0,
+                invisible: hit.invisible,
+                incoming: hit.incoming,
+            },
+            Node {
+                position_type: PositionType::Absolute,
+                ..default()
+            },
+            UiTransform::from_translation(Val2::percent(-50.0, 0.0)),
+            GlobalZIndex(2),
+            bevy::ui::FocusPolicy::Pass,
+            Visibility::Hidden,
+        ))
+        .with_children(|parent| {
+            for (x, y) in OUTLINE {
+                parent.spawn((
+                    Ink { outline: true },
+                    Text::new(hit.points.to_string()),
+                    crate::theme::bold_font(crate::theme::Size::Display),
+                    TextColor(ink_color(options, hit.incoming, true, 1.0)),
+                    TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                    Node {
+                        position_type: PositionType::Absolute,
+                        left: px(x),
+                        top: px(y),
+                        ..default()
+                    },
+                    bevy::ui::FocusPolicy::Pass,
+                ));
+            }
+            // The foreground alone determines layout size; all outline copies
+            // surround it symmetrically without changing its font or position.
+            parent.spawn((
+                Ink { outline: false },
+                Text::new(hit.points.to_string()),
+                crate::theme::bold_font(crate::theme::Size::Display),
+                TextColor(ink_color(options, hit.incoming, false, 1.0)),
+                TextLayout::new(Justify::Center, LineBreak::NoWrap),
+                ZIndex(1),
+                bevy::ui::FocusPolicy::Pass,
+            ));
+        });
 }
 
 #[cfg(test)]
@@ -288,6 +352,7 @@ mod tests {
                     position: Vec3::ZERO,
                     age: 0.0,
                     invisible: false,
+                    incoming: false,
                 },
                 Node::default(),
                 TextColor::default(),
@@ -309,6 +374,7 @@ mod tests {
                     position: Vec3::ZERO,
                     age: 0.0,
                     invisible: false,
+                    incoming: true,
                 },
                 Node::default(),
                 TextColor::default(),
@@ -317,5 +383,100 @@ mod tests {
             .id();
         app.update();
         assert!(app.world().get_entity(old).is_err());
+    }
+
+    #[test]
+    fn outlined_numbers_keep_the_approved_font_fade_recolor_and_expire_together() {
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut options = eq_client_core::options::Options::default();
+        options
+            .qol
+            .set(eq_client_core::qol::Fix::FloatingCombatText, true);
+        assert_eq!(
+            ink_color(&options, false, false, 1.0),
+            Color::srgb(1.0, 0.9, 0.3)
+        );
+        assert_eq!(
+            ink_color(&options, true, false, 1.0),
+            Color::srgb(1.0, 0.3, 0.25)
+        );
+        let mut app = App::new();
+        app.insert_resource(online)
+            .insert_resource(crate::options::OptionsState::new(&options))
+            .init_resource::<CombatText>()
+            .init_resource::<Time>()
+            .add_systems(Update, update);
+        let mut queue = bevy::ecs::world::CommandQueue::default();
+        for incoming in [false, true] {
+            draw(
+                &mut Commands::new(&mut queue, app.world()),
+                1,
+                &Hit {
+                    position: Vec3::ZERO,
+                    points: 12,
+                    incoming,
+                    invisible: false,
+                },
+                &options,
+            );
+        }
+        queue.apply(app.world_mut());
+        let roots: Vec<_> = app
+            .world_mut()
+            .query_filtered::<Entity, With<Number>>()
+            .iter(app.world())
+            .collect();
+        let font = crate::theme::bold_font(crate::theme::Size::Display);
+        for &root in &roots {
+            let children = app.world().get::<Children>(root).unwrap();
+            assert_eq!(children.len(), 9);
+            let mut offsets = Vec::new();
+            for &child in children {
+                assert_eq!(app.world().get::<Text>(child).unwrap().0, "12");
+                let actual_font = app.world().get::<TextFont>(child).unwrap();
+                assert_eq!(actual_font.font, font.font);
+                assert_eq!(actual_font.font_size, font.font_size);
+                assert!(app.world().get::<TextShadow>(child).is_none());
+                if app.world().get::<Ink>(child).unwrap().outline {
+                    let node = app.world().get::<Node>(child).unwrap();
+                    let (Val::Px(x), Val::Px(y)) = (node.left, node.top) else {
+                        panic!("outline pixel offset")
+                    };
+                    offsets.push((x, y));
+                }
+            }
+            assert_eq!(offsets, OUTLINE);
+            app.world_mut().get_mut::<Number>(root).unwrap().age = LIFETIME / 2.0;
+        }
+        {
+            let mut state = app
+                .world_mut()
+                .resource_mut::<crate::options::OptionsState>();
+            state.options.combat_text_outgoing = [20, 40, 60];
+            state.options.combat_text_incoming = [80, 10, 30];
+            options = state.options;
+        }
+        app.update();
+        let mut children = Vec::new();
+        for &root in &roots {
+            let number = app.world().get::<Number>(root).unwrap();
+            for &child in app.world().get::<Children>(root).unwrap() {
+                children.push(child);
+                let ink = app.world().get::<Ink>(child).unwrap();
+                assert_eq!(
+                    app.world().get::<TextColor>(child).unwrap().0,
+                    ink_color(&options, number.incoming, ink.outline, 0.5)
+                );
+            }
+            app.world_mut().get_mut::<Number>(root).unwrap().age = LIFETIME;
+        }
+        app.update();
+        assert!(
+            roots
+                .into_iter()
+                .chain(children)
+                .all(|entity| app.world().get_entity(entity).is_err())
+        );
     }
 }

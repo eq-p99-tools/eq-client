@@ -7470,6 +7470,60 @@ mod tests {
         );
     }
 
+    #[test]
+    fn scripts_set_each_combat_color_through_the_ordinary_slider_input() {
+        use crate::{
+            options::OptionsState,
+            skinned::{SkinSlider, slide},
+        };
+        use bevy::ui::RelativeCursorPosition;
+        use eq_client_core::options::Level;
+        for level in [
+            Level::CombatTextOutgoingRed,
+            Level::CombatTextOutgoingGreen,
+            Level::CombatTextOutgoingBlue,
+            Level::CombatTextIncomingRed,
+            Level::CombatTextIncomingGreen,
+            Level::CombatTextIncomingBlue,
+        ] {
+            let program = Program::parse(
+                &format!("click(\"slider\", \"{}\", 67)\n", level.key()),
+                Path::new("."),
+            )
+            .unwrap();
+            let mut app = pointing(Vec::new());
+            let window = app
+                .world_mut()
+                .query_filtered::<Entity, With<PrimaryWindow>>()
+                .single(app.world())
+                .unwrap();
+            set_focus(&mut app, window, true);
+            let mut online = crate::online::OnlineState::new(true);
+            crate::online::testing::admit(&mut online, 9, crate::online::testing::player(7));
+            crate::online::testing::connect(&mut online, true);
+            app.insert_resource(online)
+                .insert_resource(Script::from_program(program))
+                .add_systems(Update, slide.after(drive));
+            app.world_mut().spawn((
+                Button,
+                SkinSlider::test_level(level),
+                RelativeCursorPosition::default(),
+                laid_out(Vec2::new(240.0, 360.0), 80.0, 1),
+            ));
+            for ms in (0..=2_000).step_by(10) {
+                frame_at(&mut app, ms);
+            }
+            assert_eq!(
+                app.world().resource::<RunStatus>().phase(),
+                Phase::Completed
+            );
+            assert_eq!(
+                app.world().resource::<OptionsState>().options.level(level),
+                67
+            );
+        }
+    }
+
     /// The interface scale each time a script's one line changed it, from
     /// `start`, and whether the run completed.
     fn scale_script(line: &str, start: u16) -> (Vec<u16>, Phase) {
