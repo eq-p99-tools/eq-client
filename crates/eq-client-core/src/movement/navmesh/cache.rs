@@ -21,7 +21,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 /// The rerecast version the mesh is built with, as pinned in Cargo.toml.
 const RERECAST: &str = "0.4.0";
 /// This format's version; raised whenever the bytes or the build change.
-const FORMAT: u32 = 10;
+const FORMAT: u32 = 11;
 const MAGIC: &[u8; 4] = b"EQNM";
 
 /// Where a mesh came from.
@@ -172,9 +172,9 @@ pub fn load(
 }
 
 /// Whether a mesh for `zone` built with `settings` is kept under `directory`,
-/// judged by the header alone: its format and settings, not its key, so the
-/// count of built zones never loads a zone. A file whose triangles have since
-/// changed counts until a load rebuilds it.
+/// judged by its format, settings and nonempty, complete coverage metadata,
+/// not its geometry key, so counting never loads zone assets. A file whose
+/// triangles have since changed counts until a full load rebuilds it.
 #[must_use]
 pub fn present(directory: &Path, zone: &str, settings: &Settings) -> bool {
     // A zone that isn't a plain file name has no file.
@@ -195,8 +195,13 @@ pub fn present(directory: &Path, zone: &str, settings: &Settings) -> bool {
             .and_then(|name| name.strip_suffix(".bin"))
             .and_then(|stem| stem.rsplit_once('-'))
             .is_some_and(|(owner, _)| owner == zone);
-        ours && read_prefix(&entry.path(), expected.len()).is_some_and(|bytes| {
-            bytes[..format] == expected[..format] && bytes[settings_at..] == expected[settings_at..]
+        ours && read_prefix(&entry.path(), expected.len() + 8).is_some_and(|bytes| {
+            let header = &bytes[..expected.len()];
+            let coverage = &bytes[expected.len()..];
+            header[..format] == expected[..format]
+                && header[settings_at..] == expected[settings_at..]
+                && coverage[..4] == 0_u32.to_le_bytes()
+                && coverage[4..] != 0_u32.to_le_bytes()
         })
     })
 }
@@ -313,6 +318,7 @@ fn encode(mesh: &NavMesh, out: &mut Vec<u8>) {
             out.extend_from_slice(&f.to_le_bytes());
         }
     };
+    out.extend_from_slice(&u32::from(mesh.incomplete).to_le_bytes());
     count(out, mesh.polygons.len());
     for polygon in &mesh.polygons {
         count(out, polygon.vertices.len());
@@ -340,6 +346,11 @@ fn encode(mesh: &NavMesh, out: &mut Vec<u8>) {
 /// file, trailing bytes or a link to no polygon.
 fn decode(bytes: &[u8], header: &[u8]) -> Option<NavMesh> {
     let mut reader = Reader(bytes.strip_prefix(header)?);
+    let incomplete = match reader.u32()? {
+        0 => false,
+        1 => true,
+        _ => return None,
+    };
     let count = reader.u32()?;
     let mut polygons = Vec::new();
     for _ in 0..count {
@@ -376,10 +387,11 @@ fn decode(bytes: &[u8], header: &[u8]) -> Option<NavMesh> {
             })
         })
         .collect::<Option<_>>()?;
-    reader
-        .0
-        .is_empty()
-        .then(|| NavMesh::from_parts(polygons, drops))
+    reader.0.is_empty().then(|| {
+        let mut mesh = NavMesh::from_parts(polygons, drops);
+        mesh.incomplete = incomplete;
+        mesh
+    })
 }
 
 struct Reader<'a>(&'a [u8]);

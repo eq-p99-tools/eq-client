@@ -386,8 +386,8 @@ impl CollisionWorld {
 
     /// The zone's own triangles, without the obstacles, as a zone's mesh is
     /// built from them.
-    #[cfg(test)]
-    pub(crate) fn terrain_triangles(&self) -> Vec<[[f32; 3]; 3]> {
+    #[must_use]
+    pub fn terrain_triangles(&self) -> Vec<[[f32; 3]; 3]> {
         let mesh = &self.terrain.mesh;
         let vertices = mesh.vertices();
         mesh.indices()

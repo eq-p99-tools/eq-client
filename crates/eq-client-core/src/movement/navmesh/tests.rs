@@ -414,6 +414,27 @@ fn a_mesh_reads_back_from_the_cache() {
 }
 
 #[test]
+fn incomplete_coverage_survives_cache_and_walker_splits() {
+    let folder = folder("partial-coverage");
+    let triangles = floor(0.0, -20.0, 20.0);
+    let (mut mesh, _) = build(&triangles);
+    mesh.incomplete = true;
+    cache::store(&folder, "zone", &triangles, None, &settings(), &mesh).unwrap();
+    let read = cache::load(&folder, "zone", &triangles, None, &settings()).unwrap();
+    assert!(read.incomplete());
+    assert!(!cache::present(&folder, "zone", &settings()));
+    for size in [4.0, 6.0, 9.0] {
+        assert!(
+            read.split([4.0, 6.0, 9.0])
+                .for_height(size)
+                .unwrap()
+                .incomplete()
+        );
+    }
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+#[test]
 fn a_changed_setting_or_triangle_changes_the_key() {
     let triangles = floor(0.0, -40.0, 40.0);
     let key = cache::key(&triangles, None, &settings()).unwrap();
@@ -924,6 +945,7 @@ mod routes {
             doors,
             drops: false,
             scope: Scope::Whole,
+            goal_height: None,
         }
     }
 
@@ -1977,6 +1999,7 @@ mod sizes {
             doors: Vec::new(),
             drops: false,
             scope: Scope::Whole,
+            goal_height: None,
         });
         let progress = loop {
             match search.advance(world, 5000) {
@@ -2321,3 +2344,5 @@ fn islands_near_the_main_ones_size_count_as_walked_too() {
     assert!(!walked.contains(&island(Vec3::new(63.0, 20.0, 63.0))));
     assert_eq!(walked.len(), 2);
 }
+
+mod doors;

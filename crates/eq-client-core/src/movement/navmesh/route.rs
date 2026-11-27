@@ -27,6 +27,8 @@ enum Via {
     Link(usize),
     /// Off a ledge by the mesh's drop.
     Drop(u32),
+    /// A collision-checked walk across a usable doorway omitted by the mesh.
+    Door(usize),
 }
 
 /// A step along a corridor.
@@ -36,6 +38,8 @@ pub(super) enum Crossing {
     Edge(Portal),
     /// Off a ledge: walk to `top`, then step off and land at `landing`.
     Drop { top: Vec3, landing: Vec3 },
+    /// A grounded walk through a listed doorway between islands.
+    Door { id: u8, start: Vec3, end: Vec3 },
 }
 
 /// Boxes a request treats apart from the rest: doors. A move across the
@@ -111,6 +115,7 @@ pub(super) struct PolygonSearch {
     areas: Areas,
     /// Whether the search takes the mesh's drops.
     drops: bool,
+    doors: Vec<super::doors::DoorLink>,
     best: HashMap<u32, Reached>,
     done: HashSet<u32>,
     open: BinaryHeap<Open>,
@@ -170,11 +175,17 @@ impl PolygonSearch {
             weight,
             areas,
             drops,
+            doors: Vec::new(),
             best: HashMap::from([(from, (0.0, start, None))]),
             done: HashSet::new(),
             open: BinaryHeap::from([Open(weight * start.distance(goal), from)]),
             expanded: 0,
         }
+    }
+
+    pub fn with_doors(mut self, doors: Vec<super::doors::DoorLink>) -> Self {
+        self.doors = doors;
+        self
     }
 
     /// Polygons expanded so far.
@@ -219,13 +230,27 @@ impl PolygonSearch {
                         Via::Drop(d),
                     )
                 });
-            for (to, entry, extra, via) in links.chain(drops) {
+            let doors = self
+                .doors
+                .iter()
+                .enumerate()
+                .filter(|(_, link)| link.from == at)
+                .map(|(index, link)| {
+                    (
+                        link.to,
+                        link.end,
+                        link.start.distance(link.end) + crate::movement::path::DOOR_TOLL,
+                        Via::Door(index),
+                    )
+                });
+            for (to, entry, extra, via) in links.chain(drops).chain(doors) {
                 if self.done.contains(&to) {
                     continue;
                 }
                 let walked_to = match via {
                     Via::Link(_) => entry,
                     Via::Drop(d) => mesh.drops[d as usize].top,
+                    Via::Door(index) => self.doors[index].start,
                 };
                 // The last polygon adds the way on to the goal.
                 let onward = if to == self.to {
@@ -268,6 +293,15 @@ impl PolygonSearch {
             at = parent;
             let k = match via {
                 Via::Link(k) => k,
+                Via::Door(index) => {
+                    let link = &self.doors[index];
+                    edges.push(Crossing::Door {
+                        id: link.id,
+                        start: link.start,
+                        end: link.end,
+                    });
+                    continue;
+                }
                 Via::Drop(d) => {
                     let link = &mesh.drops[d as usize];
                     edges.push(Crossing::Drop {
