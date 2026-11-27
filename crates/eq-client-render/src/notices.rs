@@ -510,6 +510,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             ))
         }),
         Notice::Damage {
+            generation,
             damage,
             own_id,
             source,
@@ -518,6 +519,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             .and_then(|messages| {
                 damage_text(
                     messages,
+                    *generation,
                     *own_id,
                     |id| {
                         let name = if id == damage.source_id {
@@ -1446,6 +1448,96 @@ const fn link_text(link: Link) -> &'static str {
 mod tests {
     use super::*;
     use eq_client_core::Coins;
+
+    fn melee_notice(
+        generation: eq_client_core::GameDialect,
+        source_id: u16,
+        target_id: u16,
+    ) -> Notice {
+        Notice::Damage {
+            generation,
+            damage: eq_client_core::combat::Damage {
+                source_id,
+                target_id,
+                kind: 4,
+                spell_id: None,
+                outcome: eq_client_core::combat::DamageOutcome::Hit(33),
+                push: None,
+            },
+            own_id: 7,
+            source: Some("a_rat".into()),
+            target: Some("a_rat".into()),
+        }
+    }
+
+    fn melee_words() -> Messages {
+        Messages::parse(
+            "EQST0002\n0 0\n12185 LocalSubject\n12186 LocalReflexive\n12187 LocalObject\n12183 localhit\n12184 localhits\n12160 amount%1\n12162 %1 %2 %3 %4\n",
+        )
+    }
+
+    #[test]
+    fn two_self_melee_records_keep_two_rows_and_only_titanium_uses_the_local_reflexive() {
+        use eq_client_core::{
+            GameDialect,
+            chat::{ChatHistory, ChatTab},
+        };
+        let messages = melee_words();
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            let notice = melee_notice(generation, 7, 7);
+            let mut history = ChatHistory::default();
+            for _ in 0..2 {
+                for (place, said) in wording(&notice, Some(&messages)) {
+                    assert_eq!(place, Place::Chat);
+                    history.push(crate::chat::system_line(said));
+                }
+            }
+            let rows = history.lines(ChatTab::All);
+            assert_eq!(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1, 2]);
+            let word = if generation == GameDialect::Titanium {
+                "LocalReflexive"
+            } else {
+                "LocalObject"
+            };
+            for (_, row) in rows {
+                assert_eq!(
+                    row.message.text,
+                    format!("LocalSubject localhit {word} amount33")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn other_to_self_melee_keeps_the_installed_object_word_in_every_dialect() {
+        use eq_client_core::GameDialect;
+        let messages = melee_words();
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            assert_eq!(
+                wording(&melee_notice(generation, 9, 7), Some(&messages)),
+                [(
+                    Place::Chat,
+                    Said::official("A rat localhits LocalObject amount33")
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn self_to_other_melee_keeps_the_received_name_in_every_dialect() {
+        use eq_client_core::GameDialect;
+        let messages = melee_words();
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            assert_eq!(
+                wording(&melee_notice(generation, 7, 9), Some(&messages)),
+                [(
+                    Place::Chat,
+                    Said::official("LocalSubject localhit a rat amount33")
+                )]
+            );
+            assert!(wording(&melee_notice(generation, 8, 9), Some(&messages)).is_empty());
+        }
+    }
 
     #[test]
     fn received_sale_uses_native_coin_fragments_arguments_and_message_type() {

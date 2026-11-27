@@ -82,7 +82,14 @@ fn ordinary_chat_and_formatted_combat_lines_trace_once_without_a_script_or_chara
         "EQST0002\n0 0\n12185 You\n12179 slash\n12156 miss!\n12158 %1 try to %2 %3, but %4\n",
     );
     history.push(crate::chat::system_line(
-        crate::combat::damage_text(&messages, 7, |_| "a bat".into(), &damage).unwrap(),
+        crate::combat::damage_text(
+            &messages,
+            eq_client_core::GameDialect::Titanium,
+            7,
+            |_| "a bat".into(),
+            &damage,
+        )
+        .unwrap(),
     ));
     trace(&capture, &history, Some("Example"), &mut seen);
     trace(&capture, &history, Some("Example"), &mut seen);

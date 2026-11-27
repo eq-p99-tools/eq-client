@@ -344,6 +344,7 @@ impl super::ClientWorld {
                 if player.spawn_id == damage.source_id || player.spawn_id == damage.target_id =>
             {
                 changes.notices.push(Notice::Damage {
+                    generation: self.generation(),
                     damage: *damage,
                     own_id: player.spawn_id,
                     source: self.zone.name(damage.source_id),

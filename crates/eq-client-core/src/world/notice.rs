@@ -274,6 +274,8 @@ pub enum Notice {
     },
     /// Damage the player dealt or took, or anything else nearby.
     Damage {
+        /// The generation whose presentation rules apply to this record.
+        generation: crate::GameDialect,
         /// The damage record.
         damage: Damage,
         /// The player's spawn ID.

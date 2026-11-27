@@ -4146,6 +4146,7 @@ fn news_for_the_player_comes_with_notices_and_others_news_without() {
     assert_eq!(
         notices(&mut world, WorldEvent::Damage(damage)),
         [Notice::Damage {
+            generation: world.generation(),
             damage,
             own_id: 9,
             source: None,

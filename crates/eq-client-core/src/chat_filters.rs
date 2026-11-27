@@ -459,6 +459,7 @@ mod tests {
         use crate::combat::{Damage, DamageOutcome, SPELL_DAMAGE_KIND};
         use crate::world::Notice;
         let notice = |source_id, target_id, kind, outcome| Notice::Damage {
+            generation: GameDialect::Titanium,
             damage: Damage {
                 target_id,
                 source_id,

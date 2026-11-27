@@ -605,6 +605,7 @@ pub(super) fn consideration_text(
 /// Titanium-style melee text for fights involving the player; None for other fights.
 pub(super) fn damage_text(
     messages: &Messages,
+    generation: eq_client_core::GameDialect,
     own_id: u16,
     names: impl Fn(u16) -> String,
     damage: &Damage,
@@ -632,7 +633,18 @@ pub(super) fn damage_text(
         capitalized(&names(damage.source_id))
     };
     let defender = if own_defense {
-        messages.format(12187, &[])
+        // Titanium's own-source/own-target branch chooses the installed
+        // reflexive word (0x4a590a-0x4a5937). Other dialects keep their
+        // existing wording until their own program has been read.
+        let word = if generation == eq_client_core::GameDialect::Titanium
+            && own_attack
+            && damage.kind < SPELL_DAMAGE_KIND
+        {
+            12186
+        } else {
+            12187
+        };
+        messages.format(word, &[])
     } else {
         names(damage.target_id)
     };
@@ -773,8 +785,16 @@ mod tests {
                 "someone".into()
             }
         };
-        let text =
-            |damage: Damage| damage_text(&messages, 7, names, &damage).map(|said| said.words.text);
+        let text = |damage: Damage| {
+            damage_text(
+                &messages,
+                eq_client_core::GameDialect::Titanium,
+                7,
+                names,
+                &damage,
+            )
+            .map(|said| said.words.text)
+        };
         assert_eq!(
             text(hit(7, 9, 1, DamageOutcome::Hit(5))).unwrap(),
             "Thou cut a rat, dealing 5 damage."

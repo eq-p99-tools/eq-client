@@ -1,0 +1,1 @@
+- Titanium self-melee lines use the installed reflexive word. Each delivered damage record still produces its own eligible row.
