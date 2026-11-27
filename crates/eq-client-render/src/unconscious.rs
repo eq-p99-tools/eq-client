@@ -198,7 +198,6 @@ mod tests {
                     hazard: eq_client_core::hazards::Hazard::Falling,
                     amount: 2,
                     safe_fall: false,
-                    created,
                 },
             )
             .unwrap();
