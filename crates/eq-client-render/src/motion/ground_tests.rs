@@ -43,6 +43,9 @@ struct ResultNews {
 struct Submission {
     at: Instant,
     sample: eq_network_game::movement::PositionPacket,
+    accepted: Admission,
+    committed_before_call: eq_client_core::WorldPosition,
+    stage: &'static str,
     body: [u8; 36],
 }
 
@@ -52,17 +55,48 @@ struct Admission {
     position: eq_client_core::WorldPosition,
 }
 
+#[derive(Clone, Copy)]
+struct SendWitness {
+    accepted: Admission,
+    committed_before_call: eq_client_core::WorldPosition,
+    stage: &'static str,
+}
+
 fn submit(
     packets: &mut Vec<(Instant, eq_client_core::WorldPosition, i16)>,
     submissions: &mut Vec<Submission>,
     now: Instant,
+    witness: SendWitness,
     sample: &eq_network_game::movement::PositionPacket,
 ) -> anyhow::Result<()> {
+    anyhow::ensure!(
+        witness.accepted.created <= now,
+        "acceptance is in the future"
+    );
+    anyhow::ensure!(
+        sample.position == witness.accepted.position,
+        "reported position differs from independently accepted motion"
+    );
     let body = sample.encode()?;
+    // Independently accepted coordinates must also be the actual float bytes
+    // handed to the Titanium transport encoder, not just packet metadata.
+    for (offset, value) in [
+        (4, witness.accepted.position.y),
+        (24, witness.accepted.position.x),
+        (28, witness.accepted.position.z),
+    ] {
+        anyhow::ensure!(
+            body[offset..offset + 4] == value.to_le_bytes(),
+            "encoded position differs from independent admission"
+        );
+    }
     packets.push((now, sample.position, sample.animation));
     submissions.push(Submission {
         at: now,
         sample: *sample,
+        accepted: witness.accepted,
+        committed_before_call: witness.committed_before_call,
+        stage: witness.stage,
         body,
     });
     Ok(())
@@ -73,6 +107,10 @@ struct Scene {
     commands: mpsc::Receiver<ClientCommand>,
     news: mpsc::Sender<eq_client_core::WorldUpdate>,
     owner: MotionSession,
+    // Same genuine inputs, calibration and existing guards, committed through
+    // a separate no-transport session before checking the actual send. Its
+    // expectation is not taken from the emitted packet or unchecked proposal.
+    independent_owner: MotionSession,
     base: Instant,
     frame: u32,
     delay: u32,
@@ -402,6 +440,7 @@ struct MeasuredRun {
     stopped: u32,
     packet_times: Vec<u128>,
     samples: Vec<eq_network_game::movement::PositionPacket>,
+    accepted_positions: Vec<eq_client_core::WorldPosition>,
     max_time_budget_excess: f64,
     max_session_lead: f64,
     max_pre_owner_lead: f64,
@@ -418,6 +457,7 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
     let before = scene.submissions.len();
     let mut previous = latency_tests::shown(&mut scene.app).0;
     let start = previous;
+    let mut drawn_history = std::collections::BTreeMap::from([(start_at, start)]);
     let start_admission = scene.owner.position();
     let mut horizontal = 0_f64;
     let mut spatial = 0_f64;
@@ -430,6 +470,7 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
     let mut roundoff = 4. * f64::from(f32::EPSILON) * f64::from(start.abs().max_element().max(1.));
     for _ in 0..frames {
         let row = scene.step(true);
+        drawn_history.insert(scene.now(), row.shown);
         let elapsed = scene.now().duration_since(start_at);
         let delta = (row.shown - previous).as_dvec3();
         horizontal += delta.with_y(0.).length();
@@ -480,6 +521,10 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
             "position": submitted.sample.position, "sequence": submitted.sample.sequence,
             "delta": submitted.sample.delta, "animation": submitted.sample.animation,
             "delta_heading": submitted.sample.delta_heading, "titanium_body": submitted.body.to_vec(),
+            "independently_accepted": submitted.accepted.position,
+            "accepted_created_ns": submitted.accepted.created.duration_since(scene.base).as_nanos(),
+            "actual_committed_before_call": submitted.committed_before_call,
+            "send_stage": submitted.stage,
         })
     }).collect();
     let packet_times = scene.submissions[before..]
@@ -489,6 +534,23 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
     let samples = scene.submissions[before..]
         .iter()
         .map(|submitted| submitted.sample)
+        .collect();
+    if native {
+        for submitted in &scene.submissions[before..] {
+            let completed = drawn_history
+                .get(&submitted.accepted.created)
+                .expect("sent native state must identify an observed completed frame");
+            let accepted =
+                Vec3::from_array(eq_client_core::render_position(submitted.accepted.position));
+            assert!(
+                f64::from(completed.distance(accepted)) <= roundoff,
+                "guard admission did not match independent rendered-frame history"
+            );
+        }
+    }
+    let accepted_positions = scene.submissions[before..]
+        .iter()
+        .map(|submitted| submitted.accepted.position)
         .collect();
     println!(
         "GATE326-RUN {}",
@@ -517,6 +579,7 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
         stopped,
         packet_times,
         samples,
+        accepted_positions,
         max_time_budget_excess,
         max_session_lead,
         max_pre_owner_lead,
@@ -585,22 +648,29 @@ fn gate326(installed: bool, frames: u32) {
         if !same_count || !within_frame {
             failures.push((delay, "actual packet count/timing differs"));
         }
-        // Mail327 allows one frame of phase difference only if actual
-        // submitted positions and reporting semantics match. Retain this
-        // gate: projected endpoints are not completed native observations.
+        // This formerly compared absolute coordinates across legacy proposal
+        // playback and native completed observations. Those frontiers differ
+        // even on clear ground. Mail329 requires each actual send to equal
+        // motion independently admitted at that instant, not the other
+        // controller's coordinates. Keep count/cadence/path/speed independent.
+        for run in &runs {
+            if run.samples.len() != run.accepted_positions.len()
+                || run
+                    .samples
+                    .iter()
+                    .zip(&run.accepted_positions)
+                    .any(|(sample, accepted)| sample.position != *accepted)
+            {
+                failures.push((delay, "sent position differs from independent admission"));
+            }
+        }
         let coordinate_noise = runs[0].roundoff.max(runs[1].roundoff);
-        let mut position_differs = false;
         let mut semantics_differ = false;
         for (main, candidate) in runs[0].samples.iter().zip(&runs[1].samples) {
-            let position = |sample: &eq_network_game::movement::PositionPacket| {
-                Vec3::from_array(eq_client_core::render_position(sample.position)).as_dvec3()
-            };
-            if position(main).distance(position(candidate)) > coordinate_noise {
-                position_differs = true;
-            }
             if main.animation != candidate.animation
                 || main.delta_heading != candidate.delta_heading
                 || main.sequence != candidate.sequence
+                || main.position.heading.to_bits() != candidate.position.heading.to_bits()
                 || Vec3::from(main.delta)
                     .as_dvec3()
                     .distance(Vec3::from(candidate.delta).as_dvec3())
@@ -608,9 +678,6 @@ fn gate326(installed: bool, frames: u32) {
             {
                 semantics_differ = true;
             }
-        }
-        if position_differs {
-            failures.push((delay, "actual submitted position differs"));
         }
         if semantics_differ {
             failures.push((delay, "actual packet body semantics differ"));
@@ -666,6 +733,115 @@ fn supported_carrier_handover_does_not_add_receipt_delay_to_observation_spacing(
                 run.max_session_lead, run.max_pre_owner_lead
             );
         }
+    }
+}
+
+#[test]
+fn reported_position_check_rejects_a_drawn_but_unaccepted_step() {
+    let mut scene = Scene::new(0, true);
+    let mut row = scene.step(true);
+    for _ in 0..7 {
+        row = scene.step(true);
+    }
+    let accepted = scene.independent_admission();
+    let mut packet = scene.submissions.last().unwrap().sample;
+    packet.position = world_position(row.shown.to_array(), accepted.position.heading);
+    assert_ne!(
+        packet.position, accepted.position,
+        "control needs a pending frame"
+    );
+    let witness = SendWitness {
+        accepted,
+        committed_before_call: scene.owner.position(),
+        stage: "negative control: reject an unadmitted displayed point",
+    };
+    let mut packets = Vec::new();
+    let mut submissions = Vec::new();
+    assert!(
+        submit(
+            &mut packets,
+            &mut submissions,
+            scene.now(),
+            witness,
+            &packet
+        )
+        .is_err()
+    );
+    assert!(submissions.is_empty());
+    packet.position = accepted.position;
+    submit(
+        &mut packets,
+        &mut submissions,
+        scene.now(),
+        witness,
+        &packet,
+    )
+    .unwrap();
+    assert_eq!(submissions.len(), 1);
+    assert_eq!(submissions[0].accepted.position, packet.position);
+}
+
+#[test]
+fn carrier_display_settlement_distinguishes_new_frames_from_processed_observations() {
+    for delay in [0, 6] {
+        let mut scene = matched_carrier(false, true, delay, Instant::now(), MATCHED_APPROACH_X);
+        let mut drawn = std::collections::BTreeMap::new();
+        drawn.insert(scene.now(), latency_tests::shown(&mut scene.app).0);
+        let mut previous_admission = scene.owner.sampled();
+        let mut processed = 0;
+        let mut max_live_after_process = 0_f32;
+        let mut max_lead_3d = 0_f32;
+        let mut max_lead_before_3d = 0_f32;
+        let mut coordinate_noise = 0_f32;
+        for _ in 0..60 {
+            let row = scene.step(true);
+            coordinate_noise =
+                coordinate_noise.max(4. * f32::EPSILON * row.shown.abs().max_element().max(1.));
+            let accepted = Vec3::from_array(eq_client_core::render_position(row.accepted));
+            let before = Vec3::from_array(eq_client_core::render_position(
+                row.accepted_before_commands,
+            ));
+            max_lead_3d = max_lead_3d.max(row.shown.distance(accepted));
+            max_lead_before_3d = max_lead_before_3d.max(row.shown.distance(before));
+            if scene.owner.sampled() != previous_admission
+                && let Some(observation) = drawn.get(&scene.owner.sampled())
+            {
+                // Processing settles THAT recorded rendered observation to
+                // zero. Continuing Input/Present has already drawn a newer
+                // frame, which still leads by one actual60Hz frame, not zero.
+                assert!(observation.distance(accepted) <= coordinate_noise);
+                let residual = row.shown.distance(accepted);
+                assert!(residual > 0.49);
+                assert!(residual <= CARRIER_SPEED / 60. + coordinate_noise);
+                max_live_after_process = max_live_after_process.max(residual);
+                processed += 1;
+            }
+            previous_admission = scene.owner.sampled();
+            drawn.insert(scene.now(), row.shown);
+        }
+        assert!(processed > 10);
+        // "Frame cap" is the production150ms maximum physics step, not the
+        // actual16.667ms render frame. Keep both interpretations observable.
+        let frame_cap_travel = CARRIER_SPEED * 0.15;
+        assert!(max_lead_3d <= frame_cap_travel + coordinate_noise);
+        assert!(max_lead_before_3d <= frame_cap_travel + coordinate_noise);
+        let mut first_zero = None;
+        for released in 1..=60 {
+            let row = scene.step(false);
+            coordinate_noise =
+                coordinate_noise.max(4. * f32::EPSILON * row.shown.abs().max_element().max(1.));
+            let accepted = Vec3::from_array(eq_client_core::render_position(row.accepted));
+            if row.owned == Vec3::ZERO
+                && row.shown.distance(accepted) <= coordinate_noise
+                && scene.replies.is_empty()
+            {
+                first_zero.get_or_insert(released);
+            }
+        }
+        assert!(first_zero.is_some(), "stopped prefix never settled");
+        println!(
+            "SETTLE329 delay={delay} processed={processed} current_frame_residual={max_live_after_process} peak3d={max_lead_3d} peak_pre3d={max_lead_before_3d} frame_cap_travel={frame_cap_travel} first_zero_release_frame={first_zero:?}"
+        );
     }
 }
 
@@ -776,7 +952,7 @@ fn supported_carrier_handover_genuine_correction_retires_the_continuation() {
         z: 3.75,
         heading: 80.,
     };
-    scene.owner.correct(corrected, scene.now()).unwrap();
+    scene.correct(corrected);
     scene
         .news
         .send(eq_client_core::WorldUpdate::Game(
@@ -1131,39 +1307,42 @@ impl Scene {
             .player()
             .unwrap()
             .position;
-        let mut owner = MotionSession::new(11, 7, origin, start)
-            .unwrap()
-            .with_heading_snapshots(true)
-            .with_gate(Some(UpdateGate::Flagged {
-                pack: |packet| packet.packet(),
-                rule: TITANIUM_FLAGS,
-            }));
-        if carrier {
-            owner = owner.with_fall_speed(Some(
-                physics(InstalledClient::Titanium, None).terminal_speed,
-            ));
-        }
-        owner
-            .calibrate(
-                eq_client_core::MotionCalibration {
-                    units_per_second: speed,
-                    velocity_scale: if carrier { 0.05 } else { 1. },
-                    animation: 12,
-                    swim: None,
-                    swim_backward_units_per_second: None,
-                    diagonal,
-                    strafe: lateral.then_some(eq_network_game::movement::StrafeCalibration {
-                        units_per_second: 3.,
-                        velocity_scale: 1.,
-                        animation: 8,
-                        walk_units_per_second: None,
-                    }),
-                    walk: None,
-                    backward: None,
-                },
-                start,
-            )
-            .unwrap();
+        let make_owner = || {
+            let mut owner = MotionSession::new(11, 7, origin, start)
+                .unwrap()
+                .with_heading_snapshots(true)
+                .with_gate(Some(UpdateGate::Flagged {
+                    pack: |packet| packet.packet(),
+                    rule: TITANIUM_FLAGS,
+                }));
+            if carrier {
+                owner = owner.with_fall_speed(Some(
+                    physics(InstalledClient::Titanium, None).terminal_speed,
+                ));
+            }
+            owner
+                .calibrate(
+                    eq_client_core::MotionCalibration {
+                        units_per_second: speed,
+                        velocity_scale: if carrier { 0.05 } else { 1. },
+                        animation: 12,
+                        swim: None,
+                        swim_backward_units_per_second: None,
+                        diagonal,
+                        strafe: lateral.then_some(eq_network_game::movement::StrafeCalibration {
+                            units_per_second: 3.,
+                            velocity_scale: 1.,
+                            animation: 8,
+                            walk_units_per_second: None,
+                        }),
+                        walk: None,
+                        backward: None,
+                    },
+                    start,
+                )
+                .unwrap();
+            owner
+        };
         let climb = {
             let world = app.world_mut();
             let body = world
@@ -1179,13 +1358,17 @@ impl Scene {
             )
             .reach()
         };
+        let mut owner = make_owner();
+        let mut independent_owner = make_owner();
         owner.set_climb(climb);
+        independent_owner.set_climb(climb);
         app.world_mut().resource_mut::<Controls>().climb_sent = Some((11, climb));
         let mut scene = Self {
             app,
             commands,
             news,
             owner,
+            independent_owner,
             base,
             frame: 0,
             delay,
@@ -1211,6 +1394,20 @@ impl Scene {
 
     fn now(&self) -> Instant {
         self.base + Duration::from_nanos(u64::from(self.frame) * 16_666_667)
+    }
+
+    fn independent_admission(&self) -> Admission {
+        Admission {
+            created: self.independent_owner.sampled(),
+            position: self.independent_owner.position(),
+        }
+    }
+
+    fn correct(&mut self, position: eq_client_core::WorldPosition) {
+        self.owner.correct(position, self.now()).unwrap();
+        self.independent_owner
+            .correct(position, self.now())
+            .unwrap();
     }
 
     fn reply(&mut self, created: Instant, refused: Option<String>) {
@@ -1244,13 +1441,34 @@ impl Scene {
                     return;
                 }
                 self.observations += 1;
+                let independent =
+                    self.independent_owner
+                        .try_send_ground_sample(&request, state, now, |_| Ok(()));
+                if matches!(independent, Ok(GroundSampleResult::WaitingForInterval)) {
+                    self.independent_owner
+                        .observe_ground_input(
+                            request.session_id,
+                            request.created,
+                            state.forward(),
+                            now,
+                        )
+                        .unwrap();
+                }
+                let witness = SendWitness {
+                    accepted: self.independent_admission(),
+                    committed_before_call: self.owner.position(),
+                    stage: "guard-validated prepared admission; actual commit follows successful send",
+                };
                 let packets = &mut self.packets;
                 let submissions = &mut self.submissions;
                 let result = self
                     .owner
                     .try_send_ground_sample(&request, state, now, |packet| {
-                        submit(packets, submissions, now, packet)
+                        submit(packets, submissions, now, witness, packet)
                     });
+                assert_eq!(result.is_ok(), independent.is_ok());
+                assert_eq!(self.owner.position(), self.independent_owner.position());
+                assert_eq!(self.owner.sampled(), self.independent_owner.sampled());
                 if matches!(result, Ok(GroundSampleResult::WaitingForInterval)) {
                     self.owner
                         .observe_ground_input(
@@ -1284,17 +1502,31 @@ impl Scene {
                     _ => None,
                 };
                 self.owner.allow_carrier(carrier);
+                self.independent_owner.allow_carrier(carrier);
+                self.independent_owner
+                    .send_move_sample(&request, now, |_| Ok(()))
+                    .unwrap();
+                let witness = SendWitness {
+                    accepted: self.independent_admission(),
+                    committed_before_call: self.owner.position(),
+                    stage: "guard-validated prepared admission; actual commit follows successful send",
+                };
                 self.ordinary_stops += usize::from(request.position == self.owner.position());
                 let packets = &mut self.packets;
                 let submissions = &mut self.submissions;
                 self.owner
                     .send_move_sample(&request, now, |packet| {
-                        submit(packets, submissions, now, packet)
+                        submit(packets, submissions, now, witness, packet)
                     })
                     .unwrap();
+                assert_eq!(self.owner.position(), self.independent_owner.position());
+                assert_eq!(self.owner.sampled(), self.independent_owner.sampled());
                 self.reply(request.created, None);
             }
-            ClientCommand::ClimbReach { per_step, .. } => self.owner.set_climb(per_step),
+            ClientCommand::ClimbReach { per_step, .. } => {
+                self.owner.set_climb(per_step);
+                self.independent_owner.set_climb(per_step);
+            }
             _ => (),
         }
     }
@@ -1355,10 +1587,20 @@ impl Scene {
         if trace_phase {
             self.phase("before_tick");
         }
+        self.independent_owner.tick_sample(now, |_| Ok(())).unwrap();
+        let accepted = self.independent_admission();
+        assert_eq!(self.owner.position(), accepted.position);
+        let witness = SendWitness {
+            accepted,
+            committed_before_call: self.owner.position(),
+            stage: "timer release of already committed motion",
+        };
         let packets = &mut self.packets;
         let submissions = &mut self.submissions;
         self.owner
-            .tick_sample(now, |packet| submit(packets, submissions, now, packet))
+            .tick_sample(now, |packet| {
+                submit(packets, submissions, now, witness, packet)
+            })
             .unwrap();
         if trace_phase {
             self.phase("after_tick");
@@ -1683,7 +1925,7 @@ fn native_ground_real_correction_rolls_back_in_receive_and_retires_the_simulatio
         scene.step(true);
     }
     let corrected = world_position([0., 3., -2.], 80.);
-    scene.owner.correct(corrected, scene.now()).unwrap();
+    scene.correct(corrected);
     scene
         .news
         .send(eq_client_core::WorldUpdate::Game(
@@ -1769,6 +2011,9 @@ fn native_ground_guard_and_pre_admission_refusals_restore_observed_state() {
         } else {
             scene
                 .owner
+                .set_hold(eq_network_game::movement::Hold::Stunned);
+            scene
+                .independent_owner
                 .set_hold(eq_network_game::movement::Hold::Stunned);
         }
         scene.step(false);

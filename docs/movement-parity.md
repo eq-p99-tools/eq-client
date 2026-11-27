@@ -13,6 +13,14 @@ position and velocity, subject to its existing more-than-280 ms gate
 (`0x4aba14`). A gated start and stop can coalesce. There is no special final
 endpoint or stop report.
 
+[R] The ordinary own report passes the spawn's stored coordinate block at
+`+0x30` to `0x465244` (`0x4ac561`–`0x4ac565`). That packer copies its
+`+0`, `+4` and `+8` coordinates at `0x465279`, `0x465287` and `0x465293`;
+it does not add velocity or a future time to those positions. The handoff
+is `0x4ac5f0`, before the next input call at `0x4ac9cd`. Thus this is the
+stored position left by completed motion, not a projected endpoint. The
+executable instruction bytes were checked independently of the decompile.
+
 The client owns these completed frames separately from local admission. It
 shows each collision-resolved step immediately, publishes the previous
 completed state before advancing the next input, and never replays an admitted
@@ -20,6 +28,24 @@ prefix. Local refusal or server placement retires prediction. A refusal keeps
 the existing mouse heading; a genuine placement retains its existing reset
 semantics. Unsupported handback waits for a genuinely admitted prefix rather
 than rewinding accepted movement or catching up missing time.
+
+[I] An unchanged docked-carrier handover uses ordinary, guard-checked
+completed observations at 50 ms local spacing. It retains genuine floor
+support and does not wait for an earlier result before queuing another
+observation. This changes no network report timer. In the normal-dispatch
+60 Hz replay with zero or six frames of delayed receipts, horizontal
+display lead is at most 2.489 units at 29.8667 units/s; the stricter tested
+bound is 100 ms of calibrated travel. The three-dimensional deck-step
+lead is tested separately against the existing 150 ms physics frame cap.
+Their prediction alone grants no packet position or movement authority;
+each reported point is separately checked. The existing 250 ms uncertainty
+timeout still handles a stalled worker or result stream.
+
+Each processed observation equals its recorded rendered waypoint. While
+input continues, the live display has already advanced one more frame;
+that residual is not reported as zero. The current display and accepted
+position settle to the same point after the actual stopped prefix is
+processed. A 150 ms frame cap is distinct from one 16.667 ms render frame.
 
 [I] The host's precise observed frame duration replaces the native whole-ms
 clock. Input is normalized to the existing independently calibrated steady
