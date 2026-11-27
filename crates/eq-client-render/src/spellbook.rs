@@ -671,6 +671,7 @@ pub(super) fn update(
             outbox.as_deref(),
             (selection.selected, selection.search_slot),
             gem,
+            &names,
         );
         selection.message = match queued {
             Ok((spell, receipt)) => {
@@ -1081,6 +1082,7 @@ fn request_memorize(
     outbox: Option<&crate::outbox::Outbox>,
     (selected, slot): (Option<u32>, Option<usize>),
     gem: u8,
+    names: &SpellNames,
 ) -> anyhow::Result<(u32, crate::outbox::BookEditReceipt)> {
     use anyhow::{Context, ensure};
     let spell_id = selected.context("Select a spell first")?;
@@ -1096,6 +1098,7 @@ fn request_memorize(
     );
     let receipt = outbox.post_book_edit(online.world(), |stamp| {
         eq_client_core::ClientCommand::MemorizeSpell {
+            preparation: Some(memorization_inputs(online.world(), names, spell_id)),
             session_id: stamp.session_id,
             gem,
             spell_id,
@@ -1103,6 +1106,23 @@ fn request_memorize(
         }
     })?;
     Ok((spell_id, receipt))
+}
+
+/// Installed facts for the worker's shared countdown. No verified effective
+/// Bard stat provider exists here yet; retain its explicitly approximate path
+/// rather than substituting profile attributes or a resource-capacity estimate.
+pub(crate) fn memorization_inputs(
+    world: &ClientWorld,
+    names: &SpellNames,
+    spell: u32,
+) -> eq_client_core::MemorizationInputs {
+    eq_client_core::MemorizationInputs {
+        spell_level: world
+            .player()
+            .and_then(|player| player.class)
+            .and_then(|class| names.class_level(spell, class)),
+        bard: None,
+    }
 }
 
 /// Sends the current cursor scroll without consuming or inserting it locally.

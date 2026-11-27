@@ -298,12 +298,17 @@ impl Field {
             };
         }
         let casting = sight.world.casting();
-        Value::Bool(spell.is_some_and(|spell| {
-            let linked = sight.spells.and_then(|names| names.linked_timer(spell));
-            casting.cast.is_none()
-                && casting.pending.is_none()
-                && casting.spell_wait(spell, linked, sight.now).is_zero()
-        }))
+        let Some(spell) = spell else {
+            return Value::Bool(false);
+        };
+        if casting.cast.is_some() || casting.pending.is_some() || sight.world.book_request_pending()
+        {
+            return Value::Bool(false);
+        }
+        let linked = sight.spells.and_then(|names| names.linked_timer(spell));
+        casting
+            .gem_wait(gem, spell, linked, sight.now)
+            .map_or(Value::Unknown, |wait| Value::Bool(wait.is_zero()))
     }
 }
 
@@ -819,6 +824,50 @@ mod tests {
         ] {
             assert_eq!(Field::parse(name), None, "{name}");
         }
+    }
+
+    #[test]
+    fn gem_ready_observes_post_memorize_unknown_timing_and_the_same_local_refresh() {
+        struct Catalog;
+        impl eq_client_core::world::SpellCatalog for Catalog {
+            fn timing(&self, _: u32) -> Option<eq_client_core::world::SpellTiming> {
+                Some(eq_client_core::world::SpellTiming {
+                    recast_ms: 6000,
+                    recovery_ms: 1500,
+                })
+            }
+            fn instant_effect(&self, _: u32) -> bool {
+                false
+            }
+            fn feigns(&self, _: u32) -> bool {
+                false
+            }
+        }
+        let mut online = OnlineState::new(true);
+        let mut player = session::player(PLAYER);
+        player.memorized_spells[0] = Some(202);
+        player.memorized_spells[1] = Some(203);
+        session::admit(&mut online, 1, player);
+        let now = std::time::Instant::now();
+        let confirmation = || {
+            WorldEvent::Spell(eq_client_core::SpellUpdate::Slot {
+                slot: 0,
+                spell_id: 202,
+                mode: 1,
+            })
+        };
+        session::news_at(&mut online, [confirmation()], now);
+        assert_eq!(read(&online, "gem1.ready"), Value::Unknown);
+        online.tick(now, &Catalog);
+        assert_eq!(read(&online, "gem1.ready"), Value::Bool(false));
+        assert_eq!(read(&online, "gem2.ready"), Value::Bool(true));
+        session::news_at(
+            &mut online,
+            [confirmation()],
+            now - std::time::Duration::from_secs(8),
+        );
+        online.tick(now, &Catalog);
+        assert_eq!(read(&online, "gem1.ready"), Value::Bool(true));
     }
 
     #[test]

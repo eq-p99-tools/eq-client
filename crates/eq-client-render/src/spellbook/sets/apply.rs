@@ -57,6 +57,7 @@ impl Step {
                 created,
             },
             Self::Memorize(gem, spell_id) => ClientCommand::MemorizeSpell {
+                preparation: None,
                 session_id,
                 gem,
                 spell_id,
@@ -201,7 +202,7 @@ impl Apply {
         let Some(step) = next_step(&self.target, &actual) else {
             return Some(format!("Applied {} · 8/8 gems match", self.name));
         };
-        match submit(step, &self.target, &actual, world, outbox) {
+        match submit(step, &self.target, &actual, world, outbox, names) {
             Ok(receipt) => {
                 self.pending = Some(Pending {
                     step,
@@ -287,6 +288,7 @@ fn submit(
     current: &Gems,
     world: &ClientWorld,
     outbox: &Outbox,
+    names: &super::super::SpellNames,
 ) -> anyhow::Result<BookEditReceipt> {
     use anyhow::Context;
     check_learned(
@@ -294,7 +296,18 @@ fn submit(
         current,
         world.spell_book().context("Spellbook unavailable")?,
     )?;
-    Ok(outbox.spell_set_step(world, |stamp| step.command(stamp))?)
+    Ok(outbox.spell_set_step(world, |stamp| {
+        let mut command = step.command(stamp);
+        if let ClientCommand::MemorizeSpell {
+            spell_id,
+            preparation,
+            ..
+        } = &mut command
+        {
+            *preparation = Some(super::super::memorization_inputs(world, names, *spell_id));
+        }
+        command
+    })?)
 }
 
 /// Preserve matching gems. Clear a spell's old, mismatched slot before

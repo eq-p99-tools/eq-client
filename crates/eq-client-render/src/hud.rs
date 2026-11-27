@@ -195,11 +195,13 @@ pub(super) fn update(
                 .text(world, state.resource_estimate)
                 .unwrap_or_else(|| "--".into()),
             HudLabel::Spell(index) => world.gem(*index).map_or_else(String::new, |id| {
-                let remaining = casting.cooldowns.remaining(id, now);
-                if remaining.is_zero() {
-                    format!("{id}")
-                } else {
-                    format!("{:.1}s", remaining.as_secs_f32())
+                match u8::try_from(*index)
+                    .ok()
+                    .and_then(|gem| casting.gem_wait(gem, id, names.linked_timer(id), now))
+                {
+                    Some(remaining) if remaining.is_zero() => format!("{id}"),
+                    Some(remaining) => format!("{:.1}s", remaining.as_secs_f32()),
+                    None => "--".into(),
                 }
             }),
         };
@@ -392,10 +394,11 @@ pub(super) fn spell_details(
         let spell = held.get(usize::from(*gem)).copied().flatten();
         let waiting = casting.cast.is_some()
             || casting.pending.is_some()
+            || online.world().book_request_pending()
             || spell.is_some_and(|id| {
                 !casting
-                    .spell_wait(id, names.linked_timer(id), now)
-                    .is_zero()
+                    .gem_wait(*gem, id, names.linked_timer(id), now)
+                    .is_some_and(|wait| wait.is_zero())
             });
         let pointed = *interaction != Interaction::None;
         if pointed {
@@ -406,7 +409,7 @@ pub(super) fn spell_details(
     let text = match hovered {
         None => String::new(),
         Some((gem, None)) => empty_gem(gem, &map),
-        Some((_, Some(spell))) => {
+        Some((gem, Some(spell))) => {
             let mut text = names.label(spell);
             text.push('\n');
             text.push_str(&names.details(spell));
@@ -421,10 +424,13 @@ pub(super) fn spell_details(
             } else {
                 text.push_str("\nLocal spell timing unavailable");
             }
-            let remaining = casting.spell_wait(spell, names.linked_timer(spell), now);
-            if !remaining.is_zero() {
-                use std::fmt::Write;
-                let _ = write!(text, "\nAvailable in {:.1}s", remaining.as_secs_f32());
+            match casting.gem_wait(gem, spell, names.linked_timer(spell), now) {
+                Some(remaining) if !remaining.is_zero() => {
+                    use std::fmt::Write;
+                    let _ = write!(text, "\nAvailable in {:.1}s", remaining.as_secs_f32());
+                }
+                None => text.push_str("\nAwaiting spell timing data"),
+                Some(_) => {}
             }
             text
         }

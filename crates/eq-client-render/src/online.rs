@@ -489,12 +489,42 @@ pub(super) fn world(online: Option<&OnlineState>) -> &ClientWorld {
 pub(super) fn tick(
     mut state: ResMut<OnlineState>,
     names: Option<Res<super::spellbook::SpellNames>>,
+    outbox: Option<Res<crate::outbox::Outbox>>,
 ) {
     let spells: &dyn SpellCatalog = match names.as_deref() {
         Some(names) => names,
         None => &NoSpells,
     };
-    state.tick(std::time::Instant::now(), spells);
+    let now = std::time::Instant::now();
+    state.tick(now, spells);
+    if let Some(outbox) = outbox.as_deref() {
+        poll_memorization(state.world(), outbox, now);
+    }
+}
+
+/// Headless, script and drawn clients use the same update opportunity. No
+/// messages leave while there is no active worker-owned memorization.
+pub(super) fn poll_memorization(
+    world: &ClientWorld,
+    outbox: &crate::outbox::Outbox,
+    now: std::time::Instant,
+) {
+    if world.in_world()
+        && world.memorization_progress().is_some()
+        && matches!(
+            world.book_action_status(),
+            Some(eq_client_core::BookActionStatus::Preparing)
+        )
+        && let Some(session_id) = world.session_id()
+    {
+        outbox.tell(
+            world,
+            eq_client_core::ClientCommand::PollSpellbook {
+                session_id,
+                created: now,
+            },
+        );
+    }
 }
 
 /// The panels the session's news reaches besides the world, and the one
@@ -1703,6 +1733,7 @@ pub(crate) mod testing {
             [WorldEvent::CastPending {
                 session_id,
                 spell_id,
+                gem: None,
             }],
         );
     }
@@ -1711,6 +1742,48 @@ pub(crate) mod testing {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn memorization_polls_only_active_admitted_preparation_with_the_update_timestamp() {
+        use eq_client_core::{BookActionStatus, ClientCommand, MemorizationProgress};
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 5, testing::player(7));
+        let (sender, sent) = std::sync::mpsc::sync_channel(8);
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let now = std::time::Instant::now();
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+        testing::book_action(&mut state, BookActionStatus::Preparing);
+        // Preparing alone can also mean a scribe or an older caller.
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+        testing::news(
+            &mut state,
+            [WorldEvent::MemorizationProgress {
+                session_id: 5,
+                progress: Some(MemorizationProgress {
+                    gem: 0,
+                    spell_id: 42,
+                    remaining: 92,
+                    approximate: false,
+                }),
+            }],
+        );
+        poll_memorization(state.world(), &outbox, now);
+        assert!(
+            matches!(sent.try_recv(), Ok(ClientCommand::PollSpellbook { session_id: 5, created }) if created == now)
+        );
+        testing::connect(&mut state, false);
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+        testing::connect(&mut state, true);
+        testing::book_action(&mut state, BookActionStatus::AwaitingReply);
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+        testing::book_action(&mut state, BookActionStatus::Cancelled("Standing".into()));
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+    }
 
     #[test]
     fn a_reports_echo_stands_for_the_sent_line_and_a_refusal_drops_it() {
@@ -3016,12 +3089,14 @@ mod tests {
         assert_eq!(world(&app).doors().entries()[&7].action, Some(2));
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
+                gem: None,
                 session_id: 1,
                 spell_id: Some(42),
             }))
             .unwrap();
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
+                gem: None,
                 session_id: 2,
                 spell_id: None,
             }))
@@ -3062,6 +3137,7 @@ mod tests {
         assert_eq!(world(&app).casting().pending, Some(42));
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
+                gem: None,
                 session_id: 1,
                 spell_id: None,
             }))
@@ -3070,6 +3146,7 @@ mod tests {
         assert_eq!(world(&app).casting().pending, None);
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
+                gem: None,
                 session_id: 1,
                 spell_id: Some(42),
             }))

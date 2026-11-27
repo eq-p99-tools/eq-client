@@ -242,6 +242,8 @@ pub struct Casting {
     pub interrupted: Option<(Instant, u32)>,
     /// When each memorized spell can be cast again.
     pub cooldowns: Cooldowns,
+    /// Local Titanium gem clocks; other dialects retain their existing timers.
+    pub(super) gem_clocks: Option<super::gem_timing::GemClocks>,
     /// When the admitted knight's profile or locally estimated recovery elapses.
     pub(super) knight_ready: Option<(Instant, crate::knights::ReuseSource)>,
     pub(super) discipline_timers: Timers,
@@ -302,6 +304,55 @@ impl Casting {
         self.cooldowns.remaining(spell, now).max(linked_wait)
     }
 
+    /// The gem's painted readiness, including shared recovery and linked reuse.
+    /// `None` means a received transition still needs installed spell timing.
+    #[must_use]
+    pub fn gem_wait(
+        &self,
+        gem: u8,
+        spell: u32,
+        linked: Option<u32>,
+        now: Instant,
+    ) -> Option<Duration> {
+        self.gem_wait_for(gem, spell, linked, now, false)
+    }
+
+    /// The ordinary gem click's strict timer boundary. Hotkeys and scripted
+    /// input use this same gate; cast completion remains the server's event.
+    #[must_use]
+    pub fn gem_cast_wait(
+        &self,
+        gem: u8,
+        spell: u32,
+        linked: Option<u32>,
+        now: Instant,
+    ) -> Option<Duration> {
+        self.gem_wait_for(gem, spell, linked, now, true)
+    }
+
+    fn gem_wait_for(
+        &self,
+        gem: u8,
+        spell: u32,
+        linked: Option<u32>,
+        now: Instant,
+        click: bool,
+    ) -> Option<Duration> {
+        let Some(clocks) = &self.gem_clocks else {
+            return Some(self.spell_wait(spell, linked, now));
+        };
+        let linked_wait = linked
+            .and_then(|group| self.linked_wait(group, now))
+            .unwrap_or_default();
+        Some(clocks.wait(gem, spell, now, click)?.max(linked_wait))
+    }
+
+    pub(super) fn gem_submitted(&mut self, gem: u8, spell: u32, now: Instant) {
+        if let Some(clocks) = &mut self.gem_clocks {
+            clocks.submitted(gem, spell, now);
+        }
+    }
+
     /// Tracks the worker's pending request separately from any active cast.
     /// When the worker releases a request before forwarding its answer,
     /// keep the spell for the begin or result that follows.
@@ -327,12 +378,38 @@ impl Casting {
         update: &SpellUpdate,
         now: Instant,
     ) -> Option<CastNews> {
+        if let SpellUpdate::Mana {
+            spell_id,
+            keep_casting: false,
+        } = *update
+            && let Some(clocks) = &mut self.gem_clocks
+        {
+            clocks.mana(spell_id);
+        }
         let casting = |spell_id: u32| {
             self.cast.is_some_and(|(active, _, _)| {
                 u32::from(active) == spell_id || self.requested == Some(spell_id)
             })
         };
         match *update {
+            SpellUpdate::Slot {
+                slot,
+                spell_id,
+                mode: 1,
+            } if usize::try_from(slot).ok().and_then(|slot| gems.get(slot))
+                == Some(&Some(spell_id)) =>
+            {
+                if let (Some(clocks), Ok(gem)) = (&mut self.gem_clocks, u8::try_from(slot)) {
+                    clocks.memorized(gem, spell_id, now);
+                }
+                None
+            }
+            SpellUpdate::Slot { slot, mode: 2, .. } => {
+                if let (Some(clocks), Ok(gem)) = (&mut self.gem_clocks, u8::try_from(slot)) {
+                    clocks.forgotten(gem);
+                }
+                None
+            }
             SpellUpdate::BarRefresh {
                 slot,
                 spell_id,
@@ -340,6 +417,9 @@ impl Casting {
             } if usize::try_from(slot).ok().and_then(|slot| gems.get(slot))
                 == Some(&Some(spell_id)) =>
             {
+                if let (Some(clocks), Ok(gem)) = (&mut self.gem_clocks, u8::try_from(slot)) {
+                    clocks.refreshed(gem, spell_id, reduction_ms, now, self.bard_refresh);
+                }
                 if self.bard_refresh {
                     self.cooldowns
                         .refresh_without_recovery(spell_id, reduction_ms, now);
@@ -390,6 +470,9 @@ impl Casting {
                     self.requested = requested;
                 }
                 self.cast = Some((spell_id, now, Duration::from_millis(u64::from(duration_ms))));
+                if let Some(clocks) = &mut self.gem_clocks {
+                    clocks.began(u32::from(spell_id), self.requested);
+                }
                 Some(CastNews::Began)
             }
             SpellUpdate::Interrupted {
@@ -451,6 +534,7 @@ impl Casting {
         self.requested = None;
         self.next_requested = None;
         self.cooldowns = Cooldowns::default();
+        self.gem_clocks = None;
         self.knight_ready = None;
         self.discipline_timers = Timers::default();
         self.linked_timers = Timers::default();

@@ -3,6 +3,7 @@ mod boats;
 mod buff_cancellation;
 mod carriers;
 mod casting;
+mod gem_readiness;
 mod guild_roster;
 mod guild_status;
 mod levels;
@@ -1167,6 +1168,7 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
         game(
             &mut world,
             WorldEvent::CastPending {
+                gem: None,
                 session_id: 1,
                 spell_id: Some(42),
             },
@@ -1175,6 +1177,7 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
             game(
                 &mut world,
                 WorldEvent::CastPending {
+                    gem: None,
                     session_id: 1,
                     spell_id: None,
                 },
@@ -1254,6 +1257,7 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
     game(
         &mut world,
         WorldEvent::CastPending {
+            gem: None,
             session_id: 1,
             spell_id: Some(77),
         },
@@ -1262,6 +1266,7 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
     game(
         &mut world,
         WorldEvent::CastPending {
+            gem: None,
             session_id: 1,
             spell_id: None,
         },
@@ -1425,6 +1430,7 @@ fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
     game(
         &mut world,
         WorldEvent::CastPending {
+            gem: None,
             session_id: 1,
             spell_id: Some(42),
         },
@@ -1490,6 +1496,7 @@ fn a_superseded_song_cannot_end_the_different_cast_that_started() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
 
     for old_began in [false, true] {
@@ -1525,6 +1532,7 @@ fn superseding_an_old_cast_releases_it_before_the_new_pending_spell_begins() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
     let begin = |spell_id| {
         WorldEvent::Spell(SpellUpdate::Began {
@@ -8176,6 +8184,7 @@ fn a_local_cast_clear_drops_the_cast_bar_with_no_line() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
     let begin = |spell_id| {
         WorldEvent::Spell(SpellUpdate::Began {

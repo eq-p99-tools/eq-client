@@ -679,6 +679,7 @@ pub(crate) fn memorize(
         Some(outbox),
         (Some(held.spell), Some(held.slot)),
         gem,
+        names,
     )
     .ok()?;
     note(
@@ -1437,6 +1438,7 @@ mod tests {
         app.world()
             .resource::<crate::outbox::Outbox>()
             .post(world, |stamp| ClientCommand::MemorizeSpell {
+                preparation: None,
                 session_id: stamp.session_id,
                 gem: 0,
                 spell_id: 42,
