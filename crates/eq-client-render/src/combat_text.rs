@@ -94,7 +94,7 @@ pub(crate) struct Number {
 }
 
 #[derive(Component)]
-struct Ink {
+pub(crate) struct Ink {
     outline: bool,
 }
 
