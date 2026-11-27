@@ -198,8 +198,16 @@ pub(crate) fn window(
     mut shown: ResMut<Shown>,
     mut chosen: ResMut<Chosen>,
     mut opened: Local<Opened>,
+    mut seen_revision: Local<u64>,
 ) {
     let training = online.world().training().map(|offer| offer.trainer);
+    let revision = online.world().training_revision();
+    // Ended and a fresh offer can both arrive between display frames.
+    // A new accepted offer must not inherit the old window's Leaving state.
+    if training.is_some() && revision != *seen_revision && matches!(*opened, Opened::Leaving(_)) {
+        *opened = Opened::Closed;
+    }
+    *seen_revision = revision;
     match (training, *opened) {
         (Some(trainer), Opened::For(open) | Opened::Leaving(open)) if open == trainer => {
             if *opened == Opened::For(trainer) && !shown.is_open(WindowId::Training) {
@@ -344,6 +352,68 @@ mod tests {
         WorldEvent,
         training::{TrainingOffer, TrainingUpdate},
     };
+
+    #[test]
+    fn same_trainer_reopens_when_end_and_new_offer_arrive_between_frames() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = crate::testing::app();
+        app.insert_resource(Outbox::new(Some(tx)))
+            .init_resource::<Shown>()
+            .init_resource::<Chosen>()
+            .add_systems(Update, window);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let offer = TrainingOffer {
+            trainer: 42,
+            caps: vec![100; 100],
+            language_caps: Vec::new(),
+            price_scale: None,
+        };
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::Training(
+                TrainingUpdate::Offered(offer.clone()),
+            )],
+        );
+        testing::news(&mut online, [eq_client_core::WorldEvent::PracticePoints(2)]);
+        app.insert_resource(online);
+        app.update();
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Training));
+        app.world_mut()
+            .resource_mut::<Shown>()
+            .close(WindowId::Training);
+        app.update();
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::Training {
+                request: TrainingRequest::End,
+                ..
+            }
+        ));
+        {
+            let mut online = app.world_mut().resource_mut::<OnlineState>();
+            testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::Training(TrainingUpdate::Ended)],
+            );
+            testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::Training(
+                    TrainingUpdate::Offered(offer),
+                )],
+            );
+        }
+        app.update();
+        assert!(app.world().resource::<Shown>().is_open(WindowId::Training));
+        assert_eq!(
+            practice_points(app.world().resource::<OnlineState>().world()),
+            "2"
+        );
+        assert!(
+            rx.try_recv().is_err(),
+            "fresh offer must not send another Done"
+        );
+    }
 
     #[test]
     fn selecting_a_language_is_local_and_train_posts_its_typed_subject() {
