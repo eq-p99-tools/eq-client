@@ -181,7 +181,9 @@ impl ClientWorld {
         if self.is_player(spawn_id) {
             self.vitals.reported_hp = Some(report);
             self.vitals.local_hp_damage = 0;
-            self.own_hp_count_current = false;
+            if let Some(control) = &mut self.own_unconscious {
+                control.basis = None;
+            }
             self.refresh_item_hp();
             self.show_hp();
             self.bleed_out_news();
