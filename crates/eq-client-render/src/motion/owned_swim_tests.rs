@@ -45,6 +45,8 @@ fn anchor(f: &Native, owner: &MotionSession) {
         eq_client_core::WorldEvent::Position {
             spawn_id: 7,
             position: owner.position(),
+            velocity: [0.; 3],
+            forward: 0.,
         },
     );
     news(
