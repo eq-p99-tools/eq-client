@@ -13,6 +13,8 @@ struct Outcome {
     path_xy: f64,
     net_xy: f32,
     dz: f32,
+    start_heading: f32,
+    end_heading: f32,
 }
 
 fn scene(slope: bool, pitch: f32) -> (Native, MotionSession) {
@@ -23,6 +25,11 @@ fn scene(slope: bool, pitch: f32) -> (Native, MotionSession) {
         &mut f.app.world_mut().resource_mut::<online::OnlineState>(),
         position,
     );
+    f.app
+        .world_mut()
+        .get_mut::<Transform>(f.player)
+        .unwrap()
+        .rotation = Quat::from_rotation_y(eq_client_core::render_heading(128.));
     {
         let mut camera = f.app.world_mut().get_mut::<OrbitCamera>(f.camera).unwrap();
         camera.yaw = crate::camera::behind(eq_client_core::render_heading(128.));
@@ -129,7 +136,21 @@ fn run(slope: bool, pitch: f32, side: Option<KeyCode>, turn: f32) -> Outcome {
         }
     }
     let origin = session.position();
-    let mut out = Outcome::default();
+    assert!(
+        arc(128., origin.heading).abs() < 0.001,
+        "fixture must retain the actual EQ basis"
+    );
+    // RMB acquisition faces along the current camera. Match its controlled
+    // initial view to the accepted body without resetting earned wet state.
+    f.app
+        .world_mut()
+        .get_mut::<OrbitCamera>(f.camera)
+        .unwrap()
+        .yaw = crate::camera::behind(eq_client_core::render_heading(origin.heading));
+    let mut out = Outcome {
+        start_heading: origin.heading,
+        ..Outcome::default()
+    };
     crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
     if let Some(key) = side {
         if key == KeyCode::KeyS {
@@ -152,6 +173,7 @@ fn run(slope: bool, pitch: f32, side: Option<KeyCode>, turn: f32) -> Outcome {
     let end = session.position();
     out.net_xy = (end.x - origin.x).hypot(end.y - origin.y);
     out.dz = end.z - origin.z;
+    out.end_heading = end.heading;
     out
 }
 
@@ -183,6 +205,8 @@ fn a_sloped_bottom_can_change_depth_without_any_pitch_stroke() {
     let left = run(true, 0., Some(KeyCode::KeyA), 0.);
     let right = run(true, 0., Some(KeyCode::KeyD), 0.);
     eprintln!("synthetic slope idle={idle:?} left={left:?} right={right:?}");
+    assert!(arc(left.start_heading, left.end_heading).abs() < 0.001);
+    assert!(arc(right.start_heading, right.end_heading).abs() < 0.001);
     assert!(left.dz > 0.1 && right.dz < -0.1);
     assert!(idle.net_xy > 0.01, "gravity can slide along a sloped solid");
     assert!(
