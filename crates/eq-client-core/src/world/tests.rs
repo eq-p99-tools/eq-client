@@ -15,6 +15,7 @@ mod qol;
 mod target_end;
 mod wear;
 mod weather;
+mod zone_line_zones;
 
 use super::*;
 mod inventory_moves;
