@@ -63,6 +63,45 @@ fn own_hp_control_distinguishes_unknown_gear_display_zero_waking_and_actual_deat
 }
 
 #[test]
+fn hp_count_diagnostics_distinguish_computed_accepted_and_replaced_reports() {
+    let mut world = admitted();
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, hit_points(9, 0, 31));
+    let computed = world.hit_point_basis().unwrap();
+    assert_eq!(computed.current(), Some(0));
+    assert_eq!(world.accepted_hit_point_basis(), None);
+    assert!(
+        world.is_unconscious(),
+        "the host holds input before acceptance"
+    );
+
+    echo(&mut world, 1, true);
+    assert_eq!(world.accepted_hit_point_basis(), Some(computed));
+
+    // Even an identical HP receipt replaces the local count. An accepted
+    // state from the previous receipt must remain distinguishable from a
+    // newly computed basis, despite the numerical values being identical.
+    game(&mut world, hit_points(9, 0, 31));
+    assert_eq!(world.hit_point_basis(), Some(computed));
+    assert_eq!(world.accepted_hit_point_basis(), None);
+    echo(&mut world, 1, true);
+    assert_eq!(world.accepted_hit_point_basis(), Some(computed));
+
+    game(&mut world, hit_points(9, 5, 31));
+    let healed = world.hit_point_basis().unwrap();
+    assert_eq!(healed.current(), Some(5));
+    assert_eq!(world.accepted_hit_point_basis(), None);
+    assert!(
+        world.is_unconscious(),
+        "positive HP still awaits the worker's wake"
+    );
+    echo(&mut world, 2, false);
+    assert_eq!(world.accepted_hit_point_basis(), Some(healed));
+    assert!(!world.is_unconscious());
+    assert!(!world.is_dead());
+}
+
+#[test]
 fn submitted_drowning_changes_local_hp_and_a_fresh_report_replaces_it() {
     let mut world = admitted();
     game(&mut world, inventory(Vec::new()));

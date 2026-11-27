@@ -23,6 +23,13 @@ control transition can be counted; a raw negative report can still describe a
 living player wearing HP gear. Positive 1 HP can round down to 0% without being
 unconscious.
 
+Script reports distinguish `hp_control_basis`, computed from the host's current
+facts, from `hp_accepted_basis`, echoed by the session's posture owner. A fresh
+HP receipt clears the accepted basis even when the numbers repeat. The
+`unconscious` input hold can begin before the first acceptance and remains
+through a positive HP refresh until the worker's wake arrives. These values
+establish no server death or damage acknowledgment.
+
 The control basis reconstructs the received packet's current HP using its
 declared item-bonus convention. It uses the received maximum, rather than
 replacing it with a class or stamina estimate. This does not model the native
