@@ -205,7 +205,9 @@ fn centers(world: &World, visual: Entity) -> Vec<Vec3> {
         .unwrap()
         .as_float3()
         .unwrap()
-        .chunks_exact(4)
+        .as_chunks::<4>()
+        .0
+        .iter()
         .map(|quad| quad.iter().map(|p| Vec3::from_array(*p)).sum::<Vec3>() / 4.0)
         .collect()
 }
@@ -325,7 +327,7 @@ fn a_killing_impact_followed_by_despawn_cannot_leave_an_unaged_particle_mesh() {
     let (mut world, root) = fixture();
     news(&mut world, [impact(), damage()]);
     tick(&mut world); // impact visible before a later batch/frame removes it
-    assert!(!visuals(&mut world).is_empty());
+    assert_eq!(visuals(&mut world).len(), 1);
     news(&mut world, [death(), WorldEvent::Despawn(9)]);
     assert!(world.resource::<OnlineState>().world().spawn(9).is_none());
     world.despawn(root);
