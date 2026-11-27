@@ -353,6 +353,12 @@ impl Casting {
         }
     }
 
+    pub(super) fn other_submitted(&mut self, spell: u32) {
+        if let Some(clocks) = &mut self.gem_clocks {
+            clocks.other_submitted(spell);
+        }
+    }
+
     /// Tracks the worker's pending request separately from any active cast.
     /// When the worker releases a request before forwarding its answer,
     /// keep the spell for the begin or result that follows.

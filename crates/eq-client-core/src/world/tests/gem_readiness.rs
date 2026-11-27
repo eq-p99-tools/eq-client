@@ -168,6 +168,64 @@ fn item_cast_of_the_same_spell_does_not_create_a_provisional_gem_lock() {
         world.casting().gem_wait(0, 42, None, now),
         Some(Duration::ZERO)
     );
+
+    // After an unconfirmed gem request, an item may cast that same spell.
+    // Its result releases shared recovery, without borrowing the old gem.
+    let mut world = caster(crate::GameDialect::Titanium, 2, now);
+    tell(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id: 1,
+            spell_id: Some(42),
+            gem: Some(0),
+        },
+        now,
+    );
+    let retry = now + Duration::from_secs(5);
+    tell(
+        &mut world,
+        WorldEvent::CastRequestUnconfirmed {
+            session_id: 1,
+            spell_id: 42,
+        },
+        retry,
+    );
+    tell(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id: 1,
+            spell_id: Some(42),
+            gem: None,
+        },
+        retry,
+    );
+    tell(
+        &mut world,
+        WorldEvent::Spell(SpellUpdate::Began {
+            caster_id: 9,
+            spell_id: 42,
+            duration_ms: 1000,
+        }),
+        retry,
+    );
+    let ended = retry + Duration::from_secs(1);
+    tell(
+        &mut world,
+        WorldEvent::Spell(SpellUpdate::Mana {
+            spell_id: 42,
+            keep_casting: false,
+        }),
+        ended,
+    );
+    let ready = ended + Duration::from_millis(1);
+    assert_eq!(
+        world.casting().gem_wait(0, 42, None, ready),
+        Some(Duration::from_millis(3999))
+    );
+    assert_eq!(
+        world.casting().gem_wait(1, 43, None, ready),
+        Some(Duration::ZERO)
+    );
 }
 
 #[test]

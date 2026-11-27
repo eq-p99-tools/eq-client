@@ -114,6 +114,8 @@ impl ClientWorld {
                 })
             {
                 self.casting.gem_submitted(gem, spell, now);
+            } else if let Some(spell) = spell_id.filter(|_| gem.is_none()) {
+                self.casting.other_submitted(spell);
             }
             self.casting.pend(spell_id);
         } else {
