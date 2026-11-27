@@ -16,8 +16,9 @@ struct Outcome {
 }
 
 fn scene(slope: bool, pitch: f32) -> (Native, MotionSession) {
-    let mut f = Native::new(false, -15.);
-    let position = world_position([0., -15., 0.], 128.);
+    let origin_y = if slope { -13.7 } else { -15. };
+    let mut f = Native::new(false, origin_y);
+    let position = world_position([0., origin_y, 0.], 128.);
     online::testing::place(
         &mut f.app.world_mut().resource_mut::<online::OnlineState>(),
         position,
@@ -117,6 +118,16 @@ fn answer(f: &Native, session: &mut MotionSession, command: ClientCommand, out: 
 
 fn run(slope: bool, pitch: f32, side: Option<KeyCode>, turn: f32) -> Outcome {
     let (mut f, mut session) = scene(slope, pitch);
+    if slope {
+        // Earn the actual falling wet state before meeting the floor. A
+        // supported zero-displacement start is not a witnessed native fall.
+        let mut settling = Outcome::default();
+        for _ in 0..180 {
+            for command in frame(&mut f, &mut session) {
+                answer(&f, &mut session, command, &mut settling);
+            }
+        }
+    }
     let origin = session.position();
     let mut out = Outcome::default();
     crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
