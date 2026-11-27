@@ -76,7 +76,8 @@ jobs:
           if ($LASTEXITCODE -ne 0) { throw 'Source differs from product after negative control' }
       - name: Exact product focused entry regressions
         shell: pwsh
-        run: cargo test -p eq-client-render --lib --all-features --locked motion::turn_tests::entry_tests:: -- --nocapture --test-threads=1
+        run: |
+          cargo test -p eq-client-render --lib --all-features --locked motion::turn_tests::entry_tests:: -- --nocapture --test-threads=1
       - name: Exact product renderer suite
         shell: pwsh
         run: cargo test -p eq-client-render --lib --all-features --locked -- --test-threads=1
