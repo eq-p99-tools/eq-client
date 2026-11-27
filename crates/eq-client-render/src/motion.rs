@@ -1944,10 +1944,7 @@ pub(super) fn input(
     (look, aim, spells): Pointing,
 ) {
     let client = settings.0.installed_client;
-    let trace_melee = options.options.qol.on(Fix::MeleePositioning)
-        && combat
-            .as_deref()
-            .is_some_and(|combat| combat.requested_in(online.world().session_id()));
+    let trace_melee = options.options.qol.on(Fix::MeleePositioning);
     // The program's speed-modifier routine ends following once a root
     // stops the player (R6, 0x411076); a server's move does not.
     if let Some(following) = controls.following.as_ref()
@@ -1988,6 +1985,9 @@ pub(super) fn input(
         || online.world().is_dead()
         || online.world().arrival_held()
     {
+        if trace_melee {
+            melee::held("world_or_arrival_unavailable");
+        }
         controls.following = None;
         *told_wait = None;
         controls.reset(None);
@@ -1997,6 +1997,9 @@ pub(super) fn input(
     // The pad floor step precedes ordinary input/cadence gates and uses
     // the unmodified collision world, even with no voluntary input.
     if controls.pad.is_some() {
+        if trace_melee {
+            melee::held("pad_motion");
+        }
         if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
             controls.prepare_pad(world, body.feet_offset);
             controls.submit_pad(&outbox, online.world());
@@ -2038,6 +2041,9 @@ pub(super) fn input(
         .as_ref()
         .map_or(Some(wanted), |sync| sync.usable(session_id, wanted))
     else {
+        if trace_melee {
+            melee::held("movement_policy_pending");
+        }
         // Say why once for this wait, including when the queue keeps retrying.
         if *told_wait != session_id {
             chat.history.push(crate::chat::system_line(
@@ -2061,6 +2067,9 @@ pub(super) fn input(
         controls.facing = None;
     }
     if controls.speed.is_none() && controls.airborne.is_none() {
+        if trace_melee {
+            melee::held("movement_grant_unavailable");
+        }
         controls.mouse_heading = None;
         controls.held = Some(Held::Withdrawn);
         return;
@@ -2441,6 +2450,9 @@ pub(super) fn input(
     if let Some(cost) = controls.unreported.take() {
         controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
         if controls.unreported.is_some() {
+            if trace_melee {
+                melee::held("fall_report_pending");
+            }
             controls.pause_prediction();
             controls.held = Some(Held::Gate);
             return;
@@ -2708,15 +2720,22 @@ pub(super) fn input(
         || scripted_facing.is_some()
         || keys.script_active();
     let melee_step = if !melee_enabled {
+        if trace_melee {
+            trace!(target: "eq_client_render::motion::melee", reason = "attack_or_provider_unavailable", forward = false,
+                attack_requested = combat.as_deref().is_some_and(|combat| combat.requested_in(session_id)),
+                moving = online.world().can(Capability::Moving), combat = online.world().can(Capability::Combat),
+                departures = online.world().can(Capability::GameplayDepartures), "Melee positioning held");
+        }
         controls.melee.clear();
         None
     } else if manual || !focused || controls.following.is_some() {
         trace!(target: "eq_client_render::motion::melee", reason = "input_owner", forward = false,
-            manual, focused, following = controls.following.is_some(),
+            manual, focused, input_owned = keys.focused(), detached, stunned, following = controls.following.is_some(),
             movement = follow::moves(map, &sampled, scripted), autorun = controls.autorun,
             rmb = look.as_ref().is_some_and(|look| look.held), mouse_snapshot = mouse_snapshot.is_some(),
             mouse_yaw = active_mouse_yaw, released_turn = controls.released_turn,
-            scripted_facing = scripted_facing.is_some(), script = keys.script_active(),
+            scripted_facing = scripted_facing.is_some(), script = keys.script_active(), walk_toggle = keys.pressed(Act::Walk),
+            stance_key = [Act::Jump, Act::Duck].into_iter().any(|act| map.holding(&sampled, scripted).held(act)),
             "Melee positioning held");
         controls.melee.yield_input(now);
         None

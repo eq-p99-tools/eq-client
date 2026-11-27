@@ -308,6 +308,13 @@ resume for a newly confirmed current target or one that returns within range.
 It does not prevent approaching a zone line or boarding a boat. Stopping at
 water and pausing on a known ride are separate safeguards.
 
+For stalled starts, opt in to `RUST_LOG=eq_client_render::motion::melee=trace`.
+This trace is off at ordinary log levels. It records the input owner, target,
+context, collision or timing gate holding the approach, and the selected speed
+and sample interval for a proposal. Compare displacement with the request's
+sample interval; the gaps between local worker results can vary with delivery
+latency and do not measure the movement budget or server acknowledgment.
+
 The run speed slider saves the multiplier in hundredths, such as
 `run_boost = 120` for 1.20x. A saved checkbox value of `true` loads as 1.10x,
 and `false` loads as 1.00x. Move the slider to 1.00x to restore ordinary speed.
