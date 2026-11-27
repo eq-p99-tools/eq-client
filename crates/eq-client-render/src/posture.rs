@@ -274,7 +274,10 @@ mod tests {
     #[test]
     fn standing_to_duck_is_tested_on_titanium_and_silent_for_every_command_source() {
         for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
-            for ceiling in [5.25, 5.251] {
+            // These are authored planes, not returned bounds: the floor bias
+            // and Titanium's engine retreat also consume clearance. Exact
+            // compared-value equality is covered by the core headroom tests.
+            for (ceiling, clears) in [(5.25, false), (5.26, true)] {
                 for scripted in [false, true] {
                     let mut state = admitted(Some(0));
                     testing::news(
@@ -298,7 +301,7 @@ mod tests {
                         })
                         .unwrap();
                     let sent = rx.try_recv().is_ok();
-                    assert_eq!(sent, client == InstalledClient::EqMac || ceiling > 5.25);
+                    assert_eq!(sent, client == InstalledClient::EqMac || clears);
                     assert_eq!(state.world().posture(7), Some(PostureState::Standing));
                 }
             }
@@ -354,7 +357,7 @@ mod tests {
         ] {
             for scripted in [false, true] {
                 for target in [Posture::Standing, Posture::Sitting] {
-                    for ceiling in [6.0, 8.001] {
+                    for ceiling in [6.0, 9.0] {
                         let state = admitted(Some(0));
                         let (tx, rx) = mpsc::sync_channel(4);
                         let outbox = Outbox::new(Some(tx));
@@ -371,7 +374,7 @@ mod tests {
                                 })
                                 .is_ok()
                         );
-                        let allowed = ceiling > 8.0
+                        let allowed = ceiling == 9.0
                             || client == InstalledClient::EqMac && target == Posture::Sitting;
                         assert_eq!(
                             rx.try_recv().is_ok(),
@@ -405,7 +408,7 @@ mod tests {
         ] {
             for (ceiling, expected) in [
                 (6.0, eq_client_core::JumpPosture::Keep),
-                (8.001, eq_client_core::JumpPosture::StandIfDucked),
+                (9.0, eq_client_core::JumpPosture::StandIfDucked),
             ] {
                 let mut state = admitted(Some(0));
                 testing::generation(&mut state, generation);
