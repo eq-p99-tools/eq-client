@@ -302,8 +302,8 @@ fn default_size_wrapped_qol_reaches_speed(wheel_lines: Option<f32>) {
         };
         let max_scroll = (content + insets.top + insets.bottom - view.height()).max(0.0);
         // Added choices can add rows. The opening view still includes the
-        // heading, and ordinary wheel lines must reach Run Speed below the
-        // Dangerous checkboxes without clipping it at the content's bottom.
+        // heading, and ordinary wheel lines must reach Run Speed in the
+        // Dangerous section without clipping it at the content's bottom.
         assert_visible(app.world(), &[heading]);
         let wheel_pixels = wheel_lines.map_or_else(
             || (max_scroll / LINE_PIXELS).ceil() * LINE_PIXELS,

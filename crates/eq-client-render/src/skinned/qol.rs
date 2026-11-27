@@ -157,7 +157,7 @@ pub(super) fn pages<'a>(
             .copied()
             .filter(|choice| choice.section() == section)
             .collect();
-        y = layout.append_controls(
+        y = layout.append_section(
             &mut pieces,
             &section_choices,
             checkbox,
@@ -387,8 +387,7 @@ impl Control<'_> {
 
 const MARGIN: f32 = 10.0;
 const GAP: f32 = 6.0;
-// Keep Run Speed reachable after four wheel lines below wrapped tabs.
-const SECTION_GAP: f32 = 12.0;
+const SECTION_GAP: f32 = 16.0;
 
 /// Columns must fit the inner width. A short or narrow page grows downward,
 /// where its existing viewport can scroll, rather than adding hidden columns.
@@ -400,6 +399,32 @@ struct Layout {
 }
 
 impl Layout {
+    /// Give the dangerous slider its own leading row. New checkboxes must
+    /// not push Run Speed into a half-width trailing cell and wrap its
+    /// track below its caption, beyond the default viewport's four lines.
+    fn append_section(
+        &self,
+        pieces: &mut Vec<(String, Element)>,
+        choices: &[Control<'_>],
+        checkbox: &Button,
+        y: f32,
+    ) -> f32 {
+        let (leading, rest): (Vec<_>, Vec<_>) = choices.iter().copied().partition(|control| {
+            matches!(
+                control,
+                Control::Slider {
+                    section: Section::Dangerous,
+                    ..
+                }
+            )
+        });
+        if leading.is_empty() {
+            return self.append_controls(pieces, choices, checkbox, y);
+        }
+        let bottom = self.append_controls(pieces, &leading, checkbox, y);
+        self.append_controls(pieces, &rest, checkbox, bottom + GAP)
+    }
+
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,
