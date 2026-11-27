@@ -213,7 +213,10 @@ mod tests {
             reports
                 .answer(
                     Some(7),
-                    snapshot(first, captured - Duration::from_millis(1))
+                    snapshot(
+                        first,
+                        captured.checked_sub(Duration::from_millis(1)).unwrap()
+                    )
                 )
                 .is_none()
         );
