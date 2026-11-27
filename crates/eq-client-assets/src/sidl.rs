@@ -560,7 +560,7 @@ pub struct Label {
     /// What the label shows, in the official client's numbering; None for
     /// fixed text.
     pub eq_type: Option<u32>,
-    /// An optional namespaced client value, independent of native EQType ids.
+    /// An optional namespaced client value, independent of native `EQType` ids.
     pub client_value: Option<LabelValue>,
     /// The text, or a sample of it when the label shows something.
     pub text: String,
@@ -1295,6 +1295,30 @@ impl Library {
         }
     }
 
+    /// Reads native label properties and the optional namespaced client value.
+    fn label(node: roxmltree::Node<'_, '_>, area: Area) -> Label {
+        Label {
+            client_value: node
+                .attribute(("https://eq-p99-tools.github.io/eq-client/skin", "value"))
+                .filter(|value| *value == "experience-percent")
+                .map(|_| LabelValue::ExperiencePercent),
+            area,
+            anchors: flag(node, "AutoStretch").then(|| anchors(node)),
+            eq_type: number(node, "EQType"),
+            text: text_of(node, "Text").unwrap_or_default().to_owned(),
+            color: color(node, "TextColor"),
+            align: if flag(node, "AlignCenter") {
+                Align::Center
+            } else if flag(node, "AlignRight") {
+                Align::Right
+            } else {
+                Align::Left
+            },
+            font: number(node, "Font"),
+            wraps: text_of(node, "NoWrap").is_some_and(|text| text.eq_ignore_ascii_case("false")),
+        }
+    }
+
     fn element(
         &self,
         node: roxmltree::Node<'_, '_>,
@@ -1313,27 +1337,7 @@ impl Library {
             "Gauge" => self.gauge(node),
             // Words the skin writes, or the client fills: StaticText is how
             // the skin writes a book's page numbers.
-            "Label" | "StaticText" => Element::Label(Label {
-                client_value: node
-                    .attribute(("https://eq-p99-tools.github.io/eq-client/skin", "value"))
-                    .filter(|value| *value == "experience-percent")
-                    .map(|_| LabelValue::ExperiencePercent),
-                area: at(),
-                anchors: flag(node, "AutoStretch").then(|| anchors(node)),
-                eq_type: number(node, "EQType"),
-                text: text_of(node, "Text").unwrap_or_default().to_owned(),
-                color: color(node, "TextColor"),
-                align: if flag(node, "AlignCenter") {
-                    Align::Center
-                } else if flag(node, "AlignRight") {
-                    Align::Right
-                } else {
-                    Align::Left
-                },
-                font: number(node, "Font"),
-                wraps: text_of(node, "NoWrap")
-                    .is_some_and(|text| text.eq_ignore_ascii_case("false")),
-            }),
+            "Label" | "StaticText" => Element::Label(Self::label(node, at())),
             "Button" => self.button(node),
             "InvSlot" => Element::InvSlot(InvSlot {
                 id: text_of(node, "ScreenID").map(str::to_owned),
