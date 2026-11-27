@@ -400,7 +400,7 @@ mod tests {
         let now = Instant::now();
         let requests = ActionRequests {
             book: Some(BookRequest {
-                since: now - Duration::from_secs(30),
+                since: now.checked_sub(Duration::from_secs(30)).unwrap(),
                 label: "Memorizing Courage into gem 2".into(),
                 change: BookChange::Memorize,
                 spell: 202,

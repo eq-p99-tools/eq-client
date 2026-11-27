@@ -120,7 +120,7 @@ fn scripted_gem_clicks_and_hotkeys_send_nothing_during_post_memorize_refresh() {
                     if locked {
                         now
                     } else {
-                        now - Duration::from_secs(8)
+                        now.checked_sub(Duration::from_secs(8)).unwrap()
                     },
                 );
                 online.tick(now, &Catalog);
