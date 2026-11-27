@@ -663,26 +663,8 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             *common_alternate,
             messages,
         )),
-        Notice::TrainingPractice(update) => {
-            use eq_client_core::training::PracticeUpdate;
-            chat(match update {
-                PracticeUpdate::Requested { estimated_cost, .. } => {
-                    format!("Practice requested (estimated price: {estimated_cost} copper). Practice points are unknown until a fresh admission.").into()
-                }
-                PracticeUpdate::SkillRaised { .. } => {
-                    "The skill increased. The practice outcome is still unknown.".into()
-                }
-                PracticeUpdate::Unanswered { .. } => {
-                    "The practice outcome is unknown. Re-enter the zone to refresh practice points.".into()
-                }
-                PracticeUpdate::OutcomeUnknown { estimated_cost, .. } => {
-                    format!("The language practice outcome is unknown (estimated price: {estimated_cost} copper). Re-enter the zone to refresh practice points and balances.").into()
-                }
-                PracticeUpdate::PointsUncertain => {
-                    "Practice points are unknown after the level change. Re-enter the zone to refresh them.".into()
-                }
-            })
-        }
+        // Local bookkeeping is diagnostic state, not a server message.
+        Notice::TrainingPractice(_) => Vec::new(),
         Notice::Channel(line) => chat(channel_line(line)),
         Notice::ChannelRefused { reason } => chat(Said::own(format!("{reason}."))),
         Notice::ConsentExpired(kind) => {
@@ -1379,6 +1361,26 @@ const fn link_text(link: Link) -> &'static str {
 mod tests {
     use super::*;
     use eq_client_core::Coins;
+
+    #[test]
+    fn practice_bookkeeping_does_not_invent_chat() {
+        use eq_client_core::training::PracticeUpdate;
+        for update in [
+            PracticeUpdate::Requested {
+                skill: 0,
+                estimated_cost: 0,
+            },
+            PracticeUpdate::SkillRaised { skill: 0, value: 1 },
+            PracticeUpdate::Unanswered { skill: 0 },
+            PracticeUpdate::OutcomeUnknown {
+                skill: 100,
+                estimated_cost: 10,
+            },
+            PracticeUpdate::PointsUncertain,
+        ] {
+            assert_eq!(wording(&Notice::TrainingPractice(update), None), Vec::new());
+        }
+    }
 
     #[test]
     fn mac_language_training_says_the_programs_lines() {
