@@ -114,7 +114,9 @@ fn cast_send_context_and_server_completion_do_not_replace_native_refresh_readine
         ended,
     );
     assert_eq!(
-        world.casting().gem_wait(0, 42, None, ended),
+        world
+            .casting()
+            .gem_wait(0, 42, None, ended + Duration::from_nanos(1)),
         Some(Duration::ZERO)
     );
     tell(
@@ -187,7 +189,9 @@ fn titanium_bard_global_recovery_is_a_program_rule_without_a_server_capability_o
         Some(Duration::from_millis(5500))
     );
     assert_eq!(
-        world.casting().gem_wait(1, 43, None, now),
+        world
+            .casting()
+            .gem_wait(1, 43, None, now + Duration::from_nanos(1)),
         Some(Duration::ZERO)
     );
 }

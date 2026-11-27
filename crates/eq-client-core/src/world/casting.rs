@@ -368,6 +368,45 @@ impl Casting {
         self.next_requested = Some(requested_spell);
     }
 
+    fn observe_gem_clocks(&mut self, gems: &[Option<u32>; 8], update: &SpellUpdate, now: Instant) {
+        let Some(clocks) = &mut self.gem_clocks else {
+            return;
+        };
+        let occupied = |slot: u32, spell| {
+            usize::try_from(slot).ok().and_then(|slot| gems.get(slot)) == Some(&Some(spell))
+        };
+        match *update {
+            SpellUpdate::Mana {
+                spell_id,
+                keep_casting: false,
+            } => clocks.mana(spell_id, now),
+            SpellUpdate::Slot {
+                slot,
+                spell_id,
+                mode: 1,
+            } if occupied(slot, spell_id) => {
+                if let Ok(gem) = u8::try_from(slot) {
+                    clocks.memorized(gem, spell_id, now);
+                }
+            }
+            SpellUpdate::Slot { slot, mode: 2, .. } => {
+                if let Ok(gem) = u8::try_from(slot) {
+                    clocks.forgotten(gem);
+                }
+            }
+            SpellUpdate::BarRefresh {
+                slot,
+                spell_id,
+                reduction_ms,
+            } if occupied(slot, spell_id) => {
+                if let Ok(gem) = u8::try_from(slot) {
+                    clocks.refreshed(gem, spell_id, reduction_ms, now, self.bard_refresh);
+                }
+            }
+            _ => (),
+        }
+    }
+
     /// Follows the player's own casts. Resource updates alone never claim
     /// that a cast succeeded. A cast ends on a result for its spell or for
     /// the spell asked for.
@@ -378,38 +417,13 @@ impl Casting {
         update: &SpellUpdate,
         now: Instant,
     ) -> Option<CastNews> {
-        if let SpellUpdate::Mana {
-            spell_id,
-            keep_casting: false,
-        } = *update
-            && let Some(clocks) = &mut self.gem_clocks
-        {
-            clocks.mana(spell_id);
-        }
+        self.observe_gem_clocks(gems, update, now);
         let casting = |spell_id: u32| {
             self.cast.is_some_and(|(active, _, _)| {
                 u32::from(active) == spell_id || self.requested == Some(spell_id)
             })
         };
         match *update {
-            SpellUpdate::Slot {
-                slot,
-                spell_id,
-                mode: 1,
-            } if usize::try_from(slot).ok().and_then(|slot| gems.get(slot))
-                == Some(&Some(spell_id)) =>
-            {
-                if let (Some(clocks), Ok(gem)) = (&mut self.gem_clocks, u8::try_from(slot)) {
-                    clocks.memorized(gem, spell_id, now);
-                }
-                None
-            }
-            SpellUpdate::Slot { slot, mode: 2, .. } => {
-                if let (Some(clocks), Ok(gem)) = (&mut self.gem_clocks, u8::try_from(slot)) {
-                    clocks.forgotten(gem);
-                }
-                None
-            }
             SpellUpdate::BarRefresh {
                 slot,
                 spell_id,
@@ -417,9 +431,6 @@ impl Casting {
             } if usize::try_from(slot).ok().and_then(|slot| gems.get(slot))
                 == Some(&Some(spell_id)) =>
             {
-                if let (Some(clocks), Ok(gem)) = (&mut self.gem_clocks, u8::try_from(slot)) {
-                    clocks.refreshed(gem, spell_id, reduction_ms, now, self.bard_refresh);
-                }
                 if self.bard_refresh {
                     self.cooldowns
                         .refresh_without_recovery(spell_id, reduction_ms, now);
