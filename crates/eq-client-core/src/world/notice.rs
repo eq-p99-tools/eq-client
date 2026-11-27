@@ -332,6 +332,9 @@ pub enum Notice {
         item: String,
         /// Native sale text's amount, not a new purse mutation.
         price: u64,
+        /// Use the no-value line rather than the numeric coin formatter.
+        /// A positive base price can round to zero without selecting this line.
+        no_value: bool,
     },
     /// No give window opened, or it closed, and why.
     GiveRefused(String),

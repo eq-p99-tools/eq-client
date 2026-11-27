@@ -557,27 +557,47 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             merchant,
             item,
             price,
+            no_value,
         } => {
             // Titanium received-sale handler0x5384e2: native quote text,
             // merchant and item are the three arguments of0x551, type0x114.
-            let amount = eq_client_assets::merchants::MerchantPrices::split(*price)
-                .into_iter()
-                .zip(eq_client_assets::merchants::TITANIUM.coins)
-                .zip(["platinum", "gold", "silver", "copper"])
-                .filter(|((count, _), _)| *count > 0)
-                .map(|((count, id), coin)| {
-                    let fallback = format!(" {count} {coin}");
-                    messages.map_or_else(
-                        || fallback.clone(),
-                        |table| {
-                            table
-                                .said_or(id, &[count.to_string()], &fallback)
-                                .words
-                                .text
-                        },
-                    )
-                })
-                .collect::<String>();
+            // The native sale text distinguishes no base value from a
+            // positive base price whose computed coin amount rounds to zero.
+            let amount = if *no_value {
+                let fallback = " absolutely nothing";
+                messages.map_or_else(
+                    || fallback.to_owned(),
+                    |table| {
+                        table
+                            .said_or(
+                                eq_client_assets::merchants::TITANIUM.no_value,
+                                &[],
+                                fallback,
+                            )
+                            .words
+                            .text
+                    },
+                )
+            } else {
+                eq_client_assets::merchants::MerchantPrices::split(*price)
+                    .into_iter()
+                    .zip(eq_client_assets::merchants::TITANIUM.coins)
+                    .zip(["platinum", "gold", "silver", "copper"])
+                    .filter(|((count, _), _)| *count > 0)
+                    .map(|((count, id), coin)| {
+                        let fallback = format!(" {count} {coin}");
+                        messages.map_or_else(
+                            || fallback.clone(),
+                            |table| {
+                                table
+                                    .said_or(id, &[count.to_string()], &fallback)
+                                    .words
+                                    .text
+                            },
+                        )
+                    })
+                    .collect::<String>()
+            };
             let merchant = if merchant.is_empty() {
                 messages.map_or_else(
                     || "The merchant".to_owned(),
@@ -1554,12 +1574,70 @@ mod tests {
             merchant: "Iludarae".into(),
             item: "Bat Fur".into(),
             price: 14,
+            no_value: false,
         };
         assert_eq!(
             wording(&notice, Some(&messages)),
             [(
                 Place::Chat,
                 Said::official("amount 1S 4C merchant=Iludarae item=Bat Fur").typed(0x114)
+            )]
+        );
+    }
+
+    #[test]
+    fn received_sale_without_value_uses_native_text_and_spacing() {
+        let messages = Messages::parse(
+            "EQST0002\n0 2\n1361 You receive%1 from %2 for the %3(s).\n2408  absolutely nothing\n",
+        );
+        let notice = Notice::MerchantSold {
+            merchant: "Terri Woodshape".into(),
+            item: "Tasty Candy".into(),
+            price: 0,
+            no_value: true,
+        };
+        let line = "You receive absolutely nothing from Terri Woodshape for the Tasty Candy(s).";
+        assert_eq!(
+            wording(&notice, Some(&messages)),
+            [(Place::Chat, Said::official(line).typed(0x114))]
+        );
+        assert_eq!(
+            wording(&notice, None),
+            [(Place::Chat, Said::own(line).typed(0x114))]
+        );
+        // Use the installed no-value entry rather than hardcoding its words.
+        let translated = Messages::parse(
+            "EQST0002\n0 2\n1361 amount%1 merchant=%2 item=%3\n2408  no-value translation\n",
+        );
+        assert_eq!(
+            wording(&notice, Some(&translated)),
+            [(
+                Place::Chat,
+                Said::official(
+                    "amount no-value translation merchant=Terri Woodshape item=Tasty Candy"
+                )
+                .typed(0x114)
+            )]
+        );
+    }
+
+    #[test]
+    fn received_sale_rounding_to_zero_keeps_the_numeric_formatter() {
+        let messages = Messages::parse(
+            "EQST0002\n0 2\n1361 You receive%1 from %2 for the %3(s).\n2408  absolutely nothing\n",
+        );
+        let notice = Notice::MerchantSold {
+            merchant: "Terri Woodshape".into(),
+            item: "Tiny value".into(),
+            price: 0,
+            no_value: false,
+        };
+        assert_eq!(
+            wording(&notice, Some(&messages)),
+            [(
+                Place::Chat,
+                Said::official("You receive from Terri Woodshape for the Tiny value(s).")
+                    .typed(0x114)
             )]
         );
     }

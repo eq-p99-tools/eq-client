@@ -390,6 +390,7 @@ impl TradeState {
                         merchant: sale.merchant.clone(),
                         item: sale.item.clone(),
                         price: u64::from(price),
+                        no_value: sale.base == 0,
                     })
             }
             _ => None,
