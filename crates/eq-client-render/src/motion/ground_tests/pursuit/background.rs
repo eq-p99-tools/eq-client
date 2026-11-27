@@ -166,7 +166,7 @@ fn pursuit_6716_background_typing_question_cast_stun_and_script_gates_remain() {
                     .app
                     .world_mut()
                     .resource_mut::<crate::keys::Typing>()
-                    .composing = true
+                    .composing = true;
             }
             1 => {
                 let mut asked = crate::confirm::Asked::default();
