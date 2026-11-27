@@ -92,6 +92,19 @@ the Titanium walking rule has not been read for those programs. A local
 ride remains the before-merge visual check; the first public-server ferry
 check requires attended validation.
 
+## 6.676 — chase orbit after server placement
+
+[R] Titanium's trailing view uses the actor's current heading on each update
+(`eqgame.exe` `0x56fea2`–`0x56ff0e`). The same-zone placement route writes
+the received heading, but this does not establish a universal reset of native
+user-view offsets.
+
+[I] On server-set facing the port carries its perspective chase orbit relative
+to the last rendered actor facing, preserving deliberate orbit, pitch and zoom.
+The stored return-to-chase orbit follows while detached; the detached world
+transform stays put. First-person, orthographic and custom projection policies,
+local movement receipts, local pad placement and zone-entry behavior are unchanged.
+
 ## 6.657 — jump arc at the assumed frame rate
 
 [R] `eqgame.exe` `0x4bfe0f`, called from `0x445243`, scales gravity and travel

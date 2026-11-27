@@ -1038,7 +1038,8 @@ pub(super) fn receive(
                 if let Some(sets) = panels.spell_sets.as_mut() {
                     sets.interrupt("The server moved the character.");
                 }
-                scene.place(&mut commands, super::zone::placement(position), None);
+                panels.motion.server_chase_placed |=
+                    scene.place_server(&mut commands, super::zone::placement(position));
             }
             if let Some(pad) = changes.local_pad {
                 info!(entry = ?pad.entry, landing = ?pad.landing, "Crossed a local WLD pad");
