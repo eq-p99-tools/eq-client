@@ -6,6 +6,7 @@ use crate::{
 use eq_client_core::{ClientCommand, SpawnState, WorldEvent, qol::Fix};
 
 mod cadence;
+mod transitions;
 
 fn spawn(distance: f32) -> SpawnState {
     SpawnState {
@@ -96,7 +97,13 @@ fn melee_range_reuses_sizes_and_turns_without_advancing_inside_reach() {
     let mut body = body(&online);
     body.position.heading = 128.;
     let step = Assist::default()
-        .step(online.world(), &plane(), &body, Instant::now())
+        .step(
+            online.world(),
+            &plane(),
+            &online.regions,
+            &body,
+            Instant::now(),
+        )
         .unwrap();
     assert!(!step.forward);
     assert!(
@@ -125,28 +132,28 @@ fn melee_approach_stops_inside_reach_and_hysteresis_avoids_edge_jitter() {
     let now = Instant::now();
     assert!(
         assist
-            .step(online.world(), &floor, &body, now)
+            .step(online.world(), &floor, &online.regions, &body, now)
             .unwrap()
             .forward
     );
     move_target(&mut online, 10.5);
     assert!(
         !assist
-            .step(online.world(), &floor, &body, now)
+            .step(online.world(), &floor, &online.regions, &body, now)
             .unwrap()
             .forward
     );
     move_target(&mut online, 11.8);
     assert!(
         !assist
-            .step(online.world(), &floor, &body, now)
+            .step(online.world(), &floor, &online.regions, &body, now)
             .unwrap()
             .forward
     );
     move_target(&mut online, 12.2);
     assert!(
         assist
-            .step(online.world(), &floor, &body, now)
+            .step(online.world(), &floor, &online.regions, &body, now)
             .unwrap()
             .forward
     );
@@ -155,6 +162,7 @@ fn melee_approach_stops_inside_reach_and_hysteresis_avoids_edge_jitter() {
             .step(
                 online.world(),
                 &floor,
+                &online.regions,
                 &Body {
                     walking: true,
                     ..body
@@ -172,18 +180,38 @@ fn melee_identity_loss_corpse_and_pending_selection_never_drive() {
     let body = body(&online);
     let mut assist = Assist::default();
     let now = Instant::now();
-    assert!(assist.step(online.world(), &plane(), &body, now).is_some());
+    assert!(
+        assist
+            .step(online.world(), &plane(), &online.regions, &body, now)
+            .is_some()
+    );
     online.select_target(Some(5));
-    assert!(assist.step(online.world(), &plane(), &body, now).is_none());
+    assert!(
+        assist
+            .step(online.world(), &plane(), &online.regions, &body, now)
+            .is_none()
+    );
     select(&mut online, 2);
-    assert!(assist.step(online.world(), &plane(), &body, now).is_some());
+    assert!(
+        assist
+            .step(online.world(), &plane(), &online.regions, &body, now)
+            .is_some()
+    );
     testing::spawn_entry(&mut online, 5, spawn(30.));
-    assert!(assist.step(online.world(), &plane(), &body, now).is_none());
+    assert!(
+        assist
+            .step(online.world(), &plane(), &online.regions, &body, now)
+            .is_none()
+    );
     let mut corpse = spawn(30.);
     corpse.kind = SpawnKind::NpcCorpse;
     testing::spawn_entry(&mut online, 5, corpse);
     select(&mut online, 3);
-    assert!(assist.step(online.world(), &plane(), &body, now).is_none());
+    assert!(
+        assist
+            .step(online.world(), &plane(), &online.regions, &body, now)
+            .is_none()
+    );
 }
 
 #[test]
@@ -195,7 +223,7 @@ fn melee_target_change_pauses_until_the_new_current_target_is_authoritative() {
     let mut assist = Assist::default();
     assert!(
         assist
-            .step(online.world(), &floor, &body, now)
+            .step(online.world(), &floor, &online.regions, &body, now)
             .unwrap()
             .forward
     );
@@ -205,7 +233,11 @@ fn melee_target_change_pauses_until_the_new_current_target_is_authoritative() {
     next.position.x = 30.;
     testing::spawn_entry(&mut online, 6, next);
     online.select_target(Some(6));
-    assert!(assist.step(online.world(), &floor, &body, now).is_none());
+    assert!(
+        assist
+            .step(online.world(), &floor, &online.regions, &body, now)
+            .is_none()
+    );
     assert!(!assist.driving());
     let request_id = online.world().next_target_request() - 1;
     testing::news(
@@ -220,7 +252,9 @@ fn melee_target_change_pauses_until_the_new_current_target_is_authoritative() {
             },
         }],
     );
-    let turning = assist.step(online.world(), &floor, &body, now).unwrap();
+    let turning = assist
+        .step(online.world(), &floor, &online.regions, &body, now)
+        .unwrap();
     assert_eq!(assist.scope.unwrap().target_id, 6);
     assert!(
         !turning.forward,
@@ -228,7 +262,11 @@ fn melee_target_change_pauses_until_the_new_current_target_is_authoritative() {
     );
     assert!(motion::arc(body.position.heading, turning.heading).abs() > 0.);
     online.select_target(None);
-    assert!(assist.step(online.world(), &floor, &body, now).is_none());
+    assert!(
+        assist
+            .step(online.world(), &floor, &online.regions, &body, now)
+            .is_none()
+    );
 }
 
 #[test]
@@ -240,17 +278,21 @@ fn melee_distance_limit_stops_above_200_and_can_resume_within_range() {
     let mut assist = Assist::default();
     assert!(
         assist
-            .step(online.world(), &floor, &body, now)
+            .step(online.world(), &floor, &online.regions, &body, now)
             .unwrap()
             .forward
     );
     move_target(&mut online, 200.01);
-    assert!(assist.step(online.world(), &floor, &body, now).is_none());
+    assert!(
+        assist
+            .step(online.world(), &floor, &online.regions, &body, now)
+            .is_none()
+    );
     assert!(!assist.driving());
     move_target(&mut online, 190.);
     assert!(
         assist
-            .step(online.world(), &floor, &body, now)
+            .step(online.world(), &floor, &online.regions, &body, now)
             .unwrap()
             .forward
     );
@@ -272,7 +314,7 @@ fn melee_obstruction_stops_and_manual_input_keeps_the_release_gap() {
     let mut assist = Assist::default();
     assert!(
         !assist
-            .step(online.world(), &wall, &body, now)
+            .step(online.world(), &wall, &online.regions, &body, now)
             .unwrap()
             .forward
     );
@@ -282,6 +324,7 @@ fn melee_obstruction_stops_and_manual_input_keeps_the_release_gap() {
             .step(
                 online.world(),
                 &floor,
+                &online.regions,
                 &body,
                 now + Duration::from_millis(499)
             )
@@ -289,7 +332,13 @@ fn melee_obstruction_stops_and_manual_input_keeps_the_release_gap() {
     );
     assert!(
         assist
-            .step(online.world(), &floor, &body, now + MANUAL_PAUSE)
+            .step(
+                online.world(),
+                &floor,
+                &online.regions,
+                &body,
+                now + MANUAL_PAUSE
+            )
             .unwrap()
             .forward
     );

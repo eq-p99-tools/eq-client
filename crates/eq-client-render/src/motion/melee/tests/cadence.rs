@@ -21,6 +21,7 @@ struct Measurement {
     path: f32,
     net: f32,
     samples: usize,
+    writes: usize,
     first_ms: u128,
     minimum_spacing_ms: u128,
     maximum_spacing_ms: u128,
@@ -111,6 +112,7 @@ fn ten_seconds(assisted: bool, delays: &[u64]) -> Measurement {
     let mut pending = VecDeque::new();
     let mut samples = Vec::new();
     let mut path = 0.;
+    let mut total_writes = 0;
     let mut last_created = start;
     let mut last_arrival = start;
     let mut maximum_arrival_rate = 0_f32;
@@ -174,7 +176,8 @@ fn ten_seconds(assisted: bool, delays: &[u64]) -> Measurement {
                     Ok(())
                 })
                 .unwrap();
-            assert_eq!(writes, 1, "the ordinary Titanium gate sent this sample");
+            total_writes += writes;
+            assert_eq!(session.position(), request.position);
             path += distance;
             last_created = request.created;
             samples.push(request.created);
@@ -192,6 +195,7 @@ fn ten_seconds(assisted: bool, delays: &[u64]) -> Measurement {
         path,
         net: (end.x - origin.x).hypot(end.y - origin.y),
         samples: samples.len(),
+        writes: total_writes,
         first_ms: samples[0].duration_since(start).as_millis(),
         minimum_spacing_ms: *spacing.iter().min().unwrap(),
         maximum_spacing_ms: *spacing.iter().max().unwrap(),
@@ -208,6 +212,7 @@ fn melee_ten_second_request_path_and_cap_match_manual_run_with_result_jitter() {
             "ten simulated seconds delays_ms={delays:?} manual={manual:?} assisted={assisted:?}"
         );
         assert_eq!(manual.samples, assisted.samples);
+        assert!(assisted.writes > 0 && assisted.writes <= assisted.samples);
         assert_eq!(manual.first_ms, assisted.first_ms);
         assert_eq!(manual.minimum_spacing_ms, assisted.minimum_spacing_ms);
         assert_eq!(manual.maximum_spacing_ms, assisted.maximum_spacing_ms);

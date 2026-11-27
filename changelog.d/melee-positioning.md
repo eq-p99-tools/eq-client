@@ -1,2 +1,3 @@
 - Added Stay in Melee Range, an optional QoL setting, off by default. While auto-attack is requested, it faces the current target and approaches ordinary melee reach on clear ground. Manual input takes priority; it stops at obstacles and never selects a target or starts attacking.
 - Added opt-in diagnostics for blocked melee approaches and capped assisted walking by the ordinary run grant.
+- Assisted approaches refuse mapped zone-line triggers and loaded carrier floors while leaving manual crossing available.

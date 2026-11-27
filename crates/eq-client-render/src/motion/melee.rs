@@ -62,6 +62,7 @@ impl Assist {
         &mut self,
         world: &ClientWorld,
         collision: &eq_client_core::movement::CollisionWorld,
+        regions: &eq_client_assets::regions::ZoneRegions,
         body: &Body,
         now: Instant,
     ) -> Option<follow::Step> {
@@ -131,7 +132,14 @@ impl Assist {
         } else if !selected.is_finite() || !body.speeds.0.is_finite() || speed <= 0. {
             "speed_unavailable"
         } else {
-            approach_reason(collision, body, from, to, beyond.min(speed * body.seconds))
+            approach_reason(
+                collision,
+                regions,
+                body,
+                from,
+                to,
+                beyond.min(speed * body.seconds),
+            )
         };
         let forward = reason == "forward";
         trace!(target: "eq_client_render::motion::melee", reason, forward, sample_seconds = body.seconds,
@@ -244,6 +252,7 @@ fn reach(own: abilities::Body, mut target: abilities::Body) -> f32 {
 
 fn approach_reason(
     collision: &eq_client_core::movement::CollisionWorld,
+    regions: &eq_client_assets::regions::ZoneRegions,
     body: &Body,
     from: Vec3,
     to: Vec3,
@@ -269,9 +278,56 @@ fn approach_reason(
         "no_support"
     } else if collision.in_liquid(achieved) {
         "liquid"
+    } else if let Some(reason) = transition_reason(
+        collision,
+        regions,
+        from,
+        achieved + Vec3::Y * body.offset,
+        body.height,
+        body.offset,
+    ) {
+        reason
     } else {
         "forward"
     }
+}
+
+/// A helper may approach on known ordinary ground, never choose a zone or
+/// a carrier for the player. Unknown/unloaded boundaries remain unknown.
+pub(super) fn transition_reason(
+    collision: &eq_client_core::movement::CollisionWorld,
+    regions: &eq_client_assets::regions::ZoneRegions,
+    from: Vec3,
+    to: Vec3,
+    height: f32,
+    offset: f32,
+) -> Option<&'static str> {
+    if regions.zone_line_at(from.to_array()).is_some()
+        || regions
+            .zone_line_entry(from.to_array(), to.to_array())
+            .is_some()
+    {
+        return Some("zone_line");
+    }
+    let mut feet = from - Vec3::Y * offset;
+    let delta = (to - from).with_y(0.);
+    // Match ordinary walking's half-unit strides and first-floor footprint
+    // query. Check intermediate support as well as the final landing.
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let count = (delta.length() / 0.5).ceil().clamp(1., 64.) as u8;
+    let part = delta / f32::from(count);
+    for index in 0..=count {
+        if collision
+            .ground_spawn(feet, 0.01, super::boats::sweep_depth(feet))
+            .is_some()
+        {
+            return Some("carrier_support");
+        }
+        if index < count {
+            feet = collision.step(feet, part, height);
+        }
+    }
+    None
 }
 
 #[cfg(test)]

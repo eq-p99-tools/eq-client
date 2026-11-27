@@ -305,8 +305,9 @@ The **Dangerous** section sits below the ordinary settings and includes the
 Stay in Melee Range stops on target death or loss, while a new target choice is
 pending, beyond 200 horizontal units, and after a zone/session change. It can
 resume for a newly confirmed current target or one that returns within range.
-It does not prevent approaching a zone line or boarding a boat. Stopping at
-water and pausing on a known ride are separate safeguards.
+Assisted steps stop before mapped zone-line triggers and loaded carrier
+floors; manual crossing and boarding remain available. This guard cannot
+identify absent region metadata or unloaded carrier geometry.
 
 For stalled starts, opt in to `RUST_LOG=eq_client_render::motion::melee=trace`.
 This trace is off at ordinary log levels. It records the input owner, target,

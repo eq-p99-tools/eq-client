@@ -2831,7 +2831,9 @@ pub(super) fn input(
             ),
             walking: controls.walking,
         };
-        controls.melee.step(online.world(), world, &body, now)
+        controls
+            .melee
+            .step(online.world(), world, &online.regions, &body, now)
     };
     if let Some(step) = melee_step {
         let radians = eq_client_core::render_heading(step.heading);
@@ -3730,6 +3732,24 @@ pub(super) fn input(
         turn_toward(current_heading, facing, TURN_RATE * span)
     };
     trace_proposal(mode, delta, position - origin, heading, facing);
+    if melee_step.is_some()
+        && let Some(reason) = melee::transition_reason(
+            world,
+            &online.regions,
+            origin,
+            position,
+            body.height,
+            body.feet_offset,
+        )
+    {
+        // This disposable assist proposal sent nothing. Keep ordinary manual
+        // crossing, boarding and authoritative corrections on their own path.
+        controls.airborne = previous_airborne;
+        controls.melee.clear();
+        melee::held(reason);
+        controls.held = Some(Held::NoSpeed);
+        return;
+    }
     if melee_step.is_some() {
         trace!(target: "eq_client_render::motion::melee", sample_seconds = span,
             elapsed_since_send = since_sent.as_secs_f64(), granted_run_speed = ?controls.speed,
