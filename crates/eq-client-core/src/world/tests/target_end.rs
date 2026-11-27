@@ -1,4 +1,5 @@
 use super::*;
+use crate::GameDialect;
 
 fn death(id: u16) -> WorldEvent {
     WorldEvent::Death(Death {
