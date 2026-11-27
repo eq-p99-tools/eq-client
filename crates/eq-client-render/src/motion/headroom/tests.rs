@@ -496,6 +496,68 @@ fn automatic_return_tests_the_manual_origin_bound_at_the_candidate_too() {
 }
 
 #[test]
+fn headroom_vertical_wall_with_open_sky_never_arms_a_pointless_duck() {
+    for slant in [0.0, 0.01] {
+        let (mut app, receiver) = app(InstalledClient::Titanium, 100.0);
+        let mut faces = plane(0.0, true);
+        // A wall, including a slight inward lean. It is not a low opening.
+        // The larger ceiling sphere can contact its side at a body-resolved
+        // endpoint; ducking cannot create a passable route through it.
+        faces.extend([
+            [[-20.0, 0.0, 0.0], [-20.0, 100.0, -100.0 * slant], [20.0, 0.0, 0.0]],
+            [[20.0, 0.0, 0.0], [-20.0, 100.0, -100.0 * slant], [20.0, 100.0, -100.0 * slant]],
+        ]);
+        app.insert_resource(Collision(Some(CollisionWorld::new(faces).unwrap())));
+        testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            world_position([0.0, HUMAN.feet_offset, -1.0], 0.0),
+        );
+        let begin = Instant::now();
+        let mut flips = Vec::new();
+        for frame in 0..100 {
+            {
+                let mut controls = app.world_mut().resource_mut::<Controls>();
+                controls.test_now = Some(begin + Duration::from_millis(frame * 100));
+                controls.test_span = Some(0.1);
+                controls.speed = Some(14.0);
+            }
+            app.update();
+            for requested in accepted_commands(&mut app, &receiver) {
+                flips.push(requested);
+                posture(&mut app, match requested {
+                    Posture::Standing => PostureState::Standing,
+                    Posture::Ducking => PostureState::Ducking,
+                    Posture::Sitting => panic!("unexpected sit"),
+                });
+            }
+        }
+        assert!(flips.is_empty(), "wall slant={slant}: {flips:?}");
+    }
+}
+
+#[test]
+fn automatic_return_checks_the_present_lifted_standing_probe() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
+    // A one-sided higher shelf is below the lifted standing origin, but
+    // above the ducked origin. Return must use the ordinary standing probe
+    // too, rather than assuming the ducked floor remains its standing floor.
+    let faces = plane(0.0, true).into_iter()
+        .chain(plane(4.0, true)).chain(plane(12.0, false));
+    app.insert_resource(Collision(Some(CollisionWorld::new(faces).unwrap())));
+    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+    let now = Instant::now();
+    app.world_mut().resource_scope(|world, mut controls: Mut<Controls>| {
+        controls.headroom.refused(InstalledClient::Titanium,
+            world.resource::<online::OnlineState>().world(), Some(PostureState::Standing),
+            true, now.checked_sub(Duration::from_millis(2_001)).unwrap());
+        controls.test_now = Some(now);
+    });
+    posture(&mut app, PostureState::Ducking);
+    app.update();
+    assert!(commands(&receiver).is_empty(), "the next standing probe refuses");
+}
+
+#[test]
 fn automatic_return_preserves_the_existing_idle_origin_test() {
     let (mut app, receiver) = app(InstalledClient::Titanium, 12.0);
     app.world_mut()
