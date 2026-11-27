@@ -26,7 +26,7 @@ Declare the namespace on the XML root and place a label in the desired layout.
 
 The label displays progress through the current level with two decimal places
 and a percent sign, such as 37.27%. It stays empty until progress is known.
-Font, color, alignment, wrapping and placement follow the authored label.
+Font, color, alignment and placement follow the authored label.
 The binding takes priority if that label also declares an EQType.
 
 The existing server-reported field has 330 steps per level, so each step is

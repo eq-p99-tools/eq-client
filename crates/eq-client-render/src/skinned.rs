@@ -2274,7 +2274,7 @@ fn label(
     owner: WindowId,
 ) {
     if label.client_value == Some(eq_client_assets::sidl::LabelValue::ExperiencePercent) {
-        aligned(
+        aligned_in(
             window,
             label_node(label, inside),
             label.align,
@@ -2286,6 +2286,10 @@ fn label(
                     label.color.map_or(theme::INK_BRIGHT, rgb),
                 ),
             ),
+            owner
+                .is_chat()
+                .then(|| label.anchors.map(reflow::Geometry))
+                .flatten(),
         );
         return;
     }
@@ -3709,6 +3713,7 @@ mod tests {
                         window,
                         &name,
                         &Label {
+                            client_value: None,
                             area: Area {
                                 x,
                                 y,
@@ -3731,6 +3736,7 @@ mod tests {
                     window,
                     "CSPW_Spell0_Name",
                     &Label {
+                        client_value: None,
                         area: Area {
                             x: 25.0,
                             y: 15.0,
@@ -4586,6 +4592,7 @@ mod tests {
                 commands.spawn(Node::default()).with_children(|window| {
                     for kind in &kinds {
                         let words = Label {
+                            client_value: None,
                             area: Area {
                                 x: 25.0,
                                 y: 15.0,
@@ -4684,6 +4691,7 @@ mod tests {
             .run_system_once(move |mut commands: Commands| {
                 commands.spawn(Node::default()).with_children(|window| {
                     let words = Label {
+                        client_value: None,
                         area: Area {
                             x: 0.0,
                             y: 0.0,
