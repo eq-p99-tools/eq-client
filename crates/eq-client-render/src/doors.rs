@@ -457,18 +457,28 @@ pub(super) fn swings(door: &Door, generation: GameDialect) -> bool {
 /// Only mechanisms already modeled as ordinary passages may be opened by a
 /// route. Vertical/combined lifts and unknown mechanisms remain obstacles.
 pub(super) fn route_usable(door: &Door, generation: GameDialect) -> bool {
-    swings(door, generation)
-        || generation == GameDialect::Titanium
-            && door.open_type == 15
-            && endpoint(door, generation).is_some()
-            && eq_client_core::doors::Slide::of(door).is_some()
+    if swings(door, generation) {
+        return true;
+    }
+    match generation {
+        GameDialect::Titanium => {
+            door.open_type == 15
+                && endpoint(door, generation).is_some()
+                && eq_client_core::doors::Slide::of(door).is_some()
+        }
+        GameDialect::EqMac | GameDialect::Rof2 => false,
+    }
 }
 
 fn passage_fraction(door: &Door, generation: GameDialect, swing: f32, slide: f32) -> Option<f32> {
     if let Some(open) = open_swing(door) {
         return Some(hinge_fraction(swing, open));
     }
-    if generation != GameDialect::Titanium || door.open_type != 15 {
+    let sliding = match generation {
+        GameDialect::Titanium => door.open_type == 15,
+        GameDialect::EqMac | GameDialect::Rof2 => false,
+    };
+    if !sliding {
         return None;
     }
     let full = eq_client_core::doors::Slide::of(door)?.distance;
