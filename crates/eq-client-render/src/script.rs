@@ -1758,7 +1758,7 @@ pub(super) fn drive(
                     _ => None,
                 };
                 // Only an object walk has chosen an object.
-                match walking::scene_ready(&mut script, &online) {
+                match walking::scene_ready(script, &online) {
                     Ok(true) => (),
                     Ok(false) => {
                         script.release_step(&mut keys, &mut mouse);
@@ -1791,7 +1791,7 @@ pub(super) fn drive(
                     _ => unreachable!(),
                 };
                 match walking::prepare(
-                    &mut script,
+                    script,
                     &step,
                     &online,
                     client,
@@ -2982,7 +2982,7 @@ pub(super) fn drive(
                     return;
                 }
             }
-            let scene = match walking::scene_ready(&mut script, &online) {
+            let scene = match walking::scene_ready(script, &online) {
                 Ok(ready) => ready,
                 Err(reason) => {
                     script.stop(&mut keys, &mut mouse, &reason);
@@ -3003,7 +3003,7 @@ pub(super) fn drive(
                     return;
                 };
                 if let Err(reason) = walking::prepare(
-                    &mut script,
+                    script,
                     &step,
                     &online,
                     client,
