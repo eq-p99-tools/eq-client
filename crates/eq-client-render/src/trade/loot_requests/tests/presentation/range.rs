@@ -1,4 +1,5 @@
 use super::*;
+use crate::trade::loot_range::Model;
 use std::{
     path::PathBuf,
     sync::atomic::{AtomicU64, Ordering},
@@ -72,6 +73,17 @@ fn prepared(skinned: bool, classic: u32, reference: Option<f32>) -> (Host, Metad
     host.open();
     grant(&mut host);
     host.list();
+    let corpse = host.world().spawn(9).unwrap();
+    let scale = eq_client_assets::scale::TITANIUM.drawn_scale(
+        1,
+        0,
+        6.0,
+        eq_client_assets::scale::ZoneScale {
+            classic_reduced: classic != 0,
+        },
+    );
+    let model = Model::new(9, corpse.revision, Some(classic), model, scale);
+    host.app.world_mut().spawn(model);
     (host, metadata)
 }
 
@@ -93,11 +105,12 @@ fn check(host: &mut Host, now: Instant) {
     host.app
         .world_mut()
         .resource_scope(|world, mut trade: Mut<TradeState>| {
+            let model = world.query::<&Model>().iter(world).next().cloned();
             trade.range.check(
                 world.resource::<OnlineState>().world(),
                 &world.resource::<crate::ViewerSettings>().0,
                 world.resource::<Outbox>(),
-                true,
+                (true, model.as_ref()),
                 now,
             );
         });
@@ -271,7 +284,7 @@ fn unknown_basis_hidden_frame_and_unread_generations_send_no_distance_close() {
                     world.resource::<OnlineState>().world(),
                     &world.resource::<crate::ViewerSettings>().0,
                     world.resource::<Outbox>(),
-                    false,
+                    (false, None),
                     now,
                 );
             });
@@ -285,5 +298,76 @@ fn unknown_basis_hidden_frame_and_unread_generations_send_no_distance_close() {
         check(&mut host, now + Duration::from_secs(1));
         assert!(host.commands.try_recv().is_err());
         assert!(host.world().loot().unwrap().granted);
+    }
+}
+
+#[test]
+fn range_uses_the_prepared_actor_model_and_refuses_a_missing_or_stale_actor() {
+    let (mut host, metadata) = prepared(false, 0, None);
+    let world = host.app.world_mut();
+    let old = world
+        .query_filtered::<Entity, With<Model>>()
+        .iter(world)
+        .next()
+        .unwrap();
+    world.entity_mut(old).despawn();
+    position(&mut host, 30.0, 0.0, 0.0);
+    let now = Instant::now();
+    check(&mut host, now);
+    assert!(
+        host.commands.try_recv().is_err(),
+        "a marker is not an actor offset"
+    );
+    let revision = host.world().spawn(9).unwrap().revision;
+    let stale = host
+        .app
+        .world_mut()
+        .spawn(Model::new(9, revision + 1, Some(0), "OtherModel", 1.2))
+        .id();
+    check(&mut host, now + Duration::from_millis(500));
+    assert!(host.commands.try_recv().is_err());
+    host.app.world_mut().entity_mut(stale).despawn();
+    // A stand-in's prepared model can differ from the spawn race's model.
+    // Its own authored reference, not a race-name lookup, supplies native S.
+    std::fs::write(
+        metadata.0.join("Resources/moddat.ini"),
+        "[OtherModel]\nROffset=1\n",
+    )
+    .unwrap();
+    host.app
+        .world_mut()
+        .spawn(Model::new(9, revision, Some(0), "OtherModel", 1.2));
+    position(&mut host, 22.0, 0.0, 0.0);
+    check(&mut host, now + Duration::from_secs(1));
+    assert!(matches!(
+        host.commands.try_recv().unwrap(),
+        ClientCommand::EndLoot { corpse_id: 9, .. }
+    ));
+}
+
+#[test]
+fn checked_spawn_offset_survives_render_culling_but_not_a_replacement() {
+    for replaced in [false, true] {
+        let (mut host, _metadata) = prepared(false, 0, None);
+        let now = Instant::now();
+        check(&mut host, now); // Qualify the current actor while within reach.
+        let world = host.app.world_mut();
+        let actor = world
+            .query_filtered::<Entity, With<Model>>()
+            .iter(world)
+            .next()
+            .unwrap();
+        world.entity_mut(actor).despawn();
+        if replaced {
+            let mut replacement = host.world().spawn(9).unwrap().state.clone();
+            replacement.name = "Replacement".into();
+            crate::online::testing::spawns(
+                &mut host.app.world_mut().resource_mut::<OnlineState>(),
+                vec![replacement],
+            );
+        }
+        position(&mut host, 30.0, 0.0, 0.0);
+        check(&mut host, now + Duration::from_millis(500));
+        assert_eq!(host.commands.try_recv().is_ok(), !replaced);
     }
 }
