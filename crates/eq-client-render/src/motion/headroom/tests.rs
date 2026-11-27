@@ -639,7 +639,10 @@ fn slower_duck_return(suppress_rate: bool) -> (App, mpsc::Receiver<ClientCommand
         controls.headroom.suppress_standing_rate = suppress_rate;
     }
     app.update();
-    assert!(accepted_commands(&mut app, &receiver).is_empty());
+    assert_eq!(
+        accepted_commands(&mut app, &receiver),
+        Vec::<Posture>::new()
+    );
     assert!(
         app.world()
             .resource::<Controls>()
@@ -898,8 +901,25 @@ fn installed_felwithe_side_wall_does_not_cycle_posture() {
                     heading: 397.0,
                 },
             );
+            {
+                let origin = app
+                    .world()
+                    .resource::<online::OnlineState>()
+                    .world()
+                    .player()
+                    .unwrap()
+                    .position;
+                let world = app.world_mut();
+                let mut players = world.query_filtered::<&mut Transform, With<Player>>();
+                let mut transform = players.single_mut(world).unwrap();
+                transform.translation = Vec3::from_array(eq_client_core::render_position(origin));
+                transform.rotation =
+                    Quat::from_rotation_y(eq_client_core::render_heading(origin.heading));
+            }
             let begin = Instant::now();
             let mut flips = Vec::new();
+            let mut attempted = false;
+            let mut refused = false;
             for frame in 0..(10_000 / millis) {
                 {
                     let mut controls = app.world_mut().resource_mut::<Controls>();
@@ -912,6 +932,11 @@ fn installed_felwithe_side_wall_does_not_cycle_posture() {
                         .get_or_insert_with(AirborneController::default);
                 }
                 app.update();
+                {
+                    let controls = app.world().resource::<Controls>();
+                    attempted |= controls.pending.is_some();
+                    refused |= controls.headroom_refused;
+                }
                 for requested in accepted_commands(&mut app, &receiver) {
                     flips.push(requested);
                     posture(
@@ -924,6 +949,10 @@ fn installed_felwithe_side_wall_does_not_cycle_posture() {
                     );
                 }
             }
+            assert!(
+                attempted && refused,
+                "{millis}ms speed={speed}: the logged wall must actually be exercised"
+            );
             assert!(flips.is_empty(), "{millis}ms speed={speed}: {flips:?}");
         }
     }
