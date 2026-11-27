@@ -69,7 +69,9 @@ impl GroundMotion {
         forward: bool,
         elapsed: Duration,
     ) -> Option<Self> {
-        self.frame_using(world, height, direction, speed, forward, elapsed, None)
+        self.frame_using(
+            world, height, direction, speed, forward, elapsed, None, true,
+        )
     }
 
     /// Uses the same grounded body physics as the ordinary walking controller.
@@ -94,6 +96,37 @@ impl GroundMotion {
             forward,
             elapsed,
             Some(physics),
+            true,
+        )
+    }
+
+    /// The ordinary grounded collision step after a static-ground handover.
+    ///
+    /// This preserves this frame's existing velocity recurrence and consumes
+    /// its elapsed time once, but establishes no native/static-ground proof.
+    /// The caller must obtain genuine carrier support and submit the resulting
+    /// observation through the existing ordinary movement guard.
+    #[must_use]
+    #[allow(clippy::too_many_arguments)]
+    pub fn ordinary_frame_with_physics(
+        self,
+        world: &CollisionWorld,
+        height: f32,
+        direction: Vec3,
+        speed: f32,
+        forward: bool,
+        elapsed: Duration,
+        physics: VerticalPhysics,
+    ) -> Option<Self> {
+        self.frame_using(
+            world,
+            height,
+            direction,
+            speed,
+            forward,
+            elapsed,
+            Some(physics),
+            false,
         )
     }
 
@@ -107,6 +140,7 @@ impl GroundMotion {
         forward: bool,
         elapsed: Duration,
         physics: Option<VerticalPhysics>,
+        static_ground: bool,
     ) -> Option<Self> {
         let climb = physics.map_or(MAX_GROUNDED_STEP, |physics| physics.reach());
         if !climb.is_finite() || climb <= 0.0 {
@@ -119,7 +153,9 @@ impl GroundMotion {
             || !height.is_finite()
             || height < 1.0
             || world.support(feet).is_none()
-            || !world.plain_ground(feet, height, climb)
+            || world.liquid_support
+            || !matches!(world.liquid_contact(feet, height), LiquidContact::Unmarked)
+            || static_ground && !world.plain_ground(feet, height, climb)
         {
             return None;
         }
@@ -184,7 +220,7 @@ impl GroundMotion {
             world.step(feet, target - feet, height)
         };
         if world.support(landed).is_none()
-            || !world.plain_ground(landed, height, climb)
+            || static_ground && !world.plain_ground(landed, height, climb)
             || !world.plain_ground_segment(feet, landed, height)
         {
             return None;

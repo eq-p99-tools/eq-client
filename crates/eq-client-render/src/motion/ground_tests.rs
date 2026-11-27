@@ -206,6 +206,7 @@ fn carrier_crossing(installed: bool) {
                 scene.step(true);
             }
             let mut previous = latency_tests::shown(&mut scene.app).0;
+            let start = world_position(previous.to_array(), 128.);
             let mut distance = 0.;
             let mut stopped = 0;
             let mut stopped_run = 0;
@@ -219,6 +220,13 @@ fn carrier_crossing(installed: bool) {
                 longest_stop = longest_stop.max(stopped_run);
                 previous = shown;
             }
+            let end = world_position(previous.to_array(), 128.);
+            println!(
+                "carrier-crossing installed={installed} delay={delay} native={native} path={distance} stopped_frames={stopped} longest_stop_frames={longest_stop} start={start:?} end={end:?} native_observations={} ordinary_requests={} packets={}",
+                scene.observations,
+                scene.ordinary_modes.len(),
+                scene.packets.len()
+            );
             assert!(
                 scene.ordinary_supports.iter().any(
                     |support| matches!(support,Some(Support::Spawn(sample)) if sample.spawn_id==172)
@@ -226,11 +234,6 @@ fn carrier_crossing(installed: bool) {
                 "fixture never produced an actual supported-carrier request"
             );
             assert_eq!(scene.refusals, 0);
-            let end = world_position(previous.to_array(), 128.);
-            println!(
-                "carrier-crossing installed={installed} delay={delay} native={native} path={distance} stopped_frames={stopped} longest_stop_frames={longest_stop} end={end:?} native_observations={}",
-                scene.observations
-            );
             if native && longest_stop >= 6 {
                 failed.push((delay, "zero-frame"));
             }
@@ -256,6 +259,88 @@ fn native_ground_transfers_once_to_supported_carrier_without_a_zero_sample() {
 #[ignore = "requires authorized installed Titanium assets; offline CPU collision only"]
 fn installed_qeynos_pre_carrier172_crossing_matches_main() {
     carrier_crossing(true);
+}
+
+#[test]
+fn supported_carrier_handover_release_and_late_results_never_replay_travel() {
+    for delay in [0, 6] {
+        let mut scene = Scene::with_carrier_fixture(
+            delay,
+            true,
+            29.866_667,
+            false,
+            Some(docked_carrier(true, false)),
+        );
+        for _ in 0..120 {
+            scene.step(true);
+        }
+        assert!(scene.ordinary_supports.iter().any(|support| {
+            matches!(support, Some(Support::Spawn(sample)) if sample.spawn_id == 172)
+        }));
+        let mut previous = scene.step(false);
+        for _ in 0..60 {
+            let row = scene.step(false);
+            assert!(!row.forward);
+            assert!(row.owned.length() <= previous.owned.length() + 0.000_01);
+            let forward = Vec3::from_array(eq_client_core::render_vector([1., 0., 0.]));
+            assert!((row.shown - previous.shown).dot(forward) >= -0.000_01);
+            assert!(row.shown.distance(previous.shown) <= previous.owned.length() / 60. + 0.000_1);
+            assert_eq!(row.shown, row.focus);
+            previous = row;
+        }
+        assert_eq!(previous.owned, Vec3::ZERO);
+        assert!(
+            previous
+                .shown
+                .distance(Vec3::from_array(eq_client_core::render_position(
+                    scene.owner.position()
+                ),))
+                < 0.001
+        );
+        assert_eq!(scene.refusals, 0);
+        for packets in scene.packets.windows(2) {
+            assert!(packets[1].0.duration_since(packets[0].0) > TITANIUM_FLAGS.spacing);
+        }
+    }
+}
+
+#[test]
+fn supported_carrier_handover_genuine_correction_retires_the_continuation() {
+    let mut scene = Scene::with_carrier_fixture(
+        6,
+        true,
+        29.866_667,
+        false,
+        Some(docked_carrier(true, false)),
+    );
+    for _ in 0..120 {
+        scene.step(true);
+    }
+    let corrected = eq_client_core::WorldPosition {
+        x: 220.,
+        y: 10.,
+        z: 3.75,
+        heading: 80.,
+    };
+    scene.owner.correct(corrected, scene.now()).unwrap();
+    scene
+        .news
+        .send(eq_client_core::WorldUpdate::Game(
+            eq_client_core::WorldEvent::Position {
+                spawn_id: 7,
+                position: corrected,
+                velocity: [0.; 3],
+                forward: 0.,
+            },
+        ))
+        .unwrap();
+    scene.replies.clear();
+    let actual = Vec3::from_array(eq_client_core::render_position(corrected));
+    for _ in 0..20 {
+        let row = scene.step(false);
+        assert_eq!(row.shown, actual);
+        assert_eq!(row.focus, actual);
+    }
 }
 
 // Each piece meets its neighbour exactly; the collision owner's capsule,
@@ -558,6 +643,7 @@ impl Scene {
             {
                 let world = app.world_mut();
                 world.resource_mut::<Controls>().suppress_ground = !fixture.native;
+                world.resource_mut::<Controls>().airborne = Some(AirborneController::default());
                 let mut online = world.resource_mut::<online::OnlineState>();
                 crate::online::testing::place(&mut online, fixture.origin);
                 crate::online::testing::news(
@@ -590,6 +676,11 @@ impl Scene {
                 pack: |packet| packet.packet(),
                 rule: TITANIUM_FLAGS,
             }));
+        if carrier {
+            owner = owner.with_fall_speed(Some(
+                physics(InstalledClient::Titanium, None).terminal_speed,
+            ));
+        }
         owner
             .calibrate(
                 eq_client_core::MotionCalibration {

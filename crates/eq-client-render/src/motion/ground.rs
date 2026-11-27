@@ -1,7 +1,7 @@
 //! Completed native dry frames; prediction and local admission remain separate.
 use super::{
     Controls, Held, LiquidBasis, MOVE_RESULT_WAIT, MotionInput, OrbitCamera, Player, PlayerBody,
-    START_CYCLE_DURATION, TURN_RATE, TURN_STEPS_PER_SECOND, TapBuffer, arc, online, pose,
+    START_CYCLE_DURATION, TURN_RATE, TURN_STEPS_PER_SECOND, TapBuffer, arc, boats, online, pose,
     ramped_turn, stop_at_zone_line, turn_cap, turn_toward,
 };
 use bevy::prelude::{Entity, Has, Quat, Query, Transform, Vec2, Vec3, With};
@@ -34,6 +34,8 @@ pub(super) struct Frame {
     pub follows: bool,
     pub heading: HeadingUpdate,
     pub facing: f32,
+    pub carrier: Option<boats::Riding>,
+    support: Option<eq_client_core::movement::CarrierSample>,
 }
 
 impl Frame {
@@ -66,6 +68,8 @@ impl Frame {
             follows,
             heading: update,
             facing,
+            carrier: None,
+            support: None,
         })
     }
     fn same_state(self, other: Self) -> bool {
@@ -75,6 +79,7 @@ impl Frame {
         let mut request =
             MovementRequest::new(MovementMode::Forward, session, self.position, self.at);
         request.heading = self.heading;
+        request.support = self.support.map(eq_client_core::Support::Spawn);
         request
     }
 }
@@ -83,6 +88,7 @@ impl Frame {
 struct Sent {
     session: u64,
     frame: Frame,
+    ordinary: bool,
 }
 
 /// One current simulation and the genuine completed observations it published.
@@ -100,6 +106,8 @@ pub(super) struct Control {
     epoch: Option<Instant>,
     retired: Option<Frame>,
     pub cold_handback: bool,
+    ordinary: bool,
+    ordinary_answered: Option<Instant>,
 }
 
 impl Control {
@@ -117,6 +125,8 @@ impl Control {
         self.epoch = Some(rest.at);
         self.retired = None;
         self.cold_handback = false;
+        self.ordinary = false;
+        self.ordinary_answered = None;
     }
 
     /// Retire presentation on a correction/control seam; pending identities
@@ -127,6 +137,8 @@ impl Control {
         self.last_posted = None;
         self.retired = None;
         self.cold_handback = false;
+        self.ordinary = false;
+        self.ordinary_answered = None;
     }
 
     pub fn active(&self) -> bool {
@@ -193,6 +205,7 @@ impl Control {
         &mut self,
         world: &ClientWorld,
         outbox: &crate::outbox::Outbox,
+        now: Instant,
     ) -> Result<Option<Instant>, crate::outbox::Refusal> {
         let Some(frame) = self.current else {
             return Ok(None);
@@ -211,11 +224,41 @@ impl Control {
         if world.session_id() != Some(session) {
             return Err(crate::outbox::Refusal::NotAdmitted);
         }
-        outbox.post(world, |_| ClientCommand::GroundFrame {
-            request: frame.request(session),
-            state: frame.state,
+        if self.ordinary
+            && (self.sent.iter().any(|sent| sent.ordinary)
+                || self.last_posted.is_some_and(|at| {
+                    frame.at.saturating_duration_since(at) < START_CYCLE_DURATION
+                })
+                || self
+                    .ordinary_answered
+                    .is_some_and(|at| now.saturating_duration_since(at) < START_CYCLE_DURATION))
+        {
+            return Ok(None);
+        }
+        outbox.post(world, |_| {
+            if self.ordinary {
+                ClientCommand::Move(frame.request(session))
+            } else {
+                ClientCommand::GroundFrame {
+                    request: frame.request(session),
+                    state: frame.state,
+                }
+            }
         })?;
-        self.sent.push_back(Sent { session, frame });
+        if self.ordinary {
+            bevy::prelude::debug!(
+                session_id = session,
+                created = ?frame.at,
+                position = ?frame.position,
+                support = ?frame.support,
+                "Ordinary carrier handover current-state observation submitted"
+            );
+        }
+        self.sent.push_back(Sent {
+            session,
+            frame,
+            ordinary: self.ordinary,
+        });
         self.last_posted = Some(frame.at);
         Ok(Some(frame.at))
     }
@@ -225,6 +268,10 @@ impl Control {
         self.current
             .zip(self.accepted)
             .is_some_and(|(a, b)| a.same_state(b))
+    }
+
+    pub fn carrier(&self) -> Option<boats::Riding> {
+        self.accepted.and_then(|frame| frame.carrier)
     }
 
     /// A stalled result bounds speculation by the unchanged maximum cycle.
@@ -259,6 +306,7 @@ impl Control {
         created: Instant,
         position: WorldPosition,
         refused: bool,
+        received: Instant,
     ) -> bool {
         let Some(index) = self
             .sent
@@ -268,6 +316,9 @@ impl Control {
             return false;
         };
         let sent = self.sent[index];
+        if sent.ordinary {
+            self.ordinary_answered = Some(received);
+        }
         self.sent.drain(..=index);
         if !refused
             && position == sent.frame.position
@@ -360,7 +411,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         controls.ground.blocked = false;
         return true;
     }
-    match controls.ground.report(online.world(), outbox) {
+    match controls.ground.report(online.world(), outbox, now) {
         Ok(Some(created)) => {
             controls.last_sent = Some(created);
             controls.refused = None;
@@ -443,6 +494,12 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         controls.climb_sent = Some((session, per_step));
     }
     let current = controls.ground.current.expect("active ground frame");
+    let eligible = eligible
+        && !(controls.ground.ordinary
+            && controls.ground.settled()
+            && current.motion.velocity() == Vec3::ZERO
+            && intent.direction == Vec3::ZERO
+            && intent.turn == 0.);
     let seconds = if current.at == now {
         first_span
     } else {
@@ -476,7 +533,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
     } else {
         intent.direction
     };
-    let trial = eligible
+    let trial = (eligible && !controls.ground.ordinary)
         .then(|| {
             current.motion.frame_with_physics(
                 world,
@@ -489,6 +546,61 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
             )
         })
         .flatten();
+    // The rejected static proof consumed no part of this actual frame. Use
+    // the ordinary body sweep on a copy, retaining its owned velocity and
+    // the whole unconsumed span once. A genuine carrier floor is required
+    // to enter this bridge; it never widens GroundFrame's static guard.
+    let ordinary_trial = if trial.is_none() && eligible {
+        let carrier_unchanged = current.carrier.is_none_or(|riding| {
+            riding
+                .carried(online.world().carriers(), now)
+                .is_some_and(|carried| carried.pose == riding.pose)
+        });
+        carrier_unchanged
+            .then(|| {
+                current.motion.ordinary_frame_with_physics(
+                    world,
+                    body.height,
+                    direction,
+                    intent.speed,
+                    forward,
+                    seconds,
+                    physics,
+                )
+            })
+            .flatten()
+            .and_then(|motion| {
+                let carrier = boats::under(
+                    world,
+                    online.world().carriers(),
+                    motion.feet(),
+                    current.carrier.map(|riding| riding.sample.spawn_id),
+                    now,
+                )
+                .map(|(sample, pose)| boats::Riding {
+                    sample,
+                    pose,
+                    position: world_position(
+                        (motion.feet() + Vec3::Y * body.feet_offset).to_array(),
+                        heading,
+                    ),
+                });
+                // The static footprint can meet an elevated deck before
+                // the narrow down-sweep links the feet to it. Positive
+                // ordinary-reach geometry can select the ordinary owner;
+                // only the actual down-sweep above supplies wire support.
+                let approaching = world
+                    .ground_spawn(motion.feet(), physics.reach(), MAX_GROUNDED_STEP)
+                    .is_some_and(|id| online.world().carriers().latest(id).is_some());
+                (controls.ground.ordinary || carrier.is_some() || approaching)
+                    .then_some((motion, carrier))
+            })
+    } else {
+        None
+    };
+    let ordinary = ordinary_trial.is_some();
+    let carrier = ordinary_trial.and_then(|(_, carrier)| carrier);
+    let trial = trial.or(ordinary_trial.map(|(motion, _)| motion));
     let trial = trial.and_then(|motion| {
         let origin = motion.feet() + Vec3::Y * body.feet_offset;
         let before = Vec3::from_array(eq_client_core::render_position(current.position));
@@ -499,7 +611,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
             .then_some(motion)
     });
     if let Some(trial) = trial.filter(|_| !controls.ground.timed_out(now)) {
-        let Some(frame) = Frame::observed(
+        let Some(mut frame) = Frame::observed(
             now,
             trial,
             body.feet_offset,
@@ -514,25 +626,41 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         ) else {
             return true;
         };
+        frame.carrier = carrier;
+        frame.support = controls
+            .ground
+            .carrier()
+            .or(carrier)
+            .map(|riding| riding.sample);
         let legal = online
             .world()
             .session_id()
             .ok_or(crate::outbox::Refusal::NotAdmitted)
             .and_then(|session| {
-                outbox.check_command(
-                    online.world(),
-                    &ClientCommand::GroundFrame {
+                let command = if ordinary {
+                    ClientCommand::Move(frame.request(session))
+                } else {
+                    ClientCommand::GroundFrame {
                         request: frame.request(session),
                         state: frame.state,
-                    },
-                )
+                    }
+                };
+                outbox.check_command(online.world(), &command)
             });
         if let Err(reason) = legal {
             controls.send_failed(reason);
             controls.held = Some(Held::Refused);
             return true;
         }
+        if ordinary && !controls.ground.ordinary {
+            bevy::prelude::debug!(
+                seconds = seconds.as_secs_f32(),
+                velocity = ?trial.velocity(),
+                "Static-ground scope handed its unconsumed frame to ordinary carrier physics"
+            );
+        }
         controls.ground.current = Some(frame);
+        controls.ground.ordinary = ordinary;
         controls.moving = forward || trial.velocity() != Vec3::ZERO;
         controls.visual = None;
         controls.preview = None;
@@ -546,7 +674,11 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
     }
     if controls.ground.handback_ready(now) {
         let admitted = controls.ground.admitted();
+        let carrier = controls.ground.carrier();
         controls.ground.handback();
+        if carrier.is_some() {
+            controls.boat = carrier;
+        }
         if let Some(admitted) = admitted {
             // This is an actual admitted creation time, never a fabricated
             // interval and never the time a delayed receipt arrived.
@@ -568,7 +700,12 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         forward,
         current.heading,
         current.follows,
-    );
+    )
+    .map(|mut frame| {
+        frame.carrier = current.carrier;
+        frame.support = current.support;
+        frame
+    });
     controls.held = Some(Held::Waiting);
     true
 }
@@ -597,6 +734,7 @@ mod walk_budget_tests {
         control.sent.push_back(Sent {
             session: 7,
             frame: frame(posted, 0.),
+            ordinary: false,
         });
         let now = start + Duration::from_millis(100);
         assert!(control.within_walk_budget(now, Vec3::Y * 3., 3.));

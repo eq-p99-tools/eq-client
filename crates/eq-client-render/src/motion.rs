@@ -1425,9 +1425,10 @@ impl Controls {
         position: eq_client_core::WorldPosition,
         refused: Option<&str>,
     ) -> bool {
+        let received = self.now();
         if !self
             .ground
-            .reconcile(session, created, position, refused.is_some())
+            .reconcile(session, created, position, refused.is_some(), received)
         {
             return false;
         }
@@ -1521,7 +1522,9 @@ impl Controls {
         eq_client_core::WorldPosition,
         eq_client_core::WorldPosition,
     )> {
-        self.boat
+        self.ground
+            .carrier()
+            .or(self.boat)
             .map(|riding| (riding.sample, riding.pose, riding.position))
     }
 
