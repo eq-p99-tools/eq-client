@@ -103,3 +103,23 @@ fn submitted_drowning_changes_local_hp_and_a_fresh_report_replaces_it() {
     }
     assert!(!world.is_dead());
 }
+
+#[test]
+fn unresolved_equipped_hp_keeps_control_unknown_despite_a_zero_display() {
+    for augmented in [false, true] {
+        let mut world = admitted();
+        let mut item = chest();
+        if augmented {
+            item.augments[0] = Some(42);
+        } else {
+            item.details.bonuses = None;
+        }
+        game(&mut world, inventory(vec![item]));
+        game(&mut world, hit_points(9, -5, 100));
+        assert_eq!(world.hit_points(), Some((0, 100)));
+        assert_eq!(world.counted_hit_points(), None);
+        assert_eq!(world.hit_point_basis(), None);
+        assert!(!world.is_unconscious());
+        assert!(!world.is_dead());
+    }
+}
