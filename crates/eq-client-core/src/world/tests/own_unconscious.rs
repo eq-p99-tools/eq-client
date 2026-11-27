@@ -123,3 +123,14 @@ fn unresolved_equipped_hp_keeps_control_unknown_despite_a_zero_display() {
         assert!(!world.is_dead());
     }
 }
+
+#[test]
+fn a_nonpositive_reconstructed_maximum_withholds_the_control_basis() {
+    let mut world = admitted();
+    game(&mut world, inventory(Vec::new()));
+    game(&mut world, hit_points(9, 1, 0));
+    assert_eq!(world.hit_point_basis(), None);
+    assert_eq!(world.hit_point_gauge(), None);
+    assert!(!world.is_unconscious());
+    assert!(!world.is_dead());
+}
