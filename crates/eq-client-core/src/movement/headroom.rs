@@ -1,13 +1,13 @@
 //! The distinct floor and upward headroom probes. Walking's body shape is
-//! unchanged. A capsule here is the union of the same probe spheres along a
-//! coalesced host stride, so a thin underside cannot fall between samples.
+//! unchanged. A coalesced host stride tests candidate spheres at its mapped
+//! program-frame spacing, without filling the gaps between native samples.
 use super::{CollisionWorld, Obstacle, Surface};
 use glam::Vec3;
 use parry3d::{
     bounding_volume::Aabb,
     math::{Pose, Vector},
     query::{PointQueryWithLocation, ShapeCastOptions, Unsupported, cast_shapes},
-    shape::{Ball, Capsule, Triangle, TrianglePointLocation},
+    shape::{Ball, Triangle, TrianglePointLocation},
 };
 
 const REACH: f32 = 32_767.0;
@@ -98,7 +98,7 @@ impl CollisionWorld {
         }
         let floor = self.headroom_floor(origin, probe);
         let ceiling = self
-            .headroom_ceiling_contacts(origin, origin, probe)
+            .headroom_ceiling_contacts(origin, probe)
             .ok()
             .and_then(|contacts| {
                 contacts
@@ -135,9 +135,10 @@ impl CollisionWorld {
             .map(|bottom| bottom + probe.floor_bias)
     }
 
-    /// Test the complete resolved stride without enlarging a probe or adding
-    /// a tolerance. Native itself probes a candidate sphere; sweeping its
-    /// union here accounts for this host's coalesced movement samples.
+    /// Test candidate spheres at `(count, step_fraction)` frame endpoints.
+    /// The last is always `to`; a shorter final frame does not rescale the
+    /// earlier frame spacing. The caller maps elapsed time to frames. This does not
+    /// fill the extra crescent of a continuous capsule between those frames.
     #[must_use]
     pub fn headroom_on_path(
         &self,
@@ -146,8 +147,14 @@ impl CollisionWorld {
         probe: HeadroomProbe,
         need: f32,
         margin: f32,
+        (samples, step_fraction): (u8, f32),
     ) -> Option<HeadroomHit> {
-        if !from.is_finite() || !to.is_finite() || !probe.valid() {
+        if !from.is_finite()
+            || !to.is_finite()
+            || !probe.valid()
+            || !step_fraction.is_finite()
+            || step_fraction <= 0.0
+        {
             return Some(HeadroomHit {
                 origin: to,
                 bounds: HeadroomBounds {
@@ -156,34 +163,21 @@ impl CollisionWorld {
                 },
             });
         }
-        let fits = |bounds: HeadroomBounds| probe.fits(bounds, need, margin);
-        let bounds = self.probe_headroom(to, probe);
-        if !fits(bounds) {
-            return Some(HeadroomHit { origin: to, bounds });
-        }
-        // Query each underside separately, pairing it with its own local
-        // floor. Combining a high floor and low roof from unrelated parts
-        // of the stride would invent a refusal.
-        let Ok(contacts) = self.headroom_ceiling_contacts(from, to, probe) else {
-            let bounds = HeadroomBounds {
-                ceiling: None,
-                ..bounds
+        let samples = samples.max(1);
+        for sample in 1..=samples {
+            let origin = if sample == samples {
+                to
+            } else {
+                from.lerp(to, (f32::from(sample) * step_fraction).min(1.0))
             };
-            return (!fits(bounds)).then_some(HeadroomHit { origin: to, bounds });
-        };
-        contacts
-            .into_iter()
-            .filter_map(|(origin, ceiling)| {
-                let bounds = HeadroomBounds {
-                    ceiling: Some(ceiling),
-                    floor: self.headroom_floor(origin, probe),
-                };
-                (!fits(bounds)).then_some(HeadroomHit { origin, bounds })
-            })
-            .min_by(|a, b| {
-                from.distance_squared(a.origin)
-                    .total_cmp(&from.distance_squared(b.origin))
-            })
+            // Each candidate keeps its own floor and ceiling. A high floor
+            // and low roof from unrelated frames cannot invent a refusal.
+            let bounds = self.probe_headroom(origin, probe);
+            if !probe.fits(bounds, need, margin) {
+                return Some(HeadroomHit { origin, bounds });
+            }
+        }
+        None
     }
 
     fn headroom_surfaces(&self) -> impl Iterator<Item = Surface<'_>> {
@@ -194,16 +188,14 @@ impl CollisionWorld {
 
     fn headroom_ceiling_contacts(
         &self,
-        from: Vec3,
-        to: Vec3,
+        origin: Vec3,
         probe: HeadroomProbe,
     ) -> Result<Vec<(Vec3, f32)>, Unsupported> {
         let mut contacts = Vec::new();
         for surface in self.headroom_surfaces() {
             contacts.extend(ceiling_contacts(
                 surface,
-                from,
-                to,
+                origin,
                 probe.ceiling_radius,
                 probe.retreat,
             )?);
@@ -241,7 +233,7 @@ fn sphere_floor(
     let mut floor: Option<f32> = None;
     for index in surface.mesh.bvh().intersect_aabb(&bounds) {
         let triangle = surface.mesh.triangle(index);
-        if triangle.scaled_normal().dot(down) > 0.0 {
+        if triangle.scaled_normal().dot(down) >= 0.0 {
             continue;
         }
         if let Some(hit) = cast_shapes(
@@ -253,6 +245,12 @@ fn sphere_floor(
             &triangle,
             options(reach),
         )? {
+            // The native moving-sphere test rejects tangent/separating
+            // initial contact; overlap alone is not a floor (DX9
+            // 0x1019d821..0x1019d8a6). Keep approaching real contacts.
+            if hit.normal1.dot(down) <= 0.0 {
+                continue;
+            }
             let bottom = face_height(surface, &triangle, begin, down, radius, false)
                 .unwrap_or(origin.y - hit.time_of_impact - radius);
             let bottom = bottom + retreat.min((origin.y - radius - bottom).max(0.0));
@@ -264,66 +262,40 @@ fn sphere_floor(
 
 fn ceiling_contacts(
     surface: Surface<'_>,
-    from: Vec3,
-    to: Vec3,
+    origin: Vec3,
     radius: f32,
     retreat: f32,
 ) -> Result<Vec<(Vec3, f32)>, Unsupported> {
     let begin = surface
         .pose
-        .inverse_transform_point(Vector::from_array(from.to_array()));
-    let end = surface
-        .pose
-        .inverse_transform_point(Vector::from_array(to.to_array()));
+        .inverse_transform_point(Vector::from_array(origin.to_array()));
     let up = surface.pose.rotation.inverse() * Vector::Y;
-    let reach = (REACH - from.y.min(to.y)).max(0.0);
+    let reach = (REACH - origin.y).max(0.0);
     let high = up * reach;
     let bounds = Aabb::new(
-        begin.min(end).min(begin + high).min(end + high) - Vector::splat(radius),
-        begin.max(end).max(begin + high).max(end + high) + Vector::splat(radius),
+        begin.min(begin + high) - Vector::splat(radius),
+        begin.max(begin + high) + Vector::splat(radius),
     );
-    let segment = end - begin;
-    let shape = Capsule::new(begin, end, radius);
     let mut contacts = Vec::new();
     for index in surface.mesh.bvh().intersect_aabb(&bounds) {
         let triangle = surface.mesh.triangle(index);
-        if triangle.scaled_normal().dot(up) > 0.0 {
+        if triangle.scaled_normal().dot(up) >= 0.0 {
             continue;
         }
-        let hit = if begin == end {
-            cast_shapes(
-                &Pose::translation(begin.x, begin.y, begin.z),
-                up,
-                &Ball::new(radius),
-                &Pose::IDENTITY,
-                Vector::ZERO,
-                &triangle,
-                options(reach),
-            )
-        } else {
-            cast_shapes(
-                &Pose::IDENTITY,
-                up,
-                &shape,
-                &Pose::IDENTITY,
-                Vector::ZERO,
-                &triangle,
-                options(reach),
-            )
-        }?;
+        let hit = cast_shapes(
+            &Pose::translation(begin.x, begin.y, begin.z),
+            up,
+            &Ball::new(radius),
+            &Pose::IDENTITY,
+            Vector::ZERO,
+            &triangle,
+            options(reach),
+        )?;
         let Some(hit) = hit else { continue };
-        // A capsule witness is expressed in its unadvanced local frame.
-        // Subtract its radius to recover the sphere centre on its axis.
-        let centre = if begin == end {
-            begin
-        } else {
-            let axis_point = hit.witness1 - hit.normal1 * radius;
-            begin
-                + segment
-                    * ((axis_point - begin).dot(segment) / segment.length_squared()).clamp(0.0, 1.0)
-        };
-        let origin = Vec3::from_array(surface.pose.transform_point(centre).to_array());
-        let top = face_height(surface, &triangle, centre, up, radius, true)
+        if hit.normal1.dot(up) <= 0.0 {
+            continue;
+        }
+        let top = face_height(surface, &triangle, begin, up, radius, true)
             .unwrap_or(origin.y + hit.time_of_impact + radius);
         let top = top - retreat.min((top - origin.y - radius).max(0.0));
         if top >= origin.y + radius && top - radius <= REACH {
@@ -472,7 +444,8 @@ mod tests {
                     Vec3::new(12.0, 7.75, 0.0),
                     probe(),
                     7.5,
-                    0.5
+                    0.5,
+                    (3, 1.0 / 3.0),
                 )
                 .is_none()
         );
@@ -518,8 +491,7 @@ mod tests {
 
     #[test]
     fn headroom_wall_graze_under_open_sky_is_neither_floor_nor_ceiling() {
-        let world = CollisionWorld::new(plane(0.0, true).into_iter().chain(riser(30.0)))
-            .unwrap();
+        let world = CollisionWorld::new(plane(0.0, true).into_iter().chain(riser(30.0))).unwrap();
         for x in [-0.2, 0.2] {
             let bounds = world.probe_headroom(Vec3::new(x, 3.75, 0.0), probe());
             assert!(bounds.floor.unwrap().abs() < 0.01, "{bounds:?}");
@@ -535,9 +507,13 @@ mod tests {
             [[0.0, 4.0, -20.0], [20.0, 4.0, 20.0], [20.0, 4.0, -20.0]],
         ];
         let world = CollisionWorld::new(
-            plane(0.0, true).into_iter().chain(upper).chain(riser(4.0))
+            plane(0.0, true)
+                .into_iter()
+                .chain(upper)
+                .chain(riser(4.0))
                 .chain(plane(12.0, false)),
-        ).unwrap();
+        )
+        .unwrap();
         for origin in [Vec3::new(-0.2, 3.75, 0.0), Vec3::new(0.2, 7.75, 0.0)] {
             let bounds = world.probe_headroom(origin, probe());
             assert!(bounds.ceiling.unwrap() > 11.9, "{origin:?}: {bounds:?}");
@@ -547,12 +523,67 @@ mod tests {
 
     #[test]
     fn headroom_initial_contact_with_a_real_underside_still_refuses() {
-        let world = CollisionWorld::new(
-            plane(0.0, true).into_iter().chain(plane(4.0, false)),
-        ).unwrap();
+        let world =
+            CollisionWorld::new(plane(0.0, true).into_iter().chain(plane(4.0, false))).unwrap();
         let bounds = world.probe_headroom(Vec3::new(1.0, 3.75, 0.0), probe());
         assert!(bounds.ceiling.unwrap() < 5.0, "{bounds:?}");
         assert!(!probe().fits(bounds, 7.5, 0.5));
+    }
+
+    #[test]
+    fn headroom_tapered_riser_is_not_an_underside() {
+        // A tapered vertical step face, not an underside. This synthetic
+        // primitive covers the zero-time ceiling found in the bank replay.
+        let world = CollisionWorld::new(
+            plane(0.0, true)
+                .into_iter()
+                .chain(plane(12.0, false))
+                .chain([[[-20.0, 3.28125, 0.0], [20.0, 4.0, 0.0], [-20.0, 4.0, 0.0]]]),
+        )
+        .unwrap();
+        let bounds = world.probe_headroom(Vec3::new(5.0, 3.75, 0.61), probe());
+        assert!(bounds.ceiling.unwrap() > 11.9, "{bounds:?}");
+        assert!(probe().fits(bounds, 4.75, 0.5));
+    }
+
+    #[test]
+    fn headroom_descent_edge_does_not_invent_a_ceiling_above_the_origin() {
+        let world = CollisionWorld::new(
+            plane(4.0, true)
+                .into_iter()
+                .chain(plane(12.0, false))
+                .chain(riser(30.0)),
+        )
+        .unwrap();
+        let bounds = world.probe_headroom(Vec3::new(0.5, 7.75, 0.0), probe());
+        assert!(bounds.ceiling.unwrap() > 11.9, "{bounds:?}");
+        assert!(probe().fits(bounds, 4.75, 0.5));
+    }
+
+    #[test]
+    fn headroom_ogre_beyond_a_door_does_not_pair_wall_edges_as_floor_and_roof() {
+        // A vertical face whose bottom edge is above the lifted candidate.
+        // A tangent upward sphere can meet that edge at positive time too.
+        let wall = [
+            [[0.0, 25.0, -20.0], [0.0, 14.0, 20.0], [0.0, 14.0, -20.0]],
+            [[0.0, 14.0, 20.0], [0.0, 25.0, -20.0], [0.0, 25.0, 20.0]],
+        ];
+        let world = CollisionWorld::new(
+            plane(0.0, true)
+                .into_iter()
+                .chain(plane(25.0, false))
+                .chain(wall),
+        )
+        .unwrap();
+        let ogre = HeadroomProbe {
+            floor_radius: 0.5625,
+            ceiling_radius: 0.975,
+            ..probe()
+        };
+        let bounds = world.probe_headroom(Vec3::new(0.43, 8.4375, 1.0), ogre);
+        assert!(bounds.floor.unwrap().abs() < 0.01, "{bounds:?}");
+        assert!(bounds.ceiling.unwrap() > 24.9, "{bounds:?}");
+        assert!(ogre.fits(bounds, 11.25, 0.5));
     }
 
     #[test]
@@ -569,6 +600,10 @@ mod tests {
         let to = Vec3::new(0.5, 3.75, 0.0);
         assert!(probe().fits(world.probe_headroom(from, probe()), 7.5, 0.5));
         assert!(probe().fits(world.probe_headroom(to, probe()), 7.5, 0.5));
-        assert!(world.headroom_on_path(from, to, probe(), 7.5, 0.5).is_none());
+        assert!(
+            world
+                .headroom_on_path(from, to, probe(), 7.5, 0.5, (1, 1.0))
+                .is_none()
+        );
     }
 }

@@ -63,12 +63,37 @@ sends no posture request, whether pressed, typed or scripted. Titanium
 also tests a duck-to-sit request; Mac lets that sit through. The test uses
 the new posture's strict room requirement and needs at least S above the
 origin. Headroom uses separate downward floor and upward ceiling spheres,
-with the existing estimate of Titanium's model radius. The ceiling probe
-covers the complete resolved stride so a thin lintel cannot be skipped by
-a long movement sample. This continuous coverage is the host's mapping of
-the native candidate probe; exact model radii and engine contact handling
+with the existing estimate of Titanium's model radius. A coalesced movement
+sample tests candidate spheres at this client's existing [I] 60 Hz program
+frame spacing. It does not fill a continuous capsule between those spheres;
+the original's frame rate is uncapped, so this remains a frame mapping.
+Tangent and separating initial contacts do not count as an underside or floor;
+an approaching real underside still counts. Exact model radii and engine contact handling
 remain incomplete. A successful unobstructed cast retains its end bound,
 which keeps open sky and ordinary falls distinct from a failed query.
+
+Titanium's ceiling radius is [I]: `max(0.65, 0.65 * S / 3.75)` for every
+race, using the received size and zone model-scale policy. This is an
+estimate from the existing human edge-climb control, not a per-race model
+measurement. At default size in an unreduced zone, the estimates are:
+
+| Races | S | Radius [I] |
+|---|---:|---:|
+| Human, Erudite, High Elf, Iksar | 3.75 | 0.65 |
+| Barbarian, Vah Shir | 4.375 | 0.758333 |
+| Wood Elf, Dark Elf, Froglok | 3.125 | 0.65 |
+| Half Elf | 3.4375 | 0.65 |
+| Dwarf | 2.5 | 0.65 |
+| Troll | 5 | 0.866667 |
+| Ogre | 5.625 | 0.975 |
+| Halfling | 2.1875 | 0.65 |
+| Gnome | 1.875 | 0.65 |
+
+Other races and nondefault sizes use the same formula, including the minimum
+0.65 after classic-zone scale reduction. Reading each loaded actor model's
+virtual +0x28 radius (fallback 1), instance scale and CDisplay +0x2d14 factor
+at the call into 0x43a0a0 would settle the estimate. Those values are not yet
+available to this host.
 
 A refused standing move arms automatic duck on Titanium when Allow Auto-Stand
 is enabled; Mac arms on every headroom refusal. Queued posture is not treated
@@ -77,6 +102,9 @@ the candidate's return clearance plus its ordinary stand test. Holding forward
 under a gallery that still fails those tests keeps the body ducked. A scripted
 route can continue through this recovery, using the observed ducked height;
 an unarmed or ducked refusal stops it. Swimmers retain the existing exemption.
+Any server placement, even at unchanged coordinates, or entering swimming
+withdraws this automatic cycle before it can send a pending posture request.
+This does not replace the observed posture with a locally assumed Stand.
 
 A ducked move stays ducked on Titanium and Mac, at the session's ducked
 speed grant. At jump launch the host makes one stand-clearance decision:

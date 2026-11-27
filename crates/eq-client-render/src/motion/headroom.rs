@@ -21,6 +21,7 @@ pub(super) struct Refused {
 #[derive(Default)]
 pub(super) struct State {
     automatic: Option<Automatic>,
+    placement_revision: Option<u64>,
 }
 
 struct Automatic {
@@ -37,6 +38,17 @@ struct Automatic {
 }
 
 impl State {
+    /// Placement breaks this local recovery even at unchanged XYZ. Water
+    /// withdraws it before a pending Duck can preempt the swimming path.
+    pub(super) fn observe(&mut self, placement_revision: u64, swimming: bool) -> bool {
+        let replaced = self.placement_revision.replace(placement_revision);
+        let invalid = swimming || replaced.is_some_and(|prior| prior != placement_revision);
+        if invalid {
+            self.clear();
+        }
+        invalid
+    }
+
     pub(super) fn recovering(&self, world: &ClientWorld) -> bool {
         self.automatic.as_ref().is_some_and(|automatic| {
             world.session_id() == Some(automatic.session)
@@ -240,7 +252,7 @@ pub(super) fn refused(
         (body, stand),
         (feet, candidate),
         (ducking, mounted),
-        (probe, 0.0),
+        (probe, 0.0, 0.05),
     )
 }
 
@@ -251,20 +263,38 @@ pub(super) fn refused_probe(
     (body, stand): (&PlayerBody, f32),
     (feet, candidate): (Vec3, Vec3),
     (ducking, mounted): (bool, bool),
-    (probe, lift): (eq_client_core::movement::HeadroomProbe, f32),
+    (probe, lift, seconds): (eq_client_core::movement::HeadroomProbe, f32, f32),
 ) -> Option<Refused> {
     let rule = client.headroom()?;
     let room = rule.room(stand, ducking, mounted);
     let offset = Vec3::Y * (body.feet_offset + lift);
     let need = rule.needed(stand, ducking, mounted);
-    let hit = world.headroom_on_path(feet + offset, candidate + offset, probe, need, rule.margin);
+    // The existing 60 Hz program-frame mapping is [I], not a native frame
+    // cap. A capped host sample spans at most nine of those frames. Probe
+    // their candidate spheres, not the extra volume between them.
+    let samples = (1..=9_u8)
+        .find(|count| seconds <= f32::from(*count) / eq_client_assets::falls::PROGRAM_FRAME_RATE)
+        .unwrap_or(9);
+    let step_fraction = if seconds > 0.0 {
+        1.0 / (seconds * eq_client_assets::falls::PROGRAM_FRAME_RATE)
+    } else {
+        1.0
+    };
+    let hit = world.headroom_on_path(
+        feet + offset,
+        candidate + offset,
+        probe,
+        need,
+        rule.margin,
+        (samples, step_fraction),
+    );
     if bevy::log::tracing::enabled!(bevy::log::Level::TRACE) {
         let bounds = world.probe_headroom(candidate + offset, probe);
         bevy::log::trace!(
             ?client, ducking, mounted, ?feet, ?candidate,
             probe_from = ?(feet + offset), probe_to = ?(candidate + offset),
             floor = ?bounds.floor, ceiling = ?bounds.ceiling,
-            need, margin = rule.margin, stand, lift, ?probe,
+            need, margin = rule.margin, stand, lift, seconds, samples, step_fraction, ?probe,
             endpoint_fits = probe.fits(bounds, need, rule.margin),
             refused = hit.is_some(), blocked_origin = ?hit.map(|hit| hit.origin),
             "Movement headroom probe"

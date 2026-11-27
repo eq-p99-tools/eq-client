@@ -2174,33 +2174,6 @@ pub(super) fn input(
     let now = controls.now();
     controls.restore_surface_trial();
     controls.settle(now);
-    if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
-        match controls.headroom.drive(
-            client,
-            online.world(),
-            world,
-            body,
-            crate::posture::on_mount(online.world(), spells.as_deref()),
-            &outbox,
-            now,
-            None,
-        ) {
-            Ok(true) => {
-                controls.held = Some(Held::Waiting);
-                return;
-            }
-            Err(reason) => {
-                controls.send_failed(reason);
-                controls.held = Some(Held::Refused);
-                return;
-            }
-            Ok(false) => {
-                controls.headroom_retry &= controls.headroom.recovering(online.world());
-            }
-        }
-    } else {
-        controls.headroom.clear();
-    }
     let water_enabled = match client {
         InstalledClient::Titanium => true,
         // RoF2's water is not read yet.
@@ -2241,6 +2214,40 @@ pub(super) fn input(
                 let origin = Vec3::from_array(eq_client_core::render_position(player.position));
                 world.in_swimmable_water(origin - Vec3::Y * body.feet_offset, body.height)
             });
+    if controls
+        .headroom
+        .observe(online.placement_revision(), swimming)
+    {
+        controls.headroom_retry = false;
+        controls.headroom_refused = false;
+    }
+    if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
+        match controls.headroom.drive(
+            client,
+            online.world(),
+            world,
+            body,
+            crate::posture::on_mount(online.world(), spells.as_deref()),
+            &outbox,
+            now,
+            None,
+        ) {
+            Ok(true) => {
+                controls.held = Some(Held::Waiting);
+                return;
+            }
+            Err(reason) => {
+                controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
+                return;
+            }
+            Ok(false) => {
+                controls.headroom_retry &= controls.headroom.recovering(online.world());
+            }
+        }
+    } else {
+        controls.headroom.clear();
+    }
     let shoreline_active = controls.shoreline.active();
     if swimming || shoreline_active {
         controls.jump = None;
@@ -3452,6 +3459,7 @@ pub(super) fn input(
                     (
                         crate::posture::headroom_probe(client, online.world(), stand),
                         lift,
+                        span,
                     )
                 },
             )

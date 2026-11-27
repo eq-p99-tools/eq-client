@@ -52,23 +52,33 @@ fn thin_lintel_case(direction: f32, span: f32) {
     let from = Vec3::Z * -direction * 60.0 * span * 0.5;
     let to = -from;
     assert!(
-        refused(
+        super::refused_probe(
             InstalledClient::Titanium,
             &thin_lintel(),
             (&OGRE, 5.625),
             (from, to),
-            (false, false)
+            (false, false),
+            (
+                crate::posture::headroom_dimensions(InstalledClient::Titanium, 5.625),
+                0.0,
+                span
+            ),
         )
         .is_some(),
         "standing direction={direction} span={span}"
     );
     assert!(
-        refused(
+        super::refused_probe(
             InstalledClient::Titanium,
             &thin_lintel(),
             (&OGRE, 5.625),
             (from, to),
-            (true, false)
+            (true, false),
+            (
+                crate::posture::headroom_dimensions(InstalledClient::Titanium, 5.625),
+                0.0,
+                span
+            ),
         )
         .is_none(),
         "ducked direction={direction} span={span}"
@@ -998,11 +1008,20 @@ fn underwater_forward_and_retreat_keep_the_existing_kedge_exemption() {
 fn headroom_pending_duck_is_withdrawn_before_water_input() {
     let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
     app.update();
-    assert!(app.world().resource::<Controls>().headroom.automatic.is_some());
+    assert!(
+        app.world()
+            .resource::<Controls>()
+            .headroom
+            .automatic
+            .is_some()
+    );
     accepted_commands(&mut app, &receiver);
     app.insert_resource(Collision(Some(room(7.9).with_liquids(Submerged))));
     app.update();
-    assert_eq!(accepted_commands(&mut app, &receiver), Vec::<Posture>::new());
+    assert_eq!(
+        accepted_commands(&mut app, &receiver),
+        Vec::<Posture>::new()
+    );
     let controls = app.world().resource::<Controls>();
     assert!(controls.headroom.automatic.is_none());
     assert!(!controls.headroom_retry);
@@ -1014,14 +1033,34 @@ fn headroom_server_placement_withdraws_pending_and_ducked_cycles_even_at_same_xy
     for ducked in [false, true] {
         let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
         app.update();
-        assert!(app.world().resource::<Controls>().headroom.automatic.is_some());
+        assert!(
+            app.world()
+                .resource::<Controls>()
+                .headroom
+                .automatic
+                .is_some()
+        );
         accepted_commands(&mut app, &receiver);
-        if ducked { posture(&mut app, PostureState::Ducking); }
-        let position = app.world().resource::<online::OnlineState>().world().player().unwrap().position;
-        testing::place(&mut app.world_mut().resource_mut::<online::OnlineState>(), position);
+        if ducked {
+            posture(&mut app, PostureState::Ducking);
+        }
+        let position = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            position,
+        );
         app.insert_resource(Collision(Some(room(30.0))));
         app.update();
-        assert_eq!(accepted_commands(&mut app, &receiver), Vec::<Posture>::new());
+        assert_eq!(
+            accepted_commands(&mut app, &receiver),
+            Vec::<Posture>::new()
+        );
         let controls = app.world().resource::<Controls>();
         assert!(controls.headroom.automatic.is_none(), "ducked={ducked}");
         assert!(!controls.headroom_retry);
@@ -1035,12 +1074,18 @@ fn headroom_ordinary_ledge_above_a_distant_floor_still_falls() {
         [[-20.0, 0.0, -20.0], [-20.0, 0.0, 0.0], [20.0, 0.0, 0.0]],
         [[-20.0, 0.0, -20.0], [20.0, 0.0, 0.0], [20.0, 0.0, -20.0]],
     ];
-    app.insert_resource(Collision(Some(CollisionWorld::new(
-        ledge.into_iter().chain(plane(-1000.0, true)),
-    ).unwrap())));
-    testing::place(&mut app.world_mut().resource_mut::<online::OnlineState>(),
-        world_position([0.0, 3.75, -1.0], 0.0));
-    app.world_mut().query::<&mut crate::OrbitCamera>().single_mut(app.world_mut()).unwrap().yaw = std::f32::consts::PI;
+    app.insert_resource(Collision(Some(
+        CollisionWorld::new(ledge.into_iter().chain(plane(-1000.0, true))).unwrap(),
+    )));
+    testing::place(
+        &mut app.world_mut().resource_mut::<online::OnlineState>(),
+        world_position([0.0, 3.75, -1.0], 0.0),
+    );
+    app.world_mut()
+        .query::<&mut crate::OrbitCamera>()
+        .single_mut(app.world_mut())
+        .unwrap()
+        .yaw = std::f32::consts::PI;
     {
         let mut controls = app.world_mut().resource_mut::<Controls>();
         controls.test_span = Some(0.05);
@@ -1049,10 +1094,80 @@ fn headroom_ordinary_ledge_above_a_distant_floor_still_falls() {
     }
     for _ in 0..8 {
         app.update();
-        assert_eq!(accepted_commands(&mut app, &receiver), Vec::<Posture>::new());
+        assert_eq!(
+            accepted_commands(&mut app, &receiver),
+            Vec::<Posture>::new()
+        );
         assert!(!app.world().resource::<Controls>().headroom_refused);
     }
-    let at = app.world().resource::<online::OnlineState>().world().player().unwrap().position;
+    let at = app
+        .world()
+        .resource::<online::OnlineState>()
+        .world()
+        .player()
+        .unwrap()
+        .position;
     assert!(at.z < 3.75, "{at:?}");
     assert!(eq_client_core::render_position(at)[2] > 0.0, "{at:?}");
+}
+
+#[test]
+fn headroom_zero_displacement_keeps_the_native_candidate_test() {
+    // 0x48af13 normalizes a tiny delta, then still flows through the
+    // ordinary local-player headroom guards at 0x48b162..0x48b1b7.
+    let feet = Vec3::Y * 4.0;
+    for (ceiling, refuses) in [(12.0, true), (20.0, false)] {
+        let world =
+            CollisionWorld::new(plane(4.0, true).into_iter().chain(plane(ceiling, false))).unwrap();
+        assert_eq!(
+            refused(
+                InstalledClient::Titanium,
+                &world,
+                (&HUMAN, 3.75),
+                (feet, feet),
+                (false, false)
+            )
+            .is_some(),
+            refuses
+        );
+    }
+}
+
+#[test]
+fn headroom_held_input_at_a_tall_wall_never_arms_duck() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 30.0);
+    let wall = [
+        [[-20.0, 0.0, 0.0], [-20.0, 30.0, 0.0], [20.0, 30.0, 0.0]],
+        [[-20.0, 0.0, 0.0], [20.0, 30.0, 0.0], [20.0, 0.0, 0.0]],
+    ];
+    app.insert_resource(Collision(Some(
+        CollisionWorld::new(plane(0.0, true).into_iter().chain(wall)).unwrap(),
+    )));
+    // An initially grazed wall must not become a ceiling, even without a
+    // speculative controller push-out. Hold the real forward input.
+    testing::place(
+        &mut app.world_mut().resource_mut::<online::OnlineState>(),
+        world_position([0.0, 3.75, -0.2], 0.0),
+    );
+    {
+        let world = app.world_mut();
+        world
+            .query::<&mut crate::OrbitCamera>()
+            .single_mut(world)
+            .unwrap()
+            .yaw = std::f32::consts::PI;
+        let mut controls = world.resource_mut::<Controls>();
+        controls.test_span = Some(0.05);
+        controls.airborne = Some(AirborneController::default());
+    }
+    for _ in 0..6 {
+        app.update();
+        assert_eq!(
+            accepted_commands(&mut app, &receiver),
+            Vec::<Posture>::new()
+        );
+        let controls = app.world().resource::<Controls>();
+        assert!(!controls.headroom_refused);
+        assert!(controls.headroom.automatic.is_none());
+    }
 }
