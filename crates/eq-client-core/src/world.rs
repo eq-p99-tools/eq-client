@@ -1332,14 +1332,11 @@ impl ClientWorld {
             // The Options page shows the character's filters; the session
             // keeping them, or refusing a set this client fitted to the
             // generation first, is not news for the player.
-            // The spell-timing layer owns storing/polling the worker gauge;
-            // this compatibility layer never treats it as server confirmation.
-            WorldEvent::ServerFiltersKept { .. }
-            | WorldEvent::ServerFiltersRefused { .. }
-            | WorldEvent::MemorizationProgress { .. } => {}
             // The network posture owner already lies down and holds movement
             // at zero HP. The unconscious presentation layer owns storing it.
-            WorldEvent::OwnUnconscious { .. } => {}
+            WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::OwnUnconscious { .. } => {}
             // A report to the staff went or was refused (6.511).
             WorldEvent::ReportSent {
                 session_id,

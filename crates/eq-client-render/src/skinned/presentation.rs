@@ -369,12 +369,11 @@ pub(super) fn filled(
     match kind {
         // Titanium's authored memorize gauge shows remaining points. The
         // action bar shows completion; both read the same worker countdown.
-        9 => book_progress(world, requests, BookChange::Memorize, now).map(|completed| {
-            if world.generation() == eq_client_core::GameDialect::Titanium {
-                1.0 - completed
-            } else {
-                completed
-            }
+        9 => book_progress(world, requests, BookChange::Memorize, now).map(|completed| match world
+            .generation()
+        {
+            eq_client_core::GameDialect::Titanium => 1.0 - completed,
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => completed,
         }),
         10 => book_progress(world, requests, BookChange::Scribe, now),
         _ => fraction(world, estimate, kind),
