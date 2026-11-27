@@ -145,6 +145,7 @@ mod trade;
 mod tradeskills;
 mod training;
 mod translocate;
+mod unconscious;
 mod underwater;
 mod water;
 mod weather;

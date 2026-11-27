@@ -103,9 +103,20 @@ impl ClientWorld {
         &mut self,
         session_id: u64,
         spell_id: Option<u32>,
+        gem: Option<u8>,
+        now: Instant,
         changes: &mut Changes,
     ) {
         if self.accepts_reply(session_id) && self.death.is_none() {
+            if let Some((gem, spell)) = gem.zip(spell_id)
+                && self.player.as_ref().is_some_and(|player| {
+                    player.memorized_spells.get(usize::from(gem)) == Some(&Some(spell))
+                })
+            {
+                self.casting.gem_submitted(gem, spell, now);
+            } else if let Some(spell) = spell_id.filter(|_| gem.is_none()) {
+                self.casting.other_submitted(spell);
+            }
             self.casting.pend(spell_id);
         } else {
             changes.ignored = true;
@@ -342,6 +353,7 @@ impl ClientWorld {
 
     /// The session's word on the spellbook change in flight.
     pub(super) fn book_action_news(&mut self, status: &BookActionStatus) {
+        self.memorization = None;
         self.book_action = Some(status.clone());
         self.book_action_revision = self.book_action_revision.wrapping_add(1);
     }

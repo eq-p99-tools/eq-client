@@ -10,7 +10,9 @@ use bevy::prelude::*;
 use eq_client_core::{outfit::Appearance, select_spots::Spots};
 
 mod history;
+mod input;
 pub(super) use history::{History, remember};
+pub(super) use input::orbit_input;
 
 /// How fast the camera circles a character shown at select by itself, in
 /// radians a second: one turn in about 20 s. Adam's choice (10-19 20:17Z,

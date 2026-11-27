@@ -225,6 +225,10 @@ impl ClientWorld {
     pub(super) fn hp_news(&mut self, spawn_id: u16, report: ReportedHp, changes: &mut Changes) {
         if self.is_player(spawn_id) {
             self.vitals.reported_hp = Some(report);
+            self.vitals.local_hp_damage = 0;
+            if let Some(control) = &mut self.own_unconscious {
+                control.basis = None;
+            }
             self.refresh_item_hp();
             self.show_hp();
             self.bleed_out_news();
@@ -242,10 +246,7 @@ impl ClientWorld {
     /// predicted tick. The session counts the items by the server type's own
     /// rule too, and refuses a report it rules out.
     fn bleed_out_news(&mut self) {
-        let current = self
-            .player
-            .as_ref()
-            .and_then(|player| self.vitals.counted_hp(player, &self.inventory));
+        let current = self.counted_hit_points();
         self.bled_out = current.filter(|current| {
             self.death.is_none()
                 && self.can(crate::Capability::BleedingOut)
@@ -264,7 +265,7 @@ impl ClientWorld {
 
     /// The player's health follows the HP their last report and equipped
     /// items make.
-    fn show_hp(&mut self) {
+    pub(super) fn show_hp(&mut self) {
         if let Some(percent) = self.hit_points().and_then(vitals::percent) {
             self.own_health(percent);
         }

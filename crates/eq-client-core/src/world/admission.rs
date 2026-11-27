@@ -166,10 +166,21 @@ impl ClientWorld {
         self.casting
             .cooldowns
             .restore(&player.memorized_spells, player.spell_refresh_ms, now);
-        // A Bard's own refreshes start no recovery where the session says
-        // the Titanium program's rule applies (read R49-21 c, 6.642).
+        let titanium = match self.generation {
+            crate::GameDialect::Titanium => true,
+            crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
+        };
+        self.casting.gem_clocks = titanium.then(|| {
+            super::gem_timing::GemClocks::restore(
+                &player.memorized_spells,
+                player.spell_refresh_ms,
+                now,
+            )
+        });
+        // Titanium Bards use the program's recovery rule. Other dialects
+        // retain the existing session capability policy.
         self.casting.bard_refresh = player.class == Some(super::casting::BARD)
-            && self.can(crate::Capability::BardRefreshTimers);
+            && (titanium || self.can(crate::Capability::BardRefreshTimers));
         self.displayed_level = Some(player.level);
         self.player = Some(player.clone());
         changes

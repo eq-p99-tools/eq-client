@@ -17,7 +17,7 @@ use super::Observed;
 /// and the controller's last floor sweep after carrying or resolving movement.
 pub(in crate::script) fn report(
     label: &str,
-    online: &OnlineState,
+    online: &mut OnlineState,
     transform: Option<&Transform>,
     body: Option<&PlayerBody>,
     collision: Option<&CollisionWorld>,
@@ -105,7 +105,7 @@ pub(in crate::script) fn report(
     movement_state["boat_control_notice"] = json!(world.boat_control_notice());
     movement_state["arrival"] = json!(world.arrival());
     movement_state["camera_detached"] = json!(camera_detached);
-    info!(label, %movement_state, "Script movement report");
+    online.report_movement(label, movement_state, &observed.1);
 }
 
 /// Serializes the controller's own last query, including a known absent floor.

@@ -17,6 +17,9 @@ use tree::draw;
 use tree::{augment_section, text_box};
 
 mod presentation;
+/// The skin's normal HP fill tint, restored after a negative-HP branch.
+#[derive(Component)]
+pub(crate) struct HpFillTint(Color);
 pub(crate) use presentation::show;
 #[cfg(test)]
 use presentation::{fraction, gauge_text, label_text, raid_text, shown_now};
@@ -538,15 +541,13 @@ pub(crate) fn apply(
         if *id == WindowId::Guild && !crate::guild::roster::adapt(&mut effective) {
             continue;
         }
-        // This first retained reflow contract belongs to chat. Other authored
-        // sizable screens are preserved by the parser without assuming that
-        // their widgets share chat's sizing policy.
+        // Chat and map retain authored widget relationships during resizing.
         let sizing = reflow::eligible_scope(&from, *id, screen);
         state.sizing(
             sizing,
             Vec2::new(effective.area.width, effective.area.height),
         );
-        if let Some(size) = state.preferred_size() {
+        if let Some(size) = state.preferred_size().filter(|_| *id != WindowId::Map) {
             effective.area.width = size.x;
             effective.area.height = size.y;
         }
@@ -555,6 +556,14 @@ pub(crate) fn apply(
         art.draw_in((from != skin.0).then(|| from.clone()));
         skinned.0.insert(*id);
         reshape(&mut node, screen, state.placed(), (*id, arranged));
+        if *id == WindowId::Map {
+            node.min_width = px(400);
+            node.min_height = px(340);
+            if let Some(size) = state.preferred_size() {
+                node.width = px(size.x);
+                node.height = px(size.y);
+            }
+        }
         super::windows::drag_anywhere(&mut commands, frame, *id);
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
@@ -573,28 +582,40 @@ pub(crate) fn apply(
                 tab_frame: screen.tab_frame.as_deref(),
             };
             title_bottom = draw(window, screen, &mut art, &context);
-            if *id == WindowId::Guild {
-                crate::guild::roster::labels(window, screen.area.width, screen.area.height);
-            }
-            if book_footer {
-                let base_height = screen.area.height + crate::spellbook::search::FOOTER_HEIGHT;
-                crate::spellbook::search::spawn(
-                    window,
-                    at(
-                        0.0,
-                        screen.area.height,
-                        screen.area.width,
-                        crate::spellbook::search::FOOTER_HEIGHT,
-                    ),
-                );
-                crate::spellbook::sets::ui::spawn(
-                    window,
-                    Some((frame, screen.area.width, base_height)),
-                );
-            }
+            draw_frame_controls(window, frame, *id, screen, sizing.is_some(), book_footer);
         });
         art.draw_in(None);
         state.drawn_from_skin(&mut node, title_bottom);
+    }
+}
+
+/// Shared frame controls accompany the authored window contents.
+fn draw_frame_controls(
+    window: &mut ChildSpawnerCommands,
+    frame: Entity,
+    id: WindowId,
+    screen: &Screen,
+    resizable: bool,
+    book_footer: bool,
+) {
+    if id == WindowId::Map && resizable {
+        super::windows::resize_border(window, frame);
+    }
+    if id == WindowId::Guild {
+        crate::guild::roster::labels(window, screen.area.width, screen.area.height);
+    }
+    if book_footer {
+        let base_height = screen.area.height + crate::spellbook::search::FOOTER_HEIGHT;
+        crate::spellbook::search::spawn(
+            window,
+            at(
+                0.0,
+                screen.area.height,
+                screen.area.width,
+                crate::spellbook::search::FOOTER_HEIGHT,
+            ),
+        );
+        crate::spellbook::sets::ui::spawn(window, Some((frame, screen.area.width, base_height)));
     }
 }
 
@@ -1047,7 +1068,7 @@ fn button(
         }
         None => window.spawn(node),
     };
-    if owner.is_chat()
+    if (owner.is_chat() || owner == WindowId::Map)
         && let Some(anchors) = button.anchors
     {
         drawn.insert(reflow::Geometry(anchors));
@@ -2162,6 +2183,9 @@ fn gauge_fill(
             if let Shows::LinesFill(kind) = shows {
                 image.insert(LinesFillTint(kind, tint.map_or(Color::WHITE, rgb)));
             }
+            if shows == Shows::Fill(1) {
+                image.insert(HpFillTint(tint.map_or(Color::WHITE, rgb)));
+            }
             if shows == Shows::Fill(8) && gauge.area.width > 0.0 && gauge.area.height > 0.0 {
                 image.insert(crate::breath::NativeGauge);
             }
@@ -2629,7 +2653,164 @@ const fn to_f32(value: u32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn titanium_memorization_gauge_shows_shared_remaining_points_until_submission() {
+        use crate::{
+            hud::action_bar::{ActionRequests, BookChange, BookRequest},
+            online::{OnlineState, testing},
+            outbox::Outbox,
+        };
+        use eq_client_core::{
+            BookActionStatus, ClientCommand, GameDialect, MemorizationProgress, WorldEvent,
+        };
+        for (dialect, expected) in [(GameDialect::Titanium, 0.75), (GameDialect::EqMac, 0.25)] {
+            let mut online = OnlineState::new(true);
+            testing::generation(&mut online, dialect);
+            testing::admit(&mut online, 1, testing::player(7));
+            let (sender, _sent) = std::sync::mpsc::sync_channel(4);
+            let outbox = Outbox::new(Some(sender));
+            let receipt = outbox
+                .post_book_edit(online.world(), |stamp| ClientCommand::MemorizeSpell {
+                    session_id: stamp.session_id,
+                    gem: 1,
+                    spell_id: 202,
+                    preparation: Some(eq_client_core::MemorizationInputs::default()),
+                    created: stamp.created,
+                })
+                .unwrap();
+            testing::book_news(
+                &mut online,
+                &outbox,
+                WorldEvent::BookAction(BookActionStatus::Preparing),
+            );
+            testing::news(
+                &mut online,
+                [WorldEvent::MemorizationProgress {
+                    session_id: 1,
+                    progress: Some(MemorizationProgress {
+                        gem: 1,
+                        spell_id: 202,
+                        remaining: 69,
+                        approximate: false,
+                    }),
+                }],
+            );
+            let requests = ActionRequests {
+                book: Some(BookRequest {
+                    since: std::time::Instant::now()
+                        .checked_sub(std::time::Duration::from_secs(30))
+                        .unwrap(),
+                    label: "Memorizing Courage into gem 2".into(),
+                    change: BookChange::Memorize,
+                    spell: 202,
+                    receipt,
+                    began: false,
+                }),
+            };
+            assert!(
+                (super::presentation::filled(online.world(), (None, &requests), 9) - expected)
+                    .abs()
+                    < f32::EPSILON
+            );
+            testing::book_news(
+                &mut online,
+                &outbox,
+                WorldEvent::BookAction(BookActionStatus::AwaitingReply),
+            );
+            let submitted = if dialect == GameDialect::Titanium {
+                0.0
+            } else {
+                1.0
+            };
+            assert!(
+                (super::presentation::filled(online.world(), (None, &requests), 9) - submitted)
+                    .abs()
+                    < f32::EPSILON
+            );
+            assert_eq!(online.world().player().unwrap().memorized_spells[1], None);
+        }
+    }
     use super::*;
+
+    #[test]
+    fn skinned_hp_fill_uses_the_signed_purple_scale_and_restores_the_skin_tint() {
+        let mut app = crate::testing::app();
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        testing::news(
+            &mut online,
+            [
+                WorldEvent::Inventory(eq_client_core::inventory::InventoryUpdate::Snapshot(
+                    Vec::new(),
+                )),
+                WorldEvent::HitPoints {
+                    spawn_id: 7,
+                    current: -5,
+                    maximum: 100,
+                    items: eq_client_core::ItemHitPoints::LeftOut,
+                },
+            ],
+        );
+        app.insert_resource(online).add_systems(Update, show);
+        let normal = Color::srgb_u8(20, 40, 60);
+        let image = app
+            .world_mut()
+            .spawn((HpFillTint(normal), ImageNode::default()))
+            .id();
+        let fill = app
+            .world_mut()
+            .spawn((Shows::Fill(1), Node::default()))
+            .id();
+        let lines_tint = Color::srgb_u8(80, 60, 40);
+        let lines_image = app
+            .world_mut()
+            .spawn((LinesFillTint(1, lines_tint), ImageNode::default()))
+            .id();
+        let lines = app
+            .world_mut()
+            .spawn((Shows::LinesFill(1), Node::default()))
+            .id();
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(fill).unwrap().width,
+            Val::Percent(60.0)
+        );
+        assert_eq!(
+            app.world().get::<ImageNode>(image).unwrap().color,
+            Color::srgb_u8(128, 0, 128)
+        );
+        assert_eq!(
+            app.world().get::<Node>(lines).unwrap().width,
+            Val::Percent(99.5)
+        );
+        assert_eq!(
+            app.world().get::<ImageNode>(lines_image).unwrap().color,
+            Color::srgb_u8(192, 192, 192)
+        );
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::HitPoints {
+                spawn_id: 7,
+                current: 25,
+                maximum: 100,
+                items: eq_client_core::ItemHitPoints::LeftOut,
+            }],
+        );
+        app.update();
+        assert_eq!(
+            app.world().get::<Node>(fill).unwrap().width,
+            Val::Percent(25.0)
+        );
+        assert_eq!(app.world().get::<ImageNode>(image).unwrap().color, normal);
+        assert_eq!(
+            app.world().get::<Node>(lines).unwrap().width,
+            Val::Percent(24.5)
+        );
+        assert_eq!(
+            app.world().get::<ImageNode>(lines_image).unwrap().color,
+            lines_tint
+        );
+    }
 
     #[test]
     fn a_title_bar_shows_the_title_the_skin_gives_its_window() {

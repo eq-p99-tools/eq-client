@@ -292,6 +292,52 @@ impl ClientWorld {
         self.stun_state() == Some(crate::control::StunState::Stunned)
     }
 
+    /// Whether Titanium's own-player HP control holds voluntary input. A
+    /// newly received complete count holds immediately, before the posture
+    /// owner answers. Its established hold persists until it accepts waking.
+    /// Death remains separate and cannot be cleared by an HP count.
+    #[must_use]
+    pub fn is_unconscious(&self) -> bool {
+        !self.is_dead()
+            && (self
+                .own_unconscious
+                .is_some_and(|control| control.unconscious)
+                || self
+                    .hit_point_basis()
+                    .and_then(crate::control::HitPointBasis::current)
+                    .is_some_and(|current| current < 1))
+    }
+
+    /// The posture owner's last accepted HP basis, for synchronizing a new
+    /// report or equipment count. It does not acknowledge any server action.
+    #[must_use]
+    pub fn accepted_hit_point_basis(&self) -> Option<crate::control::HitPointBasis> {
+        self.own_unconscious.and_then(|control| control.basis)
+    }
+
+    /// A full received HP count ready for Titanium's posture owner. Missing
+    /// equipment facts withhold the count; displayed zero is not a substitute.
+    #[must_use]
+    pub fn hit_point_basis(&self) -> Option<crate::control::HitPointBasis> {
+        if !self.generation.models_unconscious() || !self.in_world() || self.is_dead() {
+            return None;
+        }
+        let report = self.vitals.reported_hp?;
+        // The native getter caps current at maximum. A nonpositive
+        // reconstructed maximum supplies no usable cap for this model.
+        if self.hit_points()?.1 == 0 {
+            return None;
+        }
+        Some(crate::control::HitPointBasis {
+            reported_current: report.current,
+            reported_maximum: report.maximum,
+            item_hit_points: self.counted_hit_points()? - i64::from(report.current),
+            inventory_revision: self.inventory.revision(),
+            local_damage: self.vitals.local_hp_damage,
+            damage_floor: None,
+        })
+    }
+
     /// The zone's short name, as the server gave it.
     #[must_use]
     pub fn zone(&self) -> &str {
@@ -811,6 +857,27 @@ impl ClientWorld {
         self.vitals.hit_points(self.death.is_some())
     }
 
+    /// Titanium's signed own-HP gauge, separate from the text's clamped HP
+    /// and from unconscious/death state. Other generations remain unread.
+    #[must_use]
+    pub fn hit_point_gauge(&self) -> Option<super::HpGauge> {
+        self.generation
+            .models_unconscious()
+            .then(|| self.vitals.gauge(self.is_dead()))
+            .flatten()
+    }
+
+    /// The last signed HP report with equipped item HP counted from the
+    /// current worker inventory. None means the report, player or equipment
+    /// facts needed for that count are missing. This retains negative values
+    /// and is independent of the display clamp and established death state;
+    /// it does not by itself establish unconsciousness or death.
+    #[must_use]
+    pub fn counted_hit_points(&self) -> Option<i64> {
+        self.vitals
+            .counted_hp(self.player.as_ref()?, &self.inventory)
+    }
+
     /// The player's inventory, bank and cursor as the server reported them,
     /// with the ordered local projection of successfully queued moves.
     #[must_use]
@@ -1001,6 +1068,28 @@ impl ClientWorld {
     #[must_use]
     pub const fn book_action_status(&self) -> Option<&BookActionStatus> {
         self.book_action.as_ref()
+    }
+
+    /// A book request already sent whose matching result has not arrived.
+    /// Preparing a spell is interruptible and has not sent that request yet.
+    #[must_use]
+    pub const fn book_request_pending(&self) -> bool {
+        matches!(
+            self.book_action.as_ref(),
+            Some(
+                BookActionStatus::Submitted
+                    | BookActionStatus::AwaitingReply
+                    | BookActionStatus::Unconfirmed
+            )
+        )
+    }
+
+    /// The worker's actual memorization gauge, not an elapsed-time prediction.
+    #[must_use]
+    pub const fn memorization_progress(
+        &self,
+    ) -> Option<&eq_network_game::spells::MemorizationProgress> {
+        self.memorization.as_ref()
     }
 
     /// Counts the session's spellbook replies, so that two alike still differ.

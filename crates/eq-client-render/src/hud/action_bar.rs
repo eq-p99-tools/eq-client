@@ -12,7 +12,8 @@ use bevy::prelude::*;
 use eq_client_core::{BookActionStatus, qol::Fix};
 use std::time::{Duration, Instant};
 
-/// Matches the network worker's sit-and-wait interval before a book change is sent.
+/// Legacy preparation estimate for callers without a worker gauge. Native
+/// memorization uses received points; this does not model Titanium scribing.
 const BOOK_PREPARATION: Duration = Duration::from_secs(5);
 /// Matches the server's camp preparation time.
 const CAMP_PREPARATION: Duration = Duration::from_secs(30);
@@ -151,10 +152,25 @@ pub(crate) fn book_progress(
         .as_ref()
         .filter(|request| request.change == change)?;
     match request.active_status(world)? {
-        BookActionStatus::Preparing => Some(fraction(request.since, BOOK_PREPARATION, now)),
+        BookActionStatus::Preparing => Some(preparation_progress(world, request, now)),
         BookActionStatus::AwaitingReply => Some(1.0),
         _ => None,
     }
+}
+
+fn preparation_progress(
+    world: &eq_client_core::world::ClientWorld,
+    request: &BookRequest,
+    now: Instant,
+) -> f32 {
+    if request.change == BookChange::Memorize
+        && let Some(progress) = world
+            .memorization_progress()
+            .filter(|progress| progress.spell_id == request.spell)
+    {
+        return progress.fraction();
+    }
+    fraction(request.since, BOOK_PREPARATION, now)
 }
 
 /// How far the player's cast has come, from 0 to 1: nothing while the
@@ -220,8 +236,15 @@ pub(super) fn current(
         let book_label = || book.map_or("Changing spells", |request| request.label.as_str());
         match status {
             Some(BookActionStatus::Preparing) => Some(Shown {
-                label: book_label().into(),
-                progress: book.map(|request| fraction(request.since, BOOK_PREPARATION, now)),
+                label: if world
+                    .memorization_progress()
+                    .is_some_and(|progress| progress.approximate)
+                {
+                    format!("{} (approximate)", book_label())
+                } else {
+                    book_label().into()
+                },
+                progress: book.map(|request| preparation_progress(world, request, now)),
             }),
             Some(BookActionStatus::Submitted | BookActionStatus::AwaitingReply) => Some(Shown {
                 label: format!("{} (waiting for server)", book_label()),
@@ -350,6 +373,96 @@ mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
     use eq_client_core::SpellUpdate;
+
+    #[test]
+    fn memorization_gauge_uses_worker_points_and_labels_the_approximate_fallback() {
+        use eq_client_core::{BookActionStatus, MemorizationProgress, WorldEvent};
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let (sender, _sent) = std::sync::mpsc::sync_channel(4);
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let receipt = outbox
+            .post_book_edit(online.world(), |stamp| {
+                eq_client_core::ClientCommand::MemorizeSpell {
+                    session_id: stamp.session_id,
+                    gem: 1,
+                    spell_id: 202,
+                    preparation: Some(eq_client_core::MemorizationInputs::default()),
+                    created: stamp.created,
+                }
+            })
+            .unwrap();
+        testing::book_news(
+            &mut online,
+            &outbox,
+            WorldEvent::BookAction(BookActionStatus::Preparing),
+        );
+        let now = Instant::now();
+        let requests = ActionRequests {
+            book: Some(BookRequest {
+                since: now.checked_sub(Duration::from_secs(30)).unwrap(),
+                label: "Memorizing Courage into gem 2".into(),
+                change: BookChange::Memorize,
+                spell: 202,
+                receipt,
+                began: false,
+            }),
+        };
+        let names = crate::spellbook::SpellNames::default();
+        let messages = super::super::messages::Messages::load(
+            None,
+            eq_client_assets::ui::InstalledClient::Titanium,
+        );
+        let qol = eq_client_core::qol::Settings::default();
+        for approximate in [false, true] {
+            testing::news(
+                &mut online,
+                [WorldEvent::MemorizationProgress {
+                    session_id: 1,
+                    progress: Some(MemorizationProgress {
+                        gem: 1,
+                        spell_id: 202,
+                        remaining: 69,
+                        approximate,
+                    }),
+                }],
+            );
+            let shown = current(
+                online.world(),
+                &requests,
+                (&names, &messages),
+                now,
+                false,
+                &qol,
+            )
+            .unwrap();
+            assert!((shown.progress.unwrap() - 0.25).abs() < f32::EPSILON);
+            assert_eq!(shown.label.ends_with("(approximate)"), approximate);
+            assert_eq!(
+                book_progress(online.world(), &requests, BookChange::Memorize, now),
+                Some(0.25)
+            );
+            assert_eq!(online.world().player().unwrap().memorized_spells[1], None);
+        }
+        testing::book_news(
+            &mut online,
+            &outbox,
+            WorldEvent::BookAction(BookActionStatus::AwaitingReply),
+        );
+        let shown = current(
+            online.world(),
+            &requests,
+            (&names, &messages),
+            now,
+            false,
+            &qol,
+        )
+        .unwrap();
+        assert!(shown.label.ends_with("(waiting for server)"));
+        assert_eq!(shown.progress, None);
+        assert!(online.world().memorization_progress().is_none());
+        assert_eq!(online.world().player().unwrap().memorized_spells[1], None);
+    }
 
     #[test]
     fn the_skin_shows_casts_only_for_a_client_known_to_have_the_window() {

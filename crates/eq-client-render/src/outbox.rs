@@ -42,6 +42,8 @@ pub(crate) enum Refusal {
     Away,
     /// The player is dead, awaiting their return home.
     Dead,
+    /// HP control holds voluntary movement and posture until waking.
+    Unconscious,
     /// The session does not let the player do this on this server.
     Unavailable(Capability),
     /// This provider has no complete, usable spell replay for the current zone.
@@ -68,6 +70,7 @@ impl Refusal {
             Self::NotAdmitted => "Enter the world first",
             Self::Away => "You can't do that right now",
             Self::Dead => "You can't do that while dead",
+            Self::Unconscious => "You can't move while unconscious",
             Self::Unavailable(_) => UNAVAILABLE,
             Self::SpellData => "Spell data is not ready for casting",
             Self::SpellSet => "Wait for the spell set to finish",
@@ -141,6 +144,9 @@ pub(crate) const fn is_chat(command: &ClientCommand) -> bool {
 }
 
 fn interrupts_apply(command: &ClientCommand) -> bool {
+    if let ClientCommand::GroundFrame { state, .. } = command {
+        return state.forward() || state.velocity().iter().any(|value| *value != 0.);
+    }
     matches!(
         command,
         ClientCommand::Move(_)
@@ -509,6 +515,17 @@ impl Outbox {
         self.try_send(world, command(stamp), false, None)
     }
 
+    /// Checks current admission and capability without reserving queue capacity.
+    pub(super) fn check_command(
+        &self,
+        world: &ClientWorld,
+        command: &ClientCommand,
+    ) -> Result<(), Refusal> {
+        // Availability is not a reservation of channel capacity. Publication
+        // still uses try_send and its normal rollback on queue refusal.
+        self.check(world, command).map(|_| ())
+    }
+
     /// The queue, if the session can take this command now.
     fn check(
         &self,
@@ -538,6 +555,18 @@ impl Outbox {
             }
             if world.is_dead() && !preference {
                 return Err(Refusal::Dead);
+            }
+            if world.is_unconscious()
+                && matches!(
+                    command,
+                    ClientCommand::Move(_)
+                        | ClientCommand::GroundFrame { .. }
+                        | ClientCommand::Jump { .. }
+                        | ClientCommand::SetPosture { .. }
+                        | ClientCommand::FeignLanded { .. }
+                )
+            {
+                return Err(Refusal::Unconscious);
             }
             if !(world.in_world() || preference && world.connected()) {
                 return Err(Refusal::Away);

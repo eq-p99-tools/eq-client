@@ -48,17 +48,19 @@ pub(crate) fn ensure_window(
     if let Some((entity, _, _, _)) = frame {
         commands.entity(entity).despawn();
     }
-    let root = windows::frame(
+    let root = windows::resizable_frame(
         &mut commands,
         WindowId::Map,
         Node {
             width: px(600),
             height: px(500),
-            max_width: percent(95),
-            max_height: percent(90),
+            min_width: px(400),
+            min_height: px(340),
             flex_direction: FlexDirection::Column,
             ..default()
         },
+        Vec2::new(600.0, 500.0),
+        0x6d61_702d_666c_6578,
     );
     commands
         .entity(root)
@@ -67,6 +69,7 @@ pub(crate) fn ensure_window(
             super::Backdrop::Fill(Color::NONE),
         ))
         .with_children(|window| {
+            windows::resize_border(window, root);
             window
                 .spawn(Node {
                     padding: UiRect::all(px(6)),

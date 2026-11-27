@@ -156,6 +156,9 @@ pub(crate) fn confirm(
 
 /// Loots the item the question named, as the click would have.
 fn take(trade: &mut TradeState, world: &ClientWorld, outbox: &Outbox, question: Question) {
+    if trade.range.closing(world) {
+        return;
+    }
     let Question::LootNoDrop {
         corpse_id, place, ..
     } = question

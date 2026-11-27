@@ -22,7 +22,11 @@ mod rider_animation_tests;
 mod teleport_camera_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod ground;
+#[cfg(test)]
+mod ground_tests;
 mod headroom;
+mod melee;
 mod owned_swim;
 mod pad;
 mod placement;
@@ -184,6 +188,8 @@ pub(super) struct Controls {
     /// same binary. This switch is absent from production builds.
     #[cfg(test)]
     suppress_submitted_preview: bool,
+    #[cfg(test)]
+    suppress_ground: bool,
     /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
     test_span: Option<f32>,
@@ -278,6 +284,9 @@ pub(super) struct Controls {
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
     following: Option<follow::Following>,
+    /// Opt-in melee positioning; every reset discards its target and approach.
+    melee: melee::Assist,
+    ground: ground::Control,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -393,6 +402,8 @@ impl Default for Controls {
             #[cfg(test)]
             suppress_submitted_preview: false,
             #[cfg(test)]
+            suppress_ground: false,
+            #[cfg(test)]
             test_span: None,
             #[cfg(test)]
             suppress_release_catchup: false,
@@ -439,6 +450,8 @@ impl Default for Controls {
             swim_owner: owned_swim::Owner::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
+            melee: melee::Assist::default(),
+            ground: ground::Control::default(),
         }
     }
 }
@@ -976,10 +989,14 @@ impl Controls {
     /// it around the call.
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
-        let restore_preview = self.restore_preview || self.preview.is_some();
+        let mut ground = std::mem::take(&mut self.ground);
+        let native = ground.active();
+        ground.retire();
+        let restore_preview = self.restore_preview || self.preview.is_some() || native;
         let restore_translation = self.restore_translation
             || self.restored_translation.is_some()
-            || self.has_translation_playhead();
+            || self.has_translation_playhead()
+            || native;
         *self = Self {
             speed,
             restore_preview,
@@ -995,6 +1012,7 @@ impl Controls {
             // A correction or a server's move keeps following, which then
             // ends by its own rules; a new admission ends it in `input`.
             following: self.following.take(),
+            ground,
             movement_options: self.movement_options,
             // A grant or correction resets prediction, but the same worker
             // can still consume a move that was already queued.
@@ -1060,7 +1078,9 @@ impl Controls {
         }
         if changed && revision.is_some() {
             self.moving = false;
-            self.restore_translation |= self.has_translation_playhead();
+            self.restore_preview |= self.ground.active();
+            self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+            self.ground.retire();
             self.restore_preview |= self.preview.take().is_some();
         }
         self.stunned
@@ -1072,7 +1092,9 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
-        self.restore_translation |= self.has_translation_playhead();
+        self.restore_preview |= self.ground.active();
+        self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+        self.ground.retire();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         if previous.fly != options.fly {
@@ -1101,7 +1123,9 @@ impl Controls {
     fn pause_prediction(&mut self) {
         self.restore_surface_trial();
         self.surface.pause();
-        self.restore_translation |= self.has_translation_playhead();
+        self.restore_preview |= self.ground.active();
+        self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+        self.ground.retire();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         self.moving = false;
@@ -1151,10 +1175,10 @@ impl Controls {
     }
 
     fn span_limit(&self) -> Duration {
-        if self.moving {
+        if self.moving && !self.ground.cold_handback {
             MAX_CYCLE_DURATION
         } else {
-            Duration::from_millis(100)
+            START_CYCLE_DURATION
         }
     }
     /// Takes the session's word on how the player may move. A new speed
@@ -1172,6 +1196,11 @@ impl Controls {
         grant: eq_client_core::world::MotionGrant,
         root: eq_client_core::RootRules,
     ) {
+        if self.ground.active() {
+            self.restore_translation = true;
+            self.restore_preview = true;
+            self.ground.retire();
+        }
         // Rooted is granted too, at no speed: the program zeroes the speed
         // once and blocks nothing else, so input goes on and the player
         // turns (reads R18, R22).
@@ -1402,6 +1431,7 @@ impl Controls {
 
     pub(super) fn moved(&mut self, session_id: Option<u64>, created: Instant) -> bool {
         if self.is_pending_move(session_id, created) {
+            self.ground.cold_handback = false;
             self.finish();
             return true;
         }
@@ -1430,6 +1460,51 @@ impl Controls {
     pub(super) fn resolve_swim(&mut self, session: Option<u64>, created: Instant, refused: bool) {
         self.swim_owner
             .resolved(session, created, refused, &mut self.wet);
+    }
+
+    /// Native current-state receipts retire observation identities only.
+    /// Their already drawn distance never becomes a playback segment.
+    pub(super) fn ground_result(
+        &mut self,
+        session: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: Option<&str>,
+    ) -> bool {
+        let received = self.now();
+        if !self
+            .ground
+            .reconcile(session, created, position, refused.is_some(), received)
+        {
+            return false;
+        }
+        self.last_answer = Some(self.now());
+        self.refused = refused.map(str::to_owned);
+        if refused.is_none()
+            && self
+                .mouse_heading
+                .is_some_and(|heading| arc(heading, position.heading) == 0.)
+        {
+            self.mouse_heading = None;
+        }
+        if let Some(restore) = self.ground.restore.take() {
+            self.restored_translation =
+                Some(Vec3::from_array(eq_client_core::render_position(restore)));
+            self.visual = Some(VisualMotion::at(restore));
+            self.preview = None;
+            self.clear_poses();
+            self.moving = false;
+        }
+        true
+    }
+
+    pub(super) fn refuse_move(&mut self, world: &ClientWorld, created: Instant, reason: &str) {
+        let native = world.player().is_some_and(|player| {
+            self.ground_result(world.session_id(), created, player.position, Some(reason))
+        });
+        if !native {
+            self.move_refused(world.session_id(), created, reason);
+        }
     }
 
     /// Settles only the matching proposed carrier link. A rejection retains
@@ -1485,6 +1560,41 @@ impl Controls {
         held
     }
 
+    /// Keeps the existing carrier display queue in its received world frame.
+    fn carry_display(
+        &mut self,
+        carriers: &eq_client_core::movement::Carriers,
+        advanced_in_boat: bool,
+        transform: &mut Transform,
+    ) {
+        if let Some(frame) = self.visual_boat {
+            if let Some(report) = carriers
+                .latest(frame.sample.spawn_id)
+                .filter(|report| report.sample().incarnation == frame.sample.incarnation)
+            {
+                let pose = report.pose(Instant::now());
+                // advance() above writes local coordinates. With no remaining
+                // segment, recover the shown local point from its last frame.
+                if !advanced_in_boat {
+                    *transform = boats::to_local(frame.pose, *transform);
+                }
+                *transform = boats::to_world(pose, *transform);
+                self.visual_boat = Some(boats::DisplayFrame {
+                    sample: report.sample(),
+                    pose,
+                });
+            } else {
+                if let Some(visual) = self.visual.as_mut() {
+                    visual.map(|transform| boats::to_world(frame.pose, transform));
+                }
+                if advanced_in_boat {
+                    *transform = boats::to_world(frame.pose, *transform);
+                }
+                self.visual_boat = None;
+            }
+        }
+    }
+
     /// Accepted local carrier basis, for explicit script diagnostics.
     pub(crate) fn carrier_support(
         &self,
@@ -1493,7 +1603,9 @@ impl Controls {
         eq_client_core::WorldPosition,
         eq_client_core::WorldPosition,
     )> {
-        self.boat
+        self.ground
+            .carrier()
+            .or(self.boat)
             .map(|riding| (riding.sample, riding.pose, riding.position))
     }
 
@@ -1594,11 +1706,14 @@ impl Controls {
     }
 
     /// Whether a movement or crossing request still owns the slot.
-    pub const fn waiting(&self) -> bool {
-        self.pending.is_some()
+    pub fn waiting(&self) -> bool {
+        self.pending.is_some() || self.ground.active() && !self.ground.settled()
     }
 
     pub(super) fn liquid_basis(&self, session_id: Option<u64>, now: Instant) -> LiquidBasis {
+        if let Some(basis) = self.ground.basis(session_id, now) {
+            return basis;
+        }
         match self
             .pending
             .filter(|pending| Some(pending.session_id) == session_id)
@@ -1642,6 +1757,7 @@ impl Controls {
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE_DURATION: Duration = Duration::from_millis(250);
 const MAX_CYCLE: f32 = MAX_CYCLE_DURATION.as_secs_f32();
+const START_CYCLE_DURATION: Duration = Duration::from_millis(100);
 
 /// The lower of each speed of two grants, as the sample that straddles a
 /// change made in place may ask (`Controls::grant`). A mode either grant
@@ -1919,6 +2035,9 @@ type InputExtras<'w, 's> = (
     Option<Res<'w, crate::options::MovementSync>>,
     Local<'s, Option<u64>>,
     Option<Res<'w, crate::doors::LiftReach>>,
+    Option<Res<'w, crate::combat::CombatState>>,
+    Option<Res<'w, crate::confirm::Asked>>,
+    Local<'s, melee::InputTrace>,
 );
 
 /// A script run that fails can no longer steer, so the autorun latch goes
@@ -1963,12 +2082,13 @@ pub(super) fn stop_autorun_after_failed_script(
 )]
 pub(super) fn input(
     keys: crate::keys::Keys,
+    time: Option<Res<Time>>,
     navigation: Res<super::navigation::NavigationKeys>,
     online: Res<online::OnlineState>,
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
     options: Res<crate::options::OptionsState>,
-    (movement_sync, mut told_wait, lifts): InputExtras,
+    (movement_sync, mut told_wait, lifts, combat, asked, mut input_trace): InputExtras,
     mut controls: ResMut<Controls>,
     players: Query<(&PlayerBody, &Transform), With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
@@ -1980,6 +2100,16 @@ pub(super) fn input(
     ),
     (look, aim, spells): Pointing,
 ) {
+    let trace_melee = options.options.qol.on(Fix::MeleePositioning);
+    let (sequence, elapsed, gap) = input_trace.entered(controls.now());
+    trace!(target: "eq_client_render::motion::melee", input_sequence = sequence,
+        input_elapsed_seconds = elapsed, input_gap_seconds = ?gap,
+        option_enabled = trace_melee,
+        attack_requested = combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(online.world().session_id())),
+        input_owned = keys.focused(), pending_sample = controls.pending.is_some(),
+        "Melee positioning input entry");
     let client = settings.0.installed_client;
     // The program's speed-modifier routine ends following once a root
     // stops the player (R6, 0x411076); a server's move does not.
@@ -2014,6 +2144,18 @@ pub(super) fn input(
     {
         controls.following = None;
     }
+    // HP control skips the whole movement/report pass (0x4ac9xx), even
+    // swimming, turning or passive reports; stun/feign departures do not
+    // bypass it. Keep the received calibration for ordinary wake recovery.
+    if online.world().is_unconscious() {
+        controls.following = None;
+        controls.reset(None);
+        if let Some(grant) = online.world().motion() {
+            controls.grant(grant, online.world().generation().root());
+        }
+        controls.held = Some(Held::Gate);
+        return;
+    }
     // An arrival aboard holds the player until the session places them
     // (read R36 §3): no frames run in the program meanwhile.
     if !online.enabled
@@ -2021,6 +2163,9 @@ pub(super) fn input(
         || online.world().is_dead()
         || online.world().arrival_held()
     {
+        if trace_melee {
+            melee::held("world_or_arrival_unavailable");
+        }
         controls.following = None;
         *told_wait = None;
         controls.reset(None);
@@ -2030,6 +2175,9 @@ pub(super) fn input(
     // The pad floor step precedes ordinary input/cadence gates and uses
     // the unmodified collision world, even with no voluntary input.
     if controls.pad.is_some() {
+        if trace_melee {
+            melee::held("pad_motion");
+        }
         if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
             controls.prepare_pad(world, body.feet_offset);
             controls.submit_pad(&outbox, online.world());
@@ -2071,6 +2219,9 @@ pub(super) fn input(
         .as_ref()
         .map_or(Some(wanted), |sync| sync.usable(session_id, wanted))
     else {
+        if trace_melee {
+            melee::held("movement_policy_pending");
+        }
         // Say why once for this wait, including when the queue keeps retrying.
         if *told_wait != session_id {
             chat.history.push(crate::chat::system_line(
@@ -2094,6 +2245,9 @@ pub(super) fn input(
         controls.facing = None;
     }
     if controls.speed.is_none() && controls.airborne.is_none() {
+        if trace_melee {
+            melee::held("movement_grant_unavailable");
+        }
         controls.mouse_heading = None;
         controls.held = Some(Held::Withdrawn);
         return;
@@ -2404,6 +2558,7 @@ pub(super) fn input(
         && !swimming
         && !shoreline_active
         && controls.following.is_none()
+        && !controls.melee.driving()
         && !keys.script_routing()
         && controls.riding.is_none()
         && controls.boat.is_none()
@@ -2485,7 +2640,121 @@ pub(super) fn input(
     controls
         .taps
         .observe(&keyboard, &movement_keys, focused, now);
+    // A completed-frame producer runs before the legacy future-endpoint gates.
+    // Its input sample deliberately excludes the tap buffer and press-only
+    // edges: no duration is invented for a tap absent from an observed frame.
+    if let (Ok((body, drawn)), Ok((camera, _)), Some(world), Some(player)) = (
+        players.single(),
+        cameras.single(),
+        moving_world,
+        online.world().player(),
+    ) {
+        let mut physical = keyboard.clone();
+        physical.clear();
+        let heading = controls
+            .ground
+            .current
+            .map_or(player.position.heading, |frame| frame.facing);
+        let heading = controls
+            .mouse_heading
+            .or(controls.facing)
+            .unwrap_or(heading);
+        let yaw = controls.mouse_heading.map_or(camera.yaw, |heading| {
+            crate::camera::behind(eq_client_core::render_heading(heading))
+        });
+        let intent = controls.intent(
+            &physical,
+            map,
+            scripted,
+            focused,
+            (yaw, heading),
+            look.as_deref(),
+        );
+        let eligible = time.is_some()
+            && client.owns_ground_frames()
+            && match online.world().generation() {
+                eq_client_core::GameDialect::Titanium => true,
+                eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+            }
+            && focused
+            && standing
+            && !lying
+            && !flying
+            && !swimming
+            && !shoreline_active
+            && !controls.stun_active
+            && controls.straddle.is_none()
+            && controls.following.is_none()
+            && !keys.script_routing()
+            && scripted.is_empty()
+            && scripted_facing.is_none()
+            && controls.unreported.is_none()
+            && controls.jump.is_none()
+            && controls.crouch.is_none()
+            && controls.pad.is_none()
+            && controls.riding.is_none()
+            && controls.boat.is_none()
+            && controls.boat_pending.is_none()
+            && controls.visual_boat.is_none()
+            && controls
+                .airborne
+                .as_ref()
+                .is_none_or(|airborne| airborne.velocity() == 0. && airborne.peak().is_none())
+            && controls.movement_options.run_speed_multiplier
+                == eq_client_core::movement::RunSpeedMultiplier::NORMAL;
+        #[cfg(test)]
+        let eligible = eligible && !controls.suppress_ground;
+        let first_span = time
+            .as_deref()
+            .map_or(Duration::ZERO, Time::delta)
+            .min(now.saturating_duration_since(controls.last_accepted));
+        let mouse_heading = controls.mouse_heading;
+        let feet = controls
+            .ground
+            .current
+            .map_or(drawn.translation - Vec3::Y * body.feet_offset, |frame| {
+                frame.motion.feet()
+            });
+        let raised = raised_walk(world, feet, body.height, posture);
+        let physics = walking(
+            physics(client, online.world().zone_gravity()),
+            client,
+            body,
+            player.race,
+            (raised, false),
+        );
+        let walking_world = carrier_walking_world(world, client, body.feet_offset, false, false);
+        if ground::input(
+            &mut controls,
+            ground::Context {
+                client,
+                online: &online,
+                world: walking_world.as_ref().unwrap_or(world),
+                body,
+                drawn,
+                outbox: &outbox,
+                now,
+                first_span,
+                physics,
+                eligible,
+                mouse_heading,
+                headroom: ground::Headroom::new(
+                    client,
+                    online.world(),
+                    body,
+                    crate::posture::on_mount(online.world(), spells.as_deref()),
+                    raised,
+                ),
+            },
+            intent,
+        ) {
+            return;
+        }
+    }
     if controls.pending.is_some() {
+        if trace_melee {
+            melee::held("pending_sample");
+        }
         if controls.liquid_basis(session_id, now) == LiquidBasis::Unconfirmed {
             controls.pause_prediction();
         }
@@ -2493,7 +2762,10 @@ pub(super) fn input(
         return;
     }
     let elapsed = now.duration_since(controls.last_accepted);
-    if elapsed < Duration::from_millis(100) {
+    if elapsed < START_CYCLE_DURATION {
+        if trace_melee {
+            melee::held("sample_gate");
+        }
         controls.held = Some(Held::Gate);
         return;
     }
@@ -2502,6 +2774,9 @@ pub(super) fn input(
     if let Some(cost) = controls.unreported.take() {
         controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
         if controls.unreported.is_some() {
+            if trace_melee {
+                melee::held("fall_report_pending");
+            }
             controls.pause_prediction();
             controls.held = Some(Held::Gate);
             return;
@@ -2513,6 +2788,9 @@ pub(super) fn input(
         moving_world,
         online.world().player(),
     ) else {
+        if trace_melee {
+            melee::held("body_or_collision_unavailable");
+        }
         controls.held = Some(Held::NoBody);
         return;
     };
@@ -2746,6 +3024,126 @@ pub(super) fn input(
     } else {
         None
     };
+    let melee_enabled = options.options.qol.on(Fix::MeleePositioning)
+        && combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(session_id))
+        && [
+            Capability::GameplayDepartures,
+            Capability::Moving,
+            Capability::Combat,
+        ]
+        .into_iter()
+        .all(|capability| online.world().can(capability));
+    let manual = follow::moves(map, &sampled, scripted)
+        || controls.autorun
+        || [Act::Jump, Act::Duck]
+            .into_iter()
+            .any(|act| map.holding(&sampled, scripted).held(act))
+        || look.as_ref().is_some_and(|look| look.held)
+        || mouse_aim.is_some_and(|yaw| yaw != 0.)
+        || mouse_snapshot.is_some()
+        || controls.released_turn != 0.
+        || active_mouse_yaw
+        || keys.pressed(Act::Walk)
+        || scripted_facing.is_some()
+        || keys.script_active();
+    let melee_step = if !melee_enabled {
+        if trace_melee {
+            trace!(target: "eq_client_render::motion::melee", reason = "attack_or_provider_unavailable", forward = false,
+                attack_requested = combat.as_deref().is_some_and(|combat| combat.requested_in(session_id)),
+                moving = online.world().can(Capability::Moving), combat = online.world().can(Capability::Combat),
+                departures = online.world().can(Capability::GameplayDepartures), "Melee positioning held");
+        }
+        controls.melee.clear();
+        None
+    } else if manual || !focused || controls.following.is_some() {
+        trace!(target: "eq_client_render::motion::melee", reason = "input_owner", forward = false,
+            manual, focused, input_owned = keys.focused(), detached, stunned, following = controls.following.is_some(),
+            movement = follow::moves(map, &sampled, scripted), autorun = controls.autorun,
+            rmb = look.as_ref().is_some_and(|look| look.held), mouse_snapshot = mouse_snapshot.is_some(),
+            mouse_yaw = active_mouse_yaw, released_turn = controls.released_turn,
+            scripted_facing = scripted_facing.is_some(), script = keys.script_active(), walk_toggle = keys.pressed(Act::Walk),
+            stance_key = [Act::Jump, Act::Duck].into_iter().any(|act| map.holding(&sampled, scripted).held(act)),
+            "Melee positioning held");
+        controls.melee.yield_input(now);
+        None
+    } else if !standing
+        || stunned
+        || flying
+        || swimming
+        || placement_blocked
+        || controls.refused.is_some()
+        || online.world().camp().is_some()
+        || online.world().casting().holds_actions()
+        || asked
+            .as_deref()
+            .is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer())
+        || controls.riding.is_some()
+        || controls.boat.is_some()
+        || controls.visual_boat.is_some()
+        || controls.jump.is_some()
+        || controls.crouch.is_some()
+        || controls
+            .airborne
+            .as_ref()
+            .is_some_and(|airborne| airborne.velocity() != 0. || airborne.peak().is_some())
+    {
+        trace!(target: "eq_client_render::motion::melee", reason = "context", forward = false,
+            standing, stunned, flying, swimming, placement_blocked, refused = controls.refused.is_some(),
+            camp = online.world().camp().is_some(), casting = online.world().casting().holds_actions(),
+            question = asked.as_deref().is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer()),
+            rider = controls.riding.is_some(), boat = controls.boat.is_some(), display_boat = controls.visual_boat.is_some(),
+            jump = controls.jump.is_some(), crouch = controls.crouch.is_some(),
+            airborne_velocity = ?controls.airborne.as_ref().map(AirborneController::velocity),
+            airborne_peak = ?controls.airborne.as_ref().and_then(AirborneController::peak),
+            "Melee positioning held");
+        controls.melee.clear();
+        None
+    } else {
+        let body = melee::Body {
+            position: accepted.position,
+            height: body.height,
+            offset: body.feet_offset,
+            seconds: span,
+            speeds: (
+                controls.speed.unwrap_or(0.),
+                controls.walk_speed.or(controls.speed).unwrap_or(0.),
+            ),
+            walking: controls.walking,
+        };
+        controls
+            .melee
+            .step(online.world(), world, &online.regions, &body, now)
+    };
+    if let Some(step) = melee_step {
+        let radians = eq_client_core::render_heading(step.heading);
+        intent = MotionInput {
+            mode: if !step.run && controls.walk_speed.is_some() {
+                MovementMode::Walk
+            } else {
+                MovementMode::Forward
+            },
+            speed: if step.run {
+                controls.speed
+            } else {
+                controls.walk_speed.or(controls.speed)
+            }
+            .unwrap_or(0.),
+            direction: if step.forward {
+                Vec3::new(radians.sin(), 0., radians.cos())
+            } else {
+                Vec3::ZERO
+            },
+            turn: 0.,
+            preserve_facing: true,
+            diagonal: None,
+        };
+        if heading_snapshots {
+            heading_update = HeadingUpdate::Snapshot;
+        }
+    }
+    let follow_step = follow_step.or(melee_step);
     let follow_heading = follow_step.map(|step| step.heading);
     if placement_blocked {
         // Keep the turn inputs and ordinary sample timing. Translation,
@@ -3056,7 +3454,15 @@ pub(super) fn input(
         // Stop within one frame of reach at the selected movement rate.
         // Water selects its ordinary swim rate above, so it shares this
         // limit rather than replacing an already limited land speed.
-        speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
+        let margin = if melee_step.is_some() {
+            0.
+        } else {
+            speed / 60.0
+        };
+        speed = speed.min((step.beyond + margin) / span.max(f32::EPSILON));
+    }
+    if melee_step.is_some() {
+        speed = speed.min(controls.speed.unwrap_or(0.0).max(0.0));
     }
     // A ducking body, or one with its origin in liquid, is swept at its
     // origin (L = 0, 0x489a32), so only the floor sweep's climb holds; else
@@ -3148,13 +3554,17 @@ pub(super) fn input(
                     displacement: Vec3::ZERO,
                     seconds: span,
                     diagonal: false,
-                    lift: headroom::standing_lift(
+                    lift: headroom::walking_lift(
                         client,
                         online.world(),
-                        world,
                         body,
-                        feet,
-                        linked.is_some(),
+                        linked.is_none()
+                            && raised_walk(
+                                world,
+                                feet,
+                                body.height,
+                                Some(eq_client_core::PostureState::Standing),
+                            ),
                     ),
                 }),
             ) {
@@ -3514,20 +3924,14 @@ pub(super) fn input(
                 ),
                 {
                     let stand = crate::posture::stand_height(client, online.world(), body);
-                    let lift =
-                        client
-                            .falls()
-                            .and_then(|falls| falls.edge_lift)
-                            .map_or(0.0, |rule| {
-                                rule.lift(eq_client_assets::falls::EdgeBody {
-                                    race: online.world().player().map_or(0, |player| player.race),
-                                    stand_height: stand,
-                                    size: body.size,
-                                    // Native 0x489a32 also leaves the linked
-                                    // boat's probe at the ordinary origin.
-                                    lifted: raised && linked.is_none(),
-                                })
-                            });
+                    // Native 0x489a32 leaves a linked boat's probe at the
+                    // ordinary origin. Native frames share these exact terms.
+                    let lift = headroom::walking_lift(
+                        client,
+                        online.world(),
+                        body,
+                        raised && linked.is_none(),
+                    );
                     (
                         crate::posture::headroom_probe(client, online.world(), stand),
                         lift,
@@ -3681,6 +4085,30 @@ pub(super) fn input(
         turn_toward(current_heading, facing, TURN_RATE * span)
     };
     trace_proposal(mode, delta, position - origin, heading, facing);
+    if melee_step.is_some()
+        && let Some(reason) = melee::transition_reason(
+            world,
+            &online.regions,
+            origin,
+            position,
+            body.height,
+            body.feet_offset,
+        )
+    {
+        // This disposable assist proposal sent nothing. Keep ordinary manual
+        // crossing, boarding and authoritative corrections on their own path.
+        controls.airborne = previous_airborne;
+        controls.melee.clear();
+        melee::held(reason);
+        controls.held = Some(Held::NoSpeed);
+        return;
+    }
+    if melee_step.is_some() {
+        trace!(target: "eq_client_render::motion::melee", sample_seconds = span,
+            elapsed_since_send = since_sent.as_secs_f64(), granted_run_speed = ?controls.speed,
+            selected_speed = speed, requested_horizontal = delta.with_y(0.0).length(),
+            resolved_horizontal = (position - origin).with_y(0.0).length(), "Melee positioning proposal");
+    }
     trace_contact(world, feet, delta, position - origin, body.height);
     let position_sent = if placement_blocked {
         eq_client_core::WorldPosition {
@@ -3834,13 +4262,17 @@ pub(super) fn input(
                 displacement: delta,
                 seconds: span,
                 diagonal: matches!(mode, MovementMode::GroundedDiagonal(_)),
-                lift: headroom::standing_lift(
+                lift: headroom::walking_lift(
                     client,
                     online.world(),
-                    world,
                     body,
-                    landing,
-                    linked.is_some(),
+                    linked.is_none()
+                        && raised_walk(
+                            world,
+                            landing,
+                            body.height,
+                            Some(eq_client_core::PostureState::Standing),
+                        ),
                 ),
             }),
         )
@@ -4833,6 +5265,14 @@ pub(super) fn interpolate(
     }
     controls.restore_observed_preview(online.world());
     controls.prepare_translation_restore(online.world());
+    if ground::present(
+        &mut controls,
+        &mut players,
+        &mut cameras,
+        &mut displayed_mouse,
+    ) {
+        return;
+    }
     let preview = controls.mouse_heading;
     if controls.visual.is_none()
         && preview.is_none()
@@ -4867,34 +5307,7 @@ pub(super) fn interpolate(
                 .rise(door, at, std::time::Instant::now());
         transform.translation.y = transform.translation.y.max(floor);
     }
-    if let Some(frame) = controls.visual_boat {
-        if let Some(report) = online
-            .world()
-            .carriers()
-            .latest(frame.sample.spawn_id)
-            .filter(|report| report.sample().incarnation == frame.sample.incarnation)
-        {
-            let pose = report.pose(Instant::now());
-            // advance() above writes local coordinates. With no remaining
-            // segment, recover the shown local point from its last frame.
-            if !advanced_in_boat {
-                *transform = boats::to_local(frame.pose, *transform);
-            }
-            *transform = boats::to_world(pose, *transform);
-            controls.visual_boat = Some(boats::DisplayFrame {
-                sample: report.sample(),
-                pose,
-            });
-        } else {
-            if let Some(visual) = controls.visual.as_mut() {
-                visual.map(|transform| boats::to_world(frame.pose, transform));
-            }
-            if advanced_in_boat {
-                *transform = boats::to_world(frame.pose, *transform);
-            }
-            controls.visual_boat = None;
-        }
-    }
+    controls.carry_display(online.world().carriers(), advanced_in_boat, &mut transform);
     if let Some(heading) = preview {
         // An older queued pose never overwrites the latest local mouse orientation.
         transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
@@ -4987,6 +5400,7 @@ fn short(requested: Vec3, resolved: Vec3) -> bool {
 }
 
 /// Input intent remains separate from collision, timing and network submission.
+#[derive(Clone, Copy)]
 struct MotionInput {
     mode: MovementMode,
     speed: f32,
@@ -5622,6 +6036,50 @@ pub(super) mod tests {
             receiver.try_recv().is_err(),
             "turning the option off restores the hold"
         );
+    }
+
+    #[test]
+    fn unconscious_hp_holds_voluntary_motion_even_with_movement_departures() {
+        for hp in [1, 0, -1] {
+            let (mut app, receiver) = app();
+            for fix in [
+                Fix::WalkWhileWinded,
+                Fix::MoveWhileFeigned,
+                Fix::Fly,
+                Fix::JesusMode,
+            ] {
+                movement_choice(&mut app, fix, true);
+            }
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Space);
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [
+                    eq_client_core::WorldEvent::Inventory(
+                        eq_client_core::inventory::InventoryUpdate::Snapshot(Vec::new()),
+                    ),
+                    eq_client_core::WorldEvent::HitPoints {
+                        spawn_id: 7,
+                        current: hp,
+                        maximum: 23,
+                        items: eq_client_core::ItemHitPoints::LeftOut,
+                    },
+                ],
+            );
+            app.update();
+            let commands: Vec<_> = receiver.try_iter().collect();
+            if hp > 0 {
+                assert!(!commands.is_empty(), "positive 1 HP is still awake");
+            } else {
+                assert!(commands.is_empty(), "unconscious HP {hp}: {commands:?}");
+                let controls = app.world().resource::<Controls>();
+                assert!(!controls.autorun);
+                assert!(controls.jump.is_none());
+                assert!(controls.facing.is_none());
+            }
+        }
     }
 
     #[test]
@@ -8089,7 +8547,7 @@ pub(super) mod tests {
     }
 
     /// The fixture body's Titanium walk climb: a human standing 3 high.
-    fn fixture_climb() -> f32 {
+    pub(super) fn fixture_climb() -> f32 {
         eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
             race: 1,
             stand_height: 3.0,

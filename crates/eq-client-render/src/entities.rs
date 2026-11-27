@@ -538,6 +538,19 @@ fn draw(
         // units, as it is scaled below its root, and `interpolate` stands its
         // root on the floor by it in world units.
         let drawn = Drawn::of(client, state.world(), (race, spawn.gender, spawn.size));
+        if let (eq_client_assets::ui::InstalledClient::Titanium, Some(code), Some(record)) =
+            (client, model, state.world().spawn(id))
+        {
+            commands
+                .entity(entity)
+                .insert(crate::trade::loot_range::Model::new(
+                    id,
+                    record.revision,
+                    state.world().classic_model_scale_flag(),
+                    code,
+                    drawn.scale,
+                ));
+        }
         let scale = drawn.scale.max(0.01);
         let feet = drawn.feet();
         character::spawn_prepared(commands, entity, &asset, feet / scale);

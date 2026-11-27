@@ -14,6 +14,7 @@ mod casting;
 mod changes;
 mod character;
 mod control;
+mod gem_timing;
 mod group;
 mod guild;
 mod held_models;
@@ -52,7 +53,7 @@ pub use raid::{Raid, RaidNotice, RaidRank};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
-pub use vitals::{ReportedHp, Vitals};
+pub use vitals::{HpGauge, ReportedHp, Vitals};
 pub use who::{GuildStatus, ZonePlayer};
 
 use crate::{
@@ -69,6 +70,15 @@ use std::{collections::BTreeMap, time::Instant};
 enum OwnDeath {
     Reported { details: Death, since: Instant },
     BindTransfer { since: Instant },
+}
+
+/// The posture owner's interpreted control and its optional accepted HP
+/// basis. A new server report invalidates the basis without waking anyone.
+#[derive(Clone, Copy, Debug)]
+struct OwnConsciousness {
+    revision: u64,
+    unconscious: bool,
+    basis: Option<crate::control::HitPointBasis>,
 }
 
 /// The characters the world server offered to play.
@@ -309,6 +319,8 @@ pub struct ClientWorld {
     /// The session's interpreted stun state and latest revision; None is
     /// unknown/unconfigured, not proof of clear control.
     own_stun: Option<(u64, crate::control::StunState)>,
+    /// The posture owner's accepted HP basis and admission-scoped control.
+    own_unconscious: Option<OwnConsciousness>,
     /// Latest local worker policy feedback, never a server movement ACK.
     movement_options_result: Option<(u64, Result<crate::movement::MovementOptions, String>)>,
     /// What the admission lets the player do.
@@ -441,6 +453,7 @@ pub struct ClientWorld {
     spell_book: Option<SpellBook>,
     /// The spellbook change's latest worker status, until a reset.
     book_action: Option<BookActionStatus>,
+    memorization: Option<eq_network_game::spells::MemorizationProgress>,
     /// When each ability timer the session started runs out; servers keep
     /// them across zones.
     ability_timers: std::collections::BTreeMap<crate::abilities::Recovery, Instant>,
@@ -502,6 +515,9 @@ impl ClientWorld {
         self.zone.doors.close_due(now);
         self.zone.pet_buffs.expire_early(now);
         self.casting.cooldowns.resolve(spells, now);
+        if let Some(clocks) = &mut self.casting.gem_clocks {
+            clocks.resolve(spells);
+        }
         self.expire_casts(now);
     }
 
@@ -801,6 +817,9 @@ impl ClientWorld {
                         self.casting
                             .cooldowns
                             .song_stopped(&player.memorized_spells);
+                        if let Some(clocks) = &mut self.casting.gem_clocks {
+                            clocks.song_stopped(spells);
+                        }
                     }
                     news.notices.push(Notice::SongStopped {
                         spell_id: *spell_id,
@@ -928,6 +947,8 @@ impl ClientWorld {
             ),
             WorldEvent::OwnStun { session_id, revision, state } =>
                 self.project_stun(*session_id, *revision, *state, news),
+            WorldEvent::OwnUnconscious { session_id, revision, unconscious, basis } =>
+                self.project_unconscious(*session_id, *revision, *unconscious, *basis, news),
             WorldEvent::MotionSent {
                 session_id,
                 created,
@@ -1324,14 +1345,7 @@ impl ClientWorld {
             // The Options page shows the character's filters; the session
             // keeping them, or refusing a set this client fitted to the
             // generation first, is not news for the player.
-            // The spell-timing layer owns storing/polling the worker gauge;
-            // this compatibility layer never treats it as server confirmation.
-            WorldEvent::ServerFiltersKept { .. }
-            | WorldEvent::ServerFiltersRefused { .. }
-            | WorldEvent::MemorizationProgress { .. } => {}
-            // The network posture owner already lies down and holds movement
-            // at zero HP. The unconscious presentation layer owns storing it.
-            WorldEvent::OwnUnconscious { .. } => {}
+            WorldEvent::ServerFiltersKept { .. } | WorldEvent::ServerFiltersRefused { .. } => {}
             // A report to the staff went or was refused (6.511).
             WorldEvent::ReportSent {
                 session_id,
@@ -2089,8 +2103,8 @@ impl ClientWorld {
             WorldEvent::CastPending {
                 session_id,
                 spell_id,
-                ..
-            } => self.cast_pending(*session_id, *spell_id, news),
+                gem,
+            } => self.cast_pending(*session_id, *spell_id, *gem, now, news),
             WorldEvent::CastRequestUnconfirmed {
                 session_id,
                 spell_id,
@@ -2158,6 +2172,11 @@ impl ClientWorld {
             WorldEvent::SpellEffect(effect) => self.spell_effect(effect, (now, spells), news),
             WorldEvent::SpellBook(book) => self.spell_book = Some(book.clone()),
             WorldEvent::BookAction(status) => self.book_action_news(status),
+            WorldEvent::MemorizationProgress { session_id, progress } => {
+                if self.accepts_reply(*session_id) {
+                    self.memorization = *progress;
+                } else { news.ignored = true; }
+            }
         }
         changes
     }
@@ -2502,6 +2521,7 @@ impl ClientWorld {
                 self.inventory = Inventory::default();
                 self.spell_book = None;
                 self.book_action = None;
+                self.memorization = None;
                 self.buffs.clear();
                 self.casting = Casting::default();
             }
@@ -2510,6 +2530,7 @@ impl ClientWorld {
                 // its reply/deadline evidence is retained separately.
                 self.forget_admission();
                 self.book_action = None;
+                self.memorization = None;
                 self.casting = Casting::default();
                 self.vitals = Vitals::default();
                 self.inventory = Inventory::default();
@@ -2581,6 +2602,7 @@ impl ClientWorld {
         self.casting.interrupted = None;
         self.casting.reset_cooldowns();
         self.book_action = None;
+        self.memorization = None;
     }
 
     /// Drops the actions in flight: a cast, its request and interruption, and
@@ -2589,6 +2611,7 @@ impl ClientWorld {
         self.buffs.clear_cancellation();
         self.casting.drop_actions();
         self.book_action = None;
+        self.memorization = None;
     }
 
     /// Forgets the admission and its zone.
@@ -2619,6 +2642,7 @@ impl ClientWorld {
         self.raid_flow = raid::RaidFlow::default();
         self.death = None;
         self.own_stun = None;
+        self.own_unconscious = None;
         self.death_threshold = None;
         self.bled_out = None;
         self.forget_zone();

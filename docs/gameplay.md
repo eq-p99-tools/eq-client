@@ -7,6 +7,36 @@ on every server. Disabled controls explain whether the server policy lacks a
 feature or this client lacks the UI. The session validates actions again before
 sending them; queueing a request is not proof of a successful game action.
 
+## Unconsciousness on Titanium
+
+Zero or negative current HP holds movement, turning, swimming, jumping and
+manual posture changes, independently of the stun and feign movement options.
+The existing posture owner lies the player down once and stands them after a
+positive HP refresh. Casts and item clicks then use their existing lying-posture
+restrictions. Unconsciousness never creates a death, corpse or bind transfer;
+those still come from the server.
+
+Successfully submitted environmental damage reduces local HP until the next
+own-HP report replaces that local count. The original received report remains
+available separately in script reports. Equipped HP must be known before a
+control transition can be counted; a raw negative report can still describe a
+living player wearing HP gear. Positive 1 HP can round down to 0% without being
+unconscious.
+
+The control basis reconstructs the received packet's current HP using its
+declared item-bonus convention. It uses the received maximum, rather than
+replacing it with a class or stamina estimate. This does not model the native
+HP-bonus field's unread writer or the unread class/stat coefficients of the
+native maximum-HP formula. Missing or unresolved equipped contributions, and
+a nonpositive reconstructed maximum, withhold that control basis.
+
+Both HP gauges use Titanium's signed per-mille value. Negative values below
+-9 use the separate purple reserve scale; this is a display rule rather than
+a death threshold. The effect-328 damage cutoff is applied only where its
+absence is proven from complete current inputs; an unresolved effect total
+stays unknown. The native forced camera view and negative HP number-label
+behavior remain unread and are not inferred from the gauge.
+
 ## Server banners
 
 Received Titanium marquee notices appear above the scene and fade using the
@@ -1051,13 +1081,18 @@ P99 follows Titanium's racial level table and
 class exceptions. Native race/class/level rules do not restrict EQEmu's separate
 server policy. Unknown proficiency stays blank and cannot be practiced.
 
-On P99, select a skill or language from the received Training list and press Train once. The listed price
-estimates the cost in copper denominations. The skill value follows server
-updates. The point count goes blank as soon as the request is sent. A skill
-increase leaves the practice outcome unknown. Paid practice leaves the
-purse unknown until a new balance arrives. Re-enter the zone before
-practicing again or asking the same guildmaster again. Done closes the
-trainer. This path awaits an attended P99 check.
+On P99, select a skill or language from the received Training list and press
+Train. Following Titanium, an accepted local submission spends one practice
+point and its local price immediately. An ordinary skill already above zero
+increments locally; first skills and languages wait for received values.
+Native press-time and received skill-up lines remain distinct. Received
+updates replace local values and never spend again; absolute point/coin news
+or a new profile replaces projected balances. These projections are not server
+receipts. Further practice and reopening the same guildmaster work without
+zoning while normal eligibility, points and coins permit. Done closes the
+window; a fresh offer reopens it, including between-frame close/reopen. Skin
+reloads rebuild the view from the same model rather than refunding or spending
+points. Gameplay validation of this change remains separate from unit/CI checks.
 
 EQEmu retains its existing point and purse projection after a matching received
 skill or language increase. The update contains no point or cost receipt;

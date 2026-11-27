@@ -1,6 +1,7 @@
 //! Session events enter presentation here; this module never decodes wire
 //! packets. The world model in `eq_client_core::world` applies each update;
 //! this module shows what it changed.
+mod movement_reports;
 
 use super::{ViewerSettings, hud};
 use bevy::prelude::*;
@@ -52,6 +53,7 @@ pub(super) struct OnlineState {
     /// loading screen waits for the player's casting gesture over the zone
     /// they are leaving.
     held: Vec<WorldUpdate>,
+    movement_reports: movement_reports::Reports,
 }
 
 /// Last server-sourced placement for the current admission, not a move receipt.
@@ -70,6 +72,43 @@ pub(super) enum PlacementSource {
 }
 
 impl OnlineState {
+    /// Capture one script report's counter on demand, without advancing movement.
+    pub(crate) fn report_movement(
+        &mut self,
+        label: &str,
+        state: serde_json::Value,
+        outbox: &crate::outbox::Outbox,
+    ) {
+        let Some(session_id) = self.world.session_id().filter(|_| self.world.connected()) else {
+            movement_reports::unavailable(label, state, "no_admission").log();
+            return;
+        };
+        let request_id =
+            match self
+                .movement_reports
+                .request(session_id, label, state, std::time::Instant::now())
+            {
+                Ok(id) => id,
+                Err(report) => {
+                    report.log();
+                    return;
+                }
+            };
+        if outbox
+            .send(
+                &self.world,
+                eq_client_core::ClientCommand::MovementPacketSnapshot {
+                    session_id,
+                    request_id,
+                },
+            )
+            .is_err()
+            && let Some(report) = self.movement_reports.failed(request_id)
+        {
+            report.log();
+        }
+    }
+
     /// The last server placement remains separate from local motion submissions.
     pub(super) fn server_placement(&self) -> Option<ServerPlacement> {
         self.server_placement.filter(|entry| {
@@ -251,6 +290,7 @@ impl OnlineState {
     /// said, keeping the player's own choices, and no character choice is
     /// in progress.
     pub(super) fn restart(&mut self) {
+        self.movement_reports.reset();
         self.connection_revision = self.connection_revision.wrapping_add(1);
         self.deletion.ended();
         self.chat_link_expansion = None;
@@ -451,6 +491,7 @@ impl OnlineState {
             placement_revision: 0,
             loading: default(),
             held: Vec::new(),
+            movement_reports: default(),
         }
     }
 }
@@ -489,12 +530,42 @@ pub(super) fn world(online: Option<&OnlineState>) -> &ClientWorld {
 pub(super) fn tick(
     mut state: ResMut<OnlineState>,
     names: Option<Res<super::spellbook::SpellNames>>,
+    outbox: Option<Res<crate::outbox::Outbox>>,
 ) {
     let spells: &dyn SpellCatalog = match names.as_deref() {
         Some(names) => names,
         None => &NoSpells,
     };
-    state.tick(std::time::Instant::now(), spells);
+    let now = std::time::Instant::now();
+    state.tick(now, spells);
+    if let Some(outbox) = outbox.as_deref() {
+        poll_memorization(state.world(), outbox, now);
+    }
+}
+
+/// Headless, script and drawn clients use the same update opportunity. No
+/// messages leave while there is no active worker-owned memorization.
+pub(super) fn poll_memorization(
+    world: &ClientWorld,
+    outbox: &crate::outbox::Outbox,
+    now: std::time::Instant,
+) {
+    if world.in_world()
+        && world.memorization_progress().is_some()
+        && matches!(
+            world.book_action_status(),
+            Some(eq_client_core::BookActionStatus::Preparing)
+        )
+        && let Some(session_id) = world.session_id()
+    {
+        outbox.tell(
+            world,
+            eq_client_core::ClientCommand::PollSpellbook {
+                session_id,
+                created: now,
+            },
+        );
+    }
 }
 
 /// The panels the session's news reaches besides the world, and the one
@@ -642,8 +713,7 @@ impl Panels<'_> {
                 // A crossing without a transfer releases the movement hold.
                 Reply::ZoneLineRefused => self.motion.crossing_resolved(),
                 Reply::MotionRefused { created, reason } => {
-                    self.motion
-                        .move_refused(state.world().session_id(), *created, reason);
+                    self.motion.refuse_move(state.world(), *created, reason);
                 }
             }
         }
@@ -665,6 +735,14 @@ impl Panels<'_> {
             "Current-admission movement worker result; no server acknowledgment implied"
         );
 
+        if self.motion.ground_result(
+            admission_id,
+            moved.created,
+            moved.position,
+            moved.refused.as_deref(),
+        ) {
+            return;
+        }
         let previewed = self.motion.reconcile_preview(
             admission_id,
             moved.created,
@@ -968,12 +1046,24 @@ pub(super) fn receive(
         }
         let news = state.news(batch.into_iter().chain(lost), waiting);
         for update in news {
+            if let WorldUpdate::MovementPacketSnapshot(snapshot) = update {
+                let admission = state
+                    .world
+                    .connected()
+                    .then(|| state.world.session_id())
+                    .flatten();
+                if let Some(report) = state.movement_reports.answer(admission, snapshot) {
+                    report.log();
+                }
+                continue;
+            }
             let (changes, before, old_gems) =
                 apply(&mut state.world, &update, spells, outbox.as_deref());
             state.observe_server_placement(&changes);
             trace(&update, &changes, &state.world);
             panels.merchant_news(&update, &changes, &state.world);
             if let Some(reason) = changes.reset {
+                state.movement_reports.reset();
                 chat.socials = super::socials::Inbox::default();
                 match reason {
                     Reset::Entered => chat.admit_links(&state),
@@ -1730,6 +1820,48 @@ pub(crate) mod testing {
 mod tests {
     mod target_end;
     use super::*;
+
+    #[test]
+    fn memorization_polls_only_active_admitted_preparation_with_the_update_timestamp() {
+        use eq_client_core::{BookActionStatus, ClientCommand, MemorizationProgress};
+        let mut state = OnlineState::new(true);
+        testing::admit(&mut state, 5, testing::player(7));
+        let (sender, sent) = std::sync::mpsc::sync_channel(8);
+        let outbox = crate::outbox::Outbox::new(Some(sender));
+        let now = std::time::Instant::now();
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+        testing::book_action(&mut state, BookActionStatus::Preparing);
+        // Preparing alone can also mean a scribe or an older caller.
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+        testing::news(
+            &mut state,
+            [WorldEvent::MemorizationProgress {
+                session_id: 5,
+                progress: Some(MemorizationProgress {
+                    gem: 0,
+                    spell_id: 42,
+                    remaining: 92,
+                    approximate: false,
+                }),
+            }],
+        );
+        poll_memorization(state.world(), &outbox, now);
+        assert!(
+            matches!(sent.try_recv(), Ok(ClientCommand::PollSpellbook { session_id: 5, created }) if created == now)
+        );
+        testing::connect(&mut state, false);
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+        testing::connect(&mut state, true);
+        testing::book_action(&mut state, BookActionStatus::AwaitingReply);
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+        testing::book_action(&mut state, BookActionStatus::Cancelled("Standing".into()));
+        poll_memorization(state.world(), &outbox, now);
+        assert!(sent.try_recv().is_err());
+    }
 
     #[test]
     fn a_reports_echo_stands_for_the_sent_line_and_a_refusal_drops_it() {

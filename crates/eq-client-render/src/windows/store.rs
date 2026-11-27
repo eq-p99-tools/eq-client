@@ -422,7 +422,10 @@ mod tests {
             scope: 0x1234,
             dimensions: Vec2::new(610.0, 320.0),
         });
-        let layouts = BTreeMap::from([(super::super::WindowId::Chat, chat)]);
+        let layouts = BTreeMap::from([
+            (super::super::WindowId::Chat, chat),
+            (super::super::WindowId::Map, chat),
+        ]);
         assert_eq!(decode(&encode(&layouts)), layouts);
         for size in [
             "",

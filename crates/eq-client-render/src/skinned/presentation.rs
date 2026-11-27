@@ -59,6 +59,22 @@ pub(super) fn fill_to(node: &mut Mut<Node>, step: Option<&Step>, fraction: f32) 
     }
 }
 
+type GaugeContentQueries<'w, 's> = (
+    Query<'w, 's, (&'static Shows, &'static mut Text, &'static mut TextColor)>,
+    Query<
+        'w,
+        's,
+        (&'static super::LinesFillTint, &'static mut ImageNode),
+        Without<super::HpFillTint>,
+    >,
+    Query<
+        'w,
+        's,
+        (&'static super::HpFillTint, &'static mut ImageNode),
+        Without<super::LinesFillTint>,
+    >,
+);
+
 /// Shows the world in the skinned windows' gauges and labels.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
@@ -77,13 +93,13 @@ pub(crate) fn show(
         Res<crate::hud::action_bar::ActionRequests>,
     ),
     mut fills: Query<(&Shows, &mut Node, Option<&Step>), Without<Text>>,
-    (mut texts, mut lines): (
-        Query<(&Shows, &mut Text, &mut TextColor)>,
-        Query<(&super::LinesFillTint, &mut ImageNode)>,
-    ),
+    (mut texts, mut lines, mut hp_images): GaugeContentQueries<'_, '_>,
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
     let world = online.world();
+    for (normal, mut image) in &mut hp_images {
+        image.color = crate::unconscious::hp_tint(world).unwrap_or(normal.0);
+    }
     let load = crate::speed::load(world, &names);
     show_boxes(&mut boxes, world, &combat, &trade);
     fill_gauges(
@@ -93,7 +109,7 @@ pub(crate) fn show(
         &breath,
     );
     for (tint, mut image) in &mut lines {
-        let ratio = filled(world, (hud.resource_estimate, &requests), tint.0);
+        let ratio = lines_source(world, (hud.resource_estimate, &requests), tint.0);
         let color = if ratio <= -0.01 {
             Color::srgb_u8(192, 192, 192)
         } else {
@@ -215,13 +231,32 @@ fn fill_gauges(
                 filled(world, estimate_and_requests, kind)
             };
             let fraction = if matches!(shows, Shows::LinesFill(_)) {
-                lines_fraction(fraction)
+                lines_fraction(if kind == 8 {
+                    fraction
+                } else {
+                    lines_source(world, estimate_and_requests, kind)
+                })
             } else {
                 fraction.clamp(0.0, 1.0)
             };
             fill_to(&mut node, step, fraction);
         }
     }
+}
+
+/// Lines use the signed gauge input; HP's purple reserve transformation is
+/// already applied to the ordinary fill and must not hide the negative sign.
+fn lines_source(
+    world: &eq_client_core::world::ClientWorld,
+    estimate_and_requests: (Option<(u32, u32)>, &crate::hud::action_bar::ActionRequests),
+    kind: u32,
+) -> f32 {
+    if kind == 1
+        && let Some(gauge) = world.hit_point_gauge()
+    {
+        return f32::from(gauge.value()) / 1000.0;
+    }
+    filled(world, estimate_and_requests, kind)
 }
 
 /// The native gauge's integer thousandths keep a bubble full at its final
@@ -367,7 +402,14 @@ pub(super) fn filled(
     use crate::hud::action_bar::{BookChange, book_progress};
     let now = std::time::Instant::now();
     match kind {
-        9 => book_progress(world, requests, BookChange::Memorize, now),
+        // Titanium's authored memorize gauge shows remaining points. The
+        // action bar shows completion; both read the same worker countdown.
+        9 => book_progress(world, requests, BookChange::Memorize, now).map(|completed| match world
+            .generation()
+        {
+            eq_client_core::GameDialect::Titanium => 1.0 - completed,
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => completed,
+        }),
         10 => book_progress(world, requests, BookChange::Scribe, now),
         _ => fraction(world, estimate, kind),
     }

@@ -9,6 +9,67 @@ use eq_client_core::{
     ClientCommand, PlayerState, SpellUpdate, WorldEvent, WorldPosition, world::ClientWorld,
 };
 
+#[test]
+fn fallback_hp_fill_uses_the_signed_purple_scale_and_restores_normal_tint() {
+    let mut online = OnlineState::new(true);
+    testing::admit(&mut online, 1, testing::player(7));
+    testing::news(
+        &mut online,
+        [
+            WorldEvent::Inventory(eq_client_core::inventory::InventoryUpdate::Snapshot(
+                Vec::new(),
+            )),
+            WorldEvent::HitPoints {
+                spawn_id: 7,
+                current: -5,
+                maximum: 100,
+                items: eq_client_core::ItemHitPoints::LeftOut,
+            },
+        ],
+    );
+    let mut app = App::new();
+    app.insert_resource(online)
+        .init_resource::<HudState>()
+        .init_resource::<crate::spellbook::SpellNames>()
+        .init_resource::<messages::Messages>()
+        .add_systems(Update, update);
+    let fill = app
+        .world_mut()
+        .spawn((
+            HudFill(Stat::Hp),
+            Node::default(),
+            BackgroundColor(theme::HP.with_alpha(0.3)),
+        ))
+        .id();
+    app.update();
+    assert_eq!(
+        app.world().get::<Node>(fill).unwrap().width,
+        Val::Percent(60.0)
+    );
+    assert_eq!(
+        app.world().get::<BackgroundColor>(fill).unwrap().0,
+        Color::srgb_u8(128, 0, 128)
+    );
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [WorldEvent::HitPoints {
+            spawn_id: 7,
+            current: 25,
+            maximum: 100,
+            items: eq_client_core::ItemHitPoints::LeftOut,
+        }],
+    );
+    app.update();
+    assert_eq!(
+        app.world().get::<Node>(fill).unwrap().width,
+        Val::Percent(25.0)
+    );
+    assert_eq!(
+        app.world().get::<BackgroundColor>(fill).unwrap().0,
+        theme::HP.with_alpha(0.3)
+    );
+}
+
 /// A cleric with spell 73 in its first gem, admitted in session 7 as spawn 12.
 pub(super) fn caster() -> PlayerState {
     let mut gems = [None; 8];

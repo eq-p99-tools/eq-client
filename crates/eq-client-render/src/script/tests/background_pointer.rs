@@ -70,6 +70,101 @@ fn fixture(steps: Vec<Step>) -> (App, Entity, Entity, Entity) {
 }
 
 #[test]
+fn scripted_gem_clicks_and_hotkeys_send_nothing_during_post_memorize_refresh() {
+    use crate::{hud, online::testing, outbox::Outbox};
+    use eq_client_core::{
+        ClientCommand, SpellUpdate, WorldEvent,
+        world::{SpellCatalog, SpellTiming},
+    };
+    struct Catalog;
+    impl SpellCatalog for Catalog {
+        fn timing(&self, spell: u32) -> Option<SpellTiming> {
+            (spell == 73).then_some(SpellTiming {
+                recovery_ms: 1500,
+                recast_ms: 6000,
+            })
+        }
+        fn instant_effect(&self, _: u32) -> bool {
+            false
+        }
+        fn feigns(&self, _: u32) -> bool {
+            false
+        }
+    }
+    for hotkey in [false, true] {
+        for locked in [false, true] {
+            let step = if hotkey {
+                Step::Press(vec![KeyCode::AltLeft, KeyCode::Digit1])
+            } else {
+                Step::Click(ClickTarget::SpellGem(0))
+            };
+            let (mut app, _, gem, _) = fixture(vec![step]);
+            app.world_mut()
+                .entity_mut(gem)
+                .remove::<crate::give::GiveButton>()
+                .insert(hud::SpellGem(0));
+            let mut player = testing::player(7);
+            player.class = Some(2);
+            player.memorized_spells[0] = Some(73);
+            let now = std::time::Instant::now();
+            {
+                let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+                testing::admit(&mut online, 7, player);
+                testing::news_at(
+                    &mut online,
+                    [WorldEvent::Spell(SpellUpdate::Slot {
+                        slot: 0,
+                        spell_id: 73,
+                        mode: 1,
+                    })],
+                    if locked {
+                        now
+                    } else {
+                        now.checked_sub(Duration::from_secs(8)).unwrap()
+                    },
+                );
+                online.tick(now, &Catalog);
+            }
+            let (tx, rx) = std::sync::mpsc::sync_channel(8);
+            app.insert_resource(Outbox::new(Some(tx)))
+                .add_systems(Update, hud::actions);
+            for ms in (0..=800).step_by(10) {
+                frame_at(&mut app, ms);
+            }
+            if hotkey {
+                assert!(
+                    app.world()
+                        .resource::<SeenKeys>()
+                        .0
+                        .iter()
+                        .any(|event| event.key_code == KeyCode::Digit1 && event.state.is_pressed())
+                );
+            } else {
+                assert!(
+                    app.world()
+                        .resource::<Recorded>()
+                        .left_clicks
+                        .contains(&gem)
+                );
+            }
+            if locked {
+                assert!(rx.try_recv().is_err(), "early input must not queue a cast");
+            } else {
+                assert!(matches!(
+                    rx.try_recv(),
+                    Ok(ClientCommand::CastSpell {
+                        gem: 0,
+                        spell_id: 73,
+                        ..
+                    })
+                ));
+                assert!(rx.try_recv().is_err(), "one gesture sends at most once");
+            }
+        }
+    }
+}
+
+#[test]
 fn background_clicks_minimize_and_restore_a_skinned_map_without_focus() {
     use crate::windows::{self, Frame, Minimize, WindowId};
 

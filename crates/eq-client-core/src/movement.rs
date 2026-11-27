@@ -8,6 +8,8 @@ mod carrier_walls;
 mod choices;
 mod falls;
 mod flight;
+mod ground;
+pub use ground::GroundMotion;
 mod headroom;
 pub use headroom::{HeadroomBounds, HeadroomHit, HeadroomProbe};
 mod instances;
