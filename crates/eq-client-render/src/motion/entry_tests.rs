@@ -29,6 +29,10 @@ impl Liquids for Shore {
         enter <= leave
     }
 
+    fn segment_known(&self, from: Vec3, to: Vec3) -> bool {
+        from.is_finite() && to.is_finite()
+    }
+
     fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
         Some(Box::new(self.clone()))
     }
@@ -62,9 +66,66 @@ fn airborne(state: &Controls) -> AirState {
         .map(|air| (air.velocity(), air.drift(), air.peak()))
 }
 
+fn ready(f: &mut Native, falls: bool) {
+    let grant = f.app.world().resource::<Controls>().speeds();
+    receive(
+        f,
+        eq_client_core::WorldEvent::MotionState {
+            session_id: 11,
+            units_per_second: grant.units_per_second,
+            backward_units_per_second: grant.backward_units_per_second,
+            walk_units_per_second: grant.walk_units_per_second,
+            strafe_units_per_second: grant.strafe_units_per_second,
+            strafe_walk_units_per_second: grant.strafe_walk_units_per_second,
+            swim_backward_units_per_second: grant.swim_backward_units_per_second,
+            swim: grant.swim,
+            diagonal: grant.diagonal,
+            falls,
+            jump_factor: grant.jump_factor,
+        },
+    );
+}
+
+fn walking_shore(f: &mut Native) {
+    // Shallow entry also exercises the ordinary no-fall walking path: the
+    // origin enters water while the standing head remains in known air.
+    let shore = CollisionWorld::new([
+        [
+            [-200., -3.85, -200.],
+            [200., -3.85, 200.],
+            [200., -3.85, -200.],
+        ],
+        [
+            [-200., -3.85, -200.],
+            [-200., -3.85, 200.],
+            [200., -3.85, 200.],
+        ],
+    ])
+    .unwrap()
+    .with_liquids(Shore)
+    .with_own_liquids(Shore)
+    .with_swim_origin(3.75);
+    f.app.insert_resource(Collision(Some(shore)));
+    let start = world_position([-0.1, -0.1, 0.], 0.);
+    online::testing::place(
+        &mut f.app.world_mut().resource_mut::<online::OnlineState>(),
+        start,
+    );
+    f.app
+        .world_mut()
+        .get_mut::<Transform>(f.player)
+        .unwrap()
+        .translation = Vec3::new(-0.1, -0.1, 0.);
+    // Heading0 faces renderer+X, across the fixture's x=0 shoreline.
+    latency_tests::key(&mut f.app, KeyCode::KeyW, true);
+}
+
 fn entry(producer: Producer, wet: water::WetVelocity) -> (Native, MovementRequest, AirState) {
     let falling = matches!(producer, Producer::Fall);
-    let mut f = Native::new(false, if falling { 0.2 } else { -4. });
+    let mut f = Native::new(false, if falling { 0.2 } else { -0.1 });
+    // Keep actual received state consistent with the controller. A later
+    // Receive pass must not silently revoke this fixture's fall controller.
+    ready(&mut f, !matches!(producer, Producer::WalkWithoutFall));
     if falling {
         f.app
             .world_mut()
@@ -74,50 +135,18 @@ fn entry(producer: Producer, wet: water::WetVelocity) -> (Native, MovementReques
             .unwrap()
             .carry_from_water(-8., Vec3::X * 2., 0.2 - 3.75);
     } else {
-        // A real collision walk reaches the shore. Exercise both its ordinary
-        // dry controller and the achieved-travel branch without that controller.
-        let shore = CollisionWorld::new([
-            [
-                [-200., -7.75, -200.],
-                [200., -7.75, 200.],
-                [200., -7.75, -200.],
-            ],
-            [
-                [-200., -7.75, -200.],
-                [-200., -7.75, 200.],
-                [200., -7.75, 200.],
-            ],
-        ])
-        .unwrap()
-        .with_liquids(Shore)
-        .with_own_liquids(Shore)
-        .with_swim_origin(3.75);
-        f.app.insert_resource(Collision(Some(shore)));
-        let start = world_position([-0.1, -4., 0.], 0.);
-        online::testing::place(
-            &mut f.app.world_mut().resource_mut::<online::OnlineState>(),
-            start,
-        );
-        f.app
-            .world_mut()
-            .get_mut::<Transform>(f.player)
-            .unwrap()
-            .translation = Vec3::new(-0.1, -4., 0.);
-        if matches!(producer, Producer::WalkWithoutFall) {
-            f.app.world_mut().resource_mut::<Controls>().airborne = None;
-        }
-        crate::keys::testing::bind(
-            &mut f.app,
-            Act::StrafeLeft,
-            crate::keys::Chord::key(KeyCode::KeyZ),
-        );
-        latency_tests::key(&mut f.app, KeyCode::KeyZ, true);
+        walking_shore(&mut f);
     }
     {
         let mut controls = f.app.world_mut().resource_mut::<Controls>();
         controls.wet = wet;
         controls.suppress_surface = true;
     }
+    let (request, before_air) = crossing(&mut f, falling, wet);
+    (f, request, before_air)
+}
+
+fn crossing(f: &mut Native, falling: bool, wet: water::WetVelocity) -> (MovementRequest, AirState) {
     for _ in 0..120 {
         let before_air = airborne(f.app.world().resource::<Controls>());
         for command in f.commands_frame(0.) {
@@ -143,12 +172,12 @@ fn entry(producer: Producer, wet: water::WetVelocity) -> (Native, MovementReques
                     "the real crossing seeded a trial: {request:?}"
                 );
                 assert_eq!(request.mode == MovementMode::Fall, falling);
-                return (f, request, before_air);
+                return (request, before_air);
             }
             // Controlled local success echoes advance the actual dry producer.
             // This fixture tests the frontend transaction, not network admission.
             receive(
-                &mut f,
+                f,
                 eq_client_core::WorldEvent::MotionSent {
                     session_id: request.session_id,
                     created: request.created,
