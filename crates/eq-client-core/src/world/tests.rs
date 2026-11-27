@@ -8,6 +8,7 @@ mod guild_status;
 mod levels;
 mod loot_requests;
 mod own_stun;
+mod own_unconscious;
 mod pet_buffs;
 mod qol;
 mod wear;
@@ -2208,6 +2209,35 @@ fn shown_hp_adds_back_what_equipped_items_give() {
     // Another spawn's report is not the player's.
     assert!(game(&mut world, hit_points(5, 1, 2)).ignored);
     assert_eq!(world.hit_points(), Some((0, 150)));
+}
+
+#[test]
+fn signed_counted_hp_keeps_display_zero_and_death_as_separate_facts() {
+    let mut world = admitted();
+    assert_eq!(world.counted_hit_points(), None);
+    game(&mut world, hit_points(9, -20, 150));
+    // A report without equipment facts cannot establish the full signed HP.
+    assert_eq!(world.counted_hit_points(), None);
+    game(&mut world, inventory(vec![chest()]));
+    assert_eq!(world.counted_hit_points(), Some(80));
+    assert_eq!(world.vitals().reported_hp.unwrap().current, -20);
+    game(&mut world, inventory(Vec::new()));
+    for current in [1, 0, -1, -20, 15] {
+        game(&mut world, hit_points(9, current, 150));
+        assert_eq!(world.counted_hit_points(), Some(i64::from(current)));
+        assert!(!world.is_dead());
+    }
+    game(&mut world, hit_points(9, 1, 150));
+    assert_eq!(world.health(9), Some(0));
+    assert_eq!(world.counted_hit_points(), Some(1));
+    // A positive report after a real death remains a report, not recovery.
+    game(&mut world, WorldEvent::DeathBind { session_id: 1 });
+    game(&mut world, hit_points(9, 15, 150));
+    assert_eq!(world.counted_hit_points(), Some(15));
+    assert!(world.is_dead());
+    assert_eq!(world.hit_points(), Some((0, 150)));
+    game(&mut world, entered(2));
+    assert_eq!(world.counted_hit_points(), None);
 }
 
 #[test]

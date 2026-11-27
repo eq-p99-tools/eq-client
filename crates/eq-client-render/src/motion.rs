@@ -1985,6 +1985,18 @@ pub(super) fn input(
     {
         controls.following = None;
     }
+    // HP control skips the whole movement/report pass (0x4ac9xx), even
+    // swimming, turning or passive reports; stun/feign departures do not
+    // bypass it. Keep the received calibration for ordinary wake recovery.
+    if online.world().is_unconscious() {
+        controls.following = None;
+        controls.reset(None);
+        if let Some(grant) = online.world().motion() {
+            controls.grant(grant, online.world().generation().root());
+        }
+        controls.held = Some(Held::Gate);
+        return;
+    }
     // An arrival aboard holds the player until the session places them
     // (read R36 §3): no frames run in the program meanwhile.
     if !online.enabled
@@ -5467,6 +5479,50 @@ pub(super) mod tests {
             receiver.try_recv().is_err(),
             "turning the option off restores the hold"
         );
+    }
+
+    #[test]
+    fn unconscious_hp_holds_voluntary_motion_even_with_movement_departures() {
+        for hp in [1, 0, -1] {
+            let (mut app, receiver) = app();
+            for fix in [
+                Fix::WalkWhileWinded,
+                Fix::MoveWhileFeigned,
+                Fix::Fly,
+                Fix::JesusMode,
+            ] {
+                movement_choice(&mut app, fix, true);
+            }
+            app.world_mut().resource_mut::<Controls>().autorun = true;
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .press(KeyCode::Space);
+            crate::online::testing::news(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                [
+                    eq_client_core::WorldEvent::Inventory(
+                        eq_client_core::inventory::InventoryUpdate::Snapshot(Vec::new()),
+                    ),
+                    eq_client_core::WorldEvent::HitPoints {
+                        spawn_id: 7,
+                        current: hp,
+                        maximum: 23,
+                        items: eq_client_core::ItemHitPoints::LeftOut,
+                    },
+                ],
+            );
+            app.update();
+            let commands: Vec<_> = receiver.try_iter().collect();
+            if hp > 0 {
+                assert!(!commands.is_empty(), "positive 1 HP is still awake");
+            } else {
+                assert!(commands.is_empty(), "unconscious HP {hp}: {commands:?}");
+                let controls = app.world().resource::<Controls>();
+                assert!(!controls.autorun);
+                assert!(controls.jump.is_none());
+                assert!(controls.facing.is_none());
+            }
+        }
     }
 
     #[test]

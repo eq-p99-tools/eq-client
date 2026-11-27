@@ -19,6 +19,31 @@ pub struct ReportedHp {
     pub items: ItemHitPoints,
 }
 
+/// Titanium's own-HP gauge value, truncated to per mille and clamped to
+/// -110..1000 (0x5598bc). This display value establishes no life state.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HpGauge(i16);
+
+impl HpGauge {
+    /// The native signed per-mille value, including its -2 draw sentinel.
+    #[must_use]
+    pub const fn value(self) -> i16 {
+        self.0
+    }
+
+    /// The drawn fraction (0x5049fe): negative HP uses the purple reserve
+    /// scale below -9; -9..-1 draws empty except for the -2 sentinel.
+    #[must_use]
+    pub fn ratio(self) -> f64 {
+        match self.0 {
+            -2 => 1.0,
+            -110..=-10 => f64::from(1100 + 10 * self.0) / 1000.0,
+            -9..=-1 => 0.0,
+            value => f64::from(value) / 1000.0,
+        }
+    }
+}
+
 /// The player's HP, mana, endurance and experience as last reported.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct Vitals {
@@ -33,6 +58,9 @@ pub struct Vitals {
     pub reported_hp: Option<ReportedHp>,
     /// HP the equipped items add, as last worked out.
     pub item_hp: Option<i64>,
+    /// Successfully submitted Titanium environmental damage since the last
+    /// own-HP report. This local counter is separate from received HP facts.
+    pub local_hp_damage: u64,
 }
 
 impl Vitals {
@@ -50,6 +78,12 @@ impl Vitals {
     /// equipped items give to whichever values leave it out (unknown item HP
     /// counts as none). A dead player has none left.
     pub(super) fn hit_points(&self, dead: bool) -> Option<(u32, u32)> {
+        let (current, maximum) = self.signed_hit_points(dead)?;
+        let shown = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
+        Some((shown(current), shown(maximum)))
+    }
+
+    fn signed_hit_points(&self, dead: bool) -> Option<(i64, i64)> {
         let report = self.reported_hp?;
         let items = self.item_hp.unwrap_or(0);
         let to_maximum = match report.items {
@@ -60,11 +94,33 @@ impl Vitals {
         let current = if dead {
             0
         } else {
-            i64::from(report.current) + to_current
+            self.local_current(report.current) + to_current
         };
         let maximum = i64::from(report.maximum) + to_maximum;
-        let shown = |value: i64| u32::try_from(value.max(0)).unwrap_or(u32::MAX);
-        Some((shown(current), shown(maximum)))
+        Some((current, maximum))
+    }
+
+    fn local_current(&self, reported: i32) -> i64 {
+        if self.local_hp_damage == 0 {
+            i64::from(reported)
+        } else {
+            i64::from(reported)
+                .saturating_sub(i64::try_from(self.local_hp_damage).unwrap_or(i64::MAX))
+                .clamp(-32768, 10_000_000)
+        }
+    }
+
+    /// The native signed gauge, with no division when maximum is missing
+    /// or invalid. Text HP retains its existing nonnegative presentation.
+    pub(super) fn gauge(&self, dead: bool) -> Option<HpGauge> {
+        let (current, maximum) = self.signed_hit_points(dead)?;
+        if maximum <= 0 {
+            return None;
+        }
+        let value = (current.saturating_mul(1000) / maximum).clamp(-110, 1000);
+        Some(HpGauge(
+            i16::try_from(value).expect("native gauge range fits i16"),
+        ))
     }
 
     /// The player's current HP, the last report with what equipped items add
@@ -163,5 +219,66 @@ mod tests {
         assert_eq!(percent((75, 125)), Some(60));
         assert_eq!(percent((130, 125)), Some(100));
         assert_eq!(percent((0, 0)), None);
+    }
+
+    #[test]
+    fn titanium_signed_hp_gauge_has_a_separate_purple_scale_and_sentinel() {
+        use ItemHitPoints::LeftOutOfCurrent;
+        let gauge = |current| {
+            Vitals {
+                item_hp: Some(0),
+                ..reported(current, 1000, LeftOutOfCurrent)
+            }
+            .gauge(false)
+            .unwrap()
+        };
+        for (current, fill) in [
+            (1000, 1.0),
+            (1, 0.001),
+            (0, 0.0),
+            (-1, 0.0),
+            (-2, 1.0),
+            (-9, 0.0),
+            (-10, 1.0),
+            (-50, 0.6),
+            (-110, 0.0),
+            (-200, 0.0),
+        ] {
+            let gauge = gauge(current);
+            assert_eq!(
+                gauge.value(),
+                i16::try_from(current.clamp(-110, 1000)).unwrap()
+            );
+            assert!((gauge.ratio() - fill).abs() < f64::EPSILON);
+        }
+        // The signed report is adjusted for items before the native ratio.
+        assert_eq!(
+            reported(-30, 100, LeftOutOfCurrent).gauge(false),
+            Some(HpGauge(-50))
+        );
+        assert_eq!(
+            reported(-30, 100, LeftOutOfCurrent).gauge(true),
+            Some(HpGauge(0))
+        );
+        assert_eq!(reported(1, 0, LeftOutOfCurrent).gauge(false), None);
+    }
+
+    #[test]
+    fn local_hp_delta_bounds_apply_to_base_before_equipment() {
+        let vitals = Vitals {
+            item_hp: Some(-20),
+            local_hp_damage: 1,
+            ..reported(10_000_010, 10_000_020, ItemHitPoints::LeftOut)
+        };
+        assert_eq!(
+            vitals.signed_hit_points(false),
+            Some((9_999_980, 10_000_000))
+        );
+        let lower = Vitals {
+            item_hp: Some(-50),
+            local_hp_damage: 100,
+            ..reported(-32760, 100, ItemHitPoints::LeftOut)
+        };
+        assert_eq!(lower.signed_hit_points(false), Some((-32818, 50)));
     }
 }

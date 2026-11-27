@@ -42,6 +42,8 @@ pub(crate) enum Refusal {
     Away,
     /// The player is dead, awaiting their return home.
     Dead,
+    /// HP control holds voluntary movement and posture until waking.
+    Unconscious,
     /// The session does not let the player do this on this server.
     Unavailable(Capability),
     /// This provider has no complete, usable spell replay for the current zone.
@@ -68,6 +70,7 @@ impl Refusal {
             Self::NotAdmitted => "Enter the world first",
             Self::Away => "You can't do that right now",
             Self::Dead => "You can't do that while dead",
+            Self::Unconscious => "You can't move while unconscious",
             Self::Unavailable(_) => UNAVAILABLE,
             Self::SpellData => "Spell data is not ready for casting",
             Self::SpellSet => "Wait for the spell set to finish",
@@ -537,6 +540,18 @@ impl Outbox {
             }
             if world.is_dead() && !preference {
                 return Err(Refusal::Dead);
+            }
+            if world.is_unconscious()
+                && matches!(
+                    command,
+                    ClientCommand::Move(_)
+                        | ClientCommand::GroundFrame { .. }
+                        | ClientCommand::Jump { .. }
+                        | ClientCommand::SetPosture { .. }
+                        | ClientCommand::FeignLanded { .. }
+                )
+            {
+                return Err(Refusal::Unconscious);
             }
             if !(world.in_world() || preference && world.connected()) {
                 return Err(Refusal::Away);
