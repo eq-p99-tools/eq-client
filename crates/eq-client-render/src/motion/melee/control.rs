@@ -1,5 +1,8 @@
 //! One local intent/facing owner around the existing bounded approach.
-use super::*;
+use super::{
+    Assist, Body, ClientWorld, Instant, MAX_DISTANCE, OrbitInput, Vec3, approach_reason, follow,
+    orbit, target, transition_reason,
+};
 
 pub(in crate::motion) struct Steering {
     pub follow: follow::Step,

@@ -157,6 +157,7 @@ pub struct Script {
     /// A live chase retains the actor selected at its start, across replans.
     chase_actor: Option<(u64, u64)>,
     chase_needs_route: bool,
+    chase_edges: chase_route::Edges,
     chase_route_reason: Option<&'static str>,
     drop_refusal_seen: Option<std::time::Instant>,
     /// The route a `walk` step is searching for or following.
@@ -319,6 +320,7 @@ impl Script {
             allow_drops: false,
             chase_actor: None,
             chase_needs_route: false,
+            chase_edges: chase_route::Edges::Grounded,
             chase_route_reason: None,
             drop_refusal_seen: None,
             route: None,
@@ -867,6 +869,7 @@ impl Script {
         self.awaited = None;
         self.chase_actor = None;
         self.chase_needs_route = false;
+        self.chase_edges = chase_route::Edges::Grounded;
         self.chase_route_reason = None;
         self.drop_refusal_seen = None;
         self.approached = None;
@@ -1599,6 +1602,15 @@ pub(super) fn drive(
         script.retire(&mut commands);
         return;
     }
+    // A finished run only releases its own input. A native button may remain held.
+    if script.current.is_none() && script.follow.is_none() && script.exhausted() {
+        script.progress.complete_step();
+        script.release(&mut keys, &mut mouse);
+        script.progress.finish(Phase::Completed, "Script finished");
+        script.retire(&mut commands);
+        info!("Script finished");
+        return;
+    }
     let window = windows.single().ok();
     if script.input_mode == InputMode::Background {
         // Watching the window does not take input ownership. Only genuine
@@ -1639,13 +1651,6 @@ pub(super) fn drive(
         Phase::Running
     };
     if script.current.is_none() && script.exhausted() {
-        if script.follow.is_none() {
-            script.release(&mut keys, &mut mouse);
-            script.progress.finish(Phase::Completed, "Script finished");
-            script.retire(&mut commands);
-            info!("Script finished");
-            return;
-        }
         script.poll(now);
         if !script.progress.phase.active() {
             script.release(&mut keys, &mut mouse);
@@ -2132,7 +2137,15 @@ pub(super) fn drive(
                     .airborne
                     .as_ref()
                     .is_some_and(|airborne| airborne.peak().is_some());
-                let step = route.next_with(world, (feet, falling), goal, SEARCH_BUDGET, now);
+                // A fresh player position can reach the destination while an older path is still in flight.
+                let step = if !falling
+                    && place_range.is_some_and(|range| {
+                        walking::end(feet, goal, range, false, false) == Ok(true)
+                    }) {
+                    RouteStep::Arrived
+                } else {
+                    route.next_with(world, (feet, falling), goal, SEARCH_BUDGET, now)
+                };
                 let call = call.elapsed();
                 if let RouteStep::Toward(toward) = step {
                     if !falling
@@ -3226,6 +3239,7 @@ pub(super) fn drive(
         }
         Step::Chase(..) => {
             script.chase_needs_route = false;
+            script.chase_edges = chase_route::Edges::Grounded;
             script.chase_route_reason = None;
             script.awaited = online.world().target().selected;
             script.chase_actor = script.awaited.and_then(|id| {

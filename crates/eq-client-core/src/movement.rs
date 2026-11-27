@@ -18,6 +18,8 @@ pub use instances::CollisionInstance;
 use instances::Surface;
 mod liquids;
 mod navigator;
+mod swim_scene;
+pub use swim_scene::SwimCollision;
 mod observations;
 pub use observations::{ContactReport, MotionObservation};
 pub mod navmesh;
@@ -38,7 +40,9 @@ pub use eq_network_game::movement::{
     SHORELINE_COOLDOWN, SHORELINE_FRAME_MILLIS, SHORELINE_FRAMES, ShorelineFrame, ShorelineStroke,
     ShorelineTrace, ShorelineVelocity,
 };
-pub use eq_network_game::movement::{SwimBasis, SwimControl, SwimControls, SwimInput};
+pub use eq_network_game::movement::{
+    SwimBasis, SwimControl, SwimControls, SwimInput, SwimSceneHandle, SwimSceneMotion,
+};
 pub use falls::{HARMLESS_DROP, fall_damage};
 use liquids::LiquidGuard;
 pub use liquids::{GuardView, Liquid, Liquids, SurfaceRegion};

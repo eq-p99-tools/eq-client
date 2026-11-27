@@ -18,7 +18,7 @@ pub(crate) struct Snapshot {
 pub(super) struct Path {
     velocities: Vec<(f32, Snapshot)>,
     positions: Vec<(f32, Vec3)>,
-    airborne: bool,
+    physical_arc: bool,
     #[cfg(test)]
     pub(super) test_steps: Vec<(Vec3, Vec3)>,
 }
@@ -44,9 +44,16 @@ impl Path {
         Some(snapshot)
     }
 
+    /// Retains a genuine completed wet-frame origin for accepted playback.
+    /// A proposed or refused prefix must never enter the display queue.
+    pub(super) fn completed_position(&mut self, seconds: f32, origin: Vec3) {
+        self.positions.push((seconds, origin));
+        self.physical_arc = true;
+    }
+
     pub(super) fn position(&mut self, seconds: f32, position: Vec3, airborne: bool) {
         self.positions.push((seconds, position));
-        self.airborne |= airborne;
+        self.physical_arc |= airborne;
     }
 
     /// Convert measured feet to the actor origin once, keeping the exact
@@ -69,12 +76,12 @@ impl Path {
     }
 
     pub(super) fn has_positions(&self) -> bool {
-        self.airborne && self.positions.len() >= 2
+        self.physical_arc && self.positions.len() >= 2
     }
 
     pub(super) fn clear_positions(&mut self) {
         self.positions.clear();
-        self.airborne = false;
+        self.physical_arc = false;
     }
 
     pub(super) fn position_at(&self, seconds: f32, from: Vec3, to: Vec3) -> Option<Vec3> {
@@ -552,7 +559,7 @@ mod tests {
                         app.world_mut()
                             .resource_mut::<ButtonInput<KeyCode>>()
                             .press(KeyCode::KeyW);
-                        app.world_mut().resource_mut::<Controls>().test_span =
+                        app.world_mut().resource_mut::<Controls>().sampling.span =
                             Some(f32::from(milliseconds) / 1000.0);
                         app.update();
                         crate::character::testing::stores(app.world_mut());

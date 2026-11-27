@@ -189,8 +189,7 @@ fn locked_rmb_idle_drag_and_release_keep_the_actor_and_view_continuous() {
                 view(&mut scene)
                     .camera
                     .rotation
-                    .angle_between(before.camera.rotation)
-                    < 1e-5
+                    .abs_diff_eq(before.camera.rotation, 1e-5)
             );
             let yaw = before.yaw - 73. * turn_per_pixel(&mut scene);
             motion(&mut scene, Vec2::new(73., 20.));
@@ -305,11 +304,15 @@ fn retained_native_ground_facing_cannot_recenter_a_locked_camera() {
             .run_system_once(camera::orbit_camera)
             .unwrap();
         let after = view(&mut scene);
-        assert!(after.actor.rotation.angle_between(before.actor.rotation) > 0.1);
         if locked {
+            // Lock keeps the actor facing its target even if an older ground
+            // frame still asks the camera to follow another heading.
+            let target_bearing = Vec3::from_array(eq_client_core::render_vector([0., 1., 0.]));
+            assert!((after.actor.rotation * Vec3::Z).abs_diff_eq(target_bearing, 1e-4));
             assert!((after.yaw - before.yaw).abs() < 1e-5);
             assert!(after.camera.rotation.angle_between(before.camera.rotation) < 0.001);
         } else {
+            assert!(after.actor.rotation.angle_between(before.actor.rotation) > 0.1);
             let actor_forward = after.actor.rotation * Vec3::Z;
             assert!(actor_forward.abs_diff_eq(after.camera.forward().with_y(0.).normalize(), 1e-4));
         }

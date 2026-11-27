@@ -741,6 +741,41 @@ impl Route {
         if self.unreachable {
             return RouteStep::Unreachable;
         }
+        self.advance_waypoints(world, feet, falling);
+        let toward = match (self.waypoints.front(), self.crossings.front()) {
+            // A door still shut across the next leg is opened before going on.
+            (Some(next), Some(Some(door)))
+                if path::walk(world, feet, Vec2::new(next.x, next.z), self.height)
+                    .is_none_or(|end| (end.y - next.y).abs() > MAX_GROUNDED_STEP) =>
+            {
+                return RouteStep::OpenDoor(*door);
+            }
+            (Some(next), _) => *next,
+            // A target may move after the route ends, or the final sample
+            // may overshoot. A new tail is still an edge to validate; it
+            // cannot turn an empty path into permission to leave a platform.
+            (None, _) if !self.partial => {
+                if !falling
+                    && !path::walk(world, feet, Vec2::new(goal.x, goal.z), self.height).is_some_and(
+                        |end| {
+                            (end.y - goal.y).abs() <= self.goal_height.unwrap_or(MAX_GROUNDED_STEP)
+                        },
+                    )
+                {
+                    self.replan(feet, goal);
+                    return RouteStep::Searching;
+                }
+                goal
+            }
+            (None, _) => return RouteStep::Arrived,
+        };
+        match self.door_ahead(world, feet, toward) {
+            Some(door) => RouteStep::OpenDoor(door),
+            None => RouteStep::Toward(toward),
+        }
+    }
+
+    fn advance_waypoints(&mut self, world: &CollisionWorld, feet: Vec3, falling: bool) {
         // The last sample's path: from where the walker stood before its
         // last move to where it stands now.
         self.path = match self.path {
@@ -784,37 +819,6 @@ impl Route {
             self.waypoints.pop_front();
             self.crossings.pop_front();
             self.reached += 1;
-        }
-        let toward = match (self.waypoints.front(), self.crossings.front()) {
-            // A door still shut across the next leg is opened before going on.
-            (Some(next), Some(Some(door)))
-                if path::walk(world, feet, Vec2::new(next.x, next.z), self.height)
-                    .is_none_or(|end| (end.y - next.y).abs() > MAX_GROUNDED_STEP) =>
-            {
-                return RouteStep::OpenDoor(*door);
-            }
-            (Some(next), _) => *next,
-            // A target may move after the route ends, or the final sample
-            // may overshoot. A new tail is still an edge to validate; it
-            // cannot turn an empty path into permission to leave a platform.
-            (None, _) if !self.partial => {
-                if !falling
-                    && !path::walk(world, feet, Vec2::new(goal.x, goal.z), self.height).is_some_and(
-                        |end| {
-                            (end.y - goal.y).abs() <= self.goal_height.unwrap_or(MAX_GROUNDED_STEP)
-                        },
-                    )
-                {
-                    self.replan(feet, goal);
-                    return RouteStep::Searching;
-                }
-                goal
-            }
-            (None, _) => return RouteStep::Arrived,
-        };
-        match self.door_ahead(world, feet, toward) {
-            Some(door) => RouteStep::OpenDoor(door),
-            None => RouteStep::Toward(toward),
         }
     }
 

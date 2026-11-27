@@ -190,9 +190,9 @@ pub(super) fn plan_with_budget(
     input: Input,
     turn_budget: f32,
 ) -> Option<Plan> {
-    if !(seconds.is_finite() && seconds > 0. && seconds <= 0.25)
-        || !turn_budget.is_finite()
-        || turn_budget < 0.
+    let valid_interval = seconds > 0. && seconds <= 0.25;
+    if !valid_interval
+        || !(0.0..=f32::MAX).contains(&turn_budget)
         || !input.strafe.is_finite()
         || input.strafe <= 0.
         || !input.side.is_finite()

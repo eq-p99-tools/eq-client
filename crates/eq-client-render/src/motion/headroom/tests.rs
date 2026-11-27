@@ -142,7 +142,7 @@ fn headroom_held_input_retries_lintel_and_crosses_only_after_observed_duck() {
                         0.0
                     };
                     let mut controls = world.resource_mut::<Controls>();
-                    controls.test_span = Some(span);
+                    controls.sampling.span = Some(span);
                     controls.speed = Some(60.0);
                     controls.airborne = Some(AirborneController::default());
                     controls.climb_sent = None;
@@ -210,7 +210,7 @@ fn headroom_gallery_held_forward_stays_ducked_after_the_deadline() {
                 true,
                 now,
             );
-            controls.test_span = Some(0.05);
+            controls.sampling.span = Some(0.05);
             controls.speed = Some(10.0);
         });
     posture(&mut app, PostureState::Ducking);
@@ -419,7 +419,7 @@ fn automatic_return_checks_the_next_floor_before_standing_at_the_bank_boundary()
                 now,
             );
             controls.test_now = Some(now + Duration::from_millis(2_001));
-            controls.test_span = Some(0.05);
+            controls.sampling.span = Some(0.05);
             controls.airborne = Some(AirborneController::default());
             controls.climb_sent = None;
             controls.speed = Some(120.0);
@@ -530,7 +530,7 @@ fn headroom_vertical_wall_with_open_sky_never_arms_a_pointless_duck() {
             {
                 let mut controls = app.world_mut().resource_mut::<Controls>();
                 controls.test_now = Some(begin + Duration::from_millis(frame * 100));
-                controls.test_span = Some(0.1);
+                controls.sampling.span = Some(0.1);
                 controls.speed = Some(14.0);
             }
             app.update();
@@ -611,7 +611,7 @@ fn automatic_return_checks_the_next_standing_step_along_held_input() {
                 now.checked_sub(Duration::from_millis(2_001)).unwrap(),
             );
             controls.test_now = Some(now);
-            controls.test_span = Some(0.1);
+            controls.sampling.span = Some(0.1);
             controls.speed = Some(3.0);
         });
     posture(&mut app, PostureState::Ducking);
@@ -630,7 +630,7 @@ fn slower_duck_return(suppress_rate: bool) -> (App, mpsc::Receiver<ClientCommand
     {
         let mut controls = app.world_mut().resource_mut::<Controls>();
         controls.test_now = Some(begin);
-        controls.test_span = Some(0.1);
+        controls.sampling.span = Some(0.1);
         controls.speed = Some(14.0);
         controls.walk_speed = Some(8.0);
         controls.backward_speed = Some(8.0);
@@ -838,7 +838,7 @@ fn headroom_single_marginal_opening_ducks_and_stands_at_most_once() {
             {
                 let mut controls = app.world_mut().resource_mut::<Controls>();
                 controls.test_now = Some(begin + Duration::from_millis(u64::from(frame * millis)));
-                controls.test_span = Some(f32::from(millis) / 1_000.0);
+                controls.sampling.span = Some(f32::from(millis) / 1_000.0);
                 controls.speed = Some(6.0);
             }
             app.update();
@@ -925,7 +925,7 @@ fn installed_felwithe_side_wall_does_not_cycle_posture() {
                     let mut controls = app.world_mut().resource_mut::<Controls>();
                     controls.test_now =
                         Some(begin + Duration::from_millis(u64::from(frame * millis)));
-                    controls.test_span = Some(f32::from(millis) / 1_000.0);
+                    controls.sampling.span = Some(f32::from(millis) / 1_000.0);
                     controls.speed = Some(speed);
                     controls
                         .airborne
@@ -1329,7 +1329,7 @@ fn the_bank_sill_is_tested_after_stepping_and_restores_the_airborne_snapshot() {
                     .unwrap()
                     .translation = start;
                 let mut controls = world.resource_mut::<Controls>();
-                controls.test_span = Some(span);
+                controls.sampling.span = Some(span);
                 controls.speed = Some(speed);
                 controls.airborne = Some(AirborneController::default());
                 controls.climb_sent = None;
@@ -1687,7 +1687,7 @@ fn headroom_ordinary_ledge_above_a_distant_floor_still_falls() {
         .yaw = std::f32::consts::PI;
     {
         let mut controls = app.world_mut().resource_mut::<Controls>();
-        controls.test_span = Some(0.05);
+        controls.sampling.span = Some(0.05);
         controls.speed = Some(60.0);
         controls.airborne = Some(AirborneController::default());
     }
@@ -1756,7 +1756,7 @@ fn headroom_held_input_at_a_tall_wall_never_arms_duck() {
             .unwrap()
             .yaw = std::f32::consts::PI;
         let mut controls = world.resource_mut::<Controls>();
-        controls.test_span = Some(0.05);
+        controls.sampling.span = Some(0.05);
         controls.airborne = Some(AirborneController::default());
     }
     for _ in 0..6 {

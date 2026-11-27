@@ -155,11 +155,10 @@ fn drawn(
     };
     match (piece, holds) {
         (GemPiece::Icon, Holds::Spell(_)) => Some(Color::srgba_u8(255, 255, 255, 255 - 21 * frame)),
-        (GemPiece::Icon, Holds::Nothing) => None,
         (GemPiece::Holder, Holds::Nothing) | (GemPiece::Highlight, Holds::Spell(_)) => {
             Some(Color::WHITE)
         }
-        (GemPiece::Background | GemPiece::Highlight, Holds::Nothing)
+        (GemPiece::Icon | GemPiece::Background | GemPiece::Highlight, Holds::Nothing)
         | (GemPiece::Holder, Holds::Spell(_)) => None,
         (GemPiece::Background, Holds::Spell(tint)) => Some(match (interaction, tint) {
             (Interaction::Pressed, _) | (_, None) => Color::WHITE,

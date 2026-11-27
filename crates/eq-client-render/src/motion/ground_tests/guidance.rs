@@ -140,14 +140,14 @@ fn guidance_new_run_restarts_the_ramp_from_the_drawn_facing() {
 #[test]
 fn guidance_native_refusal_restores_the_admitted_facing() {
     let mut scene = Scene::new(0, true);
-    request(&mut scene, 128., true);
+    request(&mut scene, 128., false);
     for _ in 0..20 {
-        scene.step(false);
+        scene.step(true);
     }
     assert!(scene.app.world().resource::<Controls>().ground.active());
     scene.early_refuse = true;
     for _ in 0..12 {
-        scene.step(false);
+        scene.step(true);
         if scene.app.world().resource::<Controls>().refused.is_some() {
             let shown = heading(actor(&mut scene));
             let admitted = scene

@@ -75,7 +75,7 @@ pub(crate) fn completed(online: &mut OnlineState, at: Instant, names: &SpellName
             spell_id: Some(73),
             gem: Some(0),
         },
-        at - Duration::from_secs(4),
+        at.checked_sub(Duration::from_secs(4)).unwrap(),
         names,
     );
     news(
@@ -85,7 +85,7 @@ pub(crate) fn completed(online: &mut OnlineState, at: Instant, names: &SpellName
             spell_id: 73,
             duration_ms: 4000,
         }),
-        at - Duration::from_secs(4),
+        at.checked_sub(Duration::from_secs(4)).unwrap(),
         names,
     );
     news(

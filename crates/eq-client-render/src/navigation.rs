@@ -65,7 +65,7 @@ pub(super) fn update(
     navigation.keys.clear();
     let focused = windows.single().is_ok_and(|window| window.focused);
     let typing = typing.map(Res::into_inner);
-    let available = focused && typing.is_none_or(|typing| typing.gameplay_available());
+    let available = focused && typing.is_none_or(crate::keys::Typing::gameplay_available);
     if !available || typing.is_some_and(|typing| typing.spell_search_claimed) {
         *navigation = NavigationKeys::default();
     }

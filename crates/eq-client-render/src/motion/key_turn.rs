@@ -18,16 +18,16 @@ impl PartialEq for Source {
             (Self::Script(a), Self::Script(b)) => std::sync::Arc::ptr_eq(a, b),
             (
                 Self::Melee {
-                    admission: a,
-                    attack: b,
-                    choice: c,
+                    admission,
+                    attack,
+                    choice,
                 },
                 Self::Melee {
-                    admission: x,
-                    attack: y,
-                    choice: z,
+                    admission: other_admission,
+                    attack: other_attack,
+                    choice: other_choice,
                 },
-            ) => (a, b, c) == (x, y, z),
+            ) => (admission, attack, choice) == (other_admission, other_attack, other_choice),
             _ => false,
         }
     }

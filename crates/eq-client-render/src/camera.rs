@@ -444,6 +444,15 @@ struct CameraBody {
 }
 
 impl CameraBody {
+    fn from_player(body: Option<&crate::PlayerBody>) -> Self {
+        Self {
+            head: body.map_or(0., |body| body.height * HEAD_LINE),
+            feet: body.map(|body| body.feet_offset),
+        }
+    }
+}
+
+impl CameraBody {
     /// Shared eye point for chase and first person, shortened by low ceilings.
     fn eye(self, center: Vec3, world: Option<&CollisionWorld>) -> Vec3 {
         let head = self.head.max(0.0);
@@ -487,11 +496,7 @@ pub(super) fn orbit_camera(
     controller: Option<Res<crate::motion::Controls>>,
 ) {
     let player = players.single().ok();
-    let body = player.map(|(body, _)| body);
-    let body = CameraBody {
-        head: body.map_or(0.0, |body| body.height * HEAD_LINE),
-        feet: body.map(|body| body.feet_offset),
-    };
+    let body = CameraBody::from_player(player.map(|(body, _)| body));
     let playing = online.selection.is_none()
         && !online.world().is_dead()
         && !online.world().is_unconscious()

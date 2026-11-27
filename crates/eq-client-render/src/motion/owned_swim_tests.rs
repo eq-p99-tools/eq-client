@@ -33,7 +33,12 @@ fn news(f: &Native, event: eq_client_core::WorldEvent) {
 }
 
 fn frame(f: &mut Native, owner: &mut MotionSession) -> Vec<ClientCommand> {
-    let step = Duration::from_micros(16_667);
+    frame_for(f, owner, Duration::from_micros(16_667))
+}
+
+fn frame_for(f: &mut Native, owner: &mut MotionSession, step: Duration) -> Vec<ClientCommand> {
+    // Existing regression epochs retain the applied-call producer unless a
+    // fixture explicitly selects the new complete-frame path.
     f.now += step;
     f.app.world_mut().resource_mut::<Time>().advance_by(step);
     f.app.world_mut().resource_mut::<Controls>().test_now = Some(f.now);
@@ -171,7 +176,20 @@ fn turn_only_and_no_input_never_create_horizontal_travel() {
 
 #[test]
 fn releasing_strafe_preserves_earned_carry_and_correction_retires_pending_trial() {
+    release_and_correct(false);
+}
+
+#[test]
+fn completed_frames_keep_release_carry_and_reject_a_trial_retired_by_correction() {
+    release_and_correct(true);
+}
+
+fn release_and_correct(physical: bool) {
     let mut f = Native::new(false, -15.);
+    f.app
+        .world_mut()
+        .resource_mut::<Controls>()
+        .suppress_floor_swim = !physical;
     let mut owner = owner(&f);
     anchor(&f, &owner);
     crate::keys::testing::bind(
@@ -205,6 +223,7 @@ fn releasing_strafe_preserves_earned_carry_and_correction_retires_pending_trial(
     let ClientCommand::SwimFrame { request, controls } = stale else {
         panic!("missing queued owned step");
     };
+    assert_eq!(controls.uses_scene(), physical);
     f.now += Duration::from_millis(100);
     let position = owner.position();
     owner.correct(position, f.now).unwrap();

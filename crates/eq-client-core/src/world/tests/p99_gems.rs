@@ -77,8 +77,9 @@ fn begin(world: &mut ClientWorld, spell: u16, now: Instant) {
 }
 
 fn success(world: &mut ClientWorld, now: Instant) {
-    pending(world, Some(42), Some(0), now - Duration::from_secs(4));
-    begin(world, 42, now - Duration::from_secs(4));
+    let start = now.checked_sub(Duration::from_secs(4)).unwrap();
+    pending(world, Some(42), Some(0), start);
+    begin(world, 42, start);
     pending(world, None, None, now);
     tell(
         world,

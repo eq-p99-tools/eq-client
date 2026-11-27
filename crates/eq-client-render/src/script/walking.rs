@@ -260,7 +260,7 @@ pub(super) fn prepare(
         .with_drops(falls)
         .with_doors(openable_doors(online))
         .with_background(Arc::new(crate::background::ComputePool));
-    if script.place.is_some() {
+    if script.place.is_some() || matches!(step, Step::Chase(..)) {
         route = route.with_exact_height();
     }
     if let Some(mesh) = mesh {

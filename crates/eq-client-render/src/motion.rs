@@ -22,6 +22,7 @@ mod rider_animation_tests;
 mod teleport_camera_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod frame_swim;
 mod ground;
 #[cfg(test)]
 mod ground_tests;
@@ -205,9 +206,9 @@ pub(super) struct Controls {
     suppress_ground: bool,
     #[cfg(test)]
     test_melee: MeleeObservations,
-    /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
-    test_span: Option<f32>,
+    sampling: TestSampling,
+    /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
     suppress_release_catchup: bool,
     #[cfg(test)]
@@ -215,10 +216,6 @@ pub(super) struct Controls {
     /// Deterministic frame clock for the command-parity fixture only.
     #[cfg(test)]
     test_now: Option<Instant>,
-    #[cfg(test)]
-    test_proposal_path: Option<f64>,
-    #[cfg(test)]
-    test_motion_intent: Option<(MovementMode, Vec3, f32, f32, bool)>,
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
@@ -297,6 +294,9 @@ pub(super) struct Controls {
     wet: eq_client_core::movement::water::WetVelocity,
     /// Matched worker state and the actual physical call ledger.
     swim_owner: owned_swim::Owner,
+    floor_swim: frame_swim::Control,
+    #[cfg(test)]
+    suppress_floor_swim: bool,
     /// Explicit departures; the session checks the same choices independently.
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
@@ -427,17 +427,13 @@ impl Default for Controls {
             #[cfg(test)]
             test_melee: MeleeObservations::default(),
             #[cfg(test)]
-            test_span: None,
+            sampling: TestSampling::default(),
             #[cfg(test)]
             suppress_release_catchup: false,
             #[cfg(test)]
             suppress_surface: false,
             #[cfg(test)]
             test_now: None,
-            #[cfg(test)]
-            test_proposal_path: None,
-            #[cfg(test)]
-            test_motion_intent: None,
             airborne: None,
             water_entry_rollback: None,
             shoreline: shoreline::Control::default(),
@@ -472,6 +468,9 @@ impl Default for Controls {
             surface_hop_applied: None,
             wet: eq_client_core::movement::water::WetVelocity::default(),
             swim_owner: owned_swim::Owner::default(),
+            floor_swim: frame_swim::Control::default(),
+            #[cfg(test)]
+            suppress_floor_swim: false,
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
             melee: melee::Assist::default(),
@@ -1158,6 +1157,8 @@ impl Controls {
             #[cfg(test)]
             suppress_surface: self.suppress_surface,
             #[cfg(test)]
+            suppress_floor_swim: self.suppress_floor_swim,
+            #[cfg(test)]
             test_now: self.test_now,
             #[cfg(test)]
             last_accepted: self.now(),
@@ -1305,7 +1306,7 @@ impl Controls {
     /// becomes a jump.
     fn span(&self, elapsed: Duration) -> f32 {
         #[cfg(test)]
-        if let Some(span) = self.test_span {
+        if let Some(span) = self.sampling.span {
             return span;
         }
         elapsed.as_secs_f32().min(self.span_limit().as_secs_f32())
@@ -1396,8 +1397,10 @@ impl Controls {
         // Following outlasts a change of speed, and a withdrawal while the
         // session places the player; a root ends it in `input`.
         let reset = self.swim_owner.untouched_reset(self.wet);
+        let floor_reset = self.floor_swim.untouched_reset(self.wet);
         self.reset(grant.units_per_second);
         self.swim_owner = reset;
+        self.floor_swim = floor_reset;
         self.pad = pad;
         self.pad_landing = pad_landing;
         self.autorun = autorun;
@@ -1583,6 +1586,7 @@ impl Controls {
         position: eq_client_core::WorldPosition,
     ) {
         self.swim_owner.reset_observed(session, position);
+        self.floor_swim.reset(session, position);
     }
 
     pub(super) fn swim_receipt(
@@ -1592,8 +1596,35 @@ impl Controls {
         created: Option<Instant>,
         basis: Option<eq_client_core::movement::SwimBasis>,
     ) {
+        self.floor_swim
+            .receipt(session, position, created, basis, self.wet);
         self.swim_owner
             .receipt(session, position, created, basis, &mut self.wet);
+    }
+
+    pub(super) fn floor_swim_result(
+        &mut self,
+        session: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: Option<&str>,
+    ) -> bool {
+        let Some(wet) = self
+            .floor_swim
+            .resolved(session, created, position, refused.is_some())
+        else {
+            return false;
+        };
+        self.wet = wet;
+        let (horizontal, _) = wet.units_per_second();
+        self.moving = horizontal[0].hypot(horizontal[1]) > 0.001;
+        if refused.is_some() {
+            self.sample_pose = None;
+        }
+        self.last_accepted = self.now();
+        self.last_answer = Some(self.now());
+        self.refused = refused.map(str::to_owned);
+        true
     }
 
     pub(super) fn resolve_swim(&mut self, session: Option<u64>, created: Instant, refused: bool) {
@@ -1844,6 +1875,7 @@ impl Controls {
     fn wait_for(&mut self, session_id: Option<u64>, created: Instant, kind: PendingKind) {
         if matches!(kind, PendingKind::Move) {
             self.swim_owner.invalidate_reset("submitted_motion");
+            self.floor_swim.invalidate_reset();
         }
         self.pending = session_id.map(|session_id| Pending {
             session_id,
@@ -1854,7 +1886,9 @@ impl Controls {
 
     /// Whether a movement or crossing request still owns the slot.
     pub fn waiting(&self) -> bool {
-        self.pending.is_some() || self.ground.active() && !self.ground.settled()
+        self.pending.is_some()
+            || self.floor_swim.pending()
+            || self.ground.active() && !self.ground.settled()
     }
 
     pub(super) fn liquid_basis(&self, session_id: Option<u64>, now: Instant) -> LiquidBasis {
@@ -1899,6 +1933,14 @@ impl Controls {
     pub(crate) fn set_test_pose(&mut self, pose: Option<pose::Snapshot>) {
         self.drawn_pose = pose;
     }
+}
+
+#[cfg(test)]
+#[derive(Default)]
+struct TestSampling {
+    span: Option<f32>,
+    proposal_path: Option<f64>,
+    motion_intent: Option<(MovementMode, Vec3, f32, f32, bool)>,
 }
 
 #[cfg(test)]
@@ -2319,7 +2361,7 @@ pub(super) fn input(
         return;
     }
     // An arrival aboard holds the player until the session places them
-    // (read R36 §3): no frames run in the program meanwhile.
+    // (read R36 Â§3): no frames run in the program meanwhile.
     if !online.enabled
         || !online.world().connected()
         || online.world().is_dead()
@@ -2773,6 +2815,14 @@ pub(super) fn input(
                 || !orbit_active && controls.released_turn != 0.
                 || keys.pressed(Act::Walk)
                 || scripted_facing.is_some()));
+    // While orbit owns lateral input, a paused cast or modal question must not
+    // replay that same input as manual strafe through the ordinary controller.
+    let orbit_input_paused = orbit_active
+        && !manual
+        && (online.world().casting().holds_actions()
+            || asked
+                .as_deref()
+                .is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer()));
     let context_holds = !melee_enabled
         || controls.speed == Some(0.)
         || !standing
@@ -2836,7 +2886,7 @@ pub(super) fn input(
                 position: player.position,
                 height: body.height,
                 offset: body.feet_offset,
-                seconds: controls.span(now.saturating_duration_since(controls.last_accepted)),
+                seconds: controls.next_span(now),
                 speeds: (
                     controls.speed.unwrap_or(0.),
                     controls.walk_speed.or(controls.speed).unwrap_or(0.),
@@ -2909,6 +2959,7 @@ pub(super) fn input(
                         pose: report.pose(now),
                     })
             });
+            let restoring = controls.restore_key_facing;
             if controls
                 .key_facing
                 .as_ref()
@@ -2931,7 +2982,11 @@ pub(super) fn input(
             facing.carry(carrier);
             facing.guide(
                 now,
-                time.as_deref().map_or(Duration::ZERO, Time::delta),
+                if restoring {
+                    Duration::ZERO
+                } else {
+                    time.as_deref().map_or(Duration::ZERO, Time::delta)
+                },
                 *goal,
                 cap,
             );
@@ -3114,6 +3169,127 @@ pub(super) fn input(
     if !water_enabled || !focused || !standing || controls.stun_active || !surface_input {
         controls.surface.pause();
     }
+    if let (Some(time), Some(world), Some(player), Ok((body, _)), Ok((camera, _))) = (
+        time.as_deref(),
+        moving_world,
+        online.world().player(),
+        players.single(),
+        cameras.single(),
+    ) {
+        let feet = Vec3::from_array(eq_client_core::render_position(player.position))
+            - Vec3::Y * body.feet_offset;
+        if matches!(
+            world.liquid_contact(feet, body.height),
+            eq_client_core::movement::LiquidContact::Unmarked
+                | eq_client_core::movement::LiquidContact::Wading
+                | eq_client_core::movement::LiquidContact::Lava
+        ) {
+            controls.floor_swim.invalidate_reset();
+        }
+        let mut physical = keyboard.clone();
+        physical.clear();
+        let facing = controls
+            .mouse_heading
+            .or(controls.key_facing.as_ref().map(|f| f.heading))
+            .or(controls.facing)
+            .or(controls.floor_swim.heading())
+            .unwrap_or(player.position.heading);
+        let yaw = controls.mouse_heading.map_or(camera.yaw, |heading| {
+            crate::camera::behind(eq_client_core::render_heading(heading))
+        });
+        let intent = controls.intent(
+            &physical,
+            map,
+            scripted,
+            focused,
+            (yaw, facing),
+            look.as_deref(),
+        );
+        let pitch = stroke_pitch(
+            intent.direction,
+            intent.mode,
+            (map, &physical, scripted),
+            (camera, look.as_deref()),
+            controls.autorun,
+        )
+        .map_or(0.0, |(pitch, _)| pitch);
+        let held = map.holding(&physical, scripted);
+        let placement_blocked = controls.placement.holds(
+            online.server_placement(),
+            player.position,
+            world,
+            body,
+            &mut chat,
+            now,
+        );
+        let at_line = online
+            .regions
+            .zone_line_at(eq_client_core::render_position(player.position))
+            .is_some();
+        if swimming && !at_line {
+            controls.boundary.observe(None);
+        }
+        let between_frame_tap = movement_keys
+            .iter()
+            .any(|key| keyboard.just_pressed(*key) && !keyboard.pressed(*key));
+        let eligible = match online.world().generation() {
+            eq_client_core::GameDialect::Titanium => true,
+            eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+        } && focused
+            && !between_frame_tap
+            && !at_line
+            && controls.jump.is_none()
+            && controls.crouch.is_none()
+            && frame_swim::supports(&controls, &intent, facing, pitch)
+            && standing
+            && swimming
+            && !flying
+            && !placement_blocked
+            && controls.pad.is_none()
+            && controls.riding.is_none()
+            && controls.boat.is_none()
+            && controls.visual_boat.is_none()
+            && !controls.stun_active
+            && !shoreline_active
+            && controls
+                .straddle
+                .is_none_or(|(_, latest)| controls.speeds() == latest)
+            && controls.following.is_none()
+            && !keys.script_routing()
+            && scripted_facing.is_none()
+            && !held.held(Act::Jump)
+            && !held.held(Act::Duck)
+            && controls.water_jump.is_none()
+            && controls.surface_hop_applied.is_none()
+            && controls.ground.current.is_none()
+            && !controls.movement_options.fly;
+        #[cfg(test)]
+        let eligible = eligible && !controls.suppress_floor_swim;
+        if frame_swim::input(
+            &mut controls,
+            frame_swim::Context {
+                world,
+                online: &online,
+                outbox: &outbox,
+                now,
+                delta: time.delta(),
+                height: body.height,
+                offset: body.feet_offset,
+                eligible,
+                facing,
+                pitch,
+                body_pitch: camera.look_pitch(),
+            },
+            intent,
+        ) {
+            return;
+        }
+    } else if controls.floor_swim.active() || controls.floor_swim.pending() {
+        controls.floor_swim.unavailable(now);
+        if controls.floor_swim.pending() {
+            return;
+        }
+    }
     // A completed-frame producer runs before the legacy future-endpoint gates.
     // Its input sample deliberately excludes the tap buffer and press-only
     // edges: no duration is invented for a tap absent from an observed frame.
@@ -3141,7 +3317,7 @@ pub(super) fn input(
             &physical,
             map,
             scripted,
-            focused,
+            focused && !orbit_input_paused,
             (yaw, heading),
             look.as_deref(),
         );
@@ -3234,6 +3410,7 @@ pub(super) fn input(
                 });
             }
             controls.swim_owner.invalidate_reset("ground_owner");
+            controls.floor_swim.invalidate_reset();
             return;
         }
     }
@@ -3447,7 +3624,7 @@ pub(super) fn input(
         &sampled,
         map,
         scripted,
-        focused,
+        focused && !orbit_input_paused,
         (yaw, shown),
         look.as_deref(),
     );
@@ -3745,7 +3922,7 @@ pub(super) fn input(
     } = intent;
     #[cfg(test)]
     {
-        controls.test_motion_intent = Some((mode, direction, speed, turn, preserve_facing));
+        controls.sampling.motion_intent = Some((mode, direction, speed, turn, preserve_facing));
     }
     let surface_before_wet = controls.wet;
     let surface_before_airborne = controls.airborne.clone();
@@ -3947,6 +4124,7 @@ pub(super) fn input(
                 capture.applied(kind, piece);
             }
             controls.swim_owner.invalidate_reset("wet_model_advanced");
+            controls.floor_swim.invalidate_reset();
             let (across, up) = controls.wet.advance(set, input, piece);
             travel += Vec3::new(across[0], up, across[1]);
             left -= piece;
@@ -4083,6 +4261,9 @@ pub(super) fn input(
         && !shoreline_active
         && controls.jump.is_none()
         && controls.facing.is_none()
+        && controls.key_facing.as_ref().is_none_or(|facing| {
+            facing.source.is_none() || arc(current_heading, facing.heading).abs() <= f32::EPSILON
+        })
         && mouse_step == 0.0
         && mouse_snapshot.is_none()
         && diagonal.is_none()
@@ -4680,7 +4861,11 @@ pub(super) fn input(
     // The turn keys turn at their own rate. Camera-relative movement faces
     // its direction unless mouse-look is steering the body. The sent heading
     // follows the facing within the same sample budget as the position.
-    let facing = if let Some(facing) = controls
+    let facing = if let Some(orbit) = melee_orbit {
+        // Use the bearing of the actual bounded chord. The look-ahead can
+        // already face beyond it when the held strafe interval was shorter.
+        orbit.heading
+    } else if let Some(facing) = controls
         .key_facing
         .as_ref()
         .filter(|facing| facing.source.is_some() && !mouse_steering)
@@ -4863,7 +5048,7 @@ pub(super) fn input(
     }
     #[cfg(test)]
     {
-        controls.test_proposal_path = Some(if surface_selected {
+        controls.sampling.proposal_path = Some(if surface_selected {
             surface_plan.as_ref().expect("selected surface plan").path
         } else if !poses.test_steps.is_empty() {
             poses
@@ -7416,7 +7601,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_goto_just_over_a_steep_face_stands_up_and_climbs_it() {
-        // Live's look (11-01, 85b9d33d): a goto 1 u over a 50° face, then
+        // Live's look (11-01, 85b9d33d): a goto 1 u over a 50Â° face, then
         // a run and a walk up it, moved 0.0 on every sample. Each sample
         // now stands up and climbs, and never rises past the reach the
         // session's guard allows it.
@@ -7459,7 +7644,7 @@ pub(super) mod tests {
                         HUMAN.height,
                         false,
                     );
-                    let case = format!("{degrees}° at {speed}: {feet} to {next}");
+                    let case = format!("{degrees}Â° at {speed}: {feet} to {next}");
                     assert!(
                         next.y - feet.y <= climb_reach(titanium.climb, program_steps(0.1)) + 0.001,
                         "{case}"
@@ -7469,11 +7654,11 @@ pub(super) mod tests {
                     feet = next;
                 }
                 // A walk keeps its pace up both; a run up them goes as far as the reach lets it.
-                assert!(moved > 0.5 * speed, "{degrees}° at {speed}: moved {moved}");
+                assert!(moved > 0.5 * speed, "{degrees}Â° at {speed}: moved {moved}");
                 if speed < 20.0 {
                     assert!(
                         moved > 0.95 * speed - 0.7,
-                        "{degrees}° at {speed}: moved {moved}"
+                        "{degrees}Â° at {speed}: moved {moved}"
                     );
                 }
             }
@@ -8128,7 +8313,7 @@ pub(super) mod tests {
             6.0,
             true,
         );
-        // At 44.55 u/s under 160 u/s², three 50 ms steps climb well past a
+        // At 44.55 u/s under 160 u/sÂ², three 50 ms steps climb well past a
         // riser (1.81 + 1.40 + 0.99), and no farther than the guard grants
         // after the notice.
         let granted = MAX_GROUNDED_STEP + super::jump_rise(44.55, titanium.gravity, 0.15);
@@ -9224,7 +9409,13 @@ pub(super) mod tests {
             ],
         ];
         app.insert_resource(Collision(Some(
-            CollisionWorld::new(flat_surface(0.0).into_iter().chain(upper)).unwrap(),
+            CollisionWorld::new(
+                flat_surface(0.0)
+                    .map(|triangle| triangle.map(|[x, y, z]| [x * 10., y, z * 10.]))
+                    .into_iter()
+                    .chain(upper),
+            )
+            .unwrap(),
         )));
         // The footprint still has support, but this first actual 0.3-unit
         // input leaves it completely. Merely crossing the center is harmless.
@@ -9319,7 +9510,7 @@ pub(super) mod tests {
 
     #[test]
     fn an_actual_script_drop_refusal_names_the_current_run() {
-        let (mut app, _, _) = scripted_drop_app(false, true, false);
+        let (mut app, _receiver, _) = scripted_drop_app(false, true, false);
         app.update();
         let report = app
             .world()
@@ -15287,7 +15478,7 @@ pub(super) mod tests {
         // Safe Fall is announced where the player has it.
         for (safe_fall, amount, used) in [
             // About 7 units a step at touchdown, the per-frame fall's from
-            // 100 units up (R49-24 b): trunc(10 × (v − 4)²).
+            // 100 units up (R49-24 b): trunc(10 Ã— (v âˆ’ 4)Â²).
             (None, 89, false),
             (Some(0), 89, false),
             // The skill takes off all of it, and is still announced.

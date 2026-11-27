@@ -18,6 +18,7 @@ const FORECAST_STEPS: usize = 200;
 
 /// The exact next input's displacement and physical body, or a short slice
 /// of a route leg. A forecast owns a clone of the airborne state.
+#[derive(Clone, Copy)]
 pub(crate) struct Probe {
     pub feet: Vec3,
     pub delta: Vec3,
@@ -193,13 +194,16 @@ mod tests {
     use super::*;
 
     fn floor(x: [f32; 2], z: [f32; 2], y: f32) -> [[[f32; 3]; 3]; 2] {
-        let (a, b, c, d) = (
+        let (near_left, near_right, far_right, far_left) = (
             [x[0], y, z[0]],
             [x[1], y, z[0]],
             [x[1], y, z[1]],
             [x[0], y, z[1]],
         );
-        [[a, c, b], [a, d, c]]
+        [
+            [near_left, far_right, near_right],
+            [near_left, far_left, far_right],
+        ]
     }
 
     fn body() -> PlayerBody {

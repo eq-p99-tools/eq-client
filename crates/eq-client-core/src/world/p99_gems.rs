@@ -18,7 +18,7 @@ enum Basis {
 struct Reuse {
     anchor: Instant,
     basis: Basis,
-    full_reuse: Option<Duration>,
+    full_duration: Option<Duration>,
     ready: Option<Instant>,
 }
 
@@ -67,7 +67,7 @@ impl Gems {
                         .or_insert(Reuse {
                             anchor: now,
                             basis: Basis::Profile(duration),
-                            full_reuse: None,
+                            full_duration: None,
                             ready: None,
                         });
                 }
@@ -112,17 +112,17 @@ impl Gems {
         if let Some(reduction) = reduction {
             attempt.reduction = reduction;
         }
-        let full_reuse = self
+        let full_duration = self
             .reuse
             .get(&attempt.requested)
             .filter(|reuse| already_completed && reuse.anchor == anchor)
-            .and_then(|reuse| reuse.full_reuse);
+            .and_then(|reuse| reuse.full_duration);
         self.reuse.insert(
             attempt.requested,
             Reuse {
                 anchor,
                 basis: Basis::Refresh(attempt.reduction),
-                full_reuse,
+                full_duration,
                 ready: None,
             },
         );
@@ -171,7 +171,7 @@ impl Gems {
                         Reuse {
                             anchor: now,
                             basis: Basis::Refresh(reduction_ms),
-                            full_reuse: None,
+                            full_duration: None,
                             ready: None,
                         },
                     );
@@ -191,13 +191,13 @@ impl Gems {
                     Reuse {
                         anchor: now,
                         basis: Basis::Memorized,
-                        full_reuse: None,
+                        full_duration: None,
                         ready: None,
                     },
                 );
             }
             SpellUpdate::Interrupted { caster_id, .. } if caster_id == u32::from(own) => {
-                self.clear_attempt()
+                self.clear_attempt();
             }
             _ => {}
         }
@@ -213,7 +213,7 @@ impl Gems {
                 .or_else(|| spells.cast_duration(*spell));
             // Once known, this completion's full reuse remains anchored.
             // A later table replay or receipt must not redefine its deadline.
-            reuse.full_reuse = reuse.full_reuse.or_else(|| match reuse.basis {
+            reuse.full_duration = reuse.full_duration.or_else(|| match reuse.basis {
                 Basis::Profile(remaining) => Some(remaining),
                 Basis::Refresh(_) => spells
                     .timing(*spell)
@@ -232,7 +232,7 @@ impl Gems {
                 }
             };
             reuse.ready = reuse
-                .full_reuse
+                .full_duration
                 .map(|full| reuse.anchor + full.saturating_sub(credit));
         }
     }

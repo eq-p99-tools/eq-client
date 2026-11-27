@@ -101,6 +101,12 @@ fn melee_zone_guard_preserves_manual_entry_and_ordinary_crossing() {
             crate::keys::Chord::key(KeyCode::F10),
         );
         let world = app.world_mut();
+        // The admitted and drawn player both face the trigger at the start.
+        world
+            .query_filtered::<&mut Transform, With<crate::Player>>()
+            .single_mut(world)
+            .unwrap()
+            .rotation = Quat::from_rotation_y(eq_client_core::render_heading(0.));
         let mut cameras = world.query::<&mut crate::camera::OrbitCamera>();
         cameras.single_mut(world).unwrap().yaw =
             crate::camera::behind(eq_client_core::render_heading(0.));
@@ -115,7 +121,7 @@ fn melee_zone_guard_preserves_manual_entry_and_ordinary_crossing() {
             controls.last_accepted = now.checked_sub(Duration::from_millis(100)).unwrap();
             controls.last_sent = None;
             controls.test_now = Some(now);
-            controls.test_span = Some(0.1);
+            controls.sampling.span = Some(0.1);
         }
         app.world_mut()
             .resource_mut::<crate::outbox::Outbox>()
@@ -174,7 +180,7 @@ fn melee_zone_guard_preserves_manual_entry_and_ordinary_crossing() {
         } else {
             assert!(
                 moving.is_none(),
-                "assistance must not queue a trigger entry"
+                "assistance must not queue a trigger entry: {moving:?}"
             );
         }
     }

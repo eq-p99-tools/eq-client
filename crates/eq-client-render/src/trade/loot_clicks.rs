@@ -35,7 +35,7 @@ pub(super) fn cursor_empty(world: &ClientWorld) -> bool {
 }
 
 /// Freeze the original cell's admission, corpse and item identity.
-fn target(world: &ClientWorld, entity: Entity, action: &Action) -> Option<Target> {
+fn target(world: &ClientWorld, entity: Entity, action: Action) -> Option<Target> {
     let session = world.session_id()?;
     let loot = world.loot()?;
     let Action::Take { place, .. } = action else {
@@ -45,8 +45,8 @@ fn target(world: &ClientWorld, entity: Entity, action: &Action) -> Option<Target
         entity,
         session,
         corpse: loot.corpse_id,
-        place: *place,
-        item: loot.items.get(place)?.details.id,
+        place,
+        item: loot.items.get(&place)?.details.id,
     })
 }
 
@@ -109,7 +109,7 @@ impl Buttons<'_, '_> {
                             && **interaction == Interaction::Hovered
                     })
                 });
-            pressed.0 = over.and_then(|(entity, action, ..)| target(world, entity, action));
+            pressed.0 = over.and_then(|(entity, action, ..)| target(world, entity, *action));
         }
         if mouse.just_released(MouseButton::Right) {
             return pressed
@@ -120,7 +120,7 @@ impl Buttons<'_, '_> {
                         .get(start.entity)
                         .ok()
                         .filter(|(_, _, interaction, _)| **interaction == Interaction::Hovered)
-                        .and_then(|(entity, action, ..)| target(world, entity, action))
+                        .and_then(|(entity, action, ..)| target(world, entity, *action))
                         .as_ref()
                         == Some(start)
                 })

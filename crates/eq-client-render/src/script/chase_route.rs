@@ -1,9 +1,17 @@
 //! Direct pursuit stays direct on supported ground. Only an unsafe direct
 //! path invokes the same route planner used by ordinary scripted walking.
-use super::*;
+use super::{
+    Duration, Following, SEARCH_BUDGET, Script, Step, Vec2, Vec3, debug, drops, spawn_goal, walking,
+};
 use crate::{PlayerBody, online::OnlineState};
 use eq_client_assets::ui::InstalledClient;
 use eq_client_core::movement::{AirborneController, RouteStep};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) enum Edges {
+    Grounded,
+    WithDrops,
+}
 
 #[allow(
     clippy::too_many_arguments,
@@ -65,8 +73,10 @@ pub(super) fn aim(
             script.allow_drops,
         ) {
             Ok(end)
-                if collision.support(goal).is_none()
-                    || (end.y - goal.y).abs() <= eq_client_core::movement::MAX_GROUNDED_STEP =>
+                if (end - goal).with_y(0.).length() <= range
+                    && (collision.support(goal).is_none()
+                        || (end.y - goal.y).abs()
+                            <= eq_client_core::movement::MAX_GROUNDED_STEP) =>
             {
                 return Ok(Some(carried));
             }
@@ -91,14 +101,30 @@ pub(super) fn aim(
         body,
         collision,
         mesh,
-        airborne.is_some(),
+        airborne.is_some() && (script.allow_drops || script.chase_edges == Edges::WithDrops),
         range,
     )? {
         return Ok(None);
     }
     let route = script.route.as_mut().expect("prepared above");
     route.movement_height(height, feet, goal);
-    match route.next_with(collision, (feet, falling), goal, SEARCH_BUDGET, now) {
+    let next = route.next_with(collision, (feet, falling), goal, SEARCH_BUDGET, now);
+    // Prefer a continuous floor route. A weighted search with drop edges can
+    // choose to climb a nearby ramp and jump off it to reach a ground target.
+    // If that first search fails, try the ordinary fall-capable planner before
+    // following a partial path. Per-leg damage checks still apply.
+    if script.chase_edges == Edges::Grounded
+        && !script.allow_drops
+        && airborne.is_some()
+        && (route.partial() || matches!(next, RouteStep::Unreachable | RouteStep::Stalled))
+    {
+        script.chase_edges = Edges::WithDrops;
+        script.chase_needs_route = true;
+        script.route = None;
+        script.following = None;
+        return Ok(None);
+    }
+    match next {
         RouteStep::Searching => Ok(None),
         RouteStep::Toward(toward) => {
             if !falling {
@@ -274,7 +300,9 @@ mod tests {
                 1.0,
                 Duration::from_millis(u64::try_from(frame).unwrap()),
             )
-            .unwrap();
+            .unwrap_or_else(|error| {
+                panic!("chase frame {frame}: {feet:?} to {goal:?}, peak {peak}: {error}")
+            });
             routed |= script.route.is_some();
             if let Some(toward) = toward {
                 let toward = Vec3::from_array(eq_client_core::render_position(toward));
@@ -297,9 +325,28 @@ mod tests {
                 return (feet, peak, routed);
             }
             assert!(started.elapsed() < Duration::from_secs(30));
-            std::thread::yield_now();
+            if script
+                .route
+                .as_ref()
+                .is_some_and(eq_client_core::movement::Route::is_searching)
+            {
+                // Let the real background planner finish between simulated frames.
+                std::thread::sleep(Duration::from_millis(1));
+            } else {
+                std::thread::yield_now();
+            }
         }
-        panic!("chase did not reach its known floor: {feet:?} -> {goal:?}");
+        panic!(
+            "chase did not reach its known floor: {feet:?} -> {goal:?}; route={:?}, last waypoint={:?}, reason={:?}",
+            script.route.as_ref().map(|r| (
+                r.is_searching(),
+                r.waypoints_reached(),
+                r.remaining(),
+                r.searched()
+            )),
+            script.following.as_ref().map(|f| f.toward),
+            script.chase_route_reason
+        );
     }
 
     #[test]
@@ -311,6 +358,56 @@ mod tests {
             "unneeded platform climb: {peak}"
         );
         assert!(at.y.abs() < 0.01);
+    }
+
+    #[test]
+    fn a_chase_without_a_grounded_path_can_still_use_a_harmless_drop() {
+        let mut faces = quad(
+            [-30., 5., -30.],
+            [0., 5., -30.],
+            [0., 5., 30.],
+            [-30., 5., 30.],
+        )
+        .to_vec();
+        faces.extend(quad(
+            [0., 0., -30.],
+            [30., 0., -30.],
+            [30., 0., 30.],
+            [0., 0., 30.],
+        ));
+        faces.extend(quad(
+            [0., 0., -30.],
+            [0., 0., 30.],
+            [0., 5., 30.],
+            [0., 5., -30.],
+        ));
+        let collision = eq_client_core::movement::CollisionWorld::new(faces).unwrap();
+        let (online, mut script) = setup(Vec3::new(-10., 5., 0.), Vec3::new(10., 0., 0.));
+        script.chase_needs_route = true;
+        let target = online.world().spawn(9).unwrap().state.position;
+        let start = Instant::now();
+        loop {
+            let next = aim(
+                &mut script,
+                &online,
+                InstalledClient::Titanium,
+                BODY,
+                &collision,
+                None,
+                Some(&AirborneController::default()),
+                target,
+                1.,
+                start.elapsed(),
+            )
+            .unwrap();
+            if next.is_some() {
+                assert_eq!(script.chase_edges, Edges::WithDrops);
+                assert!(!script.route.as_ref().unwrap().partial());
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(10));
+            std::thread::sleep(Duration::from_millis(1));
+        }
     }
 
     #[test]

@@ -191,8 +191,11 @@ fn p99_normal_script_clicks_and_hotkeys_keep_b_usable_and_gate_repeated_a() {
                 .remove::<crate::give::GiveButton>()
                 .insert(hud::SpellGem(index));
             let names = hud::p99_tests::names();
-            let at = Instant::now() - Duration::from_secs(elapsed);
-            let mut online = hud::p99_tests::admitted(at - Duration::from_secs(4), &names);
+            let at = Instant::now()
+                .checked_sub(Duration::from_secs(elapsed))
+                .unwrap();
+            let mut online =
+                hud::p99_tests::admitted(at.checked_sub(Duration::from_secs(4)).unwrap(), &names);
             hud::p99_tests::completed(&mut online, at, &names);
             let (tx, rx) = std::sync::mpsc::sync_channel(8);
             app.insert_resource(online)

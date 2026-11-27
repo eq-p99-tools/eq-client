@@ -163,13 +163,21 @@ fn script_walk_6721_typed_who_ui_click_and_camera_activity_continue_to_reported_
     let mut frame = now + 60;
     while app.world().contains_resource::<Script>() {
         frame_at(&mut app, frame);
-        assert!(returned.elapsed() < Duration::from_secs(30));
+        assert!(
+            returned.elapsed() < Duration::from_secs(30),
+            "walk remained active: {:?}",
+            app.world()
+                .get_resource::<Script>()
+                .map(|s| s.status().events())
+        );
         frame += 1;
         std::thread::yield_now();
     }
     assert_eq!(
         app.world().resource::<crate::script::RunStatus>().phase(),
-        Phase::Completed
+        Phase::Completed,
+        "{:?}",
+        app.world().resource::<crate::script::RunStatus>().events()
     );
 }
 
@@ -224,24 +232,7 @@ fn script_walk_6721_captured_character_steering_interrupts_but_ui_buttons_do_not
     );
 }
 
-#[test]
-fn script_walk_6721_detached_camera_releases_input_keeps_route_and_replans_on_return() {
-    let (mut app, window) = app();
-    let scope = Scope::capture(app.world().resource::<OnlineState>()).unwrap();
-    {
-        let mut script = app.world_mut().resource_mut::<Script>();
-        script.place = Some(PlaceGoal {
-            scope,
-            feet: Vec3::new(0., 0., 20.),
-        });
-        script.route = Some(Route::new(
-            Vec3::ZERO,
-            Vec3::new(0., 0., 20.),
-            1.,
-            6.677_319_5,
-        ));
-        script.acts = vec![FORWARD];
-    }
+fn install_detachable_camera(app: &mut App) -> Entity {
     let camera = app
         .world_mut()
         .spawn((
@@ -263,7 +254,7 @@ fn script_walk_6721_detached_camera_releases_input_keeps_route_and_replans_on_re
         .qol
         .set(eq_client_core::qol::Fix::FreeCamera, true);
     crate::keys::testing::bind(
-        &mut app,
+        app,
         crate::keys::Act::FreeCamera,
         crate::keys::Chord::key(KeyCode::F12),
     );
@@ -273,6 +264,28 @@ fn script_walk_6721_detached_camera_releases_input_keeps_route_and_replans_on_re
             .after(crate::chat::capture)
             .before(crate::script::interrupt_walk),
     );
+    camera
+}
+
+#[test]
+fn script_walk_6721_detached_camera_releases_input_keeps_route_and_replans_on_return() {
+    let (mut app, window) = app();
+    let scope = Scope::capture(app.world().resource::<OnlineState>()).unwrap();
+    {
+        let mut script = app.world_mut().resource_mut::<Script>();
+        script.place = Some(PlaceGoal {
+            scope,
+            feet: Vec3::new(0., 0., 20.),
+        });
+        script.route = Some(Route::new(
+            Vec3::ZERO,
+            Vec3::new(0., 0., 20.),
+            1.,
+            6.677_319_5,
+        ));
+        script.acts = vec![FORWARD];
+    }
+    let camera = install_detachable_camera(&mut app);
     tap(
         &mut app,
         window,

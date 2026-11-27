@@ -746,6 +746,20 @@ impl Panels<'_> {
         ) {
             return;
         }
+        if self.motion.floor_swim_result(
+            admission_id,
+            moved.created,
+            moved.position,
+            moved.refused.as_deref(),
+        ) {
+            if moved.refused.is_none()
+                && let Some(transform) = drawn
+            {
+                self.motion
+                    .display_carrier_sample(transform, moved.position, carriers);
+            }
+            return;
+        }
         let previewed = self.motion.reconcile_preview(
             admission_id,
             moved.created,

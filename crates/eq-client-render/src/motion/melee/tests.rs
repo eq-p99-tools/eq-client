@@ -367,11 +367,18 @@ fn runtime() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
         .resource_mut::<ButtonInput<KeyCode>>()
         .reset_all();
     crate::clicks::testing::install(&mut app);
+    // The drawn model and session both start facing the straight test lane.
+    let world = app.world_mut();
+    world
+        .query_filtered::<&mut Transform, With<crate::Player>>()
+        .single_mut(world)
+        .unwrap()
+        .rotation = Quat::from_rotation_y(eq_client_core::render_heading(0.));
     let now = Instant::now();
     {
         let mut controls = app.world_mut().resource_mut::<motion::Controls>();
         controls.test_now = Some(now);
-        controls.test_span = Some(0.1);
+        controls.sampling.span = Some(0.1);
         controls.walk_speed = Some(3.);
         controls.last_accepted = now.checked_sub(Duration::from_millis(100)).unwrap();
     }
@@ -601,7 +608,7 @@ fn melee_received_target_loss_both_deaths_zone_and_off_stop_new_samples() {
             let mut controls = app.world_mut().resource_mut::<motion::Controls>();
             controls.last_accepted = now.checked_sub(Duration::from_millis(100)).unwrap();
             controls.last_sent = None;
-            controls.test_span = Some(0.1);
+            controls.sampling.span = Some(0.1);
             controls.walk_speed = Some(3.);
         }
         let frame = |app: &mut App, now| {

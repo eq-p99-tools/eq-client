@@ -4,9 +4,10 @@ use bevy::{prelude::*, render::view::screenshot::ScreenshotCaptured};
 use std::path::PathBuf;
 
 pub(super) fn log_step(step: &Step) {
-    match step {
-        Step::Screenshot(_) => info!(step = "Screenshot", "Script step"),
-        _ => info!(?step, "Script step"),
+    if matches!(step, Step::Screenshot(_)) {
+        info!(step = "Screenshot", "Script step");
+    } else {
+        info!(?step, "Script step");
     }
 }
 
@@ -17,12 +18,14 @@ pub(super) fn save(path: PathBuf) -> impl FnMut(On<ScreenshotCaptured>) {
             return;
         };
         // HDR uses alpha for brightness. Preserve Bevy's RGB screenshot output.
-        match image
+        if image
             .to_rgb8()
             .save_with_format(&path, image::ImageFormat::Png)
+            .is_ok()
         {
-            Ok(()) => info!("Saved script screenshot"),
-            Err(_) => error!("Could not save script screenshot"),
+            info!("Saved script screenshot");
+        } else {
+            error!("Could not save script screenshot");
         }
     }
 }

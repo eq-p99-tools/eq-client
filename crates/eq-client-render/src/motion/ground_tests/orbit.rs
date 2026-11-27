@@ -90,12 +90,22 @@ fn melee_orbit_ten_second_accepted_arc_matches_authored_and_native_and_bounds_tu
 #[test]
 fn melee_orbit_idle_native_ground_released_intent_and_explicit_rearm_are_distinct() {
     let mut scene = scene(true, 0);
-    let observations = scene.observations;
+    let started = scene.now();
     for _ in 0..60 {
         scene.step(false);
     }
     let controls = scene.app.world().resource::<Controls>();
-    assert!(controls.ground.active() && scene.observations > observations);
+    assert!(
+        controls
+            .ground
+            .current
+            .is_some_and(|frame| frame.at > started),
+        "idle lock {:?}, accepted {:?}, observations {}, guided {:?}",
+        controls.melee.status(),
+        scene.owner.position(),
+        scene.observations,
+        controls.key_facing.as_ref().map(|f| f.heading)
+    );
     assert_eq!(status(&scene), "locked");
     assert_eq!(controls.melee_facing_owner(), "melee");
     assert!(!controls.melee_proposed());
@@ -400,7 +410,7 @@ fn melee_orbit_typing_casting_and_question_suspensions_do_not_bank_held_strafe()
                     .app
                     .world_mut()
                     .resource_mut::<crate::keys::Typing>()
-                    .composing = true
+                    .composing = true;
             }
             1 => crate::online::testing::news(
                 &mut scene.app.world_mut().resource_mut::<online::OnlineState>(),
@@ -441,7 +451,7 @@ fn melee_orbit_typing_casting_and_question_suspensions_do_not_bank_held_strafe()
                     .app
                     .world_mut()
                     .resource_mut::<crate::keys::Typing>()
-                    .composing = false
+                    .composing = false;
             }
             1 => crate::online::testing::news(
                 &mut scene.app.world_mut().resource_mut::<online::OnlineState>(),
@@ -466,7 +476,9 @@ fn melee_orbit_typing_casting_and_question_suspensions_do_not_bank_held_strafe()
             let at = scene.owner.sampled();
             let distance = (next.x - previous.x).hypot(next.y - previous.y);
             assert!(
-                distance <= 3. * at.saturating_duration_since(previous_at).as_secs_f32() + 0.002
+                distance <= 3. * at.saturating_duration_since(previous_at).as_secs_f32() + 0.002,
+                "distance {distance} over {:?}, from {previous:?} to {next:?}",
+                at.saturating_duration_since(previous_at)
             );
             path += distance;
             previous = next;
@@ -481,8 +493,11 @@ fn melee_orbit_typing_casting_and_question_suspensions_do_not_bank_held_strafe()
 fn melee_orbit_jump_suspends_through_supported_landing_without_deliberate_release() {
     let mut scene = scene(true, 0);
     let fall_speed = Some(physics(InstalledClient::Titanium, None).terminal_speed);
-    scene.owner = scene.owner.with_fall_speed(fall_speed);
-    scene.independent_owner = scene.independent_owner.with_fall_speed(fall_speed);
+    scene.owner = scene.owner.with_falls(true).with_fall_speed(fall_speed);
+    scene.independent_owner = scene
+        .independent_owner
+        .with_falls(true)
+        .with_fall_speed(fall_speed);
     crate::keys::testing::bind(
         &mut scene.app,
         Act::Jump,
