@@ -23,3 +23,5 @@ character. Command-line automation and offline previews are optional workflows.
 
 The five pages under `scripts/` are also embedded in the in-game Help tab. The
 other guides are repository documentation; they are not rendered by that tab.
+
+Custom skin authors can use the optional [skin extensions](skin-extensions.md).

@@ -260,6 +260,7 @@ fn resize_reflows_real_nested_chat_widgets_clips_and_perimeter_without_replaceme
                 (
                     "Label".into(),
                     Element::Label(eq_client_assets::sidl::Label {
+                        client_value: None,
                         area: screen_area(),
                         anchors: Some(Anchors {
                             left: Anchor::Start(12.0),

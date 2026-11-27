@@ -277,6 +277,7 @@ impl Section {
         (
             id.to_owned(),
             Element::Label(Label {
+                client_value: None,
                 area,
                 anchors: None,
                 eq_type: None,
