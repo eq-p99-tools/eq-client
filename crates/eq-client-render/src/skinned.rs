@@ -2734,6 +2734,15 @@ mod tests {
 
     #[test]
     fn skinned_hp_fill_uses_the_signed_purple_scale_and_restores_the_skin_tint() {
+        let assert_width = |app: &App, entity: Entity, expected: f32| {
+            let width = app.world().get::<Node>(entity).unwrap().width;
+            let Val::Percent(actual) = width else {
+                panic!("expected a percentage width, got {width:?}");
+            };
+            // Ratio -> f32 -> percentage can round by an ULP (0.6 ->
+            // 60.000004). Stay far below the gauge's 0.1 percentage-point step.
+            assert!((actual - expected).abs() < 0.0001, "{actual} != {expected}");
+        };
         let mut app = crate::testing::app();
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
@@ -2771,18 +2780,12 @@ mod tests {
             .spawn((Shows::LinesFill(1), Node::default()))
             .id();
         app.update();
-        assert_eq!(
-            app.world().get::<Node>(fill).unwrap().width,
-            Val::Percent(60.0)
-        );
+        assert_width(&app, fill, 60.0);
         assert_eq!(
             app.world().get::<ImageNode>(image).unwrap().color,
             Color::srgb_u8(128, 0, 128)
         );
-        assert_eq!(
-            app.world().get::<Node>(lines).unwrap().width,
-            Val::Percent(99.5)
-        );
+        assert_width(&app, lines, 99.5);
         assert_eq!(
             app.world().get::<ImageNode>(lines_image).unwrap().color,
             Color::srgb_u8(192, 192, 192)
@@ -2797,15 +2800,9 @@ mod tests {
             }],
         );
         app.update();
-        assert_eq!(
-            app.world().get::<Node>(fill).unwrap().width,
-            Val::Percent(25.0)
-        );
+        assert_width(&app, fill, 25.0);
         assert_eq!(app.world().get::<ImageNode>(image).unwrap().color, normal);
-        assert_eq!(
-            app.world().get::<Node>(lines).unwrap().width,
-            Val::Percent(24.5)
-        );
+        assert_width(&app, lines, 24.5);
         assert_eq!(
             app.world().get::<ImageNode>(lines_image).unwrap().color,
             lines_tint
