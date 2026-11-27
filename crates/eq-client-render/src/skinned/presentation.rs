@@ -323,7 +323,15 @@ pub(super) fn filled(
     use crate::hud::action_bar::{BookChange, book_progress};
     let now = std::time::Instant::now();
     match kind {
-        9 => book_progress(world, requests, BookChange::Memorize, now),
+        // Titanium's authored memorize gauge shows remaining points. The
+        // action bar shows completion; both read the same worker countdown.
+        9 => book_progress(world, requests, BookChange::Memorize, now).map(|completed| {
+            if world.generation() == eq_client_core::GameDialect::Titanium {
+                1.0 - completed
+            } else {
+                completed
+            }
+        }),
         10 => book_progress(world, requests, BookChange::Scribe, now),
         _ => fraction(world, estimate, kind),
     }
