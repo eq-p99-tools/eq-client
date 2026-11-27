@@ -200,22 +200,36 @@ fn run(slope: bool, pitch: f32, side: Option<KeyCode>, turn: f32) -> Outcome {
 
 #[test]
 fn clear_water_both_strafe_turn_signs_preserve_pitch_independent_depth() {
+    let calibrated = calibration().swim.unwrap();
+    let maximum_path =
+        f64::from(water::WetCaps::new(calibrated.set, calibrated.strafe, 0.).horizontal) * 10.
+            + 0.01;
     for pitch in [-0.45, 0., 0.45] {
         let idle = run(false, pitch, None, 0.);
-        for side in [KeyCode::KeyA, KeyCode::KeyD] {
-            for turn in [-40., -7.5, 0., 7.5, 40.] {
-                let row = run(false, pitch, Some(side), turn);
+        for turn in [-40., -7.5, 0., 7.5, 40.] {
+            let left = run(false, pitch, Some(KeyCode::KeyA), turn);
+            let right = run(false, pitch, Some(KeyCode::KeyD), -turn);
+            for row in [&left, &right] {
+                assert_eq!(row.refused, 0, "pitch={pitch} turn={turn}: {row:?}");
                 assert_eq!(
-                    row.refused, 0,
-                    "pitch={pitch} side={side:?} turn={turn}: {row:?}"
+                    row.replay_mismatches, 0,
+                    "every native endpoint must match: {row:?}"
                 );
-                assert_eq!(row.replay_mismatches, 0, "{row:?}");
-                assert!(row.path_xy > 10. && f64::from(row.net_xy) <= row.path_xy + 0.001);
+                assert!(row.accepted > 50 && row.path_xy > idle.path_xy + 1.);
+                assert!(
+                    row.path_xy <= maximum_path,
+                    "only the calibrated strafe earns travel: {row:?}"
+                );
+                assert!(f64::from(row.net_xy) <= row.path_xy + 0.001);
                 assert!(
                     (row.dz - idle.dz).abs() < 0.002,
                     "a pure strafe adds no pitch stroke: {row:?}"
                 );
             }
+            assert!(
+                (left.path_xy - right.path_xy).abs() < 0.01,
+                "mirrored physical input must retain the same native travel: {left:?} / {right:?}"
+            );
         }
     }
 }
