@@ -589,23 +589,31 @@ fn gate326(installed: bool, frames: u32) {
         // submitted positions and reporting semantics match. Retain this
         // gate: projected endpoints are not completed native observations.
         let coordinate_noise = runs[0].roundoff.max(runs[1].roundoff);
+        let mut position_differs = false;
+        let mut semantics_differ = false;
         for (main, candidate) in runs[0].samples.iter().zip(&runs[1].samples) {
             let position = |sample: &eq_network_game::movement::PositionPacket| {
                 Vec3::from_array(eq_client_core::render_position(sample.position)).as_dvec3()
             };
             if position(main).distance(position(candidate)) > coordinate_noise {
-                failures.push((delay, "actual submitted position differs"));
-                break;
+                position_differs = true;
             }
             if main.animation != candidate.animation
                 || main.delta_heading != candidate.delta_heading
                 || main.sequence != candidate.sequence
-                || Vec3::from(main.delta).distance(Vec3::from(candidate.delta))
-                    > coordinate_noise as f32
+                || Vec3::from(main.delta)
+                    .as_dvec3()
+                    .distance(Vec3::from(candidate.delta).as_dvec3())
+                    > coordinate_noise
             {
-                failures.push((delay, "actual packet body semantics differ"));
-                break;
+                semantics_differ = true;
             }
+        }
+        if position_differs {
+            failures.push((delay, "actual submitted position differs"));
+        }
+        if semantics_differ {
+            failures.push((delay, "actual packet body semantics differ"));
         }
         if frames == 600 && relative > 0.04 {
             failures.push((delay, "matched ten-second travel differs by over4%"));
