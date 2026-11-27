@@ -357,7 +357,7 @@ mod tests {
         ] {
             for scripted in [false, true] {
                 for target in [Posture::Standing, Posture::Sitting] {
-                    for ceiling in [6.0, 9.0] {
+                    for (ceiling, clears) in [(6.0, false), (9.0, true)] {
                         let state = admitted(Some(0));
                         let (tx, rx) = mpsc::sync_channel(4);
                         let outbox = Outbox::new(Some(tx));
@@ -374,7 +374,7 @@ mod tests {
                                 })
                                 .is_ok()
                         );
-                        let allowed = ceiling == 9.0
+                        let allowed = clears
                             || client == InstalledClient::EqMac && target == Posture::Sitting;
                         assert_eq!(
                             rx.try_recv().is_ok(),
