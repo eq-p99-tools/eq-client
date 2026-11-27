@@ -204,11 +204,12 @@ are per character and world. A newly reported match adds a System message, map
 banner and background attention request even with the map closed. Initial zone
 list matches also count as spotted; they cannot be distinguished from new spawns.
 
-**3D On** outlines the matching character models in amber in the main view,
+**Outline tracked: On** outlines the matching character models in amber in the main view,
 including through walls. Seeing models through scenery departs from the
 official client, so the setting starts off and works only where the server
 type lists gameplay departures. It follows the saved watch list independently
-of map search. **3D Off** hides the outlines. Scene
+of map search. **Options > QoL > Map > Outline tracked names** changes the same
+per-character setting. **Outline tracked: Off** hides the outlines. Scene
 distance, model availability, and ordinary targeting checks still apply.
 
 Open **Landmarks** to save a named location. Enter a name to save your current

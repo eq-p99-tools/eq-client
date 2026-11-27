@@ -26,14 +26,17 @@ pub(crate) use landmarks::{
 pub(crate) use motion::{MapMotion, draw as draw_movement, sample as sample_movement};
 pub(crate) use navigation::input as navigate;
 pub(crate) use presentation::{
-    Backdrop, Presentation, actions as presentation_actions, persist as persist_presentation,
-    update as present,
+    Backdrop, OUTLINES_TOOLTIP, OutlineCheckbox, Presentation, actions as presentation_actions,
+    persist as persist_presentation, update as present,
 };
 pub(crate) use target::{input as target_input, show as show_target};
 pub(crate) use watch::{WatchState, alert as watch_alert, persist as persist_watches};
 pub(crate) use window::{FallbackMap, ensure_window};
 #[cfg(test)]
-pub(crate) use {controls::Control, entities::Action as MarkerAction};
+pub(crate) use {
+    controls::{Control, chrome as control_chrome},
+    entities::Action as MarkerAction,
+};
 
 use crate::online::OnlineState;
 use bevy::{

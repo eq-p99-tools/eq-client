@@ -286,6 +286,7 @@ fn section_headings_use_checkbox_typography_if_the_skin_has_no_label() {
     for (id, text) in [
         ("EQC_QoL_SettingsCaption", "Quality of Life"),
         ("EQC_QoL_UnsafeCaption", "Dangerous"),
+        ("EQC_QoL_MapCaption", "Map"),
     ] {
         let heading = label(page, id);
         assert_eq!(heading.text, text);
@@ -299,8 +300,8 @@ fn section_headings_use_checkbox_typography_if_the_skin_has_no_label() {
             .iter()
             .filter(|(_, piece)| matches!(piece, Element::Button(_)))
             .count(),
-        Fix::settings().count() + 1,
-        "the fixes and Look Spring, which this skin lacks"
+        Fix::settings().count() + 2,
+        "the fixes, Look Spring and the tracked-name outline checkbox"
     );
     assert!(
         page.pieces

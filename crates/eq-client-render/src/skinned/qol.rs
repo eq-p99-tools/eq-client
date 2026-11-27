@@ -17,6 +17,7 @@ pub(super) mod tests;
 
 /// This client's Look Spring checkbox, for a skin without one.
 pub(super) const LOOK_SPRING_FALLBACK: &str = "EQC_LookSpringCheckbox";
+pub(super) const OUTLINE_TRACKED: &str = "EQC_OutlineTrackedNames";
 const LOOK_SPRING_TEXT: &str = "Look Spring";
 const LOOK_SPRING_TOOLTIP: &str = "Bring the first-person view back level when no look key or mouse look holds it, as the official client's Look Spring does.";
 
@@ -139,9 +140,11 @@ pub(super) fn pages<'a>(
     // a usable label take both metrics and typography from the checkbox.
     let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
     let layout = Layout::new(checkbox, heading_height, room, choices.len());
+    // The Map section follows Dangerous without changing its existing row/column layout.
+    choices.push(Control::Checkbox(Choice::OutlineTracked));
     let mut pieces = Vec::new();
     let mut y = MARGIN;
-    for section in [Section::Ordinary, Section::Dangerous] {
+    for section in [Section::Ordinary, Section::Dangerous, Section::Map] {
         pieces.push(section.heading(
             checkbox,
             caption,
@@ -313,6 +316,7 @@ fn qol_slider(
 enum Section {
     Ordinary,
     Dangerous,
+    Map,
     CombatText,
 }
 
@@ -321,6 +325,7 @@ impl Section {
         let (id, text) = match self {
             Self::Ordinary => ("EQC_QoL_SettingsCaption", "Quality of Life"),
             Self::Dangerous => ("EQC_QoL_UnsafeCaption", "Dangerous"),
+            Self::Map => ("EQC_QoL_MapCaption", "Map"),
             Self::CombatText => ("EQC_QoL_CombatTextCaption", "Combat text colors"),
         };
         (
@@ -344,6 +349,7 @@ impl Section {
 #[derive(Clone, Copy)]
 enum Choice {
     Fix(Fix),
+    OutlineTracked,
     /// One of the official client's options, where the skin has no
     /// checkbox for it.
     Official {
@@ -357,6 +363,11 @@ impl Choice {
     /// The checkbox's screen ID, text and tooltip.
     fn parts(self) -> (String, &'static str, &'static str) {
         match self {
+            Self::OutlineTracked => (
+                OUTLINE_TRACKED.to_owned(),
+                "Outline tracked names",
+                crate::map::OUTLINES_TOOLTIP,
+            ),
             Self::Fix(fix) => (qol_checkbox_id(fix), fix.label(), fix.tooltip()),
             Self::Official { id, text, tooltip } => (id.to_owned(), text, tooltip),
         }
@@ -379,6 +390,7 @@ impl Control<'_> {
     fn section(self) -> Section {
         match self {
             Self::Checkbox(Choice::Fix(fix)) if fix.is_unsafe() => Section::Dangerous,
+            Self::Checkbox(Choice::OutlineTracked) => Section::Map,
             Self::Checkbox(_) => Section::Ordinary,
             Self::Slider { section, .. } => section,
         }
