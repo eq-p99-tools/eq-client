@@ -575,9 +575,11 @@ impl Panels<'_> {
                 state.deletion.listed(list);
             }
             state.selection = state.world.characters().map(|list| {
-                super::character_select::Selection::new(list.selection_id, list.characters.clone())
-                    .with_creation(list.creation)
-                    .with_deletion(list.scope(), list.deletion)
+                super::character_select::Selection::from_list(
+                    list,
+                    state.selection.as_ref(),
+                    state.world.creation(),
+                )
             });
         }
         if let Some(selection) = state.selection.as_mut() {
