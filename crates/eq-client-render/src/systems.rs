@@ -636,8 +636,10 @@ pub(super) fn install_overlays(app: &mut App) {
     // The right button's look takes the mouse before the windows see it.
     app.add_systems(
         PreUpdate,
-        crate::camera::look
+        (crate::keys::release_on_focus_loss, crate::camera::look)
+            .chain()
             .after(bevy::input::InputSystems)
+            .before(crate::script::drive)
             .before(bevy::ui::UiSystems::Focus),
     );
     windows::register_layout(app);

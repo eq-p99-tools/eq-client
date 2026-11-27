@@ -717,6 +717,11 @@ impl Keys<'_, '_> {
 
     /// Whether the game has the keyboard.
     pub(crate) fn focused(&self) -> bool {
+        self.automatic_input_available() && self.window_focused()
+    }
+
+    /// Text entry still owns input when automatic positioning runs unfocused.
+    pub(crate) fn automatic_input_available(&self) -> bool {
         !self.typing.composing
             && !self.typing.creating_character
             && !self.typing.editing_script
@@ -727,7 +732,6 @@ impl Keys<'_, '_> {
             && !self.typing.spell_search
             && !self.typing.spell_set_name
             && !self.typing.rebinding
-            && self.window_focused()
     }
 
     /// The movement acts a running script holds itself.
@@ -812,6 +816,28 @@ impl Keys<'_, '_> {
     /// keyboard.
     pub(crate) fn first(&self, acts: impl IntoIterator<Item = Act>) -> Option<Act> {
         acts.into_iter().find(|act| self.pressed(*act))
+    }
+}
+
+/// Native holds end at focus loss. A script may reassert its authored holds
+/// afterwards through its usual focus/background policy.
+#[allow(clippy::needless_pass_by_value)]
+pub(crate) fn release_on_focus_loss(
+    mut focus: MessageReader<bevy::window::WindowFocused>,
+    windows: Query<Entity, With<PrimaryWindow>>,
+    mut keys: ResMut<ButtonInput<KeyCode>>,
+    mut buttons: ResMut<ButtonInput<MouseButton>>,
+    look: Option<ResMut<crate::camera::MouseLook>>,
+) {
+    if focus
+        .read()
+        .any(|event| !event.focused && windows.contains(event.window))
+    {
+        keys.reset_all();
+        buttons.reset_all();
+        if let Some(mut look) = look {
+            *look = crate::camera::MouseLook::default();
+        }
     }
 }
 

@@ -4,6 +4,7 @@ use eq_client_core::movement::{Liquid, Liquids};
 use eq_network_game::movement::{GroundSampleResult, MotionSession, TITANIUM_FLAGS, UpdateGate};
 use std::{collections::VecDeque, sync::mpsc};
 
+mod pursuit;
 mod turn_release;
 
 struct Dry;

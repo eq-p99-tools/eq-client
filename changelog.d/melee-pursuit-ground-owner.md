@@ -1,0 +1,1 @@
+Fix Stay in Melee Range failing to approach a target on dry ground after standing idle. Positioning continues with the window in the background, releases native holds on focus loss, and closes farther inside estimated reach at ordinary run speed to catch moving targets. Typing, questions, casting, manual movement, mouse look and scripts retain priority.

@@ -203,6 +203,8 @@ pub(super) struct Controls {
     suppress_submitted_preview: bool,
     #[cfg(test)]
     suppress_ground: bool,
+    #[cfg(test)]
+    test_melee: MeleeObservations,
     /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
     test_span: Option<f32>,
@@ -420,6 +422,8 @@ impl Default for Controls {
             suppress_submitted_preview: false,
             #[cfg(test)]
             suppress_ground: false,
+            #[cfg(test)]
+            test_melee: MeleeObservations::default(),
             #[cfg(test)]
             test_span: None,
             #[cfg(test)]
@@ -1854,6 +1858,13 @@ impl Controls {
     }
 }
 
+#[cfg(test)]
+#[derive(Default)]
+struct MeleeObservations {
+    decisions: u64,
+    proposals: u64,
+}
+
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE_DURATION: Duration = Duration::from_millis(250);
 const MAX_CYCLE: f32 = MAX_CYCLE_DURATION.as_secs_f32();
@@ -1988,11 +1999,17 @@ impl TapBuffer {
         }
     }
 
-    fn take(&mut self, keys: &ButtonInput<KeyCode>) -> ButtonInput<KeyCode> {
+    fn sample(&self, keys: &ButtonInput<KeyCode>) -> ButtonInput<KeyCode> {
         let mut sampled = keys.clone();
-        for (key, _) in self.0.drain(..) {
+        for &(key, _) in &self.0 {
             sampled.press(key);
         }
+        sampled
+    }
+
+    fn take(&mut self, keys: &ButtonInput<KeyCode>) -> ButtonInput<KeyCode> {
+        let sampled = self.sample(keys);
+        self.0.clear();
         sampled
     }
 }
@@ -2209,6 +2226,7 @@ pub(super) fn input(
             .as_deref()
             .is_some_and(|combat| combat.requested_in(online.world().session_id())),
         input_owned = keys.focused(), pending_sample = controls.pending.is_some(),
+        ground_active = controls.ground.active(), script_active = keys.script_active(),
         "Melee positioning input entry");
     let client = settings.0.installed_client;
     // The program's speed-modifier routine ends following once a root
@@ -2354,6 +2372,8 @@ pub(super) fn input(
         return;
     }
     let focused = keys.focused() && !detached && !stunned && controls.speed.is_some();
+    let melee_available =
+        keys.automatic_input_available() && !detached && !stunned && controls.speed.is_some();
     // Where the program holds a lying player still (read R19 c), the keys
     // neither move nor turn them, nor jump; mouse look turns them in the
     // chase views only.
@@ -2827,6 +2847,49 @@ pub(super) fn input(
     controls
         .taps
         .observe(&keyboard, &movement_keys, focused, now);
+    let melee_enabled = trace_melee
+        && combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(session_id))
+        && [
+            Capability::GameplayDepartures,
+            Capability::Moving,
+            Capability::Combat,
+        ]
+        .into_iter()
+        .all(|capability| online.world().can(capability));
+    // Decide ownership before native ground can retain an idle frame. Observe
+    // buffered taps without consuming them or giving them a physical duration.
+    let ownership_keys = controls.taps.sample(&keyboard);
+    let manual = controls.autorun
+        || keys.script_active()
+        || (focused
+            && (follow::moves(map, &ownership_keys, scripted)
+                || [Act::Jump, Act::Duck]
+                    .into_iter()
+                    .any(|act| map.holding(&ownership_keys, scripted).held(act))
+                || look.as_ref().is_some_and(|look| look.held)
+                || mouse_aim.is_some_and(|yaw| yaw != 0.)
+                || controls.mouse_turn != 0.
+                || controls.mouse_heading.is_some_and(|heading| {
+                    online
+                        .world()
+                        .player()
+                        .is_some_and(|player| arc(player.position.heading, heading) != 0.)
+                })
+                || controls.released_turn != 0.
+                || keys.pressed(Act::Walk)
+                || scripted_facing.is_some()));
+    if !melee_enabled {
+        controls.melee.clear();
+    } else if manual || !melee_available || controls.following.is_some() {
+        controls.melee.yield_input(now);
+    }
+    let melee_waiting = melee_enabled
+        && melee_available
+        && !manual
+        && controls.following.is_none()
+        && controls.melee.ready(now);
     // A completed-frame producer runs before the legacy future-endpoint gates.
     // Its input sample deliberately excludes the tap buffer and press-only
     // edges: no duration is invented for a tap absent from an observed frame.
@@ -2857,7 +2920,8 @@ pub(super) fn input(
             (yaw, heading),
             look.as_deref(),
         );
-        let eligible = time.is_some()
+        let eligible = !melee_waiting
+            && time.is_some()
             && client.owns_ground_frames()
             && match online.world().generation() {
                 eq_client_core::GameDialect::Titanium => true,
@@ -2935,6 +2999,15 @@ pub(super) fn input(
             },
             intent,
         ) {
+            if trace_melee {
+                melee::held(if melee_waiting {
+                    "native_ground_handoff"
+                } else if manual {
+                    "native_ground_manual"
+                } else {
+                    "native_ground"
+                });
+            }
             controls.swim_owner.invalidate_reset("ground_owner");
             return;
         }
@@ -3214,30 +3287,6 @@ pub(super) fn input(
     } else {
         None
     };
-    let melee_enabled = options.options.qol.on(Fix::MeleePositioning)
-        && combat
-            .as_deref()
-            .is_some_and(|combat| combat.requested_in(session_id))
-        && [
-            Capability::GameplayDepartures,
-            Capability::Moving,
-            Capability::Combat,
-        ]
-        .into_iter()
-        .all(|capability| online.world().can(capability));
-    let manual = follow::moves(map, &sampled, scripted)
-        || controls.autorun
-        || [Act::Jump, Act::Duck]
-            .into_iter()
-            .any(|act| map.holding(&sampled, scripted).held(act))
-        || look.as_ref().is_some_and(|look| look.held)
-        || mouse_aim.is_some_and(|yaw| yaw != 0.)
-        || mouse_snapshot.is_some()
-        || controls.released_turn != 0.
-        || active_mouse_yaw
-        || keys.pressed(Act::Walk)
-        || scripted_facing.is_some()
-        || keys.script_active();
     let melee_step = if !melee_enabled {
         if trace_melee {
             trace!(target: "eq_client_render::motion::melee", reason = "attack_or_provider_unavailable", forward = false,
@@ -3247,7 +3296,7 @@ pub(super) fn input(
         }
         controls.melee.clear();
         None
-    } else if manual || !focused || controls.following.is_some() {
+    } else if manual || !melee_available || controls.following.is_some() {
         trace!(target: "eq_client_render::motion::melee", reason = "input_owner", forward = false,
             manual, focused, input_owned = keys.focused(), detached, stunned, following = controls.following.is_some(),
             movement = follow::moves(map, &sampled, scripted), autorun = controls.autorun,
@@ -3302,6 +3351,10 @@ pub(super) fn input(
             ),
             walking: controls.walking,
         };
+        #[cfg(test)]
+        {
+            controls.test_melee.decisions += 1;
+        }
         controls
             .melee
             .step(online.world(), world, &online.regions, &body, now)
@@ -4310,6 +4363,10 @@ pub(super) fn input(
         return;
     }
     if melee_step.is_some() {
+        #[cfg(test)]
+        {
+            controls.test_melee.proposals += 1;
+        }
         trace!(target: "eq_client_render::motion::melee", sample_seconds = span,
             elapsed_since_send = since_sent.as_secs_f64(), granted_run_speed = ?controls.speed,
             selected_speed = speed, requested_horizontal = delta.with_y(0.0).length(),

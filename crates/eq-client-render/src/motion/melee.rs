@@ -47,12 +47,24 @@ struct Scope {
     spawn_revision: u64,
 }
 
+struct TargetSample {
+    position: Vec3,
+    at: Instant,
+}
+
+struct StandOff {
+    stop: f32,
+    resume: f32,
+    receding_speed: f32,
+}
+
 #[derive(Default)]
 pub(super) struct Assist {
     scope: Option<Scope>,
     approaching: bool,
     paused_until: Option<Instant>,
     driving: bool,
+    target_sample: Option<TargetSample>,
 }
 
 /// Already granted ordinary movement and the current collision body.
@@ -81,7 +93,11 @@ impl Assist {
         };
     }
 
-    /// The caller supplies focus, attack, option, ownership and movement gates.
+    pub fn ready(&self, now: Instant) -> bool {
+        self.paused_until.is_none_or(|until| now >= until)
+    }
+
+    /// The caller supplies attack, option, ownership and movement gates.
     /// Target authority and geometry are checked anew for every actual sample.
     pub fn step(
         &mut self,
@@ -91,7 +107,7 @@ impl Assist {
         body: &Body,
         now: Instant,
     ) -> Option<follow::Step> {
-        if self.paused_until.is_some_and(|until| now < until) {
+        if !self.ready(now) {
             held("manual_release_pause");
             return None;
         }
@@ -125,15 +141,8 @@ impl Assist {
         // The existing Titanium ability check is horizontal. Staying inside
         // its sphere is a conservative height approximation, not extra reach.
         let reach = (radius * radius - dz * dz).sqrt();
-        let stop = (reach - 1_f32.min(reach * 0.1)).max(0.);
-        if self.scope != Some(scope) {
-            self.scope = Some(scope);
-            self.approaching = !in_range;
-        } else if distance > reach && !in_range {
-            self.approaching = true;
-        } else if distance <= stop {
-            self.approaching = false;
-        }
+        let stand_off = self.stand_off(scope, to, reach, body, now);
+        let stop = stand_off.stop;
         let desired = if distance > 1e-5 {
             eq_client_core::world_heading(flat.x.atan2(flat.y))
         } else {
@@ -144,7 +153,10 @@ impl Assist {
             desired,
             super::TURN_RATE * body.seconds,
         );
-        let run = !body.walking && distance - stop > 8.;
+        // Slowing to walk near the target cannot catch a target faster than
+        // walking. The ordinary run grant and the remaining distance cap
+        // both still apply; the player's walking preference is unchanged.
+        let run = !body.walking;
         let selected = if run { body.speeds.0 } else { body.speeds.1 };
         let speed = selected.min(body.speeds.0);
         let beyond = (distance - stop).max(0.);
@@ -168,7 +180,9 @@ impl Assist {
         };
         let forward = reason == "forward";
         trace!(target: "eq_client_render::motion::melee", reason, forward, sample_seconds = body.seconds,
-            selected_speed = speed, distance, beyond, heading_error, "Melee positioning decision");
+            selected_speed = speed, distance, beyond, heading_error, reach, stop,
+            resume = stand_off.resume, receding_speed = stand_off.receding_speed, in_range,
+            own = ?body.position, target = ?there, "Melee positioning decision");
         self.driving = forward;
         Some(follow::Step {
             heading,
@@ -176,6 +190,61 @@ impl Assist {
             run,
             beyond: if forward { beyond } else { 0. },
         })
+    }
+
+    fn stand_off(
+        &mut self,
+        scope: Scope,
+        to: Vec3,
+        reach: f32,
+        body: &Body,
+        now: Instant,
+    ) -> StandOff {
+        let from = Vec3::from_array(eq_client_core::render_position(body.position));
+        let same = self.scope == Some(scope);
+        let direction = (to - from).with_y(0.).normalize_or_zero();
+        let receding_speed = self
+            .target_sample
+            .as_ref()
+            .filter(|_| same)
+            .map_or(0., |last| {
+                let elapsed = now.saturating_duration_since(last.at).as_secs_f32();
+                if elapsed > 0. {
+                    ((to - last.position).dot(direction) / elapsed).max(0.)
+                } else {
+                    0.
+                }
+            });
+        self.target_sample = Some(TargetSample {
+            position: to,
+            at: now,
+        });
+        // Reserve one planning interval of ordinary run travel plus observed
+        // target recession. This is a local planning allowance, not measured
+        // server latency or extra reach. Keep the old minimum and cap the
+        // reserve at half the envelope so no body overlap is demanded.
+        let seconds = body.seconds.clamp(0.1, 0.25);
+        let reserve = ((body.speeds.0.max(0.) + receding_speed) * seconds)
+            .max(1_f32.min(reach * 0.1))
+            .min(reach * 0.5);
+        let stop = reach - reserve;
+        // A stationary caught target reopens only at the outer envelope.
+        // A receding one reopens earlier, leaving hysteresis above the stop.
+        let resume = (reach - receding_speed * seconds).clamp(stop + reserve * 0.25, reach);
+        let distance = (to - from).with_y(0.).length();
+        if !same {
+            self.scope = Some(scope);
+            self.approaching = distance > stop;
+        } else if distance > resume {
+            self.approaching = true;
+        } else if distance <= stop {
+            self.approaching = false;
+        }
+        StandOff {
+            stop,
+            resume,
+            receding_speed,
+        }
     }
 }
 
@@ -246,6 +315,9 @@ fn target(
             abilities::in_melee_range(own_body, target_body),
         ),
     };
+    trace!(target: "eq_client_render::motion::melee", own_race = own_body.race, own_size = own_body.size,
+        target_race = target_body.race, target_size = target_body.size, radius, in_range,
+        "Melee estimated body reach (local state, not server swing admission)");
     Ok((
         Scope {
             session,
