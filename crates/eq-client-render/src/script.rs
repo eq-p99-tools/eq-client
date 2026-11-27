@@ -4614,6 +4614,7 @@ fn runs(distance: Option<f32>, range: f32) -> bool {
 #[cfg(test)]
 mod tests {
     mod background_pointer;
+    mod exchange_buttons;
     mod private;
     mod semantic;
     mod world_input;

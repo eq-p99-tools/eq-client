@@ -47,7 +47,16 @@ Use these targets after `click`, `right_click` or `hover`. Each word of a target
 - `buy slot` or `sell slot`: buy the merchant slot or sell the inventory slot.
 - `buy_chosen` or `sell_chosen`: act on the selected merchant item.
 - `shop_done`: leave the merchant.
-- `give`: the give window's button.
+- `give`: the open Give or Trade window's accept button. `give()` opens an
+  offer with the item or coins on your cursor; it does not press this button.
+- Give window: `button give GVW_Give_Button` accepts and
+  `button give GVW_Cancel_Button` cancels. `done give` also names Cancel.
+- Trade window: `button trade TRDW_Trade_Button` accepts and
+  `button trade TRDW_Cancel_Button` cancels. `done trade` also names Cancel.
+  For example, `click("button", "give", "GVW_Cancel_Button")` presses the
+  visible Cancel control through the same UI action as a person's click.
+  These controls must exist in the current skin and be visible and enabled.
+  Cancel requests cancellation; it does not establish item or coin return.
 - `combine slot`: combine in the tradeskill container in a pack slot.
 
 Titanium purchases and sales of multiple available units use the existing
@@ -63,7 +72,7 @@ merchant action.
 
 - `window key`: click a window toggle, such as `inventory`, `spellbook`, `options` or `scripts`. The toggles live in the EQ menu; while it is closed the step first clicks the menu's own button (`button selector EQButton`), waits for the menu to open (up to a second), then clicks the entry; the script ends if the menu stays closed. Keyboard shortcuts such as the map's starting `press("M")` do not require the menu; saved bindings still apply.
 - `close_box key` or `minimize_box key`: the window's titlebar control.
-- `done key`: a window's Done button.
+- `done key`: a window's Done button, or Give/Trade's Cancel button.
 - `button key ScreenID`: a named button in the installed skin's window.
 - `scroll_up key` or `scroll_down key`: a window's scrollbar.
 - `tab number`: an options tab counted from 1.

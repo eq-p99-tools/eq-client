@@ -1,0 +1,1 @@
+- Documented the existing Give/Trade accept and Cancel script targets, with regression coverage for ordinary UI dispatch and disabled, hidden or wrong-window controls.
