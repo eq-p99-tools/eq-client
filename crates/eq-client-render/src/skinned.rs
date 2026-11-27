@@ -582,31 +582,40 @@ pub(crate) fn apply(
                 tab_frame: screen.tab_frame.as_deref(),
             };
             title_bottom = draw(window, screen, &mut art, &context);
-            if *id == WindowId::Map && sizing.is_some() {
-                super::windows::resize_border(window, frame);
-            }
-            if *id == WindowId::Guild {
-                crate::guild::roster::labels(window, screen.area.width, screen.area.height);
-            }
-            if book_footer {
-                let base_height = screen.area.height + crate::spellbook::search::FOOTER_HEIGHT;
-                crate::spellbook::search::spawn(
-                    window,
-                    at(
-                        0.0,
-                        screen.area.height,
-                        screen.area.width,
-                        crate::spellbook::search::FOOTER_HEIGHT,
-                    ),
-                );
-                crate::spellbook::sets::ui::spawn(
-                    window,
-                    Some((frame, screen.area.width, base_height)),
-                );
-            }
+            draw_frame_controls(window, frame, *id, screen, sizing.is_some(), book_footer);
         });
         art.draw_in(None);
         state.drawn_from_skin(&mut node, title_bottom);
+    }
+}
+
+/// Shared frame controls accompany the authored window contents.
+fn draw_frame_controls(
+    window: &mut ChildSpawnerCommands,
+    frame: Entity,
+    id: WindowId,
+    screen: &Screen,
+    resizable: bool,
+    book_footer: bool,
+) {
+    if id == WindowId::Map && resizable {
+        super::windows::resize_border(window, frame);
+    }
+    if id == WindowId::Guild {
+        crate::guild::roster::labels(window, screen.area.width, screen.area.height);
+    }
+    if book_footer {
+        let base_height = screen.area.height + crate::spellbook::search::FOOTER_HEIGHT;
+        crate::spellbook::search::spawn(
+            window,
+            at(
+                0.0,
+                screen.area.height,
+                screen.area.width,
+                crate::spellbook::search::FOOTER_HEIGHT,
+            ),
+        );
+        crate::spellbook::sets::ui::spawn(window, Some((frame, screen.area.width, base_height)));
     }
 }
 
