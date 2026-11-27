@@ -38,6 +38,28 @@ struct ResultNews {
     refused: Option<String>,
 }
 
+struct Submission {
+    at: Instant,
+    sample: eq_network_game::movement::PositionPacket,
+    body: [u8; 36],
+}
+
+fn submit(
+    packets: &mut Vec<(Instant, eq_client_core::WorldPosition, i16)>,
+    submissions: &mut Vec<Submission>,
+    now: Instant,
+    sample: &eq_network_game::movement::PositionPacket,
+) -> anyhow::Result<()> {
+    let body = sample.encode()?;
+    packets.push((now, sample.position, sample.animation));
+    submissions.push(Submission {
+        at: now,
+        sample: *sample,
+        body,
+    });
+    Ok(())
+}
+
 struct Scene {
     app: App,
     commands: mpsc::Receiver<ClientCommand>,
@@ -48,6 +70,7 @@ struct Scene {
     delay: u32,
     replies: VecDeque<ResultNews>,
     packets: Vec<(Instant, eq_client_core::WorldPosition, i16)>,
+    submissions: Vec<Submission>,
     observations: usize,
     admissions: usize,
     refusals: usize,
@@ -57,12 +80,14 @@ struct Scene {
     ordinary_supports: Vec<Option<Support>>,
 }
 
+#[derive(Clone)]
 struct CarrierFixture {
     collision: CollisionWorld,
     origin: eq_client_core::WorldPosition,
     body: PlayerBody,
     ship: eq_client_core::SpawnState,
     native: bool,
+    clock: Option<Instant>,
 }
 
 #[allow(
@@ -191,6 +216,7 @@ fn docked_carrier(native: bool, installed: bool) -> CarrierFixture {
         },
         ship,
         native,
+        clock: None,
     }
 }
 
@@ -252,6 +278,194 @@ fn carrier_crossing(installed: bool) {
         Vec::new(),
         "supported carrier handover lost time/distance"
     );
+}
+
+// Fixed before observing crossing outcomes. Frame93 is an ordinary admission
+// for both7-frame (reply0) and13-frame (reply6) cycles, and a native3-frame
+// admission. The92 held warmup frames follow the initial idle frame.
+const MATCHED_WARMUP_FRAMES: u32 = 92;
+const MATCHED_APPROACH_X: f32 = 230.;
+const CARRIER_SPEED: f32 = 29.866_667;
+
+fn warm_carrier(fixture: CarrierFixture, delay: u32) -> (Scene, Vec<f32>) {
+    let mut scene = Scene::with_carrier_fixture(delay, true, CARRIER_SPEED, false, Some(fixture));
+    let mut previous = latency_tests::shown(&mut scene.app).0;
+    let mut speeds = Vec::new();
+    for _ in 0..MATCHED_WARMUP_FRAMES {
+        let row = scene.step(true);
+        speeds.push((row.shown - previous).with_y(0.).length() * 60.);
+        assert!(
+            (row.shown.y - 3.75).abs() < 0.001,
+            "warmup left the clear approach"
+        );
+        previous = row.shown;
+    }
+    assert!(scene.ordinary_supports.iter().all(Option::is_none));
+    assert_eq!(scene.refusals, 0);
+    (scene, speeds)
+}
+
+fn matched_carrier(installed: bool, native: bool, delay: u32, clock: Instant) -> Scene {
+    let target = eq_client_core::WorldPosition {
+        x: MATCHED_APPROACH_X,
+        y: 10.,
+        z: 3.75,
+        heading: 128.,
+    };
+    let mut fixture = docked_carrier(native, installed);
+    fixture.clock = Some(clock);
+    fixture.origin.x = 150.;
+    let initial = Vec3::from_array(eq_client_core::render_position(fixture.origin));
+    let (mut pilot, _) = warm_carrier(fixture.clone(), delay);
+    let travelled = latency_tests::shown(&mut pilot.app).0 - initial;
+    // Coordinate alignment of the untouched warmup only. No correction,
+    // clock/velocity reset, geometry swap or outcome-based adjustment occurs
+    // at the fixed measurement boundary or during its following one second.
+    fixture.origin = world_position(
+        (Vec3::from_array(eq_client_core::render_position(target)) - travelled).to_array(),
+        target.heading,
+    );
+    let (mut scene, speeds) = warm_carrier(fixture, delay);
+    let shown = latency_tests::shown(&mut scene.app).0;
+    assert!(shown.distance(Vec3::from_array(eq_client_core::render_position(target))) < 0.001);
+    let settled = &speeds[speeds.len() - 8..];
+    assert!(
+        settled
+            .iter()
+            .all(|speed| (*speed - CARRIER_SPEED).abs() < 0.01),
+        "unsettled approach velocity: {settled:?}"
+    );
+    assert_eq!(scene.frame, 93);
+    let latest = scene.replies.back().expect("matched latest admission");
+    assert_eq!(latest.due, scene.frame + delay + 1);
+    assert!(latest.refused.is_none());
+    assert_eq!(latest.position, scene.owner.position());
+    let world = scene.app.world_mut();
+    let controls = world.resource::<Controls>();
+    assert_eq!(controls.ground.active(), native);
+    assert!(
+        controls
+            .ground
+            .current
+            .is_none_or(|frame| frame.carrier.is_none())
+    );
+    let collision = world.resource::<Collision>().0.as_ref().unwrap();
+    let feet_offset = 3.75;
+    // The actor, worker endpoint and every pending reply all precede the
+    // first possible carrier handover, including ordinary future playback.
+    for position in std::iter::once(world_position(shown.to_array(), 128.))
+        .chain(std::iter::once(scene.owner.position()))
+        .chain(scene.replies.iter().map(|reply| reply.position))
+    {
+        let feet =
+            Vec3::from_array(eq_client_core::render_position(position)) - Vec3::Y * feet_offset;
+        assert!(
+            collision
+                .support(feet)
+                .is_some_and(|floor| floor.abs() < 0.001)
+        );
+        assert_eq!(collision.ground_frame_carrier(feet, 5.), None);
+    }
+    println!(
+        "MATCHED-START {}",
+        serde_json::json!({
+            "installed": installed, "native": native, "delay_frames": delay,
+            "fixed_target": target, "actual_shown": world_position(shown.to_array(),128.),
+            "worker_position": scene.owner.position(), "frame": scene.frame,
+            "latest_reply_due_frame": latest.due,
+            "latest_request_created_ns": latest.created.duration_since(clock).as_nanos(),
+            "settled_last8_speeds": settled, "submissions_before": scene.submissions.len(),
+            "qualification": "normal held-input warmup; fixed measurement pose and frame; no state transplant",
+        })
+    );
+    scene
+}
+
+fn matched_carrier_crossing(installed: bool) {
+    let mut failures = Vec::new();
+    for delay in [0, 6] {
+        let clock = Instant::now();
+        let mut distances = Vec::new();
+        for native in [false, true] {
+            let mut scene = matched_carrier(installed, native, delay, clock);
+            let start_at = scene.now();
+            let before = scene.submissions.len();
+            let mut previous = latency_tests::shown(&mut scene.app).0;
+            let start = previous;
+            let mut horizontal = 0.;
+            let mut spatial = 0.;
+            let mut stopped = 0;
+            for _ in 0..60 {
+                let row = scene.step(true);
+                let delta = row.shown - previous;
+                horizontal += delta.with_y(0.).length();
+                spatial += delta.length();
+                stopped += usize::from(delta.with_y(0.).length() < 0.000_01);
+                assert_eq!(row.shown, row.focus);
+                previous = row.shown;
+            }
+            let packets: Vec<_> = scene.submissions[before..].iter().map(|submitted| {
+                serde_json::json!({
+                    "elapsed_ns": submitted.at.duration_since(start_at).as_nanos(),
+                    "position": submitted.sample.position, "sequence": submitted.sample.sequence,
+                    "delta": submitted.sample.delta, "animation": submitted.sample.animation,
+                    "delta_heading": submitted.sample.delta_heading, "titanium_body": submitted.body.to_vec(),
+                })
+            }).collect();
+            println!(
+                "MATCHED-CROSSING {}",
+                serde_json::json!({
+                    "installed": installed, "native": native, "delay_frames": delay,
+                    "elapsed_ns": scene.now().duration_since(start_at).as_nanos(),
+                    "start": world_position(start.to_array(),128.), "end": world_position(previous.to_array(),128.),
+                    "horizontal_path": horizontal, "spatial_path": spatial, "stopped_frames": stopped,
+                    "actual_submissions": packets, "all_submissions": scene.submissions.len(),
+                    "ordinary_requests": scene.ordinary_modes.len(), "native_observations": scene.observations,
+                })
+            );
+            assert_eq!(scene.refusals, 0);
+            assert!(scene.ordinary_supports.iter().any(|support| {
+                matches!(support, Some(Support::Spawn(sample)) if sample.spawn_id == 172)
+            }));
+            if native {
+                assert_eq!(stopped, 0);
+                assert!(
+                    horizontal <= CARRIER_SPEED + 0.001,
+                    "exceeded actual held time"
+                );
+            }
+            for pair in scene.packets.windows(2) {
+                assert!(pair[1].0.duration_since(pair[0].0) > TITANIUM_FLAGS.spacing);
+            }
+            distances.push(horizontal);
+        }
+        println!(
+            "MATCHED-DELTA {}",
+            serde_json::json!({
+                "installed": installed, "delay_frames": delay,
+                "relative_percent": (distances[1]/distances[0]-1.)*100.,
+            })
+        );
+        // Delayed ordinary playback can stall. Retain and report that loss;
+        // never pause or accelerate the candidate to fit a delayed control.
+        if delay == 0 {
+            if (distances[1] - distances[0]).abs() / distances[0] > 0.01 {
+                failures.push("matched normal-reply distance exceeds1%");
+            }
+        }
+    }
+    assert!(failures.is_empty(), "{failures:?}");
+}
+
+#[test]
+fn native_ground_matched_supported_carrier_crossing() {
+    matched_carrier_crossing(false);
+}
+
+#[test]
+#[ignore = "requires authorized installed Titanium assets; offline CPU collision only"]
+fn installed_qeynos_matched_supported_carrier_crossing() {
+    matched_carrier_crossing(true);
 }
 
 #[test]
@@ -669,7 +883,10 @@ impl Scene {
         } else {
             collision
         };
-        let base = Instant::now();
+        let base = fixture
+            .as_ref()
+            .and_then(|fixture| fixture.clock)
+            .unwrap_or_else(Instant::now);
         let start = base.checked_sub(Duration::from_secs(1)).unwrap();
         let carrier = fixture.is_some();
         if let Some(fixture) = fixture {
@@ -766,6 +983,7 @@ impl Scene {
             delay,
             replies: VecDeque::new(),
             packets: Vec::new(),
+            submissions: Vec::new(),
             observations: 0,
             admissions: 0,
             refusals: 0,
@@ -808,11 +1026,11 @@ impl Scene {
                 }
                 self.observations += 1;
                 let packets = &mut self.packets;
+                let submissions = &mut self.submissions;
                 let result = self
                     .owner
                     .try_send_ground_sample(&request, state, now, |packet| {
-                        packets.push((now, packet.position, packet.animation));
-                        Ok(())
+                        submit(packets, submissions, now, packet)
                     });
                 if matches!(result, Ok(GroundSampleResult::WaitingForInterval)) {
                     self.owner
@@ -849,10 +1067,10 @@ impl Scene {
                 self.owner.allow_carrier(carrier);
                 self.ordinary_stops += usize::from(request.position == self.owner.position());
                 let packets = &mut self.packets;
+                let submissions = &mut self.submissions;
                 self.owner
                     .send_move_sample(&request, now, |packet| {
-                        packets.push((now, packet.position, packet.animation));
-                        Ok(())
+                        submit(packets, submissions, now, packet)
                     })
                     .unwrap();
                 self.reply(request.created, None);
@@ -904,11 +1122,9 @@ impl Scene {
             self.publish(command, now);
         }
         let packets = &mut self.packets;
+        let submissions = &mut self.submissions;
         self.owner
-            .tick_sample(now, |packet| {
-                packets.push((now, packet.position, packet.animation));
-                Ok(())
-            })
+            .tick_sample(now, |packet| submit(packets, submissions, now, packet))
             .unwrap();
         let (shown, focus) = latency_tests::shown(&mut self.app);
         let current = self.app.world().resource::<Controls>().ground.current;
