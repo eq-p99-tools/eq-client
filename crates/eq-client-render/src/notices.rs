@@ -4,7 +4,6 @@ use super::chat::Said;
 use super::{
     combat::{consideration_text, damage_text},
     hud::messages::Messages,
-    trade::coin_text,
 };
 use eq_client_assets::skills::SkillRules;
 use eq_client_core::chat::Source;
@@ -204,16 +203,40 @@ const fn loot_refusal(response: LootResponse) -> (&'static str, Option<u32>) {
 /// the coins (eqstr 12072).
 const LOOT_COINS: u32 = 12072;
 
-/// Coins taken from a corpse, in the official client's words where the
-/// installation has them.
+/// The native US loot amount preserves each reported denomination, omits
+/// zero counts, and joins the last part with "and". It is not the compact HUD
+/// balance, nor a total to convert back into different coin counts.
+fn loot_coin_amount(coins: eq_client_core::Coins) -> String {
+    let mut parts: Vec<_> = [
+        (coins.platinum, "platinum"),
+        (coins.gold, "gold"),
+        (coins.silver, "silver"),
+        (coins.copper, "copper"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, coin)| format!("{count} {coin}"))
+    .collect();
+    let Some(last) = parts.pop() else {
+        return String::new();
+    };
+    if parts.is_empty() {
+        last
+    } else {
+        format!("{} and {last}", parts.join(", "))
+    }
+}
+
+/// Coins taken from a corpse, in the installed client's outer line.
 fn loot_coins(coins: eq_client_core::Coins, messages: Option<&Messages>) -> Said {
-    let coins = coin_text(coins.total_copper());
+    let coins = loot_coin_amount(coins);
     official(
         Some(LOOT_COINS),
         std::slice::from_ref(&coins),
-        &format!("The corpse gave you {coins}."),
+        &format!("You receive {coins} from the corpse."),
         messages,
     )
+    .typed(0x11d)
 }
 
 /// Why a corpse could not be looted, in the official client's words where
@@ -1908,6 +1931,50 @@ mod tests {
     }
 
     #[test]
+    fn looted_coins_use_native_us_names_order_and_separators() {
+        let messages = Messages::parse("EQST0002\n0 1\n12072 You receive %1 from the corpse.\n");
+        for (amounts, words) in [
+            ([1, 0, 0, 0], "1 platinum"),
+            ([0, 2, 0, 0], "2 gold"),
+            ([0, 0, 3, 0], "3 silver"),
+            ([0, 0, 0, 4], "4 copper"),
+            ([1, 2, 0, 0], "1 platinum and 2 gold"),
+            ([1, 0, 3, 0], "1 platinum and 3 silver"),
+            ([1, 0, 0, 4], "1 platinum and 4 copper"),
+            ([0, 2, 3, 0], "2 gold and 3 silver"),
+            ([0, 2, 0, 4], "2 gold and 4 copper"),
+            ([0, 0, 3, 4], "3 silver and 4 copper"),
+            ([1, 2, 3, 0], "1 platinum, 2 gold and 3 silver"),
+            ([1, 2, 0, 4], "1 platinum, 2 gold and 4 copper"),
+            ([1, 0, 3, 4], "1 platinum, 3 silver and 4 copper"),
+            ([0, 2, 3, 4], "2 gold, 3 silver and 4 copper"),
+            ([1, 2, 3, 4], "1 platinum, 2 gold, 3 silver and 4 copper"),
+            ([0, 0, 0, 1], "1 copper"),
+            ([0, 0, 0, 8], "8 copper"),
+            ([0, 0, 0, 100], "100 copper"),
+            ([0, 0, 15, 12], "15 silver and 12 copper"),
+            ([0, 0, 0, 2_147_483_647], "2147483647 copper"),
+        ] {
+            let [platinum, gold, silver, copper] = amounts;
+            let coins = Coins {
+                platinum,
+                gold,
+                silver,
+                copper,
+            };
+            assert_eq!(loot_coin_amount(coins), words);
+            assert_eq!(
+                wording(&Notice::LootCoins(coins), Some(&messages)),
+                [(
+                    Place::Chat,
+                    Said::official(format!("You receive {words} from the corpse.")).typed(0x11d)
+                )]
+            );
+        }
+        assert_eq!(loot_coin_amount(Coins::default()), "");
+    }
+
+    #[test]
     fn loot_replies_say_what_the_corpse_gave_or_refused() {
         let line = |notice| wording(&notice, None);
         let coins = Coins {
@@ -1918,13 +1985,19 @@ mod tests {
         };
         assert_eq!(
             line(Notice::LootCoins(coins)),
-            [(Place::Chat, "The corpse gave you 1g 2c.".into())]
+            [(
+                Place::Chat,
+                Said::own("You receive 1 gold and 2 copper from the corpse.").typed(0x11d)
+            )]
         );
         // With the installed strings, the official line names the coins.
         let messages = Messages::parse("EQST0002\n0 1\n12072 Took %1.\n");
         assert_eq!(
             wording(&Notice::LootCoins(coins), Some(&messages)),
-            [(Place::Chat, Said::official("Took 1g 2c."))]
+            [(
+                Place::Chat,
+                Said::official("Took 1 gold and 2 copper.").typed(0x11d)
+            )]
         );
         assert_eq!(
             line(Notice::ItemRefused),
