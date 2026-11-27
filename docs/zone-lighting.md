@@ -1,13 +1,37 @@
 # Zone lighting
 
-How the client lights a zone without a sky (a palace, a dungeon or a cave)
-on a Titanium installation. Outdoor zones still follow the time of day, as
+How the client lights a zone whose header reports no sky on a Titanium
+installation. This can include a forest; it is not an indoor/outdoor test.
+Zones with a sky still follow the time of day, as
 the module notes of `daylight.rs` describe. The Mac-era client's engine
 isn't read, so its zones are drawn as before.
 
 The original draws zone geometry in its graphics engine, EQGraphicsDX9.dll.
 eqgame.exe chooses the ambient light and hands it over. The engine then
 lights each vertex in its effects.
+
+## Background clear (6.675)
+
+The selected installation follows the server's protocol: P99 and EQEmu use
+`InstalledClient::Titanium`; Quarm and TAKP use `InstalledClient::EqMac`.
+`apps/eq-client/src/logins.rs::installed_client` maps the network's
+`GameDialect` exhaustively. RoF2 is a placeholder, not a selectable server
+installation. P99's Titanium/P99-V62 configuration does not select the
+Mac-era rules.
+
+| Installed client | Original no-sky clear evidence | Current background |
+| --- | --- | --- |
+| Titanium | [R] EQGraphicsDX9.dll 0x1007f0d6–0x1007f0fe clears the colour target with the cached RGB also written by the fog setter at 0x1007da20 and used for D3D fog colour at 0x1007daa5–0x1007daa9. | With sky index zero and effective fog enabled, clear to that fog tint. |
+| Mac era | Unread: the Mac engine's no-sky colour-clear path has not been established. No Titanium address is evidence for it. | Retain the existing black no-sky background; this is not a native parity claim. |
+| RoF2 | Unread: no no-sky colour-clear path has been established. | Retain the existing black no-sky background; do not infer Titanium's rule. |
+
+[R] Titanium's usable-sky path at EQGraphicsDX9.dll
+0x1007f02c–0x1007f0bf can clear depth/stencil without clearing colour.
+This renderer retains its existing day/night background when the header
+advertises a sky. For sky index zero, disabled fog or Clear View keeps the
+prior black background. Material alpha and fog distances are unchanged.
+These static reads and offline tests do not establish an attended P99
+visual result.
 
 ## The path the original takes
 
