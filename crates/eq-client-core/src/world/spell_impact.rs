@@ -167,6 +167,10 @@ impl ClientWorld {
 // Independent native trace: 452c78 looks up target; 439ca3/439bd1 sum
 // fabs(X/Y/Z) deltas at factor 1; 644804 is 75. Confirmed by read 416.
 fn within_impact_range(own: WorldPosition, target: WorldPosition) -> bool {
-    let distance = (target.x - own.x).abs() + (target.y - own.y).abs() + (target.z - own.z).abs();
+    // Native stores each absolute delta as f32, then compares their x87
+    // sum without rounding the total back to f32 at the 75-unit boundary.
+    let distance = f64::from((target.x - own.x).abs())
+        + f64::from((target.y - own.y).abs())
+        + f64::from((target.z - own.z).abs());
     distance.is_finite() && distance <= 75.0
 }

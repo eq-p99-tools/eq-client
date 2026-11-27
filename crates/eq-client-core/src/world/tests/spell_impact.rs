@@ -176,6 +176,11 @@ fn bystander_range_uses_target_taxicab_distance_with_inclusive_75_and_role_bypas
     for (source, target, shown) in [
         (position(1000.0, 0.0, 0.0), position(25.0, 25.0, 25.0), true),
         (position(0.0, 0.0, 0.0), position(50.0, 50.0, 0.0), false),
+        (
+            position(0.0, 0.0, 0.0),
+            position(25.0, 25.0, f32::from_bits(25.0_f32.to_bits() + 1)),
+            false,
+        ),
         (position(1000.0, 0.0, 0.0), position(75.0, 0.0, 0.0), true),
         (position(0.0, 0.0, 0.0), position(75.001, 0.0, 0.0), false),
         (position(0.0, 0.0, 0.0), position(0.0, 0.0, 75.0), true),
