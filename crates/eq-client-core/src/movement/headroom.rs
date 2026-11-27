@@ -164,15 +164,12 @@ impl CollisionWorld {
         // Query each underside separately, pairing it with its own local
         // floor. Combining a high floor and low roof from unrelated parts
         // of the stride would invent a refusal.
-        let contacts = match self.headroom_ceiling_contacts(from, to, probe) {
-            Ok(contacts) => contacts,
-            Err(_) => {
-                let bounds = HeadroomBounds {
-                    ceiling: None,
-                    ..bounds
-                };
-                return (!fits(bounds)).then_some(HeadroomHit { origin: to, bounds });
-            }
+        let Ok(contacts) = self.headroom_ceiling_contacts(from, to, probe) else {
+            let bounds = HeadroomBounds {
+                ceiling: None,
+                ..bounds
+            };
+            return (!fits(bounds)).then_some(HeadroomHit { origin: to, bounds });
         };
         contacts
             .into_iter()
