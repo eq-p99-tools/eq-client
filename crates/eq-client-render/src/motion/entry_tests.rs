@@ -11,6 +11,24 @@ impl Liquids for Shore {
         (point.x >= 0. && point.y <= 0.).then_some(Liquid::Water)
     }
 
+    fn passes_through(&self, from: Vec3, to: Vec3, liquid: Liquid) -> bool {
+        if liquid != Liquid::Water {
+            return false;
+        }
+        let (mut enter, mut leave) = (0_f32, 1_f32);
+        for (a, b) in [(from.x, to.x), (-from.y, -to.y)] {
+            if a < 0. && b < 0. {
+                return false;
+            }
+            if a < 0. {
+                enter = enter.max(-a / (b - a));
+            } else if b < 0. {
+                leave = leave.min(-a / (b - a));
+            }
+        }
+        enter <= leave
+    }
+
     fn within(&self, _: Vec3, _: Vec3) -> Option<Box<dyn Liquids>> {
         Some(Box::new(self.clone()))
     }
