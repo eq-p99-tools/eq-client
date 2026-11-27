@@ -287,17 +287,41 @@ pub(super) enum RunMode {
 #[derive(Default, Resource)]
 pub(crate) struct RunControl {
     request: Option<Request>,
+    owner: Option<Arc<()>>,
     breakpoints: Option<std::collections::BTreeSet<usize>>,
 }
 
 impl RunControl {
     pub(crate) fn request(&mut self, request: Request) {
-        if self.request != Some(Request::Stop) {
+        if self.request != Some(Request::Stop) || request == Request::Stop {
             self.request = Some(request);
+            self.owner = None;
         }
     }
 
+    /// A hotbutton controls only the execution it observed when pressed.
+    pub(crate) fn request_for(&mut self, owner: &Arc<()>, request: Request) {
+        let stopping_this_run = self.request == Some(Request::Stop)
+            && self
+                .owner
+                .as_ref()
+                .is_none_or(|asked| Arc::ptr_eq(asked, owner));
+        if !stopping_this_run {
+            self.request = Some(request);
+            self.owner = Some(owner.clone());
+        }
+    }
+
+    pub(super) fn take_for(&mut self, owner: &Arc<()>) -> Option<Request> {
+        let matches = self
+            .owner
+            .take()
+            .is_none_or(|asked| Arc::ptr_eq(&asked, owner));
+        self.take().filter(|_| matches)
+    }
+
     pub(super) fn take(&mut self) -> Option<Request> {
+        self.owner = None;
         self.request.take()
     }
 
@@ -334,6 +358,14 @@ mod tests {
         control.request(Request::Resume);
         assert_eq!(control.take(), Some(Request::Stop));
         assert_eq!(control.take(), None);
+        let previous = Arc::new(());
+        let current = Arc::new(());
+        control.request_for(&previous, Request::Stop);
+        control.request_for(&current, Request::Resume);
+        assert_eq!(control.take_for(&current), Some(Request::Resume));
+        control.request_for(&previous, Request::Stop);
+        control.request(Request::Stop);
+        assert_eq!(control.take_for(&current), Some(Request::Stop));
     }
 
     #[test]

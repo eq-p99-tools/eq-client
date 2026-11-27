@@ -40,7 +40,7 @@ Use these targets after `click`, `right_click` or `hover`. Each word of a target
 
 ## Loot, merchants and tradeskills
 
-- `loot place`: take the corpse item at its server place number.
+- `loot place`: the corpse item at its server place number. `click("loot", place)` takes it to the cursor; `right_click("loot", place)` asks for inventory placement. Both retain the destination through NO DROP confirmation and wait for server inventory updates.
 - `loot_all`: take all corpse items.
 - `loot_done`: end looting.
 - `merchant_row slot`: select a merchant row.

@@ -4,7 +4,6 @@ use super::chat::Said;
 use super::{
     combat::{consideration_text, damage_text},
     hud::messages::Messages,
-    trade::coin_text,
 };
 use eq_client_assets::skills::SkillRules;
 use eq_client_core::chat::Source;
@@ -204,16 +203,40 @@ const fn loot_refusal(response: LootResponse) -> (&'static str, Option<u32>) {
 /// the coins (eqstr 12072).
 const LOOT_COINS: u32 = 12072;
 
-/// Coins taken from a corpse, in the official client's words where the
-/// installation has them.
+/// The native US loot amount preserves each reported denomination, omits
+/// zero counts, and joins the last part with "and". It is not the compact HUD
+/// balance, nor a total to convert back into different coin counts.
+fn loot_coin_amount(coins: eq_client_core::Coins) -> String {
+    let mut parts: Vec<_> = [
+        (coins.platinum, "platinum"),
+        (coins.gold, "gold"),
+        (coins.silver, "silver"),
+        (coins.copper, "copper"),
+    ]
+    .into_iter()
+    .filter(|(count, _)| *count > 0)
+    .map(|(count, coin)| format!("{count} {coin}"))
+    .collect();
+    let Some(last) = parts.pop() else {
+        return String::new();
+    };
+    if parts.is_empty() {
+        last
+    } else {
+        format!("{} and {last}", parts.join(", "))
+    }
+}
+
+/// Coins taken from a corpse, in the installed client's outer line.
 fn loot_coins(coins: eq_client_core::Coins, messages: Option<&Messages>) -> Said {
-    let coins = coin_text(coins.total_copper());
+    let coins = loot_coin_amount(coins);
     official(
         Some(LOOT_COINS),
         std::slice::from_ref(&coins),
-        &format!("The corpse gave you {coins}."),
+        &format!("You receive {coins} from the corpse."),
         messages,
     )
+    .typed(0x11d)
 }
 
 /// Why a corpse could not be looted, in the official client's words where
@@ -510,6 +533,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             ))
         }),
         Notice::Damage {
+            generation,
             damage,
             own_id,
             source,
@@ -518,6 +542,7 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             .and_then(|messages| {
                 damage_text(
                     messages,
+                    *generation,
                     *own_id,
                     |id| {
                         let name = if id == damage.source_id {
@@ -532,6 +557,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 )
             })
             .map_or_else(Vec::new, chat),
+        Notice::SpellImpact { line, .. } => {
+            super::combat::spell_impact_text(line, messages).map_or_else(Vec::new, chat)
+        }
         Notice::EnvironmentalDamage { reported, record } => messages
             .map(|messages| environmental_lines(messages, *reported, *record))
             .map_or_else(Vec::new, in_chat),
@@ -552,27 +580,47 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             merchant,
             item,
             price,
+            no_value,
         } => {
             // Titanium received-sale handler0x5384e2: native quote text,
             // merchant and item are the three arguments of0x551, type0x114.
-            let amount = eq_client_assets::merchants::MerchantPrices::split(*price)
-                .into_iter()
-                .zip(eq_client_assets::merchants::TITANIUM.coins)
-                .zip(["platinum", "gold", "silver", "copper"])
-                .filter(|((count, _), _)| *count > 0)
-                .map(|((count, id), coin)| {
-                    let fallback = format!(" {count} {coin}");
-                    messages.map_or_else(
-                        || fallback.clone(),
-                        |table| {
-                            table
-                                .said_or(id, &[count.to_string()], &fallback)
-                                .words
-                                .text
-                        },
-                    )
-                })
-                .collect::<String>();
+            // The native sale text distinguishes no base value from a
+            // positive base price whose computed coin amount rounds to zero.
+            let amount = if *no_value {
+                let fallback = " absolutely nothing";
+                messages.map_or_else(
+                    || fallback.to_owned(),
+                    |table| {
+                        table
+                            .said_or(
+                                eq_client_assets::merchants::TITANIUM.no_value,
+                                &[],
+                                fallback,
+                            )
+                            .words
+                            .text
+                    },
+                )
+            } else {
+                eq_client_assets::merchants::MerchantPrices::split(*price)
+                    .into_iter()
+                    .zip(eq_client_assets::merchants::TITANIUM.coins)
+                    .zip(["platinum", "gold", "silver", "copper"])
+                    .filter(|((count, _), _)| *count > 0)
+                    .map(|((count, id), coin)| {
+                        let fallback = format!(" {count} {coin}");
+                        messages.map_or_else(
+                            || fallback.clone(),
+                            |table| {
+                                table
+                                    .said_or(id, &[count.to_string()], &fallback)
+                                    .words
+                                    .text
+                            },
+                        )
+                    })
+                    .collect::<String>()
+            };
             let merchant = if merchant.is_empty() {
                 messages.map_or_else(
                     || "The merchant".to_owned(),
@@ -1447,6 +1495,99 @@ mod tests {
     use super::*;
     use eq_client_core::Coins;
 
+    fn melee_notice(
+        generation: eq_client_core::GameDialect,
+        source_id: u16,
+        target_id: u16,
+    ) -> Notice {
+        Notice::Damage {
+            generation,
+            damage: eq_client_core::combat::Damage {
+                source_id,
+                target_id,
+                kind: 4,
+                spell_id: None,
+                outcome: eq_client_core::combat::DamageOutcome::Hit(33),
+                push: None,
+            },
+            own_id: 7,
+            source: Some("a_rat".into()),
+            target: Some("a_rat".into()),
+        }
+    }
+
+    fn melee_words() -> Messages {
+        Messages::parse(
+            "EQST0002\n0 0\n12185 LocalSubject\n12186 LocalReflexive\n12187 LocalObject\n12183 localhit\n12184 localhits\n12160 amount%1\n12162 %1 %2 %3 %4\n",
+        )
+    }
+
+    #[test]
+    fn two_self_melee_records_keep_two_rows_and_only_titanium_uses_the_local_reflexive() {
+        use eq_client_core::{
+            GameDialect,
+            chat::{ChatHistory, ChatTab},
+        };
+        let messages = melee_words();
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            let notice = melee_notice(generation, 7, 7);
+            let mut history = ChatHistory::default();
+            for _ in 0..2 {
+                for (place, said) in wording(&notice, Some(&messages)) {
+                    assert_eq!(place, Place::Chat);
+                    history.push(crate::chat::system_line(said));
+                }
+            }
+            let rows = history.lines(ChatTab::All);
+            assert_eq!(rows.iter().map(|(id, _)| *id).collect::<Vec<_>>(), [1, 2]);
+            let word = if generation == GameDialect::Titanium {
+                "LocalReflexive"
+            } else {
+                "LocalObject"
+            };
+            for (_, row) in rows {
+                assert_eq!(
+                    row.message.text,
+                    format!("LocalSubject localhit {word} amount33")
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn other_to_self_melee_keeps_the_installed_object_word_in_every_dialect() {
+        use eq_client_core::GameDialect;
+        let messages = melee_words();
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            assert_eq!(
+                wording(&melee_notice(generation, 9, 7), Some(&messages)),
+                [(
+                    Place::Chat,
+                    Said::official("A rat localhits LocalObject amount33")
+                )]
+            );
+        }
+    }
+
+    #[test]
+    fn self_to_other_melee_keeps_the_received_name_in_every_dialect() {
+        use eq_client_core::GameDialect;
+        let messages = melee_words();
+        for generation in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            assert_eq!(
+                wording(&melee_notice(generation, 7, 9), Some(&messages)),
+                [(
+                    Place::Chat,
+                    Said::official("LocalSubject localhit a rat amount33")
+                )]
+            );
+            assert_eq!(
+                wording(&melee_notice(generation, 8, 9), Some(&messages)),
+                [] as [(Place, Said); 0]
+            );
+        }
+    }
+
     #[test]
     fn received_sale_uses_native_coin_fragments_arguments_and_message_type() {
         let messages = Messages::parse(
@@ -1456,12 +1597,70 @@ mod tests {
             merchant: "Iludarae".into(),
             item: "Bat Fur".into(),
             price: 14,
+            no_value: false,
         };
         assert_eq!(
             wording(&notice, Some(&messages)),
             [(
                 Place::Chat,
                 Said::official("amount 1S 4C merchant=Iludarae item=Bat Fur").typed(0x114)
+            )]
+        );
+    }
+
+    #[test]
+    fn received_sale_without_value_uses_native_text_and_spacing() {
+        let messages = Messages::parse(
+            "EQST0002\n0 2\n1361 You receive%1 from %2 for the %3(s).\n2408  absolutely nothing\n",
+        );
+        let notice = Notice::MerchantSold {
+            merchant: "Terri Woodshape".into(),
+            item: "Tasty Candy".into(),
+            price: 0,
+            no_value: true,
+        };
+        let line = "You receive absolutely nothing from Terri Woodshape for the Tasty Candy(s).";
+        assert_eq!(
+            wording(&notice, Some(&messages)),
+            [(Place::Chat, Said::official(line).typed(0x114))]
+        );
+        assert_eq!(
+            wording(&notice, None),
+            [(Place::Chat, Said::own(line).typed(0x114))]
+        );
+        // Use the installed no-value entry rather than hardcoding its words.
+        let translated = Messages::parse(
+            "EQST0002\n0 2\n1361 amount%1 merchant=%2 item=%3\n2408  no-value translation\n",
+        );
+        assert_eq!(
+            wording(&notice, Some(&translated)),
+            [(
+                Place::Chat,
+                Said::official(
+                    "amount no-value translation merchant=Terri Woodshape item=Tasty Candy"
+                )
+                .typed(0x114)
+            )]
+        );
+    }
+
+    #[test]
+    fn received_sale_rounding_to_zero_keeps_the_numeric_formatter() {
+        let messages = Messages::parse(
+            "EQST0002\n0 2\n1361 You receive%1 from %2 for the %3(s).\n2408  absolutely nothing\n",
+        );
+        let notice = Notice::MerchantSold {
+            merchant: "Terri Woodshape".into(),
+            item: "Tiny value".into(),
+            price: 0,
+            no_value: false,
+        };
+        assert_eq!(
+            wording(&notice, Some(&messages)),
+            [(
+                Place::Chat,
+                Said::official("You receive from Terri Woodshape for the Tiny value(s).")
+                    .typed(0x114)
             )]
         );
     }
@@ -1732,6 +1931,50 @@ mod tests {
     }
 
     #[test]
+    fn looted_coins_use_native_us_names_order_and_separators() {
+        let messages = Messages::parse("EQST0002\n0 1\n12072 You receive %1 from the corpse.\n");
+        for (amounts, words) in [
+            ([1, 0, 0, 0], "1 platinum"),
+            ([0, 2, 0, 0], "2 gold"),
+            ([0, 0, 3, 0], "3 silver"),
+            ([0, 0, 0, 4], "4 copper"),
+            ([1, 2, 0, 0], "1 platinum and 2 gold"),
+            ([1, 0, 3, 0], "1 platinum and 3 silver"),
+            ([1, 0, 0, 4], "1 platinum and 4 copper"),
+            ([0, 2, 3, 0], "2 gold and 3 silver"),
+            ([0, 2, 0, 4], "2 gold and 4 copper"),
+            ([0, 0, 3, 4], "3 silver and 4 copper"),
+            ([1, 2, 3, 0], "1 platinum, 2 gold and 3 silver"),
+            ([1, 2, 0, 4], "1 platinum, 2 gold and 4 copper"),
+            ([1, 0, 3, 4], "1 platinum, 3 silver and 4 copper"),
+            ([0, 2, 3, 4], "2 gold, 3 silver and 4 copper"),
+            ([1, 2, 3, 4], "1 platinum, 2 gold, 3 silver and 4 copper"),
+            ([0, 0, 0, 1], "1 copper"),
+            ([0, 0, 0, 8], "8 copper"),
+            ([0, 0, 0, 100], "100 copper"),
+            ([0, 0, 15, 12], "15 silver and 12 copper"),
+            ([0, 0, 0, 2_147_483_647], "2147483647 copper"),
+        ] {
+            let [platinum, gold, silver, copper] = amounts;
+            let coins = Coins {
+                platinum,
+                gold,
+                silver,
+                copper,
+            };
+            assert_eq!(loot_coin_amount(coins), words);
+            assert_eq!(
+                wording(&Notice::LootCoins(coins), Some(&messages)),
+                [(
+                    Place::Chat,
+                    Said::official(format!("You receive {words} from the corpse.")).typed(0x11d)
+                )]
+            );
+        }
+        assert_eq!(loot_coin_amount(Coins::default()), "");
+    }
+
+    #[test]
     fn loot_replies_say_what_the_corpse_gave_or_refused() {
         let line = |notice| wording(&notice, None);
         let coins = Coins {
@@ -1742,13 +1985,19 @@ mod tests {
         };
         assert_eq!(
             line(Notice::LootCoins(coins)),
-            [(Place::Chat, "The corpse gave you 1g 2c.".into())]
+            [(
+                Place::Chat,
+                Said::own("You receive 1 gold and 2 copper from the corpse.").typed(0x11d)
+            )]
         );
         // With the installed strings, the official line names the coins.
         let messages = Messages::parse("EQST0002\n0 1\n12072 Took %1.\n");
         assert_eq!(
             wording(&Notice::LootCoins(coins), Some(&messages)),
-            [(Place::Chat, Said::official("Took 1g 2c."))]
+            [(
+                Place::Chat,
+                Said::official("Took 1 gold and 2 copper.").typed(0x11d)
+            )]
         );
         assert_eq!(
             line(Notice::ItemRefused),
@@ -2619,6 +2868,49 @@ mod tests {
                 Place::Chat,
                 Said::own("Take the poison out of the bag to apply it")
             )]
+        );
+    }
+    #[test]
+    fn native_spell_description_and_server_numeric_message_are_independent_rows() {
+        use eq_client_core::{
+            chat::{ChatHistory, ChatTab},
+            world::{SpellImpactFilter, SpellImpactLine},
+        };
+        let messages = Messages::parse(
+            "EQST0002\n0 0\n9073 server=%1 target=%2 amount=%3\n434 MUST-NOT-BE-USED %1 %2\n",
+        );
+        let server = Notice::ServerString {
+            id: 9073,
+            arguments: vec!["Caster".into(), "Rat".into(), "10".into()],
+            message_type: Some(283),
+        };
+        let native = Notice::SpellImpact {
+            line: SpellImpactLine::Other {
+                target: "a_rat".into(),
+                text: " is synthetically struck.".into(),
+            },
+            filter: SpellImpactFilter::Own,
+            message_type: Some(0x108),
+        };
+        let mut history = ChatHistory::default();
+        for notice in [server, native] {
+            for (place, said) in wording(&notice, Some(&messages)) {
+                assert_eq!(place, Place::Chat);
+                let mut row = crate::chat::system_line(said);
+                row.message_type = notice.message_type();
+                history.push(row);
+            }
+        }
+        let rows = history.lines(ChatTab::All);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1.message.text, "server=Caster target=Rat amount=10");
+        assert_eq!(rows[0].1.message_type, Some(283));
+        assert_eq!(rows[1].1.message.text, "A rat is synthetically struck.");
+        assert_eq!(rows[1].1.message_type, Some(0x108));
+        assert!(
+            !rows
+                .iter()
+                .any(|(_, row)| row.message.text.contains("MUST-NOT-BE-USED"))
         );
     }
 }

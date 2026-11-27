@@ -109,6 +109,7 @@ impl Zone {
                     health: spawn.hp_percent,
                     posture: None,
                     revision: *revision,
+                    incarnation: *revision,
                     reported: now,
                 },
             );
@@ -330,8 +331,24 @@ fn still_if_corpse(state: &mut SpawnState) {
 
 impl super::ClientWorld {
     /// Damage the player dealt or took; only that is theirs to read.
-    pub(super) fn damage(&mut self, damage: &crate::combat::Damage, changes: &mut super::Changes) {
+    pub(super) fn damage(
+        &mut self,
+        damage: &crate::combat::Damage,
+        now: Instant,
+        spells: &dyn super::SpellCatalog,
+        changes: &mut super::Changes,
+    ) {
         changes.damage.push(*damage);
+        let describes_spell_impacts = match self.generation() {
+            crate::GameDialect::Titanium => true,
+            crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
+        };
+        if describes_spell_impacts && damage.kind == crate::combat::SPELL_DAMAGE_KIND {
+            if let Some(notice) = self.spell_impact(damage, now, spells) {
+                changes.notices.push(notice);
+            }
+            return;
+        }
         if let Some(record) = self.environmental_record(damage) {
             changes.notices.push(Notice::EnvironmentalDamage {
                 reported: None,
@@ -344,6 +361,7 @@ impl super::ClientWorld {
                 if player.spawn_id == damage.source_id || player.spawn_id == damage.target_id =>
             {
                 changes.notices.push(Notice::Damage {
+                    generation: self.generation(),
                     damage: *damage,
                     own_id: player.spawn_id,
                     source: self.zone.name(damage.source_id),

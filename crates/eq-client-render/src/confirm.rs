@@ -72,6 +72,8 @@ pub(crate) enum Question {
         corpse_id: u16,
         place: u16,
         item_id: u32,
+        /// Retain the button's destination while the question is open.
+        auto: bool,
     },
     /// The bug report window's question before its report goes
     /// ([`crate::report_windows`]): every answer sends.

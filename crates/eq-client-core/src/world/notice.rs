@@ -165,7 +165,9 @@ impl Notice {
     #[must_use]
     pub const fn message_type(&self) -> Option<u32> {
         match self {
-            Self::ServerString { message_type, .. } => *message_type,
+            Self::ServerString { message_type, .. } | Self::SpellImpact { message_type, .. } => {
+                *message_type
+            }
             // The program prints the song stop's line in colour 0x108.
             // And every line of `OP_InterruptCast`'s print tail (0x45e233,
             // read R49-51b).
@@ -274,6 +276,8 @@ pub enum Notice {
     },
     /// Damage the player dealt or took, or anything else nearby.
     Damage {
+        /// The generation whose presentation rules apply to this record.
+        generation: crate::GameDialect,
         /// The damage record.
         damage: Damage,
         /// The player's spawn ID.
@@ -282,6 +286,15 @@ pub enum Notice {
         source: Option<String>,
         /// The defender's server name, when known.
         target: Option<String>,
+    },
+    /// A native Titanium spell-impact description, separate from server numeric text.
+    SpellImpact {
+        /// The role-specific installed description.
+        line: super::SpellImpactLine,
+        /// The native actor/group filter category.
+        filter: super::SpellImpactFilter,
+        /// Native colour when the installed discipline flag is known.
+        message_type: Option<u32>,
     },
     /// Environmental damage the player took, in the lines the Titanium
     /// program prints for it (reads R49-3 e and R49-3b): after its own
@@ -319,6 +332,9 @@ pub enum Notice {
         item: String,
         /// Native sale text's amount, not a new purse mutation.
         price: u64,
+        /// Use the no-value line rather than the numeric coin formatter.
+        /// A positive base price can round to zero without selecting this line.
+        no_value: bool,
     },
     /// No give window opened, or it closed, and why.
     GiveRefused(String),

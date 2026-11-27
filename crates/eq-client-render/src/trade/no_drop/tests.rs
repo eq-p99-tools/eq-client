@@ -148,8 +148,15 @@ fn a_no_drop_click_asks_first_and_takes_only_on_yes() {
         corpse_id: 9,
         place: 0,
         item_id: 1,
+        auto: false,
     };
-    click(&mut app, Action::Take(0));
+    click(
+        &mut app,
+        Action::Take {
+            place: 0,
+            auto: false,
+        },
+    );
     assert!(sent.try_recv().is_err());
     assert_eq!(asked(&app), Some(question));
     let text = text(
@@ -164,7 +171,13 @@ fn a_no_drop_click_asks_first_and_takes_only_on_yes() {
     assert!(sent.try_recv().is_err());
     assert_eq!(asked(&app), None);
     // Yes takes it, as the click would have.
-    click(&mut app, Action::Take(0));
+    click(
+        &mut app,
+        Action::Take {
+            place: 0,
+            auto: false,
+        },
+    );
     app.world_mut().resource_mut::<Asked>().give(true);
     app.update();
     assert!(matches!(
@@ -182,7 +195,13 @@ fn a_no_drop_click_asks_first_and_takes_only_on_yes() {
 #[test]
 fn twenty_seconds_unanswered_takes_the_question_back_and_takes_nothing() {
     let (mut app, sent) = app(item(true, true), LootNoDrop::Ask);
-    click(&mut app, Action::Take(0));
+    click(
+        &mut app,
+        Action::Take {
+            place: 0,
+            auto: false,
+        },
+    );
     assert!(asked(&app).is_some());
     app.update();
     assert!(asked(&app).is_some());
@@ -211,7 +230,13 @@ fn a_click_the_choice_allows_takes_at_once() {
         (item(true, false), LootNoDrop::Take),
     ] {
         let (mut app, sent) = app(loot, choice);
-        click(&mut app, Action::Take(0));
+        click(
+            &mut app,
+            Action::Take {
+                place: 0,
+                auto: false,
+            },
+        );
         assert!(matches!(
             sent.try_recv(),
             Ok(ClientCommand::LootItem { place: 0, .. })
@@ -227,7 +252,13 @@ fn the_mac_era_client_takes_at_once_as_before() {
         .resource_mut::<crate::ViewerSettings>()
         .0
         .installed_client = eq_client_assets::ui::InstalledClient::EqMac;
-    click(&mut app, Action::Take(0));
+    click(
+        &mut app,
+        Action::Take {
+            place: 0,
+            auto: false,
+        },
+    );
     assert!(matches!(
         sent.try_recv(),
         Ok(ClientCommand::LootItem { place: 0, .. })

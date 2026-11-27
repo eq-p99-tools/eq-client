@@ -187,6 +187,36 @@ pub(crate) fn cast_progress(
     ))
 }
 
+/// Titanium's cast gauge reads remaining integer thousandths on its millisecond
+/// clock. A visual deadline never settles the authoritative cast or its hold.
+pub(crate) fn titanium_cast_remaining(
+    world: &eq_client_core::world::ClientWorld,
+    now: Instant,
+) -> Option<f32> {
+    let (_, started, duration) = world.casting().cast?;
+    let duration = duration.as_millis();
+    let elapsed = now.saturating_duration_since(started).as_millis();
+    if duration == 0 || elapsed > duration {
+        return None;
+    }
+    let value = u16::try_from((duration - elapsed) * 1000 / duration).expect("gauge thousandths");
+    Some(f32::from(value) / 1000.0)
+}
+
+fn cast_window_visible(
+    world: &eq_client_core::world::ClientWorld,
+    client: eq_client_assets::ui::InstalledClient,
+    now: Instant,
+) -> bool {
+    match client {
+        eq_client_assets::ui::InstalledClient::Titanium => {
+            titanium_cast_remaining(world, now).is_some()
+        }
+        eq_client_assets::ui::InstalledClient::EqMac
+        | eq_client_assets::ui::InstalledClient::Rof2 => cast_spell(world).is_some(),
+    }
+}
+
 /// The spell the player casts, begun or waiting for the server.
 pub(crate) fn cast_spell(world: &eq_client_core::world::ClientWorld) -> Option<u32> {
     let casting = world.casting();
@@ -299,7 +329,8 @@ pub(crate) fn cast_window(
     mut shown: ResMut<crate::windows::Shown>,
 ) {
     let id = crate::windows::WindowId::CastBar;
-    let wanted = skin_shows_casts(&settings) && cast_spell(online.world()).is_some();
+    let wanted = skin_shows_casts(&settings)
+        && cast_window_visible(online.world(), settings.0.installed_client, Instant::now());
     if wanted != shown.is_open(id) {
         if wanted {
             shown.open(id);
@@ -373,6 +404,117 @@ mod tests {
     use super::*;
     use crate::online::{OnlineState, testing};
     use eq_client_core::SpellUpdate;
+
+    #[test]
+    fn titanium_cast_visual_counts_down_and_expires_without_settling_the_cast() {
+        use eq_client_assets::ui::InstalledClient;
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let start = Instant::now();
+        testing::news_at(
+            &mut online,
+            [eq_client_core::WorldEvent::Spell(SpellUpdate::Began {
+                caster_id: 7,
+                spell_id: 14,
+                duration_ms: 1500,
+            })],
+            start,
+        );
+        for (ms, expected) in [
+            (0, Some(1.0)),
+            (750, Some(0.5)),
+            (1499, Some(0.0)),
+            (1500, Some(0.0)),
+            (1501, None),
+        ] {
+            let now = start + Duration::from_millis(ms);
+            assert_eq!(titanium_cast_remaining(online.world(), now), expected);
+            assert_eq!(
+                cast_window_visible(online.world(), InstalledClient::Titanium, now),
+                expected.is_some()
+            );
+            assert!(online.world().casting().holds_actions());
+            assert_eq!(cast_spell(online.world()), Some(14));
+        }
+        let after = start + Duration::from_millis(1547);
+        assert!(cast_window_visible(
+            online.world(),
+            InstalledClient::Rof2,
+            after
+        ));
+        assert_eq!(cast_progress(online.world(), after), Some(1.0));
+        // A reported hit is separate from the authoritative cast completion.
+        testing::news_at(
+            &mut online,
+            [eq_client_core::WorldEvent::Damage(
+                eq_client_core::combat::Damage {
+                    source_id: 7,
+                    target_id: 7,
+                    kind: 1,
+                    spell_id: Some(14),
+                    outcome: eq_client_core::combat::DamageOutcome::Hit(10),
+                    push: None,
+                },
+            )],
+            after,
+        );
+        assert!(online.world().casting().cast.is_some());
+        testing::news_at(
+            &mut online,
+            [eq_client_core::WorldEvent::Spell(SpellUpdate::Mana {
+                spell_id: 14,
+                keep_casting: false,
+            })],
+            after,
+        );
+        assert!(!online.world().casting().holds_actions());
+    }
+
+    #[test]
+    fn interrupted_replaced_and_instant_casts_never_keep_an_old_visual_deadline() {
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let start = Instant::now();
+        let began = |spell_id, duration_ms| {
+            eq_client_core::WorldEvent::Spell(SpellUpdate::Began {
+                caster_id: 7,
+                spell_id,
+                duration_ms,
+            })
+        };
+        testing::news_at(&mut online, [began(14, 1500)], start);
+        testing::news_at(
+            &mut online,
+            [eq_client_core::WorldEvent::Spell(
+                SpellUpdate::Interrupted {
+                    caster_id: 7,
+                    message_id: 1,
+                    caster_name: None,
+                },
+            )],
+            start + Duration::from_millis(500),
+        );
+        assert_eq!(
+            titanium_cast_remaining(online.world(), start + Duration::from_millis(500)),
+            None
+        );
+        testing::news_at(&mut online, [began(14, 1500)], start);
+        testing::news_at(
+            &mut online,
+            [began(17, 3000)],
+            start + Duration::from_millis(1000),
+        );
+        let now = start + Duration::from_millis(1501);
+        assert!(
+            (titanium_cast_remaining(online.world(), now).unwrap() - 0.833).abs() < f32::EPSILON
+        );
+        assert_eq!(cast_spell(online.world()), Some(17));
+        testing::news_at(&mut online, [began(14, 0)], now);
+        assert_eq!(titanium_cast_remaining(online.world(), now), None);
+        assert!(online.world().casting().holds_actions());
+        testing::admit(&mut online, 2, testing::player(7));
+        assert_eq!(titanium_cast_remaining(online.world(), now), None);
+    }
 
     #[test]
     fn memorization_gauge_uses_worker_points_and_labels_the_approximate_fallback() {

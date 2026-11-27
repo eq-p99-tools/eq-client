@@ -14,6 +14,7 @@ use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::
 use super::windows;
 
 mod auto_loot;
+mod loot_clicks;
 pub(crate) mod loot_range;
 mod loot_requests;
 mod merchant;
@@ -37,6 +38,7 @@ const BANKER_CLASS: u8 = 40;
 #[derive(Resource, Default)]
 pub(super) struct TradeState {
     range: loot_range::RangeClose,
+    loot_press: loot_clicks::Press,
     automatic: auto_loot::AutoLoot,
     /// One scene click, consumed once in its own admission.
     right_clicked: Option<(u64, u16)>,
@@ -82,6 +84,65 @@ pub(crate) enum Chosen {
 }
 
 impl TradeState {
+    /// Slash loot shares normal opening/custody without the Loot key's close toggle.
+    pub(crate) fn slash_loot(
+        &mut self,
+        online: &mut OnlineState,
+        outbox: &Outbox,
+        stamp: Stamp,
+        target: u16,
+        revision: Option<u64>,
+    ) {
+        let world = online.world();
+        if self.loot.is_some()
+            || world.loot().is_some()
+            || self.merchant.is_some()
+            || world.merchant().is_some()
+            || self.merchant_pending.is_some()
+            || world.exchange().is_some()
+            || world.container().is_some()
+            || world.pending_container_open().is_some()
+            || world.combining().is_some()
+            || world.training().is_some()
+            || world.inventory_moves_pending()
+            || world.casting().holds_actions()
+        {
+            return;
+        }
+        let Some(spawn) = world.spawn(target).filter(|spawn| {
+            Some(spawn.revision) == revision
+                && world.target().selected == Some(target)
+                && !world.target_stale()
+                && !spawn.state.invisible
+                && matches!(
+                    spawn.state.kind,
+                    SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse
+                )
+        }) else {
+            return;
+        };
+        let name = eq_client_core::entities::display_name(&spawn.state.name);
+        let _ = self.open_loot(online, outbox, stamp, target, name);
+    }
+
+    /// A script withdrawn before release must not leave a native right gesture.
+    pub(crate) fn cancel_loot_press(&mut self, entity: Entity) {
+        self.loot_press.cancel_target(entity);
+    }
+
+    /// Both buttons and a delayed confirmation use the same current request gates.
+    fn can_take_loot(&self, world: &ClientWorld, place: u16) -> bool {
+        !self.range.closing(world)
+            && self
+                .loot
+                .as_ref()
+                .is_some_and(|window| window.pending.is_none())
+            && world
+                .loot()
+                .is_some_and(|loot| loot.items.contains_key(&place))
+            && loot_clicks::cursor_empty(world)
+    }
+
     /// The spawn a scene click or the Use key asked to use, until taken.
     #[cfg(test)]
     pub(crate) fn right_clicked(&self) -> Option<u16> {
@@ -409,7 +470,10 @@ pub(super) enum Rows {
 #[derive(Component, Clone, Copy, Debug, Eq, PartialEq)]
 pub(super) enum Action {
     /// Takes the item at a place on the corpse, from 0.
-    Take(u16),
+    Take {
+        place: u16,
+        auto: bool,
+    },
     TakeAll,
     EndLoot,
     Buy(u32),
@@ -427,7 +491,7 @@ pub(super) enum Action {
 pub(crate) const fn needs(action: Action) -> eq_client_core::Capability {
     use eq_client_core::Capability;
     match action {
-        Action::Take(_) | Action::TakeAll | Action::EndLoot => Capability::Looting,
+        Action::Take { .. } | Action::TakeAll | Action::EndLoot => Capability::Looting,
         Action::Buy(_)
         | Action::Sell(_)
         | Action::EndShop
@@ -453,7 +517,7 @@ pub(super) fn input(
     outbox: Res<crate::outbox::Outbox>,
     mut trade: ResMut<TradeState>,
     (mut chat, mut shown): (ResMut<super::chat::ChatState>, ResMut<windows::Shown>),
-    buttons: crate::clicks::Clicks<Action>,
+    (buttons, loot_buttons): (crate::clicks::Clicks<Action>, loot_clicks::Buttons),
     escape: Res<super::escape::Escape>,
     (settings, messages, mut inventory, skinned): (
         Res<crate::ViewerSettings>,
@@ -541,7 +605,14 @@ pub(super) fn input(
                 eq_client_core::entities::display_name(&spawn.name),
             ))
         });
-    let mut clicked: Vec<Action> = buttons.iter().copied().collect();
+    // Loot cells have their own two-button rule; do not also consume their
+    // generic left-release/OnPress action, including a scripted right press.
+    let mut clicked: Vec<Action> = buttons
+        .iter()
+        .filter(|action| !matches!(action, Action::Take { .. }))
+        .copied()
+        .collect();
+    clicked.extend(loot_buttons.actions(online.world(), &mut trade.loot_press));
     match *escape {
         super::escape::Escape::Close(windows::WindowId::Loot) => clicked.push(Action::EndLoot),
         super::escape::Escape::Close(windows::WindowId::Merchant) => {
@@ -646,7 +717,10 @@ pub(super) fn input(
     }
     for action in clicked {
         if trade.range.closing(online.world())
-            && matches!(action, Action::Take(_) | Action::TakeAll | Action::EndLoot)
+            && matches!(
+                action,
+                Action::Take { .. } | Action::TakeAll | Action::EndLoot
+            )
         {
             continue;
         }
@@ -741,9 +815,12 @@ pub(super) fn input(
             (other, _) => other,
         };
         match action {
-            Action::Take(place) => {
+            Action::Take { place, auto } => {
+                if !trade.can_take_loot(online.world(), place) || trade.no_drop.active() {
+                    continue;
+                }
                 if let Some(question) =
-                    no_drop::question(online.world(), session_id, place, loot_no_drop)
+                    no_drop::question(online.world(), session_id, place, auto, loot_no_drop)
                 {
                     trade.no_drop.want(question);
                     continue;
@@ -760,7 +837,7 @@ pub(super) fn input(
                             corpse_id,
                             own_id,
                             place,
-                            auto: true,
+                            auto,
                             created: now,
                         },
                     )
@@ -771,7 +848,7 @@ pub(super) fn input(
                             corpse_id,
                             own_id,
                             place,
-                            auto: true,
+                            auto,
                         },
                     ));
                 }
@@ -907,6 +984,7 @@ pub(super) fn input(
         .as_ref()
         .filter(|window| window.loot_all && window.pending.is_none())
         .filter(|_| !trade.range.closing(online.world()))
+        .filter(|_| loot_clicks::cursor_empty(online.world()))
         .filter(|_| online.world().loot_continuation().automatic())
         .and(online.world().loot())
         .filter(|loot| loot.listed)
@@ -1039,7 +1117,15 @@ pub(super) fn present(
         let rows: Vec<(Action, String)> = contents
             .items
             .iter()
-            .map(|(place, item)| (Action::Take(*place), item_label(item)))
+            .map(|(place, item)| {
+                (
+                    Action::Take {
+                        place: *place,
+                        auto: false,
+                    },
+                    item_label(item),
+                )
+            })
             .collect();
         let status = if contents.listed && rows.is_empty() {
             "No items listed"
@@ -1370,8 +1456,7 @@ mod tests {
         assert!(!trade.loot.as_ref().unwrap().loot_all);
     }
 
-    #[test]
-    fn eqmac_loot_all_and_armed_auto_loop_send_nothing_but_manual_take_sends() {
+    fn eqmac_loot_world() -> super::super::online::OnlineState {
         use eq_client_core::{WorldEvent, WorldUpdate, world::NoSpells};
         let mut online = super::super::online::OnlineState::new(false);
         super::super::online::testing::admit(
@@ -1394,6 +1479,12 @@ mod tests {
                 &NoSpells,
             );
         }
+        online
+    }
+
+    #[test]
+    fn eqmac_loot_all_and_armed_auto_loop_send_nothing_but_manual_take_sends() {
+        let online = eqmac_loot_world();
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
         let mut app = App::new();
         app.insert_resource(TradeState {
@@ -1454,7 +1545,14 @@ mod tests {
         assert!(receiver.try_recv().is_err());
         let one = app
             .world_mut()
-            .spawn((Button, Action::Take(0), Interaction::None))
+            .spawn((
+                Button,
+                Action::Take {
+                    place: 0,
+                    auto: false,
+                },
+                Interaction::None,
+            ))
             .id();
         crate::clicks::testing::click(&mut app, one);
         assert!(matches!(

@@ -842,6 +842,12 @@ Lines run a tenth of a second apart, as the original's social runner steps
 them. A social or the chat also takes these Titanium commands:
 
 - `/yell` calls for help from the players near you.
+- `/cast 1` through `/cast 8` press the corresponding memorized spell gem,
+  using the same targeting, readiness and posture checks as its ordinary input.
+  Gem 9 remains unsupported in this client.
+- `/loot` opens the selected corpse through ordinary looting. It never chooses
+  a nearby corpse, loots all items, or closes an already open loot window.
+  Extra words are ignored.
 - `/stopcast` ends your own cast, or a Bard's song. It's refused while you
   ride a mount or have a buff whose effects the spell data can't name.
 - `/doability 1` to `/doability 10` press the Actions window's ability

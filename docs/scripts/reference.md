@@ -333,6 +333,10 @@ or occluded. The counters are independent of damage and inventory.
   a changed world withdraws it before movement handles it. Completion of the
   step does not establish movement. The ordinary standing, movement and group
   checks still apply, and a movement key ends following.
+  `slash("cast 1")` through `slash("cast 8")` press an ordinary spell gem.
+  `slash("loot")` opens the selected corpse; it does not choose a nearby corpse,
+  take all items or close the current loot window. These share the typed slash
+  handlers and retain the originating admission.
   `slash("ranged")` requests one shot or throw against the current target on Titanium.
   `slash("layonhands")` and `slash("harmtouch")` request the class ability against the
   settled selection. Select yourself before using Lay on Hands on yourself.

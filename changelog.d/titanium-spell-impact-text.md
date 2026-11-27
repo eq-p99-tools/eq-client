@@ -1,0 +1,1 @@
+- Titanium spell-damage records use installed role-specific impact descriptions and native range/chat-filter gates. Received server numeric lines remain independent; the client no longer adds string434 for kind231.

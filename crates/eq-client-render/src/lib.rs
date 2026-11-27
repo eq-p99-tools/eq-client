@@ -5,6 +5,7 @@ use theme::Size;
 
 mod camera;
 mod carriers;
+mod cast_loot;
 mod gpu_assets;
 #[cfg(test)]
 mod object_material_tests;

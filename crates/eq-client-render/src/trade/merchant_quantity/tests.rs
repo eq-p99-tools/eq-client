@@ -644,6 +644,7 @@ fn titanium_sale_words_wait_for_a_matched_result_after_the_item_has_left() {
             merchant: "Merchant Iludarae".into(),
             item: "Bat Fur".into(),
             price: 14,
+            no_value: false,
         })
     );
     assert_eq!(trade.merchant_news(&result(23, 1), online.world()), None);
@@ -787,6 +788,7 @@ fn titanium_eligible_zero_value_sale_waits_for_the_server() {
                     merchant: String::new(),
                     item: "Worthless item".into(),
                     price: 0,
+                    no_value: true,
                 })
             );
             assert!(trade.merchant_pending.is_none());
@@ -798,6 +800,48 @@ fn titanium_eligible_zero_value_sale_waits_for_the_server() {
             assert!(rx.try_recv().is_err(), "reply never sends another sale");
         }
     }
+}
+
+#[test]
+fn titanium_positive_base_rounding_to_zero_retains_the_numeric_text_kind() {
+    use eq_client_core::world::Notice;
+    let (mut online, mut trade, outbox, rx) = fixture();
+    let mut item = online.world().inventory().items()[&InventorySlot(23)].clone();
+    item.details.name = "Tiny value".into();
+    item.details.price = Some(1);
+    item.details.flags.clear();
+    testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+    testing::news(
+        &mut online,
+        [WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 8,
+            accepted: true,
+            rate: 4.0,
+        })],
+    );
+    trade.follow(online.world());
+    trade.prices = Some(eq_client_assets::merchants::TITANIUM);
+    let selection = choose(&mut trade, online.world(), Chosen::Carried(23));
+    assert_eq!(trade.quantity_quote(online.world(), 1), Some(0));
+    submit(&mut trade, &online, &outbox, selection, 1).unwrap();
+    rx.try_recv().unwrap();
+    testing::inventory(&mut online, InventoryUpdate::Remove(InventorySlot(23)));
+    assert_eq!(
+        trade.merchant_news(
+            &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Sold {
+                slot: 23,
+                quantity: 1,
+                price: 0,
+            })),
+            online.world()
+        ),
+        Some(Notice::MerchantSold {
+            merchant: String::new(),
+            item: "Tiny value".into(),
+            price: 0,
+            no_value: false,
+        })
+    );
 }
 
 #[test]

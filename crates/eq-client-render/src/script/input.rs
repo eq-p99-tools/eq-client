@@ -76,6 +76,10 @@ fn after_replay(mut replayed: ResMut<Replayed>, mut keys: ResMut<ButtonInput<Key
 }
 
 impl AuthoredInput {
+    pub(crate) fn button(&self, button: MouseButton) -> bool {
+        self.buttons.contains(&button)
+    }
+
     pub(crate) fn typed(&self, id: MessageId<KeyboardInput>) -> bool {
         self.typed.contains(&id)
     }

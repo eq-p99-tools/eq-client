@@ -34,6 +34,8 @@ mod fit;
 mod frame;
 pub(crate) mod gem;
 mod items;
+#[cfg(test)]
+pub(crate) use items::testing_loot_slot;
 pub(crate) mod looks;
 #[cfg(test)]
 mod merchant_grid_tests;
@@ -1630,6 +1632,7 @@ type Stateful<'w, 's> = Query<
         Option<&'static super::options::OptionCheckbox>,
         (
             Has<Greyed>,
+            Has<crate::hud::hotbar::scripts::Latched>,
             Has<scrollbar::ScrollArrow>,
             Option<&'static crate::character_select::Action>,
             Option<&'static crate::report_windows::ReportButton>,
@@ -1666,7 +1669,7 @@ pub(crate) fn buttons(
         selector,
         attack,
         checkbox,
-        (greyed, arrow, character, report),
+        (greyed, latched, arrow, character, report),
         interaction,
         mut image,
     ) in &mut buttons
@@ -1681,7 +1684,7 @@ pub(crate) fn buttons(
             }
             // A scrollbar's arrow is down while it is held.
             (None, None, _) if arrow => *interaction == Interaction::Pressed,
-            (None, None, _) => attack && combat.auto_attack,
+            (None, None, _) => latched || (attack && combat.auto_attack),
         };
         let hovered = *interaction != Interaction::None;
         let piece = match (greyed, on, hovered) {
@@ -5392,6 +5395,90 @@ mod tests {
                 (fill, bar, root)
             })
             .collect()
+    }
+
+    #[test]
+    fn embedded_target_cast_gauge_uses_native_remaining_time_without_changing_other_dialects() {
+        use crate::online::{OnlineState, testing};
+        use bevy::ecs::system::RunSystemOnce;
+        use eq_client_core::{GameDialect, SpellUpdate, WorldEvent};
+        use std::time::{Duration, Instant};
+        let mut gauge = test_gauge(
+            eq_client_assets::sidl::GaugeLook {
+                fill: Some(gauge_piece(240, 11)),
+                ..default()
+            },
+            0.0,
+            0.0,
+        );
+        gauge.area = Area {
+            x: 20.0,
+            y: 43.0,
+            width: 240.0,
+            height: 11.0,
+        };
+        gauge.eq_type = Some(7);
+        for dialect in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            let mut app = crate::testing::app();
+            draw_gauges(&mut app, vec![gauge.clone()]);
+            let mut online = OnlineState::new(true);
+            let mut world = eq_client_core::world::ClientWorld::default();
+            world.carry_as(dialect);
+            testing::set_world(&mut online, world);
+            testing::admit(&mut online, 1, testing::player(7));
+            let start = Instant::now();
+            testing::news_at(
+                &mut online,
+                [WorldEvent::Spell(SpellUpdate::Began {
+                    caster_id: 7,
+                    spell_id: 14,
+                    duration_ms: 1500,
+                })],
+                start,
+            );
+            let [(fill, _, root)] = gauge_fills(app.world_mut())[..] else {
+                panic!("one embedded fill")
+            };
+            assert_eq!(app.world().get::<Node>(root).unwrap().left, px(20));
+            for ms in [0, 750, 1500, 1501] {
+                let ratio = super::presentation::fraction_at(
+                    online.world(),
+                    None,
+                    7,
+                    start + Duration::from_millis(ms),
+                )
+                .unwrap();
+                app.world_mut()
+                    .run_system_once(move |mut fills: Query<&mut Node>| {
+                        super::presentation::fill_to(
+                            &mut fills.get_mut(fill).unwrap(),
+                            None,
+                            ratio,
+                        );
+                    })
+                    .unwrap();
+                let expected = if dialect == GameDialect::Titanium {
+                    if ms == 0 {
+                        100.0
+                    } else if ms == 750 {
+                        50.0
+                    } else {
+                        0.0
+                    }
+                } else if ms == 0 {
+                    0.0
+                } else if ms == 750 {
+                    50.0
+                } else {
+                    100.0
+                };
+                assert_eq!(
+                    app.world().get::<Node>(fill).unwrap().width,
+                    percent(expected)
+                );
+                assert!(online.world().casting().holds_actions());
+            }
+        }
     }
 
     /// A length in pixels.

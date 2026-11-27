@@ -154,7 +154,12 @@ pub(super) fn prepare(
             wait(script, "current-zone navigation mesh is building");
             return Ok(false);
         }
-        Some(Err(reason @ (GridReason::Failed | GridReason::Missing | GridReason::NoFloor))) => {
+        Some(Err(
+            reason @ (GridReason::Failed
+            | GridReason::Missing
+            | GridReason::NoFloor
+            | GridReason::TooTall),
+        )) => {
             return Err(reason.describe().into());
         }
         Some(Err(reason)) => (None, Some(reason)),

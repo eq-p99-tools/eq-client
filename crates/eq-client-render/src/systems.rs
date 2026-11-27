@@ -50,6 +50,8 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<skin::UiSkin>()
         .init_resource::<hud::hotbar::Bindings>()
         .init_resource::<hud::hotbar::Files>()
+        .init_resource::<hud::hotbar::scripts::Runs>()
+        .init_resource::<crate::script::RunControl>()
         .init_resource::<contacts::Files>()
         .init_resource::<abilities::Choices>()
         .init_resource::<abilities::choices::Files>()
@@ -324,10 +326,11 @@ pub(super) fn schedule(app: &mut App) {
                     .chain(),
                 skinned::slash,
             ),
-            hud::actions,
+            (hud::actions, crate::cast_loot::run).chain(),
             hud::melody::melody.after(hud::actions),
             (
                 hud::hotbar::update,
+                hud::hotbar::scripts::input,
                 crate::socials::update
                     .after(hud::actions)
                     .after(skinned::slash),
@@ -441,7 +444,12 @@ pub(super) fn schedule(app: &mut App) {
                 hud::key_help,
                 target::key_help,
                 hud::hotbar::item_artwork,
-                (hud::hotbar::presentation, hud::hotbar::fit_words).chain(),
+                (
+                    hud::hotbar::presentation,
+                    hud::hotbar::scripts::presentation,
+                    hud::hotbar::fit_words,
+                )
+                    .chain(),
                 spellbook::scribe_presentation,
                 buffs::update,
                 (
@@ -475,7 +483,7 @@ pub(super) fn schedule(app: &mut App) {
                 )
                     .chain(),
                 (crate::breath::fallback, skinned::show).chain(),
-                skinned::buttons,
+                skinned::buttons.after(hud::hotbar::scripts::presentation),
                 (
                     skinned::contents,
                     skinned::theirs,

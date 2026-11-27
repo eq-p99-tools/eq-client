@@ -425,11 +425,20 @@ pub(super) fn filled(
 }
 
 /// How full a gauge is, by the official client's numbering.
-#[allow(clippy::cast_possible_truncation, reason = "a fraction for drawing")]
 pub(super) fn fraction(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
     kind: u32,
+) -> Option<f32> {
+    fraction_at(world, estimate, kind, std::time::Instant::now())
+}
+
+#[allow(clippy::cast_possible_truncation, reason = "a fraction for drawing")]
+pub(super) fn fraction_at(
+    world: &eq_client_core::world::ClientWorld,
+    estimate: Option<(u32, u32)>,
+    kind: u32,
+    now: std::time::Instant,
 ) -> Option<f32> {
     use crate::hud::Stat;
     let stat = |stat: Stat| stat.ratio(world, estimate).map(|ratio| ratio as f32);
@@ -439,9 +448,18 @@ pub(super) fn fraction(
         3 => stat(Stat::Stamina),
         4 => stat(Stat::Experience),
         6 => target_health(world).map(|percent| f32::from(percent) / 100.0),
-        // The player's cast; empty until the server begins it.
+        // Native casting gauges count down, including those embedded in the
+        // target window. Visual expiry leaves the server-owned hold intact.
         7 => Some(
-            crate::hud::action_bar::cast_progress(world, std::time::Instant::now()).unwrap_or(0.0),
+            match world.generation() {
+                eq_client_core::GameDialect::Titanium => {
+                    crate::hud::action_bar::titanium_cast_remaining(world, now)
+                }
+                eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => {
+                    crate::hud::action_bar::cast_progress(world, now)
+                }
+            }
+            .unwrap_or(0.0),
         ),
         16 => world
             .pet()

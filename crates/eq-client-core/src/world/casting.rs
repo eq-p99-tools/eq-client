@@ -25,6 +25,11 @@ pub struct SpellTiming {
 /// What the world needs from the installed client's spell data. The data is
 /// the user's own, read where it is installed; the world never guesses it.
 pub trait SpellCatalog {
+    /// Installed impact descriptions. Known empty fields differ from unavailable data.
+    fn impact(&self, _spell: u32) -> Option<super::SpellImpact<'_>> {
+        None
+    }
+
     /// A spell's recovery and recast times, when known.
     fn timing(&self, spell: u32) -> Option<SpellTiming>;
 

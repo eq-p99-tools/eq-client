@@ -605,13 +605,21 @@ pub(super) fn consideration_text(
 /// Titanium-style melee text for fights involving the player; None for other fights.
 pub(super) fn damage_text(
     messages: &Messages,
+    generation: eq_client_core::GameDialect,
     own_id: u16,
     names: impl Fn(u16) -> String,
     damage: &Damage,
 ) -> Option<super::chat::Said> {
     let own_attack = damage.source_id == own_id;
     let own_defense = damage.target_id == own_id;
+    let titanium = match generation {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    };
     if damage.kind == SPELL_DAMAGE_KIND {
+        if titanium {
+            return None;
+        }
         return match damage.outcome {
             DamageOutcome::Hit(points) if !own_defense && damage.source_id == own_id => {
                 Some(messages.said(
@@ -632,7 +640,15 @@ pub(super) fn damage_text(
         capitalized(&names(damage.source_id))
     };
     let defender = if own_defense {
-        messages.format(12187, &[])
+        // Titanium's own-source/own-target branch chooses the installed
+        // reflexive word (0x4a590a-0x4a5937). Other dialects keep their
+        // existing wording until their own program has been read.
+        let word = if titanium && own_attack && damage.kind < SPELL_DAMAGE_KIND {
+            12186
+        } else {
+            12187
+        };
+        messages.format(word, &[])
     } else {
         names(damage.target_id)
     };
@@ -678,6 +694,37 @@ pub(super) fn damage_text(
     ))
 }
 
+/// The native main buffer for kind 231. Server numeric messages stay independent.
+pub(super) fn spell_impact_text(
+    line: &eq_client_core::world::SpellImpactLine,
+    messages: Option<&Messages>,
+) -> Option<super::chat::Said> {
+    use eq_client_core::world::SpellImpactLine;
+    let text = match line {
+        SpellImpactLine::Other { target, text } => {
+            if text.is_empty() {
+                return None;
+            }
+            let target = display_name(target);
+            format!("%T1{text}").replace("%T1", &target)
+        }
+        SpellImpactLine::Own {
+            text,
+            amount: Some(amount),
+        } => messages?.formatted(
+            if *amount == 1 { 12204 } else { 12203 },
+            &[text.clone(), amount.to_string()],
+        )?,
+        SpellImpactLine::Own { text, amount: None } => {
+            if text.is_empty() {
+                return None;
+            }
+            text.clone()
+        }
+    };
+    Some(super::chat::Said::official(capitalized(&text)))
+}
+
 /// First- and third-person verb string IDs for a Titanium skill number.
 const fn verbs(skill: u8) -> (u32, u32) {
     match skill {
@@ -691,6 +738,9 @@ const fn verbs(skill: u8) -> (u32, u32) {
         _ => (12183, 12184),
     }
 }
+
+#[cfg(test)]
+mod spell_impact_tests;
 
 #[cfg(test)]
 mod tests {
@@ -773,8 +823,16 @@ mod tests {
                 "someone".into()
             }
         };
-        let text =
-            |damage: Damage| damage_text(&messages, 7, names, &damage).map(|said| said.words.text);
+        let text = |damage: Damage| {
+            damage_text(
+                &messages,
+                eq_client_core::GameDialect::Titanium,
+                7,
+                names,
+                &damage,
+            )
+            .map(|said| said.words.text)
+        };
         assert_eq!(
             text(hit(7, 9, 1, DamageOutcome::Hit(5))).unwrap(),
             "Thou cut a rat, dealing 5 damage."
@@ -801,7 +859,19 @@ mod tests {
             spell_id: Some(93),
             ..hit(7, 9, 0, DamageOutcome::Hit(8))
         };
-        assert_eq!(text(spell).unwrap(), "A rat took 8 damage from a spell.");
+        assert_eq!(text(spell), None);
+        for generation in [
+            eq_client_core::GameDialect::EqMac,
+            eq_client_core::GameDialect::Rof2,
+        ] {
+            assert_eq!(
+                damage_text(&messages, generation, 7, names, &spell)
+                    .unwrap()
+                    .words
+                    .text,
+                "A rat took 8 damage from a spell."
+            );
+        }
     }
 
     #[test]

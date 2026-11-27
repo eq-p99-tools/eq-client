@@ -22,6 +22,26 @@ test shortcut opens the workbench unexpectedly, check its launch options for
 `--script-editor` and leave that option out when the window is not wanted.
 The sample in a new editor buffer does not run until you choose Run.
 
+## Saved script hotbuttons
+
+While playing a character, save an `.eqscript` in the installation's `Scripts`
+folder, then choose **Hotbutton** beside Save. Click a normal hotbar slot to
+place it. Bindings are saved with that character's hotbar; the usual hold,
+drag, swap, page and clear controls apply.
+
+Click the slot or press its assigned hotbar key to start the saved file. The
+button stays latched with a green outline and says **Running** while its run is
+active. Press it again to request a pause at the next statement boundary. **Pausing** means the
+current action is finishing; **Paused** has an amber outline and distinct label.
+Ordinary buttons also use an amber fill. Press a paused slot to resume the same
+run at that point. The usual held-input cleanup applies to pause and stop.
+
+Right-click the slot to stop its playing or paused run immediately. The file
+binding stays in place. Completion, an error or Stop elsewhere clears the
+latched state. Starting again reads the saved file anew; resuming keeps the
+existing run's source snapshot. A shortcut never replaces or controls an
+unrelated run. Missing files and parse errors are reported without starting.
+
 ## Execution view
 
 The current line is highlighted in the running source snapshot. Linear scripts show completed and total actions. Structured scripts show how many statements ran and how many actions finished, since the path depends on observations and loop counts. The Execution state panel shows the last branch result, current loop iterations and initialized variables. Scroll that panel for more bindings. Recent events and the final outcome remain after execution, including the source line that failed. The event list retains the most recent 64 entries.

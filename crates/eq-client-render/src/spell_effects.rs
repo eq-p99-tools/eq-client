@@ -10,6 +10,9 @@ use std::{collections::HashMap, path::PathBuf, sync::Arc};
 
 use super::background::Background;
 
+#[cfg(test)]
+mod lifecycle;
+
 /// How long a target stage keeps starting particles after its landing
 /// (inferred, item 6.224).
 const TARGET_SECONDS: f32 = 1.5;
@@ -40,6 +43,44 @@ pub(super) struct SpellParticles {
     images: HashMap<String, Picture>,
     /// The particles alive in all at the last frame.
     alive: usize,
+    /// Effect state outlives a render root: death redraws our model, while
+    /// Titanium retains the same actor and its emitter attachments (R422).
+    running: HashMap<Actor, Running>,
+    /// Zone name also guards a replacement scene within the same admission.
+    scene: Option<(u64, String)>,
+}
+
+/// A local actor identity, independent of render-root replacement. Spawn
+/// IDs alone cannot distinguish a corpse from an unrelated reused ID.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+struct Actor {
+    admission: u64,
+    id: u16,
+    incarnation: Option<u64>,
+}
+
+impl Actor {
+    fn of(world: &eq_client_core::world::ClientWorld, id: u16, own: bool) -> Option<Self> {
+        Some(Self {
+            admission: world.session_id()?,
+            id,
+            incarnation: if own {
+                None
+            } else {
+                Some(world.spawn(id)?.incarnation)
+            },
+        })
+    }
+
+    fn current(self, world: &eq_client_core::world::ClientWorld) -> bool {
+        world.session_id() == Some(self.admission)
+            && match self.incarnation {
+                Some(incarnation) => world
+                    .spawn(self.id)
+                    .is_some_and(|s| s.incarnation == incarnation),
+                None => world.player().is_some_and(|p| p.spawn_id == self.id),
+            }
+    }
 }
 
 /// An emitter image.
@@ -53,7 +94,7 @@ enum Picture {
 }
 
 /// What a drawn character is running.
-#[derive(Component, Default)]
+#[derive(Default)]
 pub(super) struct Running {
     /// The spell whose caster stage runs, if a cast is under way.
     casting: Option<u16>,
@@ -62,12 +103,17 @@ pub(super) struct Running {
     landing: Option<u64>,
     /// Its emitters, each drawn by its own entity.
     sprays: Vec<Spray>,
+    /// The last model's layers also draw finite tails while it is absent.
+    layers: bevy::camera::visibility::RenderLayers,
 }
 
 /// One running emitter at one placement.
 struct Spray {
     emitter: Emitter,
     placement: Placement,
+    /// Floor-point emitters stay where first placed, rather than following
+    /// a corpse drag. Existing EFF placement decoding remains inferred.
+    floor: Option<Vec3>,
     /// Whether it belongs to the caster stage, which stops with the cast.
     caster: bool,
     /// Until when it starts particles; None while its cast runs.
@@ -125,11 +171,9 @@ type Bodies<'w, 's> = Query<
     'w,
     's,
     (
-        Entity,
         &'static super::character::AnimatedCharacter,
         Option<&'static super::entities::RemoteEntity>,
         Has<super::Player>,
-        Option<&'static mut Running>,
     ),
 >;
 
@@ -141,7 +185,12 @@ type Drawing<'w> = (
 );
 
 /// Starts, stops, steps and draws the particles of every drawn character.
-#[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
+#[allow(
+    clippy::needless_pass_by_value,
+    clippy::too_many_arguments,
+    clippy::too_many_lines,
+    reason = "one frame's actor attachment and independent finite particle clocks"
+)]
 pub(super) fn update(
     mut commands: Commands,
     time: Res<Time>,
@@ -155,105 +204,144 @@ pub(super) fn update(
         Res<super::options::OptionsState>,
         Option<Res<super::local_settings::ParticleDensity>>,
     ),
-    mut bodies: Bodies,
+    bodies: Bodies,
     places: Query<&GlobalTransform>,
     camera: Query<&GlobalTransform, With<super::OrbitCamera>>,
     (mut meshes, mut materials, mut images): Drawing,
 ) {
-    let Some(effects) = particles.effects.clone() else {
-        return;
-    };
+    let effects = particles.effects.clone();
     let world = online.world();
     let dt = time.delta_secs().min(0.1);
     let now = time.elapsed_secs();
     let facing = camera.iter().next().map_or((Vec3::X, Vec3::Y), |camera| {
         (camera.right().into(), camera.up().into())
     });
-    let mut alive = 0;
-    let mut room = TOTAL_CAP.saturating_sub(particles.alive);
-    for (entity, character, remote, own, running) in &mut bodies {
+    let drawn = options.on(eq_client_core::options::Toggle::SpellEffects)
+        && density.as_deref().is_none_or(|density| density.draws());
+    // Keep controllers separate from the short-lived render roots. A corpse
+    // redraw, including one before this presentation frame, keeps its clock.
+    let mut running = std::mem::take(&mut particles.running);
+    let same_scene = particles
+        .scene
+        .as_ref()
+        .is_some_and(|(id, zone)| Some(*id) == world.session_id() && zone == world.zone());
+    if !same_scene {
+        for state in running.values_mut() {
+            state.clear(&mut commands);
+        }
+        running.clear();
+        particles.scene = world.session_id().map(|id| (id, world.zone().to_owned()));
+    }
+    let mut poses = HashMap::new();
+    for (character, remote, own) in &bodies {
         let id = remote.map(|entity| entity.id).or_else(|| {
             own.then(|| world.player().map(|player| player.spawn_id))
                 .flatten()
         });
-        let Some(id) = id else { continue };
-        let Some(mut running) = running else {
-            // A landing from before the character was drawn is not replayed.
-            commands.entity(entity).insert(Running {
-                landing: world.landing_on(id).map(|landing| landing.count),
-                ..Running::default()
-            });
+        let Some(actor) = id.and_then(|id| Actor::of(world, id, own)) else {
             continue;
         };
-        let level = if own {
-            world.player().map_or(0, |player| u16::from(player.level))
-        } else {
-            world
-                .spawn(id)
-                .map_or(0, |spawn| u16::from(spawn.state.level))
-        };
-        let heard = running.follow(world, (id, level), (&effects, &spells), now);
-        // Most bodies have nothing going: finding where their hands and
-        // head are walks the whole model, so a body with no spray and no
-        // sound is left alone.
-        if heard.is_empty() && running.sprays.is_empty() {
-            continue;
+        let state = running.entry(actor).or_insert_with(|| Running {
+            // A landing predating this actor's first drawn model is not replayed.
+            landing: world.landing_on(actor.id).map(|landing| landing.count),
+            ..Running::default()
+        });
+        state.layers = character.layers.clone();
+        poses.insert(actor, (character, places.get(character.model).ok()));
+    }
+    let mut alive = 0;
+    let mut room = TOTAL_CAP.saturating_sub(particles.alive);
+    running.retain(|actor, state| {
+        // An admission boundary ends the old scene outright. Never draw an
+        // effect in the next zone, even if it reuses the same spawn ID.
+        if world.session_id() != Some(actor.admission) {
+            state.clear(&mut commands);
+            return false;
         }
-        let Ok(model) = places.get(character.model) else {
-            continue;
-        };
-        let body = Body::of(character, model);
-        // The player's own are heard on the listener, others' where they
-        // stand.
-        let place = (!own).then(|| body.at(Placement::Chest));
+        let mut heard = Vec::new();
+        if actor.current(world) {
+            let level = match actor.incarnation {
+                None => world.player().map_or(0, |p| u16::from(p.level)),
+                Some(_) => world
+                    .spawn(actor.id)
+                    .map_or(0, |s| u16::from(s.state.level)),
+            };
+            if let Some(effects) = &effects {
+                heard = state.follow(world, (actor.id, level), (effects, &spells), now);
+            }
+        } else {
+            // The graphics-DLL policy on actor destruction is unread. Our
+            // bounded cleanup stops births and ages the existing world-space
+            // tail; this is not a claim about native despawn behavior.
+            for spray in &mut state.sprays {
+                spray.until = Some(spray.until.map_or(now, |until| until.min(now)));
+            }
+        }
+        if !drawn {
+            state.clear(&mut commands);
+        }
+        // Idle models need no attachment calculation.
+        if heard.is_empty() && state.sprays.is_empty() {
+            return poses.contains_key(actor);
+        }
+        let body = poses
+            .get(actor)
+            .and_then(|(character, model)| model.map(|model| Body::of(character, model)));
+        let place = actor
+            .incarnation
+            .and_then(|_| body.as_ref().map(|b| b.at(Placement::Chest)));
         for number in heard {
             sounds.play_number(number, place);
         }
-        let drawn = options.on(eq_client_core::options::Toggle::SpellEffects)
-            && density.as_deref().is_none_or(|density| density.draws());
-        if !drawn {
-            // The player has the official choice for spell effects off (the
-            // installation's `ShowSpellEffects`, or its particles page set
-            // to no density), or typed `/particledensity 0` this session:
-            // whatever the spell started above is put away again, drawn
-            // sprays and all. The sounds keep playing, and
-            // chat and the action bar still say what was cast and what
-            // landed.
-            running.sprays.retain(|spray| {
-                if let Some(drawn) = &spray.drawn {
-                    commands.entity(drawn.entity).despawn();
+        for spray in &mut state.sprays {
+            let at = body.as_ref().map(|body| {
+                if spray.placement == Placement::Feet {
+                    *spray.floor.get_or_insert_with(|| body.at(Placement::Feet))
+                } else {
+                    body.at(spray.placement)
                 }
-                false
             });
-            continue;
-        }
-        for spray in &mut running.sprays {
-            let starting = spray.until.is_none_or(|until| now < until);
-            let at = body.at(spray.placement);
-            spray
-                .particles
-                .step(&spray.emitter, at, dt, starting, &mut room);
+            // A missing model pauses new births, never the finite particle
+            // clock. Its replacement may still attach during the same effect.
+            let starting = at.is_some() && spray.until.is_none_or(|until| now < until);
+            spray.particles.step(
+                &spray.emitter,
+                at.unwrap_or(Vec3::ZERO),
+                dt,
+                starting,
+                &mut room,
+            );
             alive += spray.particles.len();
             draw(
                 &mut commands,
                 spray,
                 (&mut particles, &mut materials, &mut images),
                 &mut meshes,
-                (facing, &character.layers),
+                (facing, &state.layers),
             );
         }
-        running.sprays.retain(|spray| {
+        state.sprays.retain(|spray| {
             let done = spray.until.is_some_and(|until| now >= until) && spray.particles.len() == 0;
             if done && let Some(drawn) = &spray.drawn {
                 commands.entity(drawn.entity).despawn();
             }
             !done
         });
-    }
+        poses.contains_key(actor) || !state.sprays.is_empty()
+    });
+    particles.running = running;
     particles.alive = alive;
 }
 
 impl Running {
+    fn clear(&mut self, commands: &mut Commands) {
+        for spray in self.sprays.drain(..) {
+            if let Some(drawn) = spray.drawn {
+                commands.entity(drawn.entity).despawn();
+            }
+        }
+    }
+
     /// Starts and stops the stages: the caster stage follows the cast under
     /// way, and each new landing starts the target stage. Returns the sounds
     /// those starts play, by number: the caster stage's as a cast starts and
@@ -349,6 +437,7 @@ fn start<'a>(
         Some(Spray {
             emitter: effects.emitter(slot.emitter)?.clone(),
             placement: slot.placement,
+            floor: None,
             caster,
             until,
             particles: Particles::new(slot.emitter),

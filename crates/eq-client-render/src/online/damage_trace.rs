@@ -61,6 +61,11 @@ impl Receipt {
             .iter()
             .filter(|notice| matches!(notice, Notice::Damage { .. }))
             .count();
+        let spell_impact_notices = changes
+            .notices
+            .iter()
+            .filter(|notice| matches!(notice, Notice::SpellImpact { .. }))
+            .count();
         let server_strings: Vec<_> = changes
             .notices
             .iter()
@@ -83,6 +88,7 @@ impl Receipt {
             string_id = ?string_id,
             ignored = changes.ignored,
             damage_notices,
+            spell_impact_notices,
             server_strings = ?server_strings,
             history_ids = ?line_ids,
             "Applied update chat provenance"

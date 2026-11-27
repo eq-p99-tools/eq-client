@@ -28,6 +28,7 @@ mod notice;
 mod pet_buffs;
 mod raid;
 mod read;
+mod spell_impact;
 mod spells;
 mod target;
 mod tracking;
@@ -50,6 +51,7 @@ pub use notice::{
     ChannelLine, DuelNotice, InterruptPrint, ListingNotice, Notice, OtherCaster, Party, YellBearing,
 };
 pub use raid::{Raid, RaidNotice, RaidRank};
+pub use spell_impact::{SpellImpact, SpellImpactFilter, SpellImpactLine};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
@@ -156,6 +158,9 @@ pub struct Spawn {
     /// Changes whenever the spawn must be drawn again: it appeared, was
     /// replaced or became a corpse.
     pub revision: u64,
+    /// Local identity assigned on appearance, retained when this same actor
+    /// becomes a corpse. A replacement using its ID gets a new identity.
+    pub incarnation: u64,
     /// When the server last said where the spawn is, from which the client
     /// carries it on.
     pub reported: Instant,
@@ -1264,7 +1269,7 @@ impl ClientWorld {
                 // renderer's toggle remains a local intention; server results
                 // arrive independently as consideration, damage and animation.
             }
-            WorldEvent::Damage(damage) => self.damage(damage, news),
+            WorldEvent::Damage(damage) => self.damage(damage, now, spells, news),
             WorldEvent::Animation(animation) => self.motion_news(*animation, news),
             WorldEvent::TargetChanged { session_id, request_id, state } => {
                 self.target_updated(*session_id, *request_id, *state, true, news);

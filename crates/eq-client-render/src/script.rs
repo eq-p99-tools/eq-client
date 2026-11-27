@@ -1245,6 +1245,9 @@ fn cancel_pointer_presses(
                     presses.cancel_target(target);
                 }
             } else if button == MouseButton::Right {
+                if let Some(mut trade) = world.get_resource_mut::<crate::trade::TradeState>() {
+                    trade.cancel_loot_press(target);
+                }
                 if let Some(mut press) = world.get_resource_mut::<crate::hud::GemPress>() {
                     press.cancel_target(target);
                 }
@@ -1329,7 +1332,10 @@ pub(super) fn drive(
     {
         script.progress.breakpoints = std::sync::Arc::new(lines);
     }
-    if let Some(request) = control.as_mut().and_then(|control| control.take()) {
+    if let Some(request) = control
+        .as_mut()
+        .and_then(|control| control.take_for(script.status().run()))
+    {
         match request {
             Request::Stop => {
                 script.cancel_press(&mut buttons, &mut commands);
@@ -3382,7 +3388,7 @@ const fn book(edit: BookEdit) -> super::book_delete::Action {
 const fn trading(click: TradeClick) -> super::trade::Action {
     use super::trade::Action;
     match click {
-        TradeClick::Take(place) => Action::Take(place),
+        TradeClick::Take(place) => Action::Take { place, auto: false },
         TradeClick::TakeAll => Action::TakeAll,
         TradeClick::EndLoot => Action::EndLoot,
         TradeClick::Buy(slot) => Action::Buy(slot),
@@ -6021,6 +6027,103 @@ mod tests {
                 .is_some()
         );
         assert_eq!(world.get::<Interaction>(closed), Some(&Interaction::None));
+    }
+
+    #[test]
+    fn scripted_loot_buttons_reach_the_normal_request_with_both_destinations() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{
+            ClientCommand, Coins, SpawnKind, WorldEvent,
+            inventory::InventoryUpdate,
+            loot::{LootResponse, LootUpdate},
+        };
+        for auto in [false, true] {
+            let target = ClickTarget::Trade(TradeClick::Take(0));
+            let click = if auto {
+                Step::RightClick(target)
+            } else {
+                Step::Click(target)
+            };
+            let (mut app, _) = background(vec![
+                Step::Press(vec![KeyCode::KeyL]),
+                Step::Wait(Duration::from_millis(100)),
+                click,
+                Step::Wait(Duration::from_secs(2)),
+            ]);
+            let mut online = OnlineState::new(true);
+            testing::admit(&mut online, 5, testing::player(7));
+            testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
+            let mut corpse = testing::pet(9, 7);
+            corpse.kind = SpawnKind::NpcCorpse;
+            corpse.name = "Test corpse".into();
+            testing::spawns(&mut online, vec![corpse]);
+            online.select_target(Some(9));
+            let (tx, rx) = std::sync::mpsc::sync_channel(8);
+            app.insert_resource(online)
+                .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+                .add_systems(
+                    Update,
+                    (crate::online::carry_as, crate::trade::input).chain(),
+                );
+            crate::keys::testing::install(&mut app);
+            // The direct loot command has no native default; choose one here.
+            crate::keys::testing::bind(
+                &mut app,
+                crate::keys::Act::Loot,
+                crate::keys::Chord::key(KeyCode::KeyL),
+            );
+            app.world_mut().spawn((
+                Button,
+                crate::trade::Action::Take {
+                    place: 0,
+                    auto: false,
+                },
+                Interaction::None,
+                Node::default(),
+                laid_out(Vec2::new(200.0, 200.0), 50.0, 10),
+            ));
+            frame_at(&mut app, 0);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::Loot { corpse_id: 9, .. })
+            ));
+            let mut item = crate::preview::items().remove(0);
+            item.details.flags.clear();
+            testing::news(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                [
+                    WorldEvent::Loot(LootUpdate::Opened {
+                        response: LootResponse::Normal,
+                        coins: Coins::default(),
+                    }),
+                    WorldEvent::Loot(LootUpdate::Item {
+                        place: 0,
+                        item: Box::new(item),
+                    }),
+                    WorldEvent::Loot(LootUpdate::Listed { corpse_id: 9 }),
+                ],
+            );
+            for ms in [10, 120, 250, 400, 550, 700, 850, 1000] {
+                frame_at(&mut app, ms);
+            }
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::LootItem { corpse_id: 9, own_id: 7, place: 0, auto: sent, .. }) if sent == auto
+            ));
+            assert!(
+                rx.try_recv().is_err(),
+                "one scripted gesture queues one request"
+            );
+            assert!(
+                app.world()
+                    .resource::<OnlineState>()
+                    .world()
+                    .loot()
+                    .unwrap()
+                    .items
+                    .contains_key(&0)
+            );
+        }
     }
 
     #[test]

@@ -55,6 +55,8 @@ pub enum Binding {
     Disband,
     /// Runs the named social with this ID in the current character profile.
     Social(u32),
+    /// A saved script file in this character's hotbar file registry.
+    Script(u32),
 }
 
 impl Binding {
@@ -90,6 +92,7 @@ impl Binding {
             Self::Follow => "follow".to_owned(),
             Self::Disband => "disband".to_owned(),
             Self::Social(id) => format!("social {id}"),
+            Self::Script(id) => format!("script {id}"),
         }
     }
 
@@ -123,6 +126,7 @@ impl Binding {
             ["follow"] => Self::Follow,
             ["disband"] => Self::Disband,
             ["social", id] => Self::Social(id.parse::<u32>().ok().filter(|id| *id != 0)?),
+            ["script", id] => Self::Script(id.parse::<u32>().ok().filter(|id| *id != 0)?),
             _ => return None,
         })
     }

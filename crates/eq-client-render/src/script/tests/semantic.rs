@@ -16,6 +16,59 @@ use std::{path::Path, sync::mpsc};
 const ADMISSION: u64 = 9;
 const TARGET: u16 = 42;
 
+#[test]
+fn normal_script_slash_cast_and_loot_share_the_ordinary_action_paths() {
+    for casting in [true, false] {
+        let (mut app, rx) = app();
+        app.add_systems(Update, crate::cast_loot::run.after(super::super::drive));
+        let mut player = session::player(7);
+        player.memorized_spells[7] = Some(14);
+        player.spell_refresh_ms = Some([0; 8]);
+        session::admit(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            ADMISSION,
+            player,
+        );
+        let source = if casting {
+            "slash(\"cast 8\")"
+        } else {
+            select_service(&mut app, SpawnKind::NpcCorpse, 1, 10.0);
+            "slash(\"loot all\")"
+        };
+        start(&mut app, source);
+        for ms in (0..=500).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        assert_eq!(
+            app.world().resource::<RunStatus>().phase(),
+            Phase::Completed
+        );
+        let command = rx.try_recv().unwrap();
+        if casting {
+            assert!(matches!(
+                command,
+                ClientCommand::CastSpell {
+                    session_id: ADMISSION,
+                    gem: 7,
+                    spell_id: 14,
+                    target_id: 7,
+                    ..
+                }
+            ));
+        } else {
+            assert!(matches!(
+                command,
+                ClientCommand::Loot {
+                    session_id: ADMISSION,
+                    corpse_id: TARGET,
+                    ..
+                }
+            ));
+        }
+        assert!(rx.try_recv().is_err());
+    }
+}
+
 fn app() -> (App, mpsc::Receiver<ClientCommand>) {
     let mut app = pointing(Vec::new());
     let window = app

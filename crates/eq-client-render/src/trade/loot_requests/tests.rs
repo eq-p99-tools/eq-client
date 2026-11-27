@@ -141,7 +141,10 @@ impl Host {
     }
 
     fn take(&mut self) -> ClientCommand {
-        self.click(Action::Take(0))
+        self.click(Action::Take {
+            place: 0,
+            auto: false,
+        })
     }
 
     fn result(&mut self, command: &ClientCommand, status: LootRequestStatus) {
@@ -224,7 +227,7 @@ fn every_original_item_field_and_creation_time_must_match_before_releasing_pendi
             1 => *corpse_id = 10,
             2 => *own_id = 8,
             3 => *place = 1,
-            4 => *auto = false,
+            4 => *auto = !*auto,
             5 => {
                 *created = created
                     .checked_sub(std::time::Duration::from_secs(1))

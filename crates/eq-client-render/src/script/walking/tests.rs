@@ -316,3 +316,97 @@ fn a_missing_exit_zone_map_does_not_move_but_explicit_reference_still_works() {
         false,
     );
 }
+
+fn a_walk_with_body(body: PlayerBody) -> App {
+    let mut app = pending_walk();
+    let world = app.world_mut();
+    *world.query::<&mut PlayerBody>().single_mut(world).unwrap() = body;
+    world
+        .query_filtered::<&mut Transform, With<crate::Player>>()
+        .single_mut(world)
+        .unwrap()
+        .translation
+        .y = body.feet_offset;
+    let mut player = testing::player(7);
+    player.position = eq_client_core::world_position([0.0, body.feet_offset, 0.0], 0.0);
+    testing::admit(&mut world.resource_mut::<OnlineState>(), 1, player);
+    app
+}
+
+#[test]
+fn a_script_refuses_a_body_without_a_fitting_mesh_profile_before_any_movement() {
+    let ordinary = PlayerBody {
+        size: 6.0,
+        height: 6.677_319_5,
+        feet_offset: 3.75,
+    };
+    for body in [
+        PlayerBody {
+            size: 10.0,
+            ..ordinary
+        },
+        PlayerBody {
+            height: 12.0,
+            ..ordinary
+        },
+        PlayerBody {
+            feet_offset: 6.0,
+            ..ordinary
+        },
+    ] {
+        let mut app = a_walk_with_body(body);
+        let mesh = NavMesh::build(
+            &floor(),
+            &eq_client_core::movement::navmesh::Settings::walker(6.0),
+            1,
+            &AtomicBool::new(false),
+        )
+        .unwrap()
+        .0;
+        app.world_mut()
+            .resource_mut::<ZoneNavMesh>()
+            .complete_for_test(Some(mesh));
+        let start = Instant::now();
+        for ms in 0.. {
+            frame_at(&mut app, ms);
+            let script = app.world().resource::<Script>();
+            assert!(!script.acts.contains(&FORWARD));
+            assert!(script.route.is_none());
+            if script.status().phase() == Phase::Failed {
+                assert_eq!(
+                    script.status().events().back().unwrap().message,
+                    "no navigation mesh profile fits this body's size and headroom"
+                );
+                break;
+            }
+            assert!(start.elapsed() < Duration::from_secs(30));
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[test]
+fn explicit_grid_only_walk_still_runs_for_a_body_outside_mesh_profiles() {
+    let mut app = a_walk_with_body(PlayerBody {
+        size: 6.0,
+        height: 12.0,
+        feet_offset: 3.75,
+    });
+    // The disabled resource is exactly the production --no-navmesh state;
+    // the existing scheduled systems remain, but no mesh task is retained.
+    app.insert_resource(ZoneNavMesh::default());
+    let start = Instant::now();
+    for ms in 0.. {
+        frame_at(&mut app, ms);
+        let script = app.world().resource::<Script>();
+        assert_eq!(script.status().phase(), Phase::Running);
+        if script.acts.contains(&FORWARD) {
+            assert!(script.route.is_some());
+            assert!(script.status().events().iter().any(|event| event.message
+                == "Walk uses grid search: navigation meshes are off (--no-navmesh)"));
+            break;
+        }
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+}

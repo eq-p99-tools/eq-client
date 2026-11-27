@@ -367,7 +367,11 @@ impl WindowId {
     pub(crate) const fn can_minimize(self) -> bool {
         !matches!(
             self,
-            Self::Scripts | Self::ChatGroup(_) | Self::Tracking | Self::SkillSelect
+            Self::Scripts
+                | Self::ChatGroup(_)
+                | Self::Tracking
+                | Self::SkillSelect
+                | Self::ServerDialog
         )
     }
 
