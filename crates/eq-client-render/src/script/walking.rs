@@ -30,6 +30,12 @@ pub(super) struct Scope {
     zone: String,
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(super) struct Generation {
+    mesh: Option<u64>,
+    exit_zones: Option<u64>,
+}
+
 impl Scope {
     fn capture(online: &OnlineState) -> Result<Self, String> {
         let world = online.world();
@@ -108,7 +114,21 @@ pub(super) fn prepare(
         return Err("walk cancelled by a zone or admission change".into());
     }
     script.walk_scope = Some(scope.clone());
-    let generation = meshes.map(ZoneNavMesh::generation);
+    let generation = Generation {
+        mesh: meshes.map(ZoneNavMesh::generation),
+        exit_zones: matches!(
+            step,
+            Step::WalkPlace {
+                destination: PlaceDestination::ExitZone(_),
+                ..
+            }
+        )
+        .then(|| online.world().zone_line_zones_revision()),
+    };
+    // With neither a mesh nor an exit map there is nothing to invalidate a
+    // route against, as before the exit map joined this key.
+    let generation =
+        (generation.mesh.is_some() || generation.exit_zones.is_some()).then_some(generation);
     if script.walk_generation != generation {
         script.route = None;
         script.place_lookup = None;
@@ -126,19 +146,20 @@ pub(super) fn prepare(
     if script.route.is_some() {
         return Ok(true);
     }
-    let (mesh, grid) =
-        match meshes.map(|meshes| meshes.for_zone_walker(&scope.zone, body.mesh_size())) {
-            Some(Ok(mesh)) => (Some(mesh), None),
-            Some(Err(GridReason::Building)) => {
-                wait(script, "current-zone navigation mesh is building");
-                return Ok(false);
-            }
-            Some(Err(
-                reason @ (GridReason::Failed | GridReason::Missing | GridReason::NoFloor),
-            )) => return Err(reason.describe().into()),
-            Some(Err(reason)) => (None, Some(reason)),
-            None => (None, Some(GridReason::Missing)),
-        };
+    let (mesh, grid) = match meshes
+        .map(|meshes| meshes.for_zone_walker(&scope.zone, meshes.walker_size(body, client)))
+    {
+        Some(Ok(mesh)) => (Some(mesh), None),
+        Some(Err(GridReason::Building)) => {
+            wait(script, "current-zone navigation mesh is building");
+            return Ok(false);
+        }
+        Some(Err(reason @ (GridReason::Failed | GridReason::Missing | GridReason::NoFloor))) => {
+            return Err(reason.describe().into());
+        }
+        Some(Err(reason)) => (None, Some(reason)),
+        None => (None, Some(GridReason::Missing)),
+    };
     if let Step::WalkPlace { destination, .. } = step
         && script.place.is_none()
     {
@@ -160,6 +181,7 @@ pub(super) fn prepare(
                         .and_then(|mesh| mesh.floors(&scope.zone))
                         .unwrap_or_else(|| Arc::new(world.terrain_triangles()));
                     let regions = online.regions.clone();
+                    let exit_zones = online.world().zone_line_zones().clone();
                     let snapshot = world.clone();
                     let mesh = mesh.clone();
                     let doors = openable_doors(online);
@@ -169,7 +191,7 @@ pub(super) fn prepare(
                         let points = regions.zone_line_floor_points(
                             &floors,
                             body.feet_offset,
-                            |line| matches_exit(exit, line),
+                            |line| matches_exit(exit, line, &exit_zones),
                             &|| cancellation.load(Ordering::Relaxed),
                         );
                         choose_exit(
@@ -252,9 +274,16 @@ pub(super) fn prepare(
     Ok(true)
 }
 
-fn matches_exit(wanted: PlaceDestination, line: ZoneLine) -> bool {
+fn matches_exit(
+    wanted: PlaceDestination,
+    line: ZoneLine,
+    zones: &std::collections::BTreeMap<u32, u16>,
+) -> bool {
     match (wanted, line) {
         (PlaceDestination::ExitReference(wanted), ZoneLine::Reference(actual)) => wanted == actual,
+        (PlaceDestination::ExitZone(wanted), ZoneLine::Reference(reference)) => {
+            zones.get(&reference) == Some(&wanted)
+        }
         (PlaceDestination::ExitZone(wanted), ZoneLine::Absolute { zone_id, .. }) => {
             wanted == zone_id
         }

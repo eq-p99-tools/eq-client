@@ -265,6 +265,19 @@ impl ClientWorld {
         self.session_id
     }
 
+    /// Current admission's received destination zone IDs by authored boundary
+    /// reference. These are not local source coordinates or transfer permission.
+    #[must_use]
+    pub fn zone_line_zones(&self) -> &std::collections::BTreeMap<u32, u16> {
+        &self.zone.line_zones.destinations
+    }
+
+    /// Changes when the current admission's destination mapping changes.
+    #[must_use]
+    pub const fn zone_line_zones_revision(&self) -> u64 {
+        self.zone.line_zones.revision
+    }
+
     /// The admission's interpreted own-player stun state. None preserves
     /// unknown/unconfigured semantics; charm, roots and death are separate.
     #[must_use]

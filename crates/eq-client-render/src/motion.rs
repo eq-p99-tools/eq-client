@@ -3502,6 +3502,7 @@ pub(super) fn input(
     // generation's water: the travel it gives, before collision.
     let mut wet_travel = None;
     let mut swim_capture = None;
+    let mut native_wet_input = None;
     if swimming && let Some(swim) = controls.swim {
         // Residual water travel has no facing input of its own. Keep the
         // turn keys' facing when no horizontal stroke was requested.
@@ -3561,6 +3562,7 @@ pub(super) fn input(
             vertical,
             jump,
         };
+        native_wet_input = Some(input);
         // Observe resolved input before the integrator replaces direction
         // with residual travel. Special impulses/entry/surface keep the old path.
         let ordinary = follow_step.is_none()
@@ -4376,6 +4378,10 @@ pub(super) fn input(
     if swimming {
         trace!(target: "eq_client_render::motion::swim", basis = ?accepted.position,
             proposed = ?position_sent, dt = span, ?mode, input_ledger = ?swim_controls,
+            raw_renderer_delta = ?delta, resolved_renderer_delta = ?(position - origin),
+            native_renderer_input = ?native_wet_input, control_eq_heading = shown,
+            physical_sample_time = ?now,
+            body_look_pitch = camera.look_pitch(),
             verdict = "proposed", "Ordinary swim proposal before local worker validation");
     }
     let mut owned_request = None;

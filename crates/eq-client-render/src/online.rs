@@ -1,6 +1,7 @@
 //! Session events enter presentation here; this module never decodes wire
 //! packets. The world model in `eq_client_core::world` applies each update;
 //! this module shows what it changed.
+mod damage_trace;
 mod movement_reports;
 
 use super::{ViewerSettings, hud};
@@ -954,6 +955,14 @@ type Definitions<'w> = (
     Option<Res<'w, super::options::OptionsState>>,
 );
 
+/// Session input and the viewer-local ordinal used to trace its application.
+type ReceiveContext<'w, 's> = (
+    Res<'w, Updates>,
+    Option<Res<'w, super::login::FrontEnd>>,
+    Option<Res<'w, super::outbox::Outbox>>,
+    Local<'s, u64>,
+);
+
 /// Applies the session's news to the world and shows what it changed. The
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
@@ -964,11 +973,7 @@ type Definitions<'w> = (
 )]
 pub(super) fn receive(
     mut commands: Commands,
-    (updates, front, outbox): (
-        Res<Updates>,
-        Option<Res<super::login::FrontEnd>>,
-        Option<Res<super::outbox::Outbox>>,
-    ),
+    (updates, front, outbox, mut damage_trace_ordinal): ReceiveContext<'_, '_>,
     definitions: Definitions<'_>,
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
@@ -1059,6 +1064,12 @@ pub(super) fn receive(
                 }
                 continue;
             }
+            let damage_receipt = damage_trace::begin(
+                &mut damage_trace_ordinal,
+                &update,
+                state.world.session_id(),
+                &chat.history,
+            );
             let (mut changes, before, old_gems) =
                 apply(&mut state.world, &update, spells, outbox.as_deref());
             state.observe_server_placement(&changes);
@@ -1164,6 +1175,9 @@ pub(super) fn receive(
             }
             if let WorldUpdate::Chat(line) = update {
                 chat.receive(line, &state);
+            }
+            if let Some(receipt) = damage_receipt {
+                receipt.finish(&changes, &chat.history);
             }
         }
         if ended || taken < BATCH || started.elapsed() >= share {

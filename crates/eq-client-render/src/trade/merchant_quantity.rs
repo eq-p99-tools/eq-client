@@ -220,11 +220,8 @@ impl TradeState {
                     .items()
                     .get(&eq_client_core::inventory::InventorySlot(slot))
                     .ok_or("Choose a current carried item")?;
-                if self.prices.is_some_and(|prices| prices.says_sale)
-                    && self.sale_price(world, item) == Some(0)
-                {
-                    return Err(Refused::Silent);
-                }
+                // A zero quote does not refuse a sale. Keep the decoded item
+                // eligibility checks separate and let the server decide the result.
                 if super::no_drop(item) {
                     return Err("The merchant will not buy NO DROP items.".into());
                 }

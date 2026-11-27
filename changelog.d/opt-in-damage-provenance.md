@@ -1,0 +1,2 @@
+- Private testers can opt in with `eq_client_render::damage_lines=trace` to correlate decoded Damage, Chat and ServerMessage updates with the history IDs they insert. The trace records numeric damage and message IDs without chat bodies or packet payloads. Pair it with `eq_client_render::chat_lines=trace` for finalized line text.
+- Diagnostic update ordinals identify viewer updates, not wire packets; repeated identical hits remain separate.

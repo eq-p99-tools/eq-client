@@ -143,7 +143,7 @@ pub struct Script {
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
     walk_scope: Option<walking::Scope>,
-    walk_generation: Option<u64>,
+    walk_generation: Option<walking::Generation>,
     walk_waiting: Option<&'static str>,
     place: Option<walking::PlaceGoal>,
     place_lookup: Option<walking::FindingExit>,
@@ -2895,6 +2895,7 @@ pub(super) fn drive(
             report::movement_state(
                 label,
                 &mut online,
+                client,
                 players.single().ok(),
                 bodies.single().ok(),
                 collision.as_deref().and_then(|world| world.0.as_ref()),

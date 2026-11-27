@@ -1206,7 +1206,7 @@ fn holds_items(
             .any(|child| items.contains_key(&child))
 }
 
-/// Merchants silently ignore offers of NO DROP items, so they are never offered.
+/// Display pricing only; submission eligibility is checked separately.
 /// Native sale eligibility precedes the price getter (0x5e1690). Augment
 /// prices are not retained, so their sum remains unknown (6.570 G2).
 fn sale_base(
