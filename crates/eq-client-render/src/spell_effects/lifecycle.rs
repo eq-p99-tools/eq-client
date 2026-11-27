@@ -151,8 +151,9 @@ fn finish(world: &mut World) {
     for _ in 0..50 {
         tick(world);
     }
-    assert!(
-        visuals(world).is_empty(),
+    assert_eq!(
+        visuals(world),
+        Vec::<Entity>::new(),
         "an expired effect left a frozen render entity"
     );
 }
@@ -287,8 +288,9 @@ fn a_delayed_corpse_model_keeps_the_effects_original_deadline() {
     for _ in 0..10 {
         tick(&mut world);
     } // at1.85, past original duration+life
-    assert!(
-        visuals(&mut world).is_empty(),
+    assert_eq!(
+        visuals(&mut world),
+        Vec::<Entity>::new(),
         "replacement restarted the effect lifetime"
     );
 }
@@ -348,7 +350,7 @@ fn a_reused_spawn_id_does_not_inherit_the_previous_actors_emitter() {
     for _ in 0..5 {
         tick(&mut world);
     }
-    assert!(visuals(&mut world).is_empty());
+    assert_eq!(visuals(&mut world), Vec::<Entity>::new());
     news(&mut world, [impact()]);
     tick(&mut world);
     let drawn = visuals(&mut world);
@@ -388,7 +390,7 @@ fn turning_effects_off_also_clears_particles_without_a_drawn_body() {
         .options
         .set(eq_client_core::options::Toggle::SpellEffects, false);
     tick(&mut world);
-    assert!(visuals(&mut world).is_empty());
+    assert_eq!(visuals(&mut world), Vec::<Entity>::new());
 }
 
 #[test]
@@ -403,7 +405,7 @@ fn admission_replacement_clears_the_prior_scenes_particles() {
         testing::player(7),
     );
     tick(&mut world);
-    assert!(visuals(&mut world).is_empty());
+    assert_eq!(visuals(&mut world), Vec::<Entity>::new());
 }
 
 #[test]
@@ -437,7 +439,7 @@ fn caster_particles_keep_aging_when_the_cast_ends_or_the_caster_dies() {
         for _ in 0..5 {
             tick(&mut world);
         }
-        assert!(visuals(&mut world).is_empty());
+        assert_eq!(visuals(&mut world), Vec::<Entity>::new());
     }
 }
 
@@ -461,5 +463,5 @@ fn replacing_the_zone_within_one_admission_clears_the_prior_particles() {
         }],
     );
     tick(&mut world);
-    assert!(visuals(&mut world).is_empty());
+    assert_eq!(visuals(&mut world), Vec::<Entity>::new());
 }
