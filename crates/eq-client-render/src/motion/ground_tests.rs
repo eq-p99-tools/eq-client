@@ -28,7 +28,9 @@ struct Row {
     camera: Vec3,
     owned: Vec3,
     forward: bool,
+    accepted_before_commands: eq_client_core::WorldPosition,
     accepted: eq_client_core::WorldPosition,
+    ordinary_bridge: bool,
 }
 
 struct ResultNews {
@@ -78,6 +80,7 @@ struct Scene {
     packets: Vec<(Instant, eq_client_core::WorldPosition, i16)>,
     submissions: Vec<Submission>,
     last_admission: Admission,
+    origin: eq_client_core::WorldPosition,
     observations: usize,
     admissions: usize,
     refusals: usize,
@@ -453,6 +456,8 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
         rows.push(serde_json::json!({
             "frame": scene.frame, "elapsed_ns": elapsed.as_nanos(), "shown": shown,
             "session_accepted": row.accepted,
+            "session_accepted_before_commands": row.accepted_before_commands,
+            "ordinary_bridge": row.ordinary_bridge,
             "session_accepted_created_ns": scene.last_admission.created.duration_since(scene.base).as_nanos(),
             "client_received": received, "session_lead": lead,
             "received_lead": f64::from(shown.x) - f64::from(received.x),
@@ -1104,6 +1109,7 @@ impl Scene {
                 created: start,
                 position: origin,
             },
+            origin,
             observations: 0,
             admissions: 0,
             refusals: 0,
@@ -1244,14 +1250,32 @@ impl Scene {
             .resource_mut::<Time>()
             .advance_by(Duration::from_nanos(16_666_667));
         self.app.update();
+        let accepted_before_commands = self.owner.position();
+        let trace_phase = std::env::var_os("EQ_LAND_PHASE_TRACE").is_some()
+            && (self.frame <= 4
+                || (60..=64).contains(&self.frame)
+                || (118..=124).contains(&self.frame)
+                || (658..=664).contains(&self.frame));
+        if trace_phase {
+            self.phase("before_commands");
+        }
         while let Ok(command) = self.commands.try_recv() {
+            if trace_phase {
+                println!("PHASE327-COMMAND frame={} {command:?}", self.frame);
+            }
             self.publish(command, now);
+        }
+        if trace_phase {
+            self.phase("before_tick");
         }
         let packets = &mut self.packets;
         let submissions = &mut self.submissions;
         self.owner
             .tick_sample(now, |packet| submit(packets, submissions, now, packet))
             .unwrap();
+        if trace_phase {
+            self.phase("after_tick");
+        }
         let (shown, focus) = latency_tests::shown(&mut self.app);
         let current = self.app.world().resource::<Controls>().ground.current;
         let world = self.app.world_mut();
@@ -1267,12 +1291,28 @@ impl Scene {
             camera,
             owned: current.map_or(Vec3::ZERO, |frame| frame.motion.velocity()),
             forward: current.is_some_and(|frame| frame.state.forward()),
+            accepted_before_commands,
             accepted: self.owner.position(),
+            ordinary_bridge: self.app.world().resource::<Controls>().ground.ordinary,
         };
         if std::env::var_os("EQ_LAND_TRACE").is_some() {
             println!("land-frame frame={} held={held} {row:?}", self.frame);
         }
         row
+    }
+
+    fn phase(&self, stage: &str) {
+        println!(
+            "PHASE327-SESSION {} {:?}",
+            serde_json::json!({
+                "frame": self.frame, "stage": stage, "origin": self.origin,
+                "native": !self.app.world().resource::<Controls>().suppress_ground,
+                "delay": self.delay, "packet_count": self.submissions.len(),
+                "accepted_created_ns": self.last_admission.created.saturating_duration_since(self.base).as_nanos(),
+                "base": format!("{:?}", self.base),
+            }),
+            self.owner
+        );
     }
 
     fn forget_contact(&mut self) {
