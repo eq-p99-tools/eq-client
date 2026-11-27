@@ -707,13 +707,18 @@ fn a_new_admission_or_lost_geometry_cannot_drive_an_old_automatic_cycle() {
         }
         app.update();
         assert_eq!(commands(&receiver), Vec::<Posture>::new());
-        assert!(
-            app.world()
-                .resource::<Controls>()
-                .headroom
-                .automatic
-                .is_none()
-        );
+        let automatic = &app.world().resource::<Controls>().headroom.automatic;
+        if lost_geometry {
+            assert!(automatic.is_none());
+        } else {
+            // An unchanged stop proposal may itself refuse and arm a NEW
+            // admission's cycle. It must not retain or drive session11's.
+            assert!(
+                automatic
+                    .as_ref()
+                    .is_none_or(|automatic| automatic.session == 12)
+            );
+        }
     }
 }
 

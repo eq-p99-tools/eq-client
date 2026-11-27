@@ -6,8 +6,8 @@ use glam::Vec3;
 use parry3d::{
     bounding_volume::Aabb,
     math::{Pose, Vector},
-    query::{ShapeCastOptions, cast_shapes},
-    shape::{Ball, Capsule},
+    query::{PointQueryWithLocation, ShapeCastOptions, cast_shapes},
+    shape::{Ball, Capsule, Triangle, TrianglePointLocation},
 };
 
 const REACH: f32 = 32_767.0;
@@ -180,7 +180,10 @@ fn sphere_floor(surface: Surface<'_>, origin: Vec3, radius: f32) -> Option<f32> 
             )
             .ok()
             .flatten()
-            .map(|hit| origin.y - hit.time_of_impact - radius)
+            .map(|hit| {
+                face_height(surface, &triangle, begin, down, radius, false)
+                    .unwrap_or(origin.y - hit.time_of_impact - radius)
+            })
         })
         .max_by(f32::total_cmp)
 }
@@ -245,10 +248,43 @@ fn ceiling_contacts(surface: Surface<'_>, from: Vec3, to: Vec3, radius: f32) -> 
                             .clamp(0.0, 1.0)
             };
             let origin = Vec3::from_array(surface.pose.transform_point(centre).to_array());
-            (origin.y + hit.time_of_impact <= REACH)
-                .then_some((origin, origin.y + hit.time_of_impact + radius))
+            let top = face_height(surface, &triangle, centre, up, radius, true)
+                .unwrap_or(origin.y + hit.time_of_impact + radius);
+            (top >= origin.y + radius && top - radius <= REACH).then_some((origin, top))
         })
         .collect()
+}
+
+/// For a face-interior contact the returned sphere top/bottom is exact plane
+/// geometry: contact + normal*r +/- r. Recover it analytically rather than
+/// accumulating the generic GJK time error into the strict room comparison.
+/// Edges, nonclosing faces and initial penetration retain the cast result;
+/// there is no rounding tolerance or change to the native comparison.
+fn face_height(
+    surface: Surface<'_>,
+    triangle: &Triangle,
+    centre: Vector,
+    direction: Vector,
+    radius: f32,
+    ceiling: bool,
+) -> Option<f32> {
+    let normal = triangle.normal()?;
+    let closing = normal.dot(direction);
+    if closing >= 0.0 {
+        return None;
+    }
+    let time = (radius - (centre - triangle.a).dot(normal)) / closing;
+    if time < 0.0 {
+        return None;
+    }
+    let (projection, location) =
+        triangle.project_local_point_and_get_location(centre + direction * time, false);
+    if !matches!(location, TrianglePointLocation::OnFace(..)) {
+        return None;
+    }
+    let point = surface.pose.transform_point(projection.point);
+    let normal = surface.pose.rotation * normal;
+    Some(point.y + radius * (normal.y + if ceiling { 1.0 } else { -1.0 }))
 }
 
 #[cfg(test)]
@@ -364,5 +400,22 @@ mod tests {
         assert!(!bounds(None, None).fits(7.5, 0.5, false));
         assert!(!bounds(None, Some(12.0)).fits(7.5, 0.5, false));
         assert!(bounds(None, Some(12.0)).fits(7.5, 0.5, true));
+    }
+
+    #[test]
+    fn headroom_flat_face_keeps_equality_without_a_comparison_tolerance() {
+        let world =
+            CollisionWorld::new(plane(0.0, true).into_iter().chain(plane(4.25, false))).unwrap();
+        let mac = HeadroomProbe {
+            floor_radius: 0.0,
+            ceiling_radius: 0.5,
+            floor_offset: -0.5,
+            floor_bias: 0.0,
+            permits_missing_ceiling: false,
+            ..probe()
+        };
+        let bounds = world.probe_headroom(Vec3::new(1.0, 3.75, 0.0), mac);
+        assert_eq!(bounds.ceiling, Some(4.25));
+        assert!(!mac.fits(bounds, 3.75, 0.5), "{bounds:?}");
     }
 }
