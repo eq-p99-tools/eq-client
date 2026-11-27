@@ -59,6 +59,12 @@ pub(super) fn fill_to(node: &mut Mut<Node>, step: Option<&Step>, fraction: f32) 
     }
 }
 
+type GaugeContentQueries<'w, 's> = (
+    Query<'w, 's, (&'static Shows, &'static mut Text, &'static mut TextColor)>,
+    Query<'w, 's, (&'static super::LinesFillTint, &'static mut ImageNode), Without<super::HpFillTint>>,
+    Query<'w, 's, (&'static super::HpFillTint, &'static mut ImageNode), Without<super::LinesFillTint>>,
+);
+
 /// Shows the world in the skinned windows' gauges and labels.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
@@ -77,11 +83,7 @@ pub(crate) fn show(
         Res<crate::hud::action_bar::ActionRequests>,
     ),
     mut fills: Query<(&Shows, &mut Node, Option<&Step>), Without<Text>>,
-    (mut texts, mut lines, mut hp_images): (
-        Query<(&Shows, &mut Text, &mut TextColor)>,
-        Query<(&super::LinesFillTint, &mut ImageNode), Without<super::HpFillTint>>,
-        Query<(&super::HpFillTint, &mut ImageNode), Without<super::LinesFillTint>>,
-    ),
+    (mut texts, mut lines, mut hp_images): GaugeContentQueries<'_, '_>,
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
     let world = online.world();
