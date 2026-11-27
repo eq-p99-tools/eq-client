@@ -706,7 +706,9 @@ pub(super) fn update(
 #[allow(clippy::needless_pass_by_value)]
 pub(super) fn feedback(
     online: Res<super::online::OnlineState>,
+    trade: Res<crate::trade::TradeState>,
     mut slots: Query<(&SlotButton, &Interaction, &mut BorderColor)>,
+    mut skin_slots: Query<(&SlotButton, &mut Outline)>,
     mut labels: Query<&mut Text, With<HoverLabel>>,
 ) {
     let mut description = SLOT_HELP.to_owned();
@@ -714,7 +716,9 @@ pub(super) fn feedback(
     for (slot, interaction, mut border) in &mut slots {
         let item = inventory.items().get(&slot.0);
         let hovered = *interaction != Interaction::None;
-        let tint = if slot.0 == InventorySlot::CURSOR && item.is_some() {
+        let tint = if trade.selected_sale(online.world(), slot.0.0)
+            || (slot.0 == InventorySlot::CURSOR && item.is_some())
+        {
             theme::FOCUS
         } else if hovered {
             theme::EDGE_HOVER
@@ -758,6 +762,18 @@ pub(super) fn feedback(
                     effect.spell_id, effect.required_level
                 );
             }
+        }
+    }
+    // Skinned slots have no layout border. Outline selection without
+    // changing their icon size or pointer geometry (native checked bit0x51a891).
+    for (slot, mut outline) in &mut skin_slots {
+        let width = px(if trade.selected_sale(online.world(), slot.0.0) {
+            1.0
+        } else {
+            0.0
+        });
+        if outline.width != width {
+            outline.width = width;
         }
     }
     for mut text in &mut labels {
@@ -853,6 +869,88 @@ mod tests {
         );
         app
     }
+    #[test]
+    fn merchant_selection_highlights_plain_and_skinned_slots_after_pointer_release() {
+        use crate::{
+            online::{OnlineState, testing},
+            trade::TradeState,
+        };
+        use eq_client_core::{WorldEvent, merchant::MerchantUpdate};
+        let mut app = crate::testing::app();
+        app.add_systems(Update, feedback);
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 1, testing::player(7));
+        let mut first = crate::preview::items().remove(4);
+        first.slot = InventorySlot(23);
+        let mut next = first.clone();
+        next.slot = InventorySlot(24);
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![first, next]));
+        testing::news(
+            &mut online,
+            [WorldEvent::Merchant(MerchantUpdate::Opened {
+                merchant_id: 8,
+                accepted: true,
+                rate: 1.0,
+            })],
+        );
+        let mut trade = TradeState::default();
+        trade.follow(online.world());
+        assert!(trade.offer(23));
+        app.insert_resource(online).insert_resource(trade);
+        let plain = app
+            .world_mut()
+            .spawn((
+                Button,
+                SlotButton(InventorySlot(23)),
+                BorderColor::all(theme::EDGE),
+                Interaction::None,
+            ))
+            .id();
+        let skin = app
+            .world_mut()
+            .spawn((
+                Button,
+                SlotButton(InventorySlot(23)),
+                Outline::new(px(0.0), px(0.0), theme::FOCUS),
+            ))
+            .id();
+        app.update();
+        assert_eq!(
+            *app.world().get::<BorderColor>(plain).unwrap(),
+            BorderColor::all(theme::FOCUS)
+        );
+        assert_eq!(app.world().get::<Outline>(skin).unwrap().width, px(1.0));
+        assert_eq!(
+            *app.world().get::<Interaction>(plain).unwrap(),
+            Interaction::None
+        );
+        assert!(app.world_mut().resource_mut::<TradeState>().offer(24));
+        app.update();
+        assert_eq!(app.world().get::<Outline>(skin).unwrap().width, px(0.0));
+        assert_eq!(
+            *app.world().get::<BorderColor>(plain).unwrap(),
+            BorderColor::all(theme::EDGE_HELD)
+        );
+        assert!(app.world_mut().resource_mut::<TradeState>().offer(23));
+        testing::inventory(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            InventoryUpdate::Remove(InventorySlot(23)),
+        );
+        app.update();
+        assert_eq!(app.world().get::<Outline>(skin).unwrap().width, px(0.0));
+        assert!(app.world_mut().resource_mut::<TradeState>().offer(24));
+        testing::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Merchant(MerchantUpdate::Closed)],
+        );
+        app.update();
+        assert!(
+            !app.world()
+                .resource::<TradeState>()
+                .selected_sale(app.world().resource::<OnlineState>().world(), 24)
+        );
+    }
+
     #[test]
     fn chat_typing_and_unfocused_keys_do_not_toggle_inventory() {
         let mut app = app();

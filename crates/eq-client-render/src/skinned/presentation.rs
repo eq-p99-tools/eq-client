@@ -389,7 +389,7 @@ fn price_text(
         .filter(|(count, _)| *count > 0)
         .map(|(count, line)| messages.said(line, &[count.to_string()]).words.text)
         .collect::<Vec<_>>()
-        .join(" ")
+        .join(prices.coin_separator)
 }
 
 /// Format only the server-reported level progress, without deriving hidden XP.

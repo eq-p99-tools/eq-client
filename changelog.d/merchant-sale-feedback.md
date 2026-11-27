@@ -1,0 +1,1 @@
+- Keep the selected sale slot highlighted, show Titanium sale quotes before selling, and print the native sale line after a matching received result.
