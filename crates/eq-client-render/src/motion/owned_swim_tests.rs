@@ -97,6 +97,11 @@ fn settle(f: &Native, owner: &mut MotionSession, command: ClientCommand) -> Move
     };
     assert_eq!(request.created, f.now);
     owner
+        .inspect_swim_replay(&request, &controls)
+        .unwrap_or_else(|error| {
+            panic!("native replay: {error}; request={request:?}; controls={controls:?}")
+        });
+    owner
         .send_swim_sample(&request, Some(&controls), f.now, |_| Ok(()))
         .unwrap();
     assert!(owner.swim_basis().is_some());
@@ -268,6 +273,13 @@ fn held_strafe_and_turn_both_sides_keep_native_carry_and_report_path_and_net() {
                         panic!("matched ordinary swim lost owned controls: {command:?}");
                     };
                     let before = owner.position();
+                    owner
+                        .inspect_swim_replay(&request, &controls)
+                        .unwrap_or_else(|error| {
+                            panic!(
+                                "native replay: {error}; request={request:?}; controls={controls:?}"
+                            )
+                        });
                     let result =
                         owner.send_swim_sample(&request, Some(&controls), f.now, |_| Ok(()));
                     if result.is_ok() {
