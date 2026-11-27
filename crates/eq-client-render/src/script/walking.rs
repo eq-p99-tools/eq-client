@@ -139,68 +139,66 @@ pub(super) fn prepare(
             Some(Err(reason)) => (None, Some(reason)),
             None => (None, Some(GridReason::Missing)),
         };
-    if let Step::WalkPlace { destination, .. } = step {
-        if script.place.is_none() {
-            let feet = match *destination {
-                PlaceDestination::Coordinates([x, y, z]) => {
-                    Vec3::from_array(eq_client_core::render_position(WorldPosition {
-                        x,
-                        y,
-                        z,
-                        heading: 0.0,
-                    }))
+    if let Step::WalkPlace { destination, .. } = step
+        && script.place.is_none()
+    {
+        let feet = match *destination {
+            PlaceDestination::Coordinates([x, y, z]) => {
+                Vec3::from_array(eq_client_core::render_position(WorldPosition {
+                    x,
+                    y,
+                    z,
+                    heading: 0.0,
+                }))
+            }
+            exit => {
+                if script.place_lookup.is_none() {
+                    let player = online.world().player().ok_or("walk needs a player")?;
+                    let from = Vec3::from_array(eq_client_core::render_position(player.position))
+                        - Vec3::Y * body.feet_offset;
+                    let floors = meshes
+                        .and_then(|mesh| mesh.floors(&scope.zone))
+                        .unwrap_or_else(|| Arc::new(world.terrain_triangles()));
+                    let regions = online.regions.clone();
+                    let snapshot = world.clone();
+                    let mesh = mesh.clone();
+                    let doors = openable_doors(online);
+                    let cancelled = Arc::new(AtomicBool::new(false));
+                    let cancellation = Arc::clone(&cancelled);
+                    let task = AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(async move {
+                        let points = regions.zone_line_floor_points(
+                            &floors,
+                            body.feet_offset,
+                            |line| matches_exit(exit, line),
+                            &|| cancellation.load(Ordering::Relaxed),
+                        );
+                        choose_exit(
+                            points,
+                            &snapshot,
+                            mesh,
+                            from,
+                            body.height,
+                            range,
+                            &doors,
+                            falls,
+                            &cancellation,
+                        )
+                    });
+                    script.place_lookup = Some(FindingExit { cancelled, task });
                 }
-                exit => {
-                    if script.place_lookup.is_none() {
-                        let player = online.world().player().ok_or("walk needs a player")?;
-                        let from =
-                            Vec3::from_array(eq_client_core::render_position(player.position))
-                                - Vec3::Y * body.feet_offset;
-                        let floors = meshes
-                            .and_then(|mesh| mesh.floors(&scope.zone))
-                            .unwrap_or_else(|| Arc::new(world.terrain_triangles()));
-                        let regions = online.regions.clone();
-                        let snapshot = world.clone();
-                        let mesh = mesh.clone();
-                        let doors = openable_doors(online);
-                        let cancelled = Arc::new(AtomicBool::new(false));
-                        let cancellation = Arc::clone(&cancelled);
-                        let task =
-                            AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(async move {
-                                let points = regions.zone_line_floor_points(
-                                    &floors,
-                                    body.feet_offset,
-                                    |line| matches_exit(exit, line),
-                                    &|| cancellation.load(Ordering::Relaxed),
-                                );
-                                choose_exit(
-                                    points,
-                                    &snapshot,
-                                    mesh,
-                                    from,
-                                    body.height,
-                                    range,
-                                    doors,
-                                    falls,
-                                    &cancellation,
-                                )
-                            });
-                        script.place_lookup = Some(FindingExit { cancelled, task });
-                    }
-                    let finding = script.place_lookup.as_mut().expect("started above");
-                    let Some(result) = block_on(poll_once(&mut finding.task)) else {
-                        wait(script, "finding a reachable authored zone line");
-                        return Ok(false);
-                    };
-                    script.place_lookup = None;
-                    result?
-                }
-            };
-            script.place = Some(PlaceGoal {
-                scope: scope.clone(),
-                feet,
-            });
-        }
+                let finding = script.place_lookup.as_mut().expect("started above");
+                let Some(result) = block_on(poll_once(&mut finding.task)) else {
+                    wait(script, "finding a reachable authored zone line");
+                    return Ok(false);
+                };
+                script.place_lookup = None;
+                result?
+            }
+        };
+        script.place = Some(PlaceGoal {
+            scope: scope.clone(),
+            feet,
+        });
     }
     let (feet, goal) = walk_ends(
         online,
@@ -299,11 +297,11 @@ fn choose_exit(
     from: Vec3,
     height: f32,
     range: f32,
-    doors: Vec<u8>,
+    doors: &[u8],
     falls: bool,
     cancelled: &AtomicBool,
 ) -> Result<Vec3, String> {
-    let opened = world.without_doors(&doors);
+    let opened = world.without_doors(doors);
     let mut points: Vec<_> = points
         .into_iter()
         .map(Vec3::from_array)
@@ -332,7 +330,7 @@ fn choose_exit(
             goal,
             reach: range,
             height,
-            doors: doors.clone(),
+            doors: doors.to_vec(),
             drops: falls,
             scope: SearchScope::Whole,
             goal_height: Some(range.min(eq_client_core::movement::MAX_GROUNDED_STEP)),
