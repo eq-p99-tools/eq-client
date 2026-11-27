@@ -408,7 +408,7 @@ impl Route {
     /// the legacy tolerance for a spawn's approximate reported height.
     #[must_use]
     pub fn with_exact_height(mut self) -> Self {
-        let height = Some(self.reach.min(MAX_GROUNDED_STEP).max(0.0));
+        let height = Some(self.reach.clamp(0.0, MAX_GROUNDED_STEP));
         self.restart(|request| request.goal_height = height);
         self.goal_height = height;
         self
