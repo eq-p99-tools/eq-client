@@ -268,11 +268,11 @@ mod tests {
         let vitals = Vitals {
             item_hp: Some(-20),
             local_hp_damage: 1,
-            ..reported(10_000_010, 10_000_030, ItemHitPoints::LeftOut)
+            ..reported(10_000_010, 10_000_020, ItemHitPoints::LeftOut)
         };
         assert_eq!(
             vitals.signed_hit_points(false),
-            Some((9_999_980, 10_000_010))
+            Some((9_999_980, 10_000_000))
         );
         let lower = Vitals {
             item_hp: Some(-50),
