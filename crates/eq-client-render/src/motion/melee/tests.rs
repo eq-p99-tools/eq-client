@@ -199,6 +199,7 @@ fn melee_target_change_pauses_until_the_new_current_target_is_authoritative() {
     );
 
     let mut next = spawn(0.);
+    next.spawn_id = 6;
     next.position.x = 30.;
     testing::spawn_entry(&mut online, 6, next);
     online.select_target(Some(6));
