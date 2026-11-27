@@ -231,7 +231,7 @@ fn a_refused_door_loses_its_connection_and_never_crosses_the_closed_leaf() {
                 assert!(feet.distance(goal) > 10.0);
                 return;
             }
-            other => panic!("{other:?}"),
+            other @ RouteStep::OpenDoor(_) => panic!("{other:?}"),
         }
     }
     panic!("refused door did not end the route");

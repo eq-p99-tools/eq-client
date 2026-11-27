@@ -164,14 +164,14 @@ pub(super) fn prepare(
                         let mesh = mesh.clone();
                         let doors = openable_doors(online);
                         let cancelled = Arc::new(AtomicBool::new(false));
-                        let stop = Arc::clone(&cancelled);
+                        let cancellation = Arc::clone(&cancelled);
                         let task =
                             AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(async move {
                                 let points = regions.zone_line_floor_points(
                                     &floors,
                                     body.feet_offset,
                                     |line| matches_exit(exit, line),
-                                    &|| stop.load(Ordering::Relaxed),
+                                    &|| cancellation.load(Ordering::Relaxed),
                                 );
                                 choose_exit(
                                     points,
@@ -182,7 +182,7 @@ pub(super) fn prepare(
                                     range,
                                     doors,
                                     falls,
-                                    &stop,
+                                    &cancellation,
                                 )
                             });
                         script.place_lookup = Some(FindingExit { cancelled, task });
