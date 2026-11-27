@@ -152,13 +152,25 @@ fn melee_zone_guard_preserves_manual_entry_and_ordinary_crossing() {
                 .resource_mut::<crate::outbox::Outbox>()
                 .set_test_time(now + Duration::from_millis(200));
             app.update();
-            assert!(requests.try_iter().any(|command| matches!(
-                command,
-                ClientCommand::CrossZoneLine {
-                    destination: eq_client_core::ZoneLineDestination::Reference(7),
-                    ..
-                }
-            )));
+            // Receive stamps the local result at this frame. Ordinary input
+            // waits another100ms before observing a fresh crossing sample.
+            app.world_mut().resource_mut::<motion::Controls>().test_now =
+                Some(now + Duration::from_millis(300));
+            app.world_mut()
+                .resource_mut::<crate::outbox::Outbox>()
+                .set_test_time(now + Duration::from_millis(300));
+            app.update();
+            let after: Vec<_> = requests.try_iter().collect();
+            assert!(
+                after.iter().any(|command| matches!(
+                    command,
+                    ClientCommand::CrossZoneLine {
+                        destination: eq_client_core::ZoneLineDestination::Reference(7),
+                        ..
+                    }
+                )),
+                "ordinary crossing after its local result and100ms gate: {after:?}"
+            );
         } else {
             assert!(
                 moving.is_none(),

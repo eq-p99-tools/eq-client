@@ -37,6 +37,9 @@ fn ten_seconds(assisted: bool, delays: &[u64]) -> Measurement {
     use eq_network_game::movement::{MotionSession, TITANIUM_FLAGS, UpdateGate};
     let (mut app, requests, news) = latency_tests::timing_app();
     app.insert_resource(world(100.))
+        // timing_app's small floor ends at20 units; this matched ten-second
+        // ordinary-run row needs continuous ground for about299 units.
+        .insert_resource(motion::Collision(Some(plane())))
         .init_resource::<crate::combat::CombatState>()
         .init_resource::<crate::hud::hotbar::Bindings>()
         .init_resource::<ReceivedAt>()
