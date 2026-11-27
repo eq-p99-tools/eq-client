@@ -77,9 +77,11 @@ pub(crate) fn show(
         Res<crate::hud::action_bar::ActionRequests>,
     ),
     mut fills: Query<(&Shows, &mut Node, Option<&Step>), Without<Text>>,
-    mut texts: Query<(&Shows, &mut Text, &mut TextColor)>,
+    (mut texts, mut hp_images): (
+        Query<(&Shows, &mut Text, &mut TextColor)>,
+        Query<(&super::HpFillTint, &mut ImageNode)>,
+    ),
     mut boxes: Query<(&Shows, &mut Visibility)>,
-    mut hp_images: Query<(&super::HpFillTint, &mut ImageNode)>,
 ) {
     let world = online.world();
     for (normal, mut image) in &mut hp_images {
