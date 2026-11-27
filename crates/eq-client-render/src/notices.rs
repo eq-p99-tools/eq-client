@@ -534,6 +534,9 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
                 )
             })
             .map_or_else(Vec::new, chat),
+        Notice::SpellImpact { line, .. } => {
+            super::combat::spell_impact_text(line, messages).map_or_else(Vec::new, chat)
+        }
         Notice::EnvironmentalDamage { reported, record } => messages
             .map(|messages| environmental_lines(messages, *reported, *record))
             .map_or_else(Vec::new, in_chat),
@@ -2711,6 +2714,49 @@ mod tests {
                 Place::Chat,
                 Said::own("Take the poison out of the bag to apply it")
             )]
+        );
+    }
+    #[test]
+    fn native_spell_description_and_server_numeric_message_are_independent_rows() {
+        use eq_client_core::{
+            chat::{ChatHistory, ChatTab},
+            world::{SpellImpactFilter, SpellImpactLine},
+        };
+        let messages = Messages::parse(
+            "EQST0002\n0 0\n9073 server=%1 target=%2 amount=%3\n434 MUST-NOT-BE-USED %1 %2\n",
+        );
+        let server = Notice::ServerString {
+            id: 9073,
+            arguments: vec!["Caster".into(), "Rat".into(), "10".into()],
+            message_type: Some(283),
+        };
+        let native = Notice::SpellImpact {
+            line: SpellImpactLine::Other {
+                target: "a_rat".into(),
+                text: " is synthetically struck.".into(),
+            },
+            filter: SpellImpactFilter::Own,
+            message_type: Some(0x108),
+        };
+        let mut history = ChatHistory::default();
+        for notice in [server, native] {
+            for (place, said) in wording(&notice, Some(&messages)) {
+                assert_eq!(place, Place::Chat);
+                let mut row = crate::chat::system_line(said);
+                row.message_type = notice.message_type();
+                history.push(row);
+            }
+        }
+        let rows = history.lines(ChatTab::All);
+        assert_eq!(rows.len(), 2);
+        assert_eq!(rows[0].1.message.text, "server=Caster target=Rat amount=10");
+        assert_eq!(rows[0].1.message_type, Some(283));
+        assert_eq!(rows[1].1.message.text, "A rat is synthetically struck.");
+        assert_eq!(rows[1].1.message_type, Some(0x108));
+        assert!(
+            !rows
+                .iter()
+                .any(|(_, row)| row.message.text.contains("MUST-NOT-BE-USED"))
         );
     }
 }

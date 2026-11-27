@@ -12,6 +12,7 @@ mod own_stun;
 mod own_unconscious;
 mod pet_buffs;
 mod qol;
+mod spell_impact;
 mod target_end;
 mod wear;
 mod weather;

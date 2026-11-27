@@ -28,6 +28,7 @@ mod notice;
 mod pet_buffs;
 mod raid;
 mod read;
+mod spell_impact;
 mod spells;
 mod target;
 mod tracking;
@@ -50,6 +51,7 @@ pub use notice::{
     ChannelLine, DuelNotice, InterruptPrint, ListingNotice, Notice, OtherCaster, Party, YellBearing,
 };
 pub use raid::{Raid, RaidNotice, RaidRank};
+pub use spell_impact::{SpellImpact, SpellImpactFilter, SpellImpactLine};
 pub use target::Target;
 pub use tracking::{TrackWindow, track_color};
 pub use trade::{Asker, Exchange, Loot, LootContinuation, Merchant};
@@ -1264,7 +1266,7 @@ impl ClientWorld {
                 // renderer's toggle remains a local intention; server results
                 // arrive independently as consideration, damage and animation.
             }
-            WorldEvent::Damage(damage) => self.damage(damage, news),
+            WorldEvent::Damage(damage) => self.damage(damage, now, spells, news),
             WorldEvent::Animation(animation) => self.motion_news(*animation, news),
             WorldEvent::TargetChanged { session_id, request_id, state } => {
                 self.target_updated(*session_id, *request_id, *state, true, news);

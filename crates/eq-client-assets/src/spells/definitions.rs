@@ -64,6 +64,10 @@ pub struct Definition {
     /// slot (program spell +0x1c0, read R48b c). [`Definition::linked_timer`]
     /// keeps the same field for gem casts, where 0 means none.
     pub discipline_timer: Option<u32>,
+    /// Field 6: impact text for the target; empty is a known empty description.
+    pub on_you: Option<String>,
+    /// Field 7: impact text appended to another target's name.
+    pub on_other: Option<String>,
     /// Field 8: what the client says when the spell fades from the player.
     pub fades: Option<String>,
 }
@@ -206,6 +210,8 @@ impl Definitions {
                 }),
                 target_type: layout.target_type.and_then(number),
                 discipline_timer: layout.discipline_timer.and_then(number),
+                on_you: fields.get(6).map(|text| (*text).to_owned()),
+                on_other: fields.get(7).map(|text| (*text).to_owned()),
                 fades: fields
                     .get(8)
                     .map(|text| text.trim())
@@ -474,5 +480,30 @@ mod tests {
             assert_eq!(parse(&fields), None, "{malformed:?}");
         }
         assert_eq!(parse(&fields[..120]), None);
+    }
+    #[test]
+    fn impact_fields_preserve_missing_empty_and_leading_spaces() {
+        let mut fields = [""; 9];
+        fields[0] = "14";
+        fields[1] = "Synthetic";
+        fields[6] = " synthetic own text";
+        fields[7] = " synthetic other text";
+        let known = Definitions::parse(&fields.join("^"), &Layout::TITANIUM);
+        assert_eq!(
+            known.get(14).unwrap().on_you.as_deref(),
+            Some(" synthetic own text")
+        );
+        assert_eq!(
+            known.get(14).unwrap().on_other.as_deref(),
+            Some(" synthetic other text")
+        );
+        fields[6] = "";
+        fields[7] = "";
+        let empty = Definitions::parse(&fields.join("^"), &Layout::TITANIUM);
+        assert_eq!(empty.get(14).unwrap().on_you.as_deref(), Some(""));
+        assert_eq!(empty.get(14).unwrap().on_other.as_deref(), Some(""));
+        let missing = Definitions::parse("14^Synthetic", &Layout::TITANIUM);
+        assert_eq!(missing.get(14).unwrap().on_you, None);
+        assert_eq!(missing.get(14).unwrap().on_other, None);
     }
 }

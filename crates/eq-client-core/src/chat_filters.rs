@@ -207,6 +207,29 @@ fn titanium_hides(filters: &ChatFilters, notice: &crate::world::Notice) -> bool 
     use crate::combat::{DamageOutcome, SPELL_DAMAGE_KIND};
     use crate::world::{InterruptPrint, Notice, OtherCaster};
     match notice {
+        Notice::SpellImpact { filter, .. } => {
+            use crate::world::SpellImpactFilter;
+            match filter {
+                SpellImpactFilter::Own => false,
+                SpellImpactFilter::OwnBard => {
+                    filters.get(FilterCategory::BardSongs) == FilterMode::Hide
+                }
+                SpellImpactFilter::Bard => !matches!(
+                    filters.get(FilterCategory::BardSongs),
+                    FilterMode::Show | FilterMode::GroupOnly
+                ),
+                SpellImpactFilter::Grouped => !matches!(
+                    filters.get(FilterCategory::PcSpells),
+                    FilterMode::Show | FilterMode::GroupOnly
+                ),
+                SpellImpactFilter::Player => {
+                    filters.get(FilterCategory::PcSpells) != FilterMode::Show
+                }
+                SpellImpactFilter::Npc => {
+                    filters.get(FilterCategory::NpcSpells) != FilterMode::Show
+                }
+            }
+        }
         Notice::Damage { damage, own_id, .. } => {
             damage.target_id == *own_id
                 && damage.source_id != *own_id
@@ -657,5 +680,56 @@ mod tests {
                 .check(GameDialect::Titanium)
                 .is_ok()
         );
+    }
+    #[test]
+    fn native_spell_impact_filters_follow_the_main_buffer_role_table() {
+        use crate::world::{Notice, SpellImpactFilter, SpellImpactLine};
+        use FilterCategory::{BardSongs, NpcSpells, PcSpells};
+        use FilterMode::{GroupOnly, Hide, MineOnly, Show};
+        let notice = |filter| Notice::SpellImpact {
+            line: SpellImpactLine::Other {
+                target: "Target".into(),
+                text: " synthetic impact".into(),
+            },
+            filter,
+            message_type: Some(0x108),
+        };
+        let cases: [(SpellImpactFilter, FilterCategory, &[FilterMode]); 5] = [
+            (
+                SpellImpactFilter::OwnBard,
+                BardSongs,
+                &[Show, MineOnly, GroupOnly],
+            ),
+            (SpellImpactFilter::Bard, BardSongs, &[Show, GroupOnly]),
+            (SpellImpactFilter::Grouped, PcSpells, &[Show, GroupOnly]),
+            (SpellImpactFilter::Player, PcSpells, &[Show]),
+            (SpellImpactFilter::Npc, NpcSpells, &[Show]),
+        ];
+        for (role, category, allowed) in cases {
+            for mode in category.modes(GameDialect::Titanium) {
+                let mut filters = ChatFilters::default();
+                filters.set(category, mode);
+                assert_eq!(
+                    !hidden_locally(&filters, GameDialect::Titanium, &notice(role)),
+                    allowed.contains(&mode),
+                    "{role:?} {mode:?}"
+                );
+            }
+        }
+        let mut hidden = ChatFilters::default();
+        for category in [BardSongs, PcSpells, NpcSpells] {
+            hidden.set(category, Hide);
+        }
+        assert!(!hidden_locally(
+            &hidden,
+            GameDialect::Titanium,
+            &notice(SpellImpactFilter::Own)
+        ));
+        let server = Notice::ServerString {
+            id: 9073,
+            arguments: Vec::new(),
+            message_type: Some(283),
+        };
+        assert!(!hidden_locally(&hidden, GameDialect::Titanium, &server));
     }
 }

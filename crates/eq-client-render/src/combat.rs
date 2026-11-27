@@ -613,6 +613,9 @@ pub(super) fn damage_text(
     let own_attack = damage.source_id == own_id;
     let own_defense = damage.target_id == own_id;
     if damage.kind == SPELL_DAMAGE_KIND {
+        if generation == eq_client_core::GameDialect::Titanium {
+            return None;
+        }
         return match damage.outcome {
             DamageOutcome::Hit(points) if !own_defense && damage.source_id == own_id => {
                 Some(messages.said(
@@ -690,6 +693,37 @@ pub(super) fn damage_text(
     ))
 }
 
+/// The native main buffer for kind 231. Server numeric messages stay independent.
+pub(super) fn spell_impact_text(
+    line: &eq_client_core::world::SpellImpactLine,
+    messages: Option<&Messages>,
+) -> Option<super::chat::Said> {
+    use eq_client_core::world::SpellImpactLine;
+    let text = match line {
+        SpellImpactLine::Other { target, text } => {
+            if text.is_empty() {
+                return None;
+            }
+            let target = display_name(target);
+            format!("%T1{text}").replace("%T1", &target)
+        }
+        SpellImpactLine::Own {
+            text,
+            amount: Some(amount),
+        } => messages?.formatted(
+            if *amount == 1 { 12204 } else { 12203 },
+            &[text.clone(), amount.to_string()],
+        )?,
+        SpellImpactLine::Own { text, amount: None } => {
+            if text.is_empty() {
+                return None;
+            }
+            text.clone()
+        }
+    };
+    Some(super::chat::Said::official(capitalized(&text)))
+}
+
 /// First- and third-person verb string IDs for a Titanium skill number.
 const fn verbs(skill: u8) -> (u32, u32) {
     match skill {
@@ -703,6 +737,9 @@ const fn verbs(skill: u8) -> (u32, u32) {
         _ => (12183, 12184),
     }
 }
+
+#[cfg(test)]
+mod spell_impact_tests;
 
 #[cfg(test)]
 mod tests {
@@ -821,7 +858,19 @@ mod tests {
             spell_id: Some(93),
             ..hit(7, 9, 0, DamageOutcome::Hit(8))
         };
-        assert_eq!(text(spell).unwrap(), "A rat took 8 damage from a spell.");
+        assert_eq!(text(spell), None);
+        for generation in [
+            eq_client_core::GameDialect::EqMac,
+            eq_client_core::GameDialect::Rof2,
+        ] {
+            assert_eq!(
+                damage_text(&messages, generation, 7, names, &spell)
+                    .unwrap()
+                    .words
+                    .text,
+                "A rat took 8 damage from a spell."
+            );
+        }
     }
 
     #[test]

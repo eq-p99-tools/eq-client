@@ -330,8 +330,22 @@ fn still_if_corpse(state: &mut SpawnState) {
 
 impl super::ClientWorld {
     /// Damage the player dealt or took; only that is theirs to read.
-    pub(super) fn damage(&mut self, damage: &crate::combat::Damage, changes: &mut super::Changes) {
+    pub(super) fn damage(
+        &mut self,
+        damage: &crate::combat::Damage,
+        now: Instant,
+        spells: &dyn super::SpellCatalog,
+        changes: &mut super::Changes,
+    ) {
         changes.damage.push(*damage);
+        if self.generation() == crate::GameDialect::Titanium
+            && damage.kind == crate::combat::SPELL_DAMAGE_KIND
+        {
+            if let Some(notice) = self.spell_impact(damage, now, spells) {
+                changes.notices.push(notice);
+            }
+            return;
+        }
         if let Some(record) = self.environmental_record(damage) {
             changes.notices.push(Notice::EnvironmentalDamage {
                 reported: None,

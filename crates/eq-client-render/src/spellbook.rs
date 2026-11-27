@@ -138,6 +138,15 @@ use eq_client_core::world::{ClientWorld, SpellTiming};
 
 /// The installed spell data answers the world's questions about spells.
 impl eq_client_core::world::SpellCatalog for SpellNames {
+    fn impact(&self, spell: u32) -> Option<eq_client_core::world::SpellImpact<'_>> {
+        let definition = self.spell(spell)?;
+        Some(eq_client_core::world::SpellImpact {
+            on_you: definition.on_you.as_deref(),
+            on_other: definition.on_other.as_deref(),
+            discipline: definition.discipline(),
+        })
+    }
+
     fn timing(&self, spell: u32) -> Option<SpellTiming> {
         Self::timing(self, spell)
     }
