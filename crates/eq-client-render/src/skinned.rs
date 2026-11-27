@@ -3533,6 +3533,17 @@ mod tests {
     }
 
     #[test]
+    fn give_and_trade_skin_ids_bind_accept_and_cancel_to_the_normal_actions() {
+        for (window, accept, cancel) in [
+            (WindowId::Give, "GVW_Give_Button", "GVW_Cancel_Button"),
+            (WindowId::Trade, "TRDW_Trade_Button", "TRDW_Cancel_Button"),
+        ] {
+            assert!(matches!(does(accept, window), Some(Does::Gives)));
+            assert!(matches!(does(cancel, window), Some(Does::Closes)));
+        }
+    }
+
+    #[test]
     fn the_loot_windows_done_ends_the_loot_and_its_places_are_the_corpses_slots() {
         use crate::trade::Action;
         assert!(matches!(
