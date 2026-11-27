@@ -14,7 +14,7 @@ impl ClientWorld {
     ) {
         if self.session_id != Some(session_id)
             || self.death.is_some()
-            || self.generation != crate::GameDialect::Titanium
+            || !self.generation.models_unconscious()
             || basis
                 .current()
                 .is_none_or(|current| (current < 1) != unconscious)
