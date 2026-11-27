@@ -955,6 +955,14 @@ type Definitions<'w> = (
     Option<Res<'w, super::options::OptionsState>>,
 );
 
+/// Session input and the viewer-local ordinal used to trace its application.
+type ReceiveContext<'w, 's> = (
+    Res<'w, Updates>,
+    Option<Res<'w, super::login::FrontEnd>>,
+    Option<Res<'w, super::outbox::Outbox>>,
+    Local<'s, u64>,
+);
+
 /// Applies the session's news to the world and shows what it changed. The
 /// world decides what each update means; this only hands its changes to the
 /// panels, the chat and the scene.
@@ -965,12 +973,7 @@ type Definitions<'w> = (
 )]
 pub(super) fn receive(
     mut commands: Commands,
-    (updates, front, outbox, mut damage_trace_ordinal): (
-        Res<Updates>,
-        Option<Res<super::login::FrontEnd>>,
-        Option<Res<super::outbox::Outbox>>,
-        Local<u64>,
-    ),
+    (updates, front, outbox, mut damage_trace_ordinal): ReceiveContext<'_, '_>,
     definitions: Definitions<'_>,
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
