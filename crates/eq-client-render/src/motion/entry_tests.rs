@@ -28,6 +28,15 @@ fn prior_wet() -> water::WetVelocity {
 
 type AirState = Option<(f32, Vec3, Option<f32>)>;
 
+#[derive(Clone, Copy)]
+enum Producer {
+    Walk,
+    WalkWithoutFall,
+    Fall,
+}
+
+const PRODUCERS: [Producer; 3] = [Producer::Walk, Producer::WalkWithoutFall, Producer::Fall];
+
 fn airborne(state: &Controls) -> AirState {
     state
         .airborne
@@ -35,7 +44,8 @@ fn airborne(state: &Controls) -> AirState {
         .map(|air| (air.velocity(), air.drift(), air.peak()))
 }
 
-fn entry(falling: bool, wet: water::WetVelocity) -> (Native, MovementRequest, AirState) {
+fn entry(producer: Producer, wet: water::WetVelocity) -> (Native, MovementRequest, AirState) {
+    let falling = matches!(producer, Producer::Fall);
     let mut f = Native::new(false, if falling { 0.2 } else { -4. });
     if falling {
         f.app
@@ -46,8 +56,8 @@ fn entry(falling: bool, wet: water::WetVelocity) -> (Native, MovementRequest, Ai
             .unwrap()
             .carry_from_water(-8., Vec3::X * 2., 0.2 - 3.75);
     } else {
-        // An ordinary collision walk, without the optional fall controller,
-        // takes the existing achieved-travel/span conversion at the shore.
+        // A real collision walk reaches the shore. Exercise both its ordinary
+        // dry controller and the achieved-travel branch without that controller.
         let shore = CollisionWorld::new([
             [
                 [-200., -7.75, -200.],
@@ -75,7 +85,9 @@ fn entry(falling: bool, wet: water::WetVelocity) -> (Native, MovementRequest, Ai
             .get_mut::<Transform>(f.player)
             .unwrap()
             .translation = Vec3::new(-0.1, -4., 0.);
-        f.app.world_mut().resource_mut::<Controls>().airborne = None;
+        if matches!(producer, Producer::WalkWithoutFall) {
+            f.app.world_mut().resource_mut::<Controls>().airborne = None;
+        }
         crate::keys::testing::bind(
             &mut f.app,
             Act::StrafeLeft,
@@ -108,8 +120,8 @@ fn receive(f: &mut Native, event: eq_client_core::WorldEvent) {
 
 #[test]
 fn ordinary_entry_acceptance_keeps_the_actual_converted_state() {
-    for falling in [false, true] {
-        let (mut f, request, _) = entry(falling, prior_wet());
+    for producer in PRODUCERS {
+        let (mut f, request, _) = entry(producer, prior_wet());
         let converted = f.app.world().resource::<Controls>().wet;
         receive(
             &mut f,
@@ -136,10 +148,10 @@ fn ordinary_entry_acceptance_keeps_the_actual_converted_state() {
     }
 }
 
-fn refusals_restore(falling: bool) {
+fn refusals_restore(producer: Producer) {
     for discarded in [false, true] {
         for wet in [water::WetVelocity::default(), prior_wet()] {
-            let (mut f, request, before_air) = entry(falling, wet);
+            let (mut f, request, before_air) = entry(producer, wet);
             let origin = f
                 .app
                 .world()
@@ -183,18 +195,20 @@ fn refusals_restore(falling: bool) {
 
 #[test]
 fn fall_entry_refusal_and_discard_restore_both_sides_of_the_conversion() {
-    refusals_restore(true);
+    refusals_restore(Producer::Fall);
 }
 
 #[test]
 fn walk_entry_refusal_and_discard_restore_both_sides_of_the_conversion() {
-    refusals_restore(false);
+    for producer in [Producer::Walk, Producer::WalkWithoutFall] {
+        refusals_restore(producer);
+    }
 }
 
 #[test]
 fn stale_entry_refusal_cannot_restore_state_across_a_correction() {
-    for falling in [false, true] {
-        let (mut f, request, _) = entry(falling, prior_wet());
+    for producer in PRODUCERS {
+        let (mut f, request, _) = entry(producer, prior_wet());
         let trial = f.app.world().resource::<Controls>().wet;
         receive(
             &mut f,
