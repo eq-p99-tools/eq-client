@@ -2361,7 +2361,7 @@ pub(super) fn input(
         return;
     }
     // An arrival aboard holds the player until the session places them
-    // (read R36 Â§3): no frames run in the program meanwhile.
+    // (read R36 §3): no frames run in the program meanwhile.
     if !online.enabled
         || !online.world().connected()
         || online.world().is_dead()
@@ -7601,7 +7601,7 @@ pub(super) mod tests {
 
     #[test]
     fn a_goto_just_over_a_steep_face_stands_up_and_climbs_it() {
-        // Live's look (11-01, 85b9d33d): a goto 1 u over a 50Â° face, then
+        // Live's look (11-01, 85b9d33d): a goto 1 u over a 50° face, then
         // a run and a walk up it, moved 0.0 on every sample. Each sample
         // now stands up and climbs, and never rises past the reach the
         // session's guard allows it.
@@ -7644,7 +7644,7 @@ pub(super) mod tests {
                         HUMAN.height,
                         false,
                     );
-                    let case = format!("{degrees}Â° at {speed}: {feet} to {next}");
+                    let case = format!("{degrees}° at {speed}: {feet} to {next}");
                     assert!(
                         next.y - feet.y <= climb_reach(titanium.climb, program_steps(0.1)) + 0.001,
                         "{case}"
@@ -7654,11 +7654,11 @@ pub(super) mod tests {
                     feet = next;
                 }
                 // A walk keeps its pace up both; a run up them goes as far as the reach lets it.
-                assert!(moved > 0.5 * speed, "{degrees}Â° at {speed}: moved {moved}");
+                assert!(moved > 0.5 * speed, "{degrees}° at {speed}: moved {moved}");
                 if speed < 20.0 {
                     assert!(
                         moved > 0.95 * speed - 0.7,
-                        "{degrees}Â° at {speed}: moved {moved}"
+                        "{degrees}° at {speed}: moved {moved}"
                     );
                 }
             }
@@ -8313,7 +8313,7 @@ pub(super) mod tests {
             6.0,
             true,
         );
-        // At 44.55 u/s under 160 u/sÂ², three 50 ms steps climb well past a
+        // At 44.55 u/s under 160 u/s², three 50 ms steps climb well past a
         // riser (1.81 + 1.40 + 0.99), and no farther than the guard grants
         // after the notice.
         let granted = MAX_GROUNDED_STEP + super::jump_rise(44.55, titanium.gravity, 0.15);
@@ -15478,7 +15478,7 @@ pub(super) mod tests {
         // Safe Fall is announced where the player has it.
         for (safe_fall, amount, used) in [
             // About 7 units a step at touchdown, the per-frame fall's from
-            // 100 units up (R49-24 b): trunc(10 Ã— (v âˆ’ 4)Â²).
+            // 100 units up (R49-24 b): trunc(10 × (v − 4)²).
             (None, 89, false),
             (Some(0), 89, false),
             // The skill takes off all of it, and is still announced.
