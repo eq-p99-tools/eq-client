@@ -504,13 +504,24 @@ fn headroom_vertical_wall_with_open_sky_never_arms_a_pointless_duck() {
         // The larger ceiling sphere can contact its side at a body-resolved
         // endpoint; ducking cannot create a passable route through it.
         faces.extend([
-            [[-20.0, 0.0, 0.0], [-20.0, 100.0, -100.0 * slant], [20.0, 0.0, 0.0]],
-            [[20.0, 0.0, 0.0], [-20.0, 100.0, -100.0 * slant], [20.0, 100.0, -100.0 * slant]],
+            [
+                [-20.0, 0.0, 0.0],
+                [-20.0, 100.0, -100.0 * slant],
+                [20.0, 0.0, 0.0],
+            ],
+            [
+                [20.0, 0.0, 0.0],
+                [-20.0, 100.0, -100.0 * slant],
+                [20.0, 100.0, -100.0 * slant],
+            ],
         ]);
         app.insert_resource(Collision(Some(CollisionWorld::new(faces).unwrap())));
         testing::place(
             &mut app.world_mut().resource_mut::<online::OnlineState>(),
-            world_position([0.0, HUMAN.feet_offset, -1.0], 0.0),
+            world_position(
+                [0.0, HUMAN.feet_offset, -1.0],
+                eq_client_core::world_heading(0.0),
+            ),
         );
         let begin = Instant::now();
         let mut flips = Vec::new();
@@ -524,11 +535,14 @@ fn headroom_vertical_wall_with_open_sky_never_arms_a_pointless_duck() {
             app.update();
             for requested in accepted_commands(&mut app, &receiver) {
                 flips.push(requested);
-                posture(&mut app, match requested {
-                    Posture::Standing => PostureState::Standing,
-                    Posture::Ducking => PostureState::Ducking,
-                    Posture::Sitting => panic!("unexpected sit"),
-                });
+                posture(
+                    &mut app,
+                    match requested {
+                        Posture::Standing => PostureState::Standing,
+                        Posture::Ducking => PostureState::Ducking,
+                        Posture::Sitting => panic!("unexpected sit"),
+                    },
+                );
             }
         }
         assert!(flips.is_empty(), "wall slant={slant}: {flips:?}");
@@ -541,20 +555,190 @@ fn automatic_return_checks_the_present_lifted_standing_probe() {
     // A one-sided higher shelf is below the lifted standing origin, but
     // above the ducked origin. Return must use the ordinary standing probe
     // too, rather than assuming the ducked floor remains its standing floor.
-    let faces = plane(0.0, true).into_iter()
-        .chain(plane(4.0, true)).chain(plane(12.0, false));
+    let faces = plane(0.0, true)
+        .into_iter()
+        .chain(plane(4.0, true))
+        .chain(plane(12.0, false));
     app.insert_resource(Collision(Some(CollisionWorld::new(faces).unwrap())));
-    app.world_mut().resource_mut::<ButtonInput<KeyCode>>().reset_all();
+    app.world_mut()
+        .resource_mut::<ButtonInput<KeyCode>>()
+        .reset_all();
     let now = Instant::now();
-    app.world_mut().resource_scope(|world, mut controls: Mut<Controls>| {
-        controls.headroom.refused(InstalledClient::Titanium,
-            world.resource::<online::OnlineState>().world(), Some(PostureState::Standing),
-            true, now.checked_sub(Duration::from_millis(2_001)).unwrap());
-        controls.test_now = Some(now);
-    });
+    app.world_mut()
+        .resource_scope(|world, mut controls: Mut<Controls>| {
+            controls.headroom.refused(
+                InstalledClient::Titanium,
+                world.resource::<online::OnlineState>().world(),
+                Some(PostureState::Standing),
+                true,
+                now.checked_sub(Duration::from_millis(2_001)).unwrap(),
+            );
+            controls.test_now = Some(now);
+        });
     posture(&mut app, PostureState::Ducking);
     app.update();
-    assert!(commands(&receiver).is_empty(), "the next standing probe refuses");
+    assert!(
+        commands(&receiver).is_empty(),
+        "the next standing probe refuses"
+    );
+}
+
+#[test]
+fn automatic_return_checks_the_next_standing_step_along_held_input() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 100.0);
+    let mut faces = plane(0.0, true);
+    faces.extend([
+        [[-20.0, 7.9, 0.0], [20.0, 7.9, 0.0], [20.0, 7.9, 3.0]],
+        [[-20.0, 7.9, 0.0], [20.0, 7.9, 3.0], [-20.0, 7.9, 3.0]],
+    ]);
+    app.insert_resource(Collision(Some(CollisionWorld::new(faces).unwrap())));
+    testing::place(
+        &mut app.world_mut().resource_mut::<online::OnlineState>(),
+        world_position(
+            [0.0, HUMAN.feet_offset, -0.9],
+            eq_client_core::world_heading(0.0),
+        ),
+    );
+    let now = Instant::now();
+    app.world_mut()
+        .resource_scope(|world, mut controls: Mut<Controls>| {
+            controls.headroom.refused(
+                InstalledClient::Titanium,
+                world.resource::<online::OnlineState>().world(),
+                Some(PostureState::Standing),
+                true,
+                now.checked_sub(Duration::from_millis(2_001)).unwrap(),
+            );
+            controls.test_now = Some(now);
+            controls.test_span = Some(0.1);
+            controls.speed = Some(3.0);
+        });
+    posture(&mut app, PostureState::Ducking);
+    app.update();
+    let sent = accepted_commands(&mut app, &receiver);
+    assert!(
+        sent.is_empty(),
+        "return at the edge must not precede a refused standing step: {sent:?}"
+    );
+    assert!(!app.world().resource::<Controls>().headroom_refused);
+}
+
+#[test]
+fn headroom_single_marginal_opening_ducks_and_stands_at_most_once() {
+    for millis in [50_u16, 100, 150] {
+        let (mut app, receiver) = app(InstalledClient::Titanium, 100.0);
+        let mut faces = plane(0.0, true);
+        faces.extend([
+            [[-20.0, 7.9, 0.0], [20.0, 7.9, 0.0], [20.0, 7.9, 3.0]],
+            [[-20.0, 7.9, 0.0], [20.0, 7.9, 3.0], [-20.0, 7.9, 3.0]],
+        ]);
+        app.insert_resource(Collision(Some(CollisionWorld::new(faces).unwrap())));
+        testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            world_position(
+                [0.0, HUMAN.feet_offset, -2.0],
+                eq_client_core::world_heading(0.0),
+            ),
+        );
+        let begin = Instant::now();
+        let mut duck = 0;
+        let mut stand = 0;
+        for frame in 0..(10_000 / millis) {
+            {
+                let mut controls = app.world_mut().resource_mut::<Controls>();
+                controls.test_now = Some(begin + Duration::from_millis(u64::from(frame * millis)));
+                controls.test_span = Some(f32::from(millis) / 1_000.0);
+                controls.speed = Some(6.0);
+            }
+            app.update();
+            for requested in accepted_commands(&mut app, &receiver) {
+                posture(
+                    &mut app,
+                    match requested {
+                        Posture::Standing => {
+                            stand += 1;
+                            PostureState::Standing
+                        }
+                        Posture::Ducking => {
+                            duck += 1;
+                            PostureState::Ducking
+                        }
+                        Posture::Sitting => panic!("unexpected sit"),
+                    },
+                );
+            }
+        }
+        assert_eq!(duck, 1, "{millis}ms");
+        assert_eq!(stand, 1, "{millis}ms");
+        let player = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap();
+        assert!(
+            eq_client_core::render_position(player.position)[2] > 6.0,
+            "{millis}ms: {:?}",
+            player.position
+        );
+    }
+}
+
+/// Reconstruct the reported approach from installed geometry. The retained
+/// report supplies pose/heading, not its exact frame span or granted speed.
+#[test]
+#[ignore = "reads an EverQuest installation named by EQ_DIR; no window or session"]
+fn installed_felwithe_side_wall_does_not_cycle_posture() {
+    let directory = std::path::PathBuf::from(std::env::var_os("EQ_DIR").expect("EQ_DIR"));
+    let zone = eq_client_assets::load_zone_collision(&directory, "gfaydark").unwrap();
+    let collision = crate::scene_collision::collision_world(
+        &zone,
+        crate::scene_collision::collision_triangles(&zone),
+        Some(HUMAN.feet_offset),
+    )
+    .unwrap();
+    for millis in [50_u16, 100, 150] {
+        for speed in [14.0, 30.0, 43.0] {
+            let (mut app, receiver) = app(InstalledClient::Titanium, 100.0);
+            app.insert_resource(Collision(Some(collision.clone())));
+            testing::place(
+                &mut app.world_mut().resource_mut::<online::OnlineState>(),
+                eq_client_core::WorldPosition {
+                    x: -2369.4993,
+                    y: -2012.1583,
+                    z: 28.256168,
+                    heading: 397.0,
+                },
+            );
+            let begin = Instant::now();
+            let mut flips = Vec::new();
+            for frame in 0..(10_000 / millis) {
+                {
+                    let mut controls = app.world_mut().resource_mut::<Controls>();
+                    controls.test_now =
+                        Some(begin + Duration::from_millis(u64::from(frame * millis)));
+                    controls.test_span = Some(f32::from(millis) / 1_000.0);
+                    controls.speed = Some(speed);
+                    controls
+                        .airborne
+                        .get_or_insert_with(AirborneController::default);
+                }
+                app.update();
+                for requested in accepted_commands(&mut app, &receiver) {
+                    flips.push(requested);
+                    posture(
+                        &mut app,
+                        match requested {
+                            Posture::Standing => PostureState::Standing,
+                            Posture::Ducking => PostureState::Ducking,
+                            Posture::Sitting => panic!("unexpected sit"),
+                        },
+                    );
+                }
+            }
+            assert!(flips.is_empty(), "{millis}ms speed={speed}: {flips:?}");
+        }
+    }
 }
 
 #[test]
