@@ -751,11 +751,12 @@ impl CollisionWorld {
         nearest
     }
 
-    /// Floor and ceiling at a proposed origin, for the movement headroom
-    /// test. Support has the ordinary floor rules; the upward ray takes
+    /// Legacy point-ray geometric diagnostic, not the active movement or
+    /// posture policy (see [`Self::probe_headroom`]). Support has the ordinary
+    /// floor rules; the upward ray takes
     /// authored ceiling fronts, including carriers (Titanium 0x43a0a0).
     /// Rays approximate the native floor and model-radius sphere probes.
-    /// Missing surfaces, including the unread no-floor zone cases, stay unknown.
+    /// Missing and unusable surfaces collapse to unknown in this diagnostic.
     #[must_use]
     pub fn headroom_bounds(&self, origin: Vec3) -> Option<(f32, f32)> {
         const REACH: f32 = 32_767.0;
@@ -780,8 +781,8 @@ impl CollisionWorld {
             .map(|distance| origin.y + distance)
     }
 
-    /// Strict floor-to-ceiling room at a movement candidate. A missing or
-    /// unusable bound leaves movement to the existing collision controller.
+    /// Strict point-ray room diagnostic. Missing or unusable bounds pass
+    /// here; active headroom uses [`HeadroomProbe::fits`] to distinguish them.
     #[must_use]
     pub fn headroom(&self, origin: Vec3, room: f32) -> bool {
         !room.is_finite()
@@ -790,10 +791,9 @@ impl CollisionWorld {
                 .is_none_or(|(floor, ceiling)| floor + room < ceiling)
     }
 
-    /// Clearance for a manual duck-to-stand transition (Titanium 0x483556,
-    /// Mac 0x50be3c): the new posture's strict room test, then ceiling minus
-    /// origin at least S. These rays approximate the programs' probe shapes;
-    /// this helper does not install a headroom gate on movement.
+    /// Legacy point-ray posture-clearance diagnostic: strict room, then
+    /// ceiling minus origin at least S. The active transition policy uses
+    /// [`Self::probe_headroom`] and the generation's distinct missing rules.
     #[must_use]
     pub fn posture_clearance(&self, origin: Vec3, stand_height: f32, room: f32) -> bool {
         const REACH: f32 = 32_767.0;
