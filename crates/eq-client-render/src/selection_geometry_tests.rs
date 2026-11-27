@@ -138,7 +138,13 @@ fn a_spot_on_a_top_no_walk_reaches_is_flagged_and_one_on_the_floor_passes() {
         "reach",
         &squares(&[(0, 128, true, false), (32, 16, true, false)]),
     );
-    let mesh = select_spot_mesh(None, "test", &zone).unwrap();
+    let mesh = select_spot_mesh(
+        None,
+        "test",
+        &zone,
+        eq_client_assets::ui::InstalledClient::Titanium,
+    )
+    .unwrap();
     let main = select_spot_main_island(&zone, &mesh).unwrap();
     assert!(main.dry && main.clear(), "{main:?}");
     let (on_floor, _) = check_select_spot(&zone, &spot_at(80.0, 80.0, 0.0), &mesh);
@@ -242,7 +248,13 @@ fn nomination_follows_loaded_wld_winding_without_filtering_placement_or_collisio
         Some(5.0)
     );
     assert!(!collision.posture_clearance(Vec3::new(0.0, 62.0, 0.0), 3.0, 0.0));
-    let mesh = select_spot_mesh(None, "test", &zone).unwrap();
+    let mesh = select_spot_mesh(
+        None,
+        "test",
+        &zone,
+        eq_client_assets::ui::InstalledClient::Titanium,
+    )
+    .unwrap();
     let spot = propose_select_spot(&zone, &mesh).unwrap();
     assert!(
         [0.0_f32, 32.0]

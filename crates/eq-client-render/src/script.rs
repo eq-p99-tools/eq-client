@@ -62,6 +62,9 @@ use parse::{MAX_STEPS, MAX_WAIT, MoveCommand};
 /// The command the steps that move toward something hold: forward the way
 /// the camera looks, which they turn toward their aim.
 const FORWARD: Act = Act::CameraForward;
+
+const HEADROOM_REFUSED: &str =
+    "walk refused: too little headroom over the floor ahead to stand there";
 /// Longest a `face` step waits for the server to have its heading: a half
 /// turn at the turn keys' rate takes about a second.
 const FACE_LIMIT: Duration = Duration::from_secs(5);
@@ -1743,7 +1746,35 @@ pub(super) fn drive(
                     script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
                     return;
                 };
-                let height = body.height;
+                let posture = online
+                    .world()
+                    .player()
+                    .and_then(|player| online.world().posture(player.spawn_id));
+                let height =
+                    crate::posture::movement_height(client, online.world(), &body, posture);
+                let headroom_refused = observed.4.headroom_refused
+                    && observed.4.last_sent.is_some_and(|sent| {
+                        std::time::Instant::now().saturating_duration_since(sent) <= elapsed
+                    });
+                if headroom_refused && !observed.4.headroom_retry {
+                    script.stop(&mut keys, &mut mouse, HEADROOM_REFUSED);
+                    return;
+                }
+                if headroom_refused && posture != Some(eq_client_core::PostureState::Ducking) {
+                    if let Some(route) = script.route.as_mut() {
+                        route.pause_steering(now);
+                    }
+                    // Keep the ordinary timeout while waiting for the same
+                    // admission's automatic Duck. Input owns that request.
+                    if elapsed >= *duration {
+                        script.stop(
+                            &mut keys,
+                            &mut mouse,
+                            "walk ran out of time waiting for automatic duck",
+                        );
+                    }
+                    return;
+                }
                 let (waited, slowest_frame) = if script
                     .route
                     .as_ref()
@@ -1771,6 +1802,7 @@ pub(super) fn drive(
                     return;
                 };
                 let searching = route.is_searching();
+                route.movement_height(height, feet, goal);
                 let call = std::time::Instant::now();
                 // Off the ground, the fall brings the walker to its waypoint.
                 let falling = observed
@@ -5174,6 +5206,113 @@ mod tests {
         assert_eq!(
             object_walk_end(30.0, 12.0, false, true),
             Err("walk object ran out of time".to_owned())
+        );
+    }
+
+    #[test]
+    fn headroom_bank_route_waits_for_auto_duck_then_follows_with_ducked_height() {
+        use crate::online::testing;
+        use eq_client_core::{
+            PostureState, WorldEvent,
+            movement::{CollisionWorld, Route},
+            world_position,
+        };
+        let (mut app, _) = background(Vec::new());
+        let body = crate::PlayerBody {
+            feet_offset: 3.75,
+            height: 6.677_319_5,
+            size: 6.0,
+        };
+        let from = Vec3::new(0.0, 2.0, -5.0);
+        let goal = Vec3::new(0.0, 4.0, 8.0);
+        let mut faces = vec![
+            [[-20.0, 2.0, -20.0], [-20.0, 2.0, 20.0], [20.0, 2.0, 20.0]],
+            [[-20.0, 2.0, -20.0], [20.0, 2.0, 20.0], [20.0, 2.0, -20.0]],
+        ];
+        let mut roof = faces.clone();
+        for face in &mut roof {
+            for vertex in face.iter_mut() {
+                vertex[1] = 12.0;
+            }
+            face.swap(1, 2);
+        }
+        faces.extend(roof);
+        // Last two-unit bank step onto floor4 under underside12. The
+        // approach fits standing; the top requires the permitted Duck.
+        faces.extend([
+            [[-20.0, 4.0, 0.0], [-20.0, 4.0, 20.0], [20.0, 4.0, 20.0]],
+            [[-20.0, 4.0, 0.0], [20.0, 4.0, 20.0], [20.0, 4.0, 0.0]],
+            [[-20.0, 2.0, 0.0], [-20.0, 4.0, 0.0], [20.0, 4.0, 0.0]],
+            [[-20.0, 2.0, 0.0], [20.0, 4.0, 0.0], [20.0, 2.0, 0.0]],
+        ]);
+        app.insert_resource(crate::Collision(Some(CollisionWorld::new(faces).unwrap())));
+        app.world_mut().spawn((
+            crate::Player,
+            body,
+            Transform::from_translation(from + Vec3::Y * 3.75),
+        ));
+        {
+            let mut online = app.world_mut().resource_mut::<crate::online::OnlineState>();
+            let mut player = testing::player(7);
+            player.position = world_position((from + Vec3::Y * 3.75).to_array(), 0.0);
+            testing::admit(&mut online, 1, player);
+            let mut banker = testing::pet(9, 0);
+            banker.pet_owner = None;
+            banker.position = world_position((goal + Vec3::Y * 3.75).to_array(), 0.0);
+            testing::news(
+                &mut online,
+                [
+                    WorldEvent::Spawns(vec![banker]),
+                    WorldEvent::Posture {
+                        spawn_id: 7,
+                        posture: PostureState::Standing,
+                    },
+                ],
+            );
+            online.select_target(Some(9));
+        }
+        let mut script = Script::new(Vec::new())
+            .offline_preview(true)
+            .input_mode(InputMode::Background);
+        script.current = Some((Step::Walk(1.0, Duration::from_secs(30)), Duration::ZERO));
+        script.route = Some(Route::new(from, goal, 1.0, body.height));
+        script.acts = vec![FORWARD];
+        app.insert_resource(script);
+        {
+            let mut controls = app.world_mut().resource_mut::<crate::motion::Controls>();
+            controls.headroom_refused = true;
+            controls.headroom_retry = true; // emitted only by an armed standing refusal
+            controls.last_sent = Some(std::time::Instant::now());
+        }
+        // Waiting for an observed posture is not the route's three-second
+        // steering stall. This tests the real script driver, without a game.
+        for ms in [100, 1_000, 2_000, 3_000, 4_000] {
+            frame_at(&mut app, ms);
+            assert_eq!(
+                app.world().resource::<Script>().status().phase(),
+                Phase::Running
+            );
+        }
+        testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [WorldEvent::Posture {
+                spawn_id: 7,
+                posture: PostureState::Ducking,
+            }],
+        );
+        frame_at(&mut app, 4_100);
+        let script = app.world().resource::<Script>();
+        assert_eq!(script.status().phase(), Phase::Running);
+        assert!(script.route.as_ref().unwrap().height() < body.height);
+        assert!(script.acts.contains(&FORWARD));
+        // The same route must stop if its ducked proposal is also refused.
+        app.world_mut()
+            .resource_mut::<crate::motion::Controls>()
+            .headroom_retry = false;
+        frame_at(&mut app, 4_200);
+        assert_eq!(
+            app.world().resource::<Script>().status().phase(),
+            Phase::Failed
         );
     }
 

@@ -25,6 +25,7 @@ mod follow;
 mod ground;
 #[cfg(test)]
 mod ground_tests;
+mod headroom;
 mod pad;
 mod placement;
 pub(super) mod pose;
@@ -226,6 +227,12 @@ pub(super) struct Controls {
     /// Death standing (Move While Feigned, 6.454), whose feign the crouch's
     /// duck and stand would end. It keeps its wait (6.600).
     quiet_crouch: bool,
+    headroom: headroom::State,
+    /// The latest resolved own move failed the strict room test; a route
+    /// can stop instead of continuing to push at the same ceiling.
+    pub headroom_refused: bool,
+    /// That refusal was standing and armed an admission-local automatic Duck.
+    pub(crate) headroom_retry: bool,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
     unreported: Option<FallCost>,
@@ -413,6 +420,9 @@ impl Default for Controls {
             endurance_spent: None,
             crouch: None,
             quiet_crouch: false,
+            headroom: headroom::State::default(),
+            headroom_refused: false,
+            headroom_retry: false,
             unreported: None,
             facing: None,
             mouse_turn: 0.0,
@@ -1383,7 +1393,11 @@ impl Controls {
         let released_turn = self.released_turn;
         let speeds = self.speeds();
         let straddle = self.straddle;
+        // A same-admission placement resets prediction, not the provenance
+        // of an observed automatic Duck. Its destination still decides return.
+        let headroom = std::mem::take(&mut self.headroom);
         self.reset(None);
+        self.headroom = headroom;
         self.set_speeds(speeds);
         self.straddle = straddle;
         (
@@ -2317,6 +2331,40 @@ pub(super) fn input(
                 let origin = Vec3::from_array(eq_client_core::render_position(player.position));
                 world.in_swimmable_water(origin - Vec3::Y * body.feet_offset, body.height)
             });
+    if controls
+        .headroom
+        .observe(online.world(), online.placement_revision(), swimming)
+    {
+        controls.headroom_retry = false;
+        controls.headroom_refused = false;
+    }
+    if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
+        match controls.headroom.drive(
+            client,
+            online.world(),
+            world,
+            body,
+            crate::posture::on_mount(online.world(), spells.as_deref()),
+            &outbox,
+            now,
+            None,
+        ) {
+            Ok(true) => {
+                controls.held = Some(Held::Waiting);
+                return;
+            }
+            Err(reason) => {
+                controls.send_failed(reason);
+                controls.held = Some(Held::Refused);
+                return;
+            }
+            Ok(false) => {
+                controls.headroom_retry &= controls.headroom.recovering(online.world());
+            }
+        }
+    } else {
+        controls.headroom.clear();
+    }
     let shoreline_active = controls.shoreline.active();
     if swimming || shoreline_active {
         controls.jump = None;
@@ -3243,6 +3291,32 @@ pub(super) fn input(
         && diagonal.is_none()
         && follow_heading.is_none_or(|heading| arc(current_heading, heading) == 0.0)
     {
+        // Preserve idle return at its unchanged origin. Native zero-delta
+        // call frequency is unread; it is not a reason to remove this host
+        // behavior. A move or jump above never takes this idle branch.
+        if !placement_blocked && !flying {
+            match controls.headroom.drive(
+                client,
+                online.world(),
+                world,
+                body,
+                crate::posture::on_mount(online.world(), spells.as_deref()),
+                &outbox,
+                now,
+                Some(origin),
+            ) {
+                Ok(true) => {
+                    controls.held = Some(Held::Waiting);
+                    return;
+                }
+                Err(reason) => {
+                    controls.send_failed(reason);
+                    controls.held = Some(Held::Refused);
+                    return;
+                }
+                Ok(false) => (),
+            }
+        }
         // Even without voluntary input, refresh the ordinary floor sweep's
         // carrier link and submit its world pose through the existing gate.
         if !placement_blocked
@@ -3546,7 +3620,7 @@ pub(super) fn input(
             .surface
             .declined(eq_client_core::movement::SurfaceDecline::Region);
     }
-    let surface_selected = surface_plan.as_ref().is_some_and(|p| p.active);
+    let mut surface_selected = surface_plan.as_ref().is_some_and(|p| p.active);
     if let Some(plan) = surface_plan.as_ref().filter(|p| p.active) {
         // Both plans were disposable. Keep the ordinary accepted raw state
         // until the exact local result settles this continuation once.
@@ -3566,8 +3640,72 @@ pub(super) fn input(
         jumped = false;
         delta = landing - feet;
     }
+    // Body/floor resolution precedes the strict candidate room test. The
+    // swimmer exemption is retained from the old draft pending H1's full
+    // Kedge entry/retreat check; it is not a native water rule. Fly and a
+    // held server placement also keep their existing paths.
+    let refused = (!flying && !swimming && !placement_blocked)
+        .then(|| {
+            headroom::refused_probe(
+                client,
+                world,
+                (
+                    body,
+                    crate::posture::stand_height(client, online.world(), body),
+                ),
+                (feet, landing),
+                (
+                    posture == Some(eq_client_core::PostureState::Ducking)
+                        && jump_posture != JumpPosture::StandIfDucked,
+                    crate::posture::on_mount(online.world(), spells.as_deref()),
+                ),
+                {
+                    let stand = crate::posture::stand_height(client, online.world(), body);
+                    let lift =
+                        client
+                            .falls()
+                            .and_then(|falls| falls.edge_lift)
+                            .map_or(0.0, |rule| {
+                                rule.lift(eq_client_assets::falls::EdgeBody {
+                                    race: online.world().player().map_or(0, |player| player.race),
+                                    stand_height: stand,
+                                    size: body.size,
+                                    // Native 0x489a32 also leaves the linked
+                                    // boat's probe at the ordinary origin.
+                                    lifted: raised && linked.is_none(),
+                                })
+                            });
+                    (
+                        crate::posture::headroom_probe(client, online.world(), stand),
+                        lift,
+                        span,
+                    )
+                },
+            )
+        })
+        .flatten();
+    controls.headroom_refused = refused.is_some();
+    controls.headroom_retry = false;
+    let landing = if let Some(refused) = refused {
+        trace!(?client, ?posture, session = ?session_id, floor = ?refused.floor,
+            ceiling = ?refused.ceiling, stand = refused.stand, room = refused.room,
+            origin = ?refused.origin, candidate = ?refused.candidate, "Movement headroom refused");
+        controls.airborne.clone_from(&previous_airborne);
+        // A refused endpoint cannot own an unsubmitted surface frame.
+        controls.restore_surface_trial();
+        controls.surface.pause();
+        surface_plan = None;
+        surface_selected = false;
+        poses = pose::Path::default();
+        shore = None;
+        mode = MovementMode::Forward;
+        feet
+    } else {
+        landing
+    };
     // The server charges the jump's endurance; the arc travels in position
-    // updates.
+    // updates. A refused movement candidate does not cancel an otherwise
+    // eligible launch's command or endurance (the accepted jump bridge).
     if jumped
         && let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::Jump {
             session_id: stamp.session_id,
@@ -3588,6 +3726,20 @@ pub(super) fn input(
             .as_ref()
             .and_then(|hud| hud.resource_estimate)
             .map(|(_, endurance)| jump_endurance(endurance));
+    }
+    if refused.is_some() {
+        let effective_posture = if jump_posture == JumpPosture::StandIfDucked {
+            Some(eq_client_core::PostureState::Standing)
+        } else {
+            posture
+        };
+        controls.headroom_retry = controls.headroom.refused(
+            client,
+            online.world(),
+            effective_posture,
+            options.options.allow_auto_stand,
+            now,
+        );
     }
     let position = if placement_blocked {
         origin
@@ -3733,6 +3885,29 @@ pub(super) fn input(
         });
     }
     controls.surface_rollback = None;
+    // Native return tests the successful move's candidate, not its retained
+    // origin before the sweep (0x48bd31..0x48be35). A higher next floor can
+    // fail 2S+r even when the approach origin passed it. Queue after the
+    // move succeeds; a jump has already made its one stand decision.
+    if !flying
+        && !placement_blocked
+        && !jumped
+        && refused.is_none()
+        && posture == Some(eq_client_core::PostureState::Ducking)
+        && let Err(reason) = controls.headroom.drive(
+            client,
+            online.world(),
+            world,
+            body,
+            crate::posture::on_mount(online.world(), spells.as_deref()),
+            &outbox,
+            now,
+            Some(position),
+        )
+    {
+        // Keep the submitted move and retry posture on a later candidate.
+        debug!(?reason, "Automatic return could not be queued");
+    }
     controls.shoreline.sent(mode, shore, created);
     if entering {
         controls.water_entry_rollback = previous_airborne;

@@ -4,7 +4,7 @@
 //! character on a floor a player can walk to. It reads the installation only,
 //! opens no window and sends nothing.
 //!
-//! `cargo run --release -p eq-client-render --example propose_select_spots -- <EverQuest folder> [--spots <input file>] [--settings <folder>] [--check] [zone ...]`
+//! `cargo run --release -p eq-client-render --example propose_select_spots -- <EverQuest folder> [--spots <input file>] [--settings <folder>] [--client titanium|eqmac] [--check] [zone ...]`
 //!
 //! Without zones named, it tries every zone in the zone table whose files
 //! the installation has (with `--check`, every listed zone the installation
@@ -32,6 +32,7 @@
 //! words help only where a spot is in question. It exits 1 when any zone is
 //! flagged or unknown.
 use anyhow::{Context, Result, bail};
+use eq_client_assets::ui::InstalledClient;
 use eq_client_core::select_spots::{BUILT_IN, Spots, rewrite_proposals};
 use eq_client_render::SpotVerdict;
 use std::io::Write;
@@ -41,13 +42,14 @@ fn main() -> Result<()> {
     let mut arguments = std::env::args().skip(1);
     let Some(directory) = arguments.next().map(PathBuf::from) else {
         eprintln!(
-            "usage: propose_select_spots <EverQuest folder> [--spots <input file>] [--settings <folder>] [--check] [zone ...]"
+            "usage: propose_select_spots <EverQuest folder> [--spots <input file>] [--settings <folder>] [--client titanium|eqmac] [--check] [zone ...]"
         );
         std::process::exit(2);
     };
     let mut input = None;
     let mut settings = None;
     let mut check = false;
+    let mut client = None;
     let mut named = Vec::new();
     while let Some(argument) = arguments.next() {
         match argument.as_str() {
@@ -67,11 +69,13 @@ fn main() -> Result<()> {
                     arguments.next().context("--settings needs a folder")?,
                 ));
             }
+            "--client" => client = Some(client_named(client, arguments.next())?),
             "--check" => check = true,
             _ if argument.starts_with('-') => bail!("unknown option: {argument}"),
             _ => named.push(argument),
         }
     }
+    let client = installed_client(client, &directory)?;
     let full_document = input.is_some();
     let text = match input {
         Some(path) => std::fs::read_to_string(path).context("reading the input spots file")?,
@@ -79,7 +83,7 @@ fn main() -> Result<()> {
     };
     let listed = Spots::parse(&text).map_err(anyhow::Error::msg)?;
     if check {
-        let failed = check_spots(&directory, settings.as_deref(), &listed, named)?;
+        let failed = check_spots(&directory, settings.as_deref(), client, &listed, named)?;
         std::process::exit(i32::from(failed));
     }
     let zones = if named.is_empty() {
@@ -101,13 +105,14 @@ fn main() -> Result<()> {
                 continue;
             }
         };
-        let mesh = match eq_client_render::select_spot_mesh(settings.as_deref(), &zone, &asset) {
-            Ok(mesh) => mesh,
-            Err(error) => {
-                eprintln!("{zone}: no navigation mesh, not proposed: {error}");
-                continue;
-            }
-        };
+        let mesh =
+            match eq_client_render::select_spot_mesh(settings.as_deref(), &zone, &asset, client) {
+                Ok(mesh) => mesh,
+                Err(error) => {
+                    eprintln!("{zone}: no navigation mesh, not proposed: {error}");
+                    continue;
+                }
+            };
         match eq_client_render::propose_select_spot(&asset, &mesh) {
             Some(spot) => {
                 if full_document {
@@ -132,9 +137,39 @@ fn main() -> Result<()> {
 
 /// Checks each listed zone the installation has (or those named), printing
 /// one line each; whether any was flagged or unknown.
+/// The generation `--client` names, given once.
+fn client_named(already: Option<InstalledClient>, name: Option<String>) -> Result<InstalledClient> {
+    if already.is_some() {
+        bail!("--client may be supplied only once");
+    }
+    Ok(
+        match name.context("--client needs titanium or eqmac")?.as_str() {
+            "titanium" => InstalledClient::Titanium,
+            "eqmac" => InstalledClient::EqMac,
+            other => bail!("--client takes titanium or eqmac, not {other}"),
+        },
+    )
+}
+
+/// The generation the meshes are built for, so they keep its headroom test
+/// as zone entry does: the one `--client` named, else the installation's.
+fn installed_client(
+    named: Option<InstalledClient>,
+    directory: &std::path::Path,
+) -> Result<InstalledClient> {
+    if let Some(client) = named {
+        return Ok(client);
+    }
+    match InstalledClient::detect(directory) {
+        eq_client_assets::ui::Detected::Clear(client) => Ok(client),
+        _ => bail!("the installation's client isn't clear: pass --client titanium or eqmac"),
+    }
+}
+
 fn check_spots(
     directory: &std::path::Path,
     settings: Option<&std::path::Path>,
+    client: InstalledClient,
     listed: &Spots,
     named: Vec<String>,
 ) -> Result<bool> {
@@ -161,7 +196,7 @@ fn check_spots(
         let weighed = eq_client_assets::load_zone(directory, &zone)
             .map_err(|error| format!("not loaded: {error}"))
             .and_then(|asset| {
-                let mesh = eq_client_render::select_spot_mesh(settings, &zone, &asset)?;
+                let mesh = eq_client_render::select_spot_mesh(settings, &zone, &asset, client)?;
                 Ok(eq_client_render::check_select_spot(&asset, spot, &mesh))
             });
         let seconds = started.elapsed().as_secs_f32();

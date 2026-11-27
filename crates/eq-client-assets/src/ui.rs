@@ -1365,6 +1365,9 @@ pub struct OfficialOptions {
     /// Whether the chat is logged from login: `Log` in `[Defaults]`, which
     /// the official `/log` saves.
     pub log: Option<bool>,
+    /// Automatic posture after a headroom refusal: `AllowAutoStand` in
+    /// `[Defaults]`, on when absent (Titanium 0x48bdc7).
+    pub allow_auto_stand: Option<bool>,
     /// Whether sounds play: `Sound` in `[Defaults]`.
     pub sound: Option<bool>,
     /// The music volume: `Music` in `[Defaults]` (read R49-7 c); its scale
@@ -1477,6 +1480,7 @@ fn options_from_ini(text: &str) -> OfficialOptions {
     };
     OfficialOptions {
         log: flag("Defaults", "Log"),
+        allow_auto_stand: flag("Defaults", "AllowAutoStand"),
         sound: flag("Defaults", "Sound"),
         music: ini_value(text, "Defaults", "Music").and_then(|v| v.trim().parse().ok()),
         env_sounds: flag("Defaults", "EnvSounds"),
@@ -2460,6 +2464,7 @@ LookSpring=1
             ),
             OfficialOptions {
                 log: None,
+                allow_auto_stand: None,
                 sound: None,
                 music: None,
                 env_sounds: None,
@@ -2485,6 +2490,14 @@ LookSpring=1
             }
         );
         assert_eq!(options_from_ini(""), OfficialOptions::default());
+        assert_eq!(
+            options_from_ini("[Defaults]\nAllowAutoStand=0\n").allow_auto_stand,
+            Some(false)
+        );
+        assert_eq!(
+            options_from_ini("[Defaults]\nAllowAutoStand=TRUE\n").allow_auto_stand,
+            Some(true)
+        );
         let track = options_from_ini(
             "[Defaults]\nTrackSortType=rdistance\nTrackFilterType=5\nTrackPlayers=GROUP\n",
         );
