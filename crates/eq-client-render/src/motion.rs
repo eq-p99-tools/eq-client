@@ -3525,10 +3525,14 @@ pub(super) fn input(
             .and_then(|hud| hud.resource_estimate)
             .map(|(_, endurance)| jump_endurance(endurance));
     }
+    let tests_duck_step = match client {
+        InstalledClient::EqMac => false,
+        InstalledClient::Titanium | InstalledClient::Rof2 => true,
+    };
     if refused.is_some()
         && (jumped
             || Vec3::new(delta.x, 0.0, delta.z) == Vec3::ZERO
-            || client == InstalledClient::EqMac
+            || !tests_duck_step
             || posture == Some(eq_client_core::PostureState::Ducking)
             || headroom::duck_step_passes(
                 client,
