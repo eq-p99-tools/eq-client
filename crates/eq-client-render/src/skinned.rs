@@ -5394,6 +5394,90 @@ mod tests {
             .collect()
     }
 
+    #[test]
+    fn embedded_target_cast_gauge_uses_native_remaining_time_without_changing_other_dialects() {
+        use crate::online::{OnlineState, testing};
+        use bevy::ecs::system::RunSystemOnce;
+        use eq_client_core::{GameDialect, SpellUpdate, WorldEvent};
+        use std::time::{Duration, Instant};
+        let mut gauge = test_gauge(
+            eq_client_assets::sidl::GaugeLook {
+                fill: Some(gauge_piece(240, 11)),
+                ..default()
+            },
+            0.0,
+            0.0,
+        );
+        gauge.area = Area {
+            x: 20.0,
+            y: 43.0,
+            width: 240.0,
+            height: 11.0,
+        };
+        gauge.eq_type = Some(7);
+        for dialect in [GameDialect::Titanium, GameDialect::EqMac, GameDialect::Rof2] {
+            let mut app = crate::testing::app();
+            draw_gauges(&mut app, vec![gauge.clone()]);
+            let mut online = OnlineState::new(true);
+            let mut world = eq_client_core::world::ClientWorld::default();
+            world.carry_as(dialect);
+            testing::set_world(&mut online, world);
+            testing::admit(&mut online, 1, testing::player(7));
+            let start = Instant::now();
+            testing::news_at(
+                &mut online,
+                [WorldEvent::Spell(SpellUpdate::Began {
+                    caster_id: 7,
+                    spell_id: 14,
+                    duration_ms: 1500,
+                })],
+                start,
+            );
+            let [(fill, _, root)] = gauge_fills(app.world_mut())[..] else {
+                panic!("one embedded fill")
+            };
+            assert_eq!(app.world().get::<Node>(root).unwrap().left, px(20));
+            for ms in [0, 750, 1500, 1501] {
+                let ratio = super::presentation::fraction_at(
+                    online.world(),
+                    None,
+                    7,
+                    start + Duration::from_millis(ms),
+                )
+                .unwrap();
+                app.world_mut()
+                    .run_system_once(move |mut fills: Query<&mut Node>| {
+                        super::presentation::fill_to(
+                            &mut fills.get_mut(fill).unwrap(),
+                            None,
+                            ratio,
+                        );
+                    })
+                    .unwrap();
+                let expected = if dialect == GameDialect::Titanium {
+                    if ms == 0 {
+                        100.0
+                    } else if ms == 750 {
+                        50.0
+                    } else {
+                        0.0
+                    }
+                } else if ms == 0 {
+                    0.0
+                } else if ms == 750 {
+                    50.0
+                } else {
+                    100.0
+                };
+                assert_eq!(
+                    app.world().get::<Node>(fill).unwrap().width,
+                    percent(expected)
+                );
+                assert!(online.world().casting().holds_actions());
+            }
+        }
+    }
+
     /// A length in pixels.
     fn pixels(value: Val) -> f32 {
         let Val::Px(pixels) = value else {
