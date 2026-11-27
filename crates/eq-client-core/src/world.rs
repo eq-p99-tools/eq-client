@@ -2065,6 +2065,9 @@ impl ClientWorld {
             }
 
             // The player's spells.
+            // Compatibility only: the spell-timing feature owns storing and
+            // polling this worker gauge. It is never server confirmation.
+            WorldEvent::MemorizationProgress { .. } => {},
             WorldEvent::Spell(update) => self.spell(update, now, news),
             WorldEvent::CastPending {
                 session_id,

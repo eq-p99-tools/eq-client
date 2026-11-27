@@ -8401,3 +8401,26 @@ fn a_forwarded_movement_counter_never_changes_world_admission_or_position() {
     assert_eq!(world.session_id(), admission);
     assert_eq!(world.player().unwrap().position, before);
 }
+
+#[test]
+fn memorization_progress_does_not_confirm_a_pending_cast() {
+    let mut world = admitted();
+    let session_id = world.session_id().unwrap();
+    game(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id,
+            spell_id: Some(42),
+            gem: None,
+        },
+    );
+    let changes = game(
+        &mut world,
+        WorldEvent::MemorizationProgress {
+            session_id,
+            progress: None,
+        },
+    );
+    assert!(changes.reset.is_none());
+    assert_eq!(world.casting().pending, Some(42));
+}
