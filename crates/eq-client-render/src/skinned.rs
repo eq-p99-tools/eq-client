@@ -2629,6 +2629,83 @@ const fn to_f32(value: u32) -> f32 {
 
 #[cfg(test)]
 mod tests {
+    #[test]
+    fn titanium_memorization_gauge_shows_shared_remaining_points_until_submission() {
+        use crate::{
+            hud::action_bar::{ActionRequests, BookChange, BookRequest},
+            online::{OnlineState, testing},
+            outbox::Outbox,
+        };
+        use eq_client_core::{
+            BookActionStatus, ClientCommand, GameDialect, MemorizationProgress, WorldEvent,
+        };
+        for (dialect, expected) in [(GameDialect::Titanium, 0.75), (GameDialect::EqMac, 0.25)] {
+            let mut online = OnlineState::new(true);
+            testing::generation(&mut online, dialect);
+            testing::admit(&mut online, 1, testing::player(7));
+            let (sender, _sent) = std::sync::mpsc::sync_channel(4);
+            let outbox = Outbox::new(Some(sender));
+            let receipt = outbox
+                .post_book_edit(online.world(), |stamp| ClientCommand::MemorizeSpell {
+                    session_id: stamp.session_id,
+                    gem: 1,
+                    spell_id: 202,
+                    preparation: Some(eq_client_core::MemorizationInputs::default()),
+                    created: stamp.created,
+                })
+                .unwrap();
+            testing::book_news(
+                &mut online,
+                &outbox,
+                WorldEvent::BookAction(BookActionStatus::Preparing),
+            );
+            testing::news(
+                &mut online,
+                [WorldEvent::MemorizationProgress {
+                    session_id: 1,
+                    progress: Some(MemorizationProgress {
+                        gem: 1,
+                        spell_id: 202,
+                        remaining: 69,
+                        approximate: false,
+                    }),
+                }],
+            );
+            let requests = ActionRequests {
+                book: Some(BookRequest {
+                    since: std::time::Instant::now()
+                        .checked_sub(std::time::Duration::from_secs(30))
+                        .unwrap(),
+                    label: "Memorizing Courage into gem 2".into(),
+                    change: BookChange::Memorize,
+                    spell: 202,
+                    receipt,
+                    began: false,
+                }),
+            };
+            assert!(
+                (super::presentation::filled(online.world(), (None, &requests), 9) - expected)
+                    .abs()
+                    < f32::EPSILON
+            );
+            testing::book_news(
+                &mut online,
+                &outbox,
+                WorldEvent::BookAction(BookActionStatus::AwaitingReply),
+            );
+            let submitted = if dialect == GameDialect::Titanium {
+                0.0
+            } else {
+                1.0
+            };
+            assert!(
+                (super::presentation::filled(online.world(), (None, &requests), 9) - submitted)
+                    .abs()
+                    < f32::EPSILON
+            );
+            assert_eq!(online.world().player().unwrap().memorized_spells[1], None);
+        }
+    }
     use super::*;
 
     #[test]
