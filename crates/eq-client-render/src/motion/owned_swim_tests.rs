@@ -229,6 +229,7 @@ fn held_strafe_and_turn_both_sides_keep_native_carry_and_report_path_and_net() {
             }
             let origin = owner.position();
             let mut path = 0_f64;
+            let mut path_xyz = 0_f64;
             let mut accepted = 0_u16;
             let mut refused = 0_u16;
             let start = f.now;
@@ -247,6 +248,11 @@ fn held_strafe_and_turn_both_sides_keep_native_carry_and_report_path_and_net() {
                     }
                     let position = owner.position();
                     path += f64::from((position.x - before.x).hypot(position.y - before.y));
+                    path_xyz += f64::from(
+                        (position.x - before.x)
+                            .hypot(position.y - before.y)
+                            .hypot(position.z - before.z),
+                    );
                     news(
                         &f,
                         eq_client_core::WorldEvent::MotionSent {
@@ -270,14 +276,16 @@ fn held_strafe_and_turn_both_sides_keep_native_carry_and_report_path_and_net() {
             }
             let end = owner.position();
             let net = f64::from((end.x - origin.x).hypot(end.y - origin.y));
+            let net_xyz = net.hypot(f64::from(end.z - origin.z));
             assert_eq!(refused, 0);
             assert!(accepted > 50 && path > 40.);
             assert!(net <= path + 0.001);
+            assert!(net_xyz <= path_xyz + 0.001);
             if turning.is_some() {
                 assert!(net < path * 0.8);
             }
             eprintln!(
-                "controlled native {side:?}+{turning:?}: accepted={accepted} refused={refused} accepted_path_xy={path} net_xy={net}"
+                "controlled native {side:?}+{turning:?}: accepted={accepted} refused={refused} accepted_path_xy={path} net_xy={net} accepted_path_xyz={path_xyz} net_xyz={net_xyz}"
             );
         }
     }
