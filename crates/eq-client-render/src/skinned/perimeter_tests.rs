@@ -717,3 +717,94 @@ fn perimeter_zero_size_caps_preserve_the_corner_anchor_without_drawing() {
         }
     }
 }
+
+// MapPage and its canvas use fixed rectangles in Titanium default and Velious.
+// Exercise those retained widgets through normal layout after changing the frame.
+fn check_map_reflow(screen: Screen) {
+    let (_, pixels) = fixture();
+    let mut app = app(1.0, pixels);
+    let original = Vec2::new(screen.area.width, screen.area.height);
+    let root = app
+        .world_mut()
+        .run_system_once(move |mut commands: Commands, mut art: crate::sheets::Art| {
+            let root = commands
+                .spawn((
+                    at(0.0, 0.0, original.x, original.y),
+                    crate::windows::Frame::default(),
+                ))
+                .id();
+            commands.entity(root).with_children(|parent| {
+                draw(
+                    parent,
+                    &screen,
+                    &mut art,
+                    &Context {
+                        id: WindowId::Map,
+                        paperdoll: None,
+                        depth: 0,
+                        tab_frame: None,
+                    },
+                );
+                crate::windows::resize_border(parent, root);
+            });
+            root
+        })
+        .unwrap();
+    app.update();
+    let world = app.world_mut();
+    let canvas = world
+        .query_filtered::<Entity, With<crate::map::MapCanvas>>()
+        .single(world)
+        .unwrap();
+    let before = bounds(world, canvas);
+    for delta in [
+        Vec2::new(160.0, 120.0),
+        Vec2::new(-100.0, -80.0),
+        Vec2::ZERO,
+    ] {
+        let world = app.world_mut();
+        let mut node = world.get_mut::<Node>(root).unwrap();
+        node.width = px(original.x + delta.x);
+        node.height = px(original.y + delta.y);
+        app.update();
+        let world = app.world_mut();
+        let after = bounds(world, canvas);
+        assert!((after.width() - before.width() - delta.x).abs() < 1.1);
+        assert!((after.height() - before.height() - delta.y).abs() < 1.1);
+        let clip = world.get::<bevy::ui::CalculatedClip>(canvas).unwrap().clip;
+        assert!(clip.max.cmple(bounds(world, root).max).all());
+        assert!(world.get::<crate::map::MapCanvas>(canvas).is_some());
+    }
+}
+
+#[test]
+fn map_fixed_authored_canvas_grows_and_shrinks_with_its_page() {
+    let library = Library::parse("<XML/>", "<XML/>").unwrap();
+    let screen = library
+        .screen(
+            "<XML><Screen item=\"MVW_MapRenderArea\"><Location><X>20</X><Y>20</Y></Location>\
+         <Size><CX>472</CX><CY>360</CY></Size></Screen>\
+         <Page item=\"MapPage\"><Size><CX>512</CX><CY>430</CY></Size>\
+         <Pieces>Screen:MVW_MapRenderArea</Pieces></Page>\
+         <TabBox item=\"MVW_Subwindows\"><Pages>Page:MapPage</Pages></TabBox>\
+         <Screen item=\"MapViewWnd\"><Size><CX>590</CX><CY>470</CY></Size>\
+         <Style_Sizable>true</Style_Sizable><Pieces>MVW_Subwindows</Pieces></Screen></XML>",
+            "MapViewWnd",
+        )
+        .unwrap();
+    check_map_reflow(screen);
+}
+
+#[test]
+#[ignore = "requires EQ_MAP_SKIN_DIRECTORY; reads installed XML without opening a window"]
+fn installed_map_skins_reflow_through_the_real_window_tree() {
+    let directory = std::path::PathBuf::from(std::env::var("EQ_MAP_SKIN_DIRECTORY").unwrap());
+    for skin in ["default", "velious"] {
+        let library = Library::read(&directory, skin).unwrap();
+        let screen = library
+            .window(&directory, skin, "EQUI_MapViewWnd.xml", "MapViewWnd")
+            .unwrap();
+        assert!(reflow::eligible_scope(skin, WindowId::Map, &screen).is_some());
+        check_map_reflow(screen);
+    }
+}

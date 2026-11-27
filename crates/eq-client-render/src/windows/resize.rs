@@ -338,6 +338,62 @@ mod tests {
     }
 
     #[test]
+    fn map_border_grows_and_shrinks_while_interior_and_lock_keep_their_owners() {
+        use bevy::ecs::system::RunSystemOnce;
+        let (mut app, frame) = fixture(1.0, true);
+        app.world_mut()
+            .entity_mut(frame)
+            .insert(super::super::WindowId::Map);
+        app.world_mut()
+            .run_system_once(move |mut commands: Commands| {
+                commands.entity(frame).with_children(|parent| {
+                    super::super::resize_border(parent, frame);
+                });
+            })
+            .unwrap();
+        let world = app.world_mut();
+        let border = world
+            .query::<(Entity, &DragHandle, &Node)>()
+            .iter(world)
+            .find(|(entity, _, node)| {
+                *entity != frame && node.right == px(0) && node.width == px(6)
+            })
+            .unwrap()
+            .0;
+        press(&mut app, border, Vec2::new(499.0, 200.0), 1.0);
+        point(&mut app, Vec2::new(599.0, 200.0), 1.0);
+        app.update();
+        assert_eq!(app.world().get::<Node>(frame).unwrap().width, px(500));
+        point(&mut app, Vec2::new(449.0, 200.0), 1.0);
+        app.update();
+        assert_eq!(app.world().get::<Node>(frame).unwrap().width, px(350));
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        *app.world_mut().get_mut::<Interaction>(border).unwrap() = Interaction::None;
+        let canvas = app
+            .world_mut()
+            .spawn((crate::map::MapCanvas, Interaction::None))
+            .id();
+        press(&mut app, canvas, Vec2::new(250.0, 200.0), 1.0);
+        assert!(app.world().resource::<DragState>().active.is_none());
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .release(MouseButton::Left);
+        app.update();
+        app.world_mut()
+            .resource_mut::<ButtonInput<MouseButton>>()
+            .clear();
+        app.world_mut().entity_mut(frame).insert(PositionLocked);
+        press(&mut app, border, Vec2::new(499.0, 200.0), 1.0);
+        assert!(app.world().resource::<DragState>().active.is_none());
+    }
+
+    #[test]
     fn resize_release_outside_ends_capture_and_later_motion_is_idle() {
         let (mut app, entity) = fixture(1.0, true);
         press(&mut app, entity, Vec2::new(500.0, 330.0), 1.0);

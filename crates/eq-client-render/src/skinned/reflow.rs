@@ -154,7 +154,8 @@ pub(super) fn eligible_scope(
     id: super::WindowId,
     screen: &eq_client_assets::sidl::Screen,
 ) -> Option<u64> {
-    (id.is_chat() && screen.sizable == eq_client_assets::sidl::Sizable::Enabled)
+    (id == super::WindowId::Map
+        || (id.is_chat() && screen.sizable == eq_client_assets::sidl::Sizable::Enabled))
         .then(|| scope(skin, screen))
 }
 
@@ -163,7 +164,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn resize_eligibility_and_preferences_are_scoped_to_authored_chat_layout() {
+    fn map_resizes_without_a_declaration_while_chat_keeps_authored_eligibility() {
         use eq_client_assets::sidl::{Library, Sizable};
         let mut screen = Library::parse("<XML/>", "<XML/>").unwrap().screen("<XML><Screen item=\"Example\"><Size><CX>400</CX><CY>250</CY></Size></Screen></XML>", "Example").unwrap();
         for sizable in [
@@ -176,12 +177,14 @@ mod tests {
             for id in [
                 super::super::WindowId::Chat,
                 super::super::WindowId::ChatGroup(1),
+                super::super::WindowId::Map,
                 super::super::WindowId::Inventory,
                 super::super::WindowId::Spellbook,
             ] {
                 assert_eq!(
                     eligible_scope("synthetic", id, &screen).is_some(),
-                    id.is_chat() && sizable == Sizable::Enabled
+                    id == super::super::WindowId::Map
+                        || (id.is_chat() && sizable == Sizable::Enabled)
                 );
             }
         }

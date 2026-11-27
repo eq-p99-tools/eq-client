@@ -206,6 +206,17 @@ pub(super) fn pieces(
                 });
                 window.spawn((
                     crate::map::MapCanvas,
+                    view.anchors.map_or_else(
+                        || {
+                            Geometry::from_area(
+                                area,
+                                Vec2::new(inside.width, inside.height),
+                                super::reflow::Axis::Stretch,
+                                super::reflow::Axis::Stretch,
+                            )
+                        },
+                        Geometry,
+                    ),
                     crate::windows::KeepsPress,
                     ImageNode::default(),
                     ZIndex(1),
@@ -491,7 +502,7 @@ pub(super) fn view(
         area.width,
         area.height,
     ));
-    if context.id.is_chat() {
+    if context.id.is_chat() || context.id == WindowId::Map {
         outer.insert(Geometry(view.anchors.unwrap_or(
             eq_client_assets::sidl::Anchors {
                 left: eq_client_assets::sidl::Anchor::Start(area.x),
@@ -572,7 +583,7 @@ pub(super) fn view(
             }
         });
         if let Some(look) = bar {
-            if context.id.is_chat() {
+            if context.id.is_chat() || context.id == WindowId::Map {
                 scrollbar::retained(
                     frame,
                     art,
@@ -644,8 +655,8 @@ fn first_page(
         width: at.width,
         height: at.height,
     };
-    if context.id.is_chat() {
-        let axis = if page.area.is_some() {
+    if context.id.is_chat() || context.id == WindowId::Map {
+        let axis = if page.area.is_some() && context.id != WindowId::Map {
             super::reflow::Axis::Start
         } else {
             super::reflow::Axis::Stretch
