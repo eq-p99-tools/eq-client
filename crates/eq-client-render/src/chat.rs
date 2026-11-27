@@ -5722,7 +5722,7 @@ mod tests {
         let expected = [
             "Speaker (guild): Synthetic guild.",
             "Synthetic assessment.",
-            "Synthetic loot 1g.",
+            "Synthetic loot 1 gold.",
             "Synthetic typed system.",
         ];
         assert_eq!(shown(&mut app), expected);

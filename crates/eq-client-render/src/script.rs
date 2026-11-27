@@ -6066,6 +6066,12 @@ mod tests {
                     (crate::online::carry_as, crate::trade::input).chain(),
                 );
             crate::keys::testing::install(&mut app);
+            // The direct loot command has no native default; choose one here.
+            crate::keys::testing::bind(
+                &mut app,
+                crate::keys::Act::Loot,
+                crate::keys::Chord::key(KeyCode::KeyL),
+            );
             app.world_mut().spawn((
                 Button,
                 crate::trade::Action::Take {
