@@ -241,8 +241,11 @@ impl SessionWorker {
                                 (progress.completed, progress.total, progress.bytes)
                             })))
                         }
-                        // A spell table is taken above.
-                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
+                        // A spell table is taken above. This host does not
+                        // request movement-counter diagnostics; they carry
+                        // no world change.
+                        ClientEvent::World(WorldEvent::SpellTable(_))
+                        | ClientEvent::MovementPacketSnapshot { .. } => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
@@ -259,9 +262,6 @@ impl SessionWorker {
                             crate::gaps::record(&*gap);
                             None
                         }
-                        // This host does not request movement-counter snapshots.
-                        // They carry diagnostics, not a change to the world.
-                        ClientEvent::MovementPacketSnapshot { .. } => None,
                         ClientEvent::Diagnostic(message) => {
                             tracing::info!("{message}");
                             None
