@@ -330,3 +330,26 @@ fn reset_receipt_requires_the_actual_uninterrupted_matching_reset() {
     owner.calibrate(calibration(), f.now).unwrap();
     assert_ne!(owner.swim_basis(), Some(basis));
 }
+
+#[test]
+fn repeated_ordinary_backward_control_keeps_the_native_zero_backward_rate() {
+    let mut f = Native::new(false, -15.);
+    let mut owner = owner(&f);
+    anchor(&f, &owner);
+    crate::keys::testing::bind(
+        &mut f.app,
+        Act::Back,
+        crate::keys::Chord::key(KeyCode::KeyZ),
+    );
+    latency_tests::key(&mut f.app, KeyCode::KeyZ, true);
+    assert_eq!(calibration().swim.unwrap().backward, 0.);
+    let mut accepted = 0;
+    for _ in 0..120 {
+        for command in frame(&mut f) {
+            let request = settle(&f, &mut owner, command);
+            assert_eq!((request.position.x, request.position.y), (0., 0.));
+            accepted += 1;
+        }
+    }
+    assert!(accepted > 5);
+}
