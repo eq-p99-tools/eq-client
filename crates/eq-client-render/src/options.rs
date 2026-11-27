@@ -402,15 +402,21 @@ mod tests {
         let mut saved = super::Options::default();
         saved.qol.set(Fix::BetterWater, false);
         saved.qol.set(Fix::RichLighting, false);
-        let state = super::OptionsState::new(&super::Options::default())
-            .forcing(&[Fix::BetterWater, Fix::RichLighting]);
+        saved.qol.set(Fix::ShowFps, false);
+        let state = super::OptionsState::new(&super::Options::default()).forcing(&[
+            Fix::BetterWater,
+            Fix::RichLighting,
+            Fix::ShowFps,
+        ]);
         assert!(state.options.qol.on(Fix::BetterWater));
         let read = state.read(&saved.text());
         assert!(read.qol.on(Fix::BetterWater));
         assert!(read.qol.on(Fix::RichLighting));
+        assert!(read.qol.on(Fix::ShowFps));
         // Nothing forced: the saved choice stands.
         let plain = super::OptionsState::new(&super::Options::default());
         assert!(!plain.read(&saved.text()).qol.on(Fix::BetterWater));
+        assert!(!plain.read(&saved.text()).qol.on(Fix::ShowFps));
     }
 
     use super::*;

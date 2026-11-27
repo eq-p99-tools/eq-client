@@ -11,14 +11,13 @@ const HITCH: f32 = 1.0 / 30.0;
 /// A frame slower than this is logged on its own line.
 const SPIKE: f32 = 0.05;
 
-/// Adds the meter when `EQ_FPS` or `EQ_FRAME_LOG` is set, and the log when
-/// `EQ_FRAME_LOG` is.
+/// The saved option controls the meter; existing environment flags force it on.
+/// Only `EQ_FRAME_LOG` enables logging.
 pub(super) fn register(app: &mut App) {
     let log = std::env::var_os("EQ_FRAME_LOG").is_some();
-    if log || std::env::var_os("EQ_FPS").is_some() {
-        app.add_systems(Startup, spawn_meter)
-            .add_systems(Last, show_meter);
-    }
+    app.insert_resource(ForcedMeter(log || std::env::var_os("EQ_FPS").is_some()))
+        .add_systems(Startup, spawn_meter)
+        .add_systems(Last, show_meter);
     if log {
         app.add_systems(Last, frame_log);
     }
@@ -27,9 +26,13 @@ pub(super) fn register(app: &mut App) {
 #[derive(Component)]
 struct Meter;
 
+#[derive(Resource)]
+struct ForcedMeter(bool);
+
 fn spawn_meter(mut commands: Commands) {
     commands.spawn((
         Node {
+            display: Display::None,
             position_type: PositionType::Absolute,
             top: px(4),
             right: px(8),
@@ -37,8 +40,10 @@ fn spawn_meter(mut commands: Commands) {
             ..default()
         },
         BackgroundColor(theme::SCRIM),
-        GlobalZIndex(20),
+        // Remains visible over login/selection covers and UI veiling.
+        GlobalZIndex(i32::MAX),
         Pickable::IGNORE,
+        bevy::ui::FocusPolicy::Pass,
         theme::text("", theme::Size::Small, theme::INK_BRIGHT),
         Meter,
     ));
@@ -76,9 +81,22 @@ impl Span {
 fn show_meter(
     time: Res<Time<Real>>,
     state: Res<RichState>,
-    mut meter: Query<&mut Text, With<Meter>>,
+    options: Res<crate::options::OptionsState>,
+    forced: Res<ForcedMeter>,
+    mut meter: Query<(&mut Text, &mut Node), With<Meter>>,
     mut span: Local<Span>,
 ) {
+    let shown = forced.0 || options.options.qol.on(eq_client_core::qol::Fix::ShowFps);
+    let display = if shown { Display::Flex } else { Display::None };
+    for (_, mut node) in &mut meter {
+        if node.display != display {
+            node.display = display;
+        }
+    }
+    if !shown {
+        *span = Span::default();
+        return;
+    }
     span.add(time.delta_secs());
     if span.spent < 1.0 {
         return;
@@ -92,7 +110,7 @@ fn show_meter(
         span.hitches,
         if state.active { "  rich" } else { "" },
     );
-    for mut text in &mut meter {
+    for (mut text, _) in &mut meter {
         if text.0 != line {
             text.0.clone_from(&line);
         }
@@ -234,4 +252,76 @@ fn frame_log(
     log.spikes = 0;
     log.meshes = 0;
     log.plain = 0;
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::options::OptionsState;
+    use eq_client_core::qol::Fix;
+
+    fn app(forced: bool) -> App {
+        let mut app = App::new();
+        app.init_resource::<Time<Real>>()
+            .init_resource::<RichState>()
+            .init_resource::<OptionsState>()
+            .insert_resource(ForcedMeter(forced))
+            .add_systems(Startup, spawn_meter)
+            .add_systems(Last, show_meter);
+        app
+    }
+
+    fn display(app: &mut App) -> Display {
+        app.world_mut()
+            .query_filtered::<&Node, With<Meter>>()
+            .single(app.world())
+            .unwrap()
+            .display
+    }
+
+    #[test]
+    fn the_saved_toggle_changes_the_existing_meter_without_enabling_rich_lighting() {
+        let mut app = app(false);
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .qol
+            .set(Fix::ShowFps, true);
+        app.world_mut()
+            .resource_mut::<Time<Real>>()
+            .advance_by(std::time::Duration::from_secs(1));
+        app.update();
+        assert_eq!(display(&mut app), Display::Flex);
+        let world = app.world_mut();
+        let (text, layer) = world
+            .query_filtered::<(&Text, &GlobalZIndex), With<Meter>>()
+            .single(world)
+            .unwrap();
+        assert!(text.0.contains("fps"));
+        assert!(layer.0 >= crate::windows::Layer::Screen.base());
+        assert!(!world.resource::<RichState>().active);
+        app.world_mut()
+            .resource_mut::<OptionsState>()
+            .options
+            .qol
+            .set(Fix::ShowFps, false);
+        app.update();
+        assert_eq!(display(&mut app), Display::None);
+    }
+
+    #[test]
+    fn an_environment_override_forces_visibility_without_changing_saved_options() {
+        let mut app = app(true);
+        app.update();
+        assert_eq!(display(&mut app), Display::Flex);
+        assert!(
+            !app.world()
+                .resource::<OptionsState>()
+                .options
+                .qol
+                .on(Fix::ShowFps)
+        );
+    }
 }
