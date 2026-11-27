@@ -126,9 +126,14 @@ impl Stat {
         let vitals = world.vitals();
         match self {
             Self::Hp => world
-                .hit_points()
-                .filter(|(_, max)| *max > 0)
-                .map(|(value, max)| f64::from(value) / f64::from(max))
+                .hit_point_gauge()
+                .map(eq_client_core::world::HpGauge::ratio)
+                .or_else(|| {
+                    world
+                        .hit_points()
+                        .filter(|(_, max)| *max > 0)
+                        .map(|(value, max)| f64::from(value) / f64::from(max))
+                })
                 .or_else(|| {
                     world
                         .player()
@@ -153,7 +158,7 @@ pub(super) fn update(
     names: Res<super::spellbook::SpellNames>,
     messages: Res<messages::Messages>,
     mut texts: Query<(&mut Text, &HudLabel)>,
-    mut fills: Query<(&mut Node, &HudFill)>,
+    mut fills: Query<(&mut Node, &HudFill, &mut BackgroundColor)>,
 ) {
     let now = std::time::Instant::now();
     let world = online.world();
@@ -207,7 +212,12 @@ pub(super) fn update(
             text.0 = value;
         }
     }
-    for (mut node, HudFill(stat)) in &mut fills {
+    for (mut node, HudFill(stat), mut color) in &mut fills {
+        color.0 = if matches!(stat, Stat::Hp) {
+            crate::unconscious::hp_tint(world).unwrap_or_else(|| stat.tint().with_alpha(0.3))
+        } else {
+            stat.tint().with_alpha(0.3)
+        };
         let ratio = stat
             .ratio(world, state.resource_estimate)
             .unwrap_or(0.0)

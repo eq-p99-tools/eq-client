@@ -180,6 +180,8 @@ impl ClientWorld {
     pub(super) fn hp_news(&mut self, spawn_id: u16, report: ReportedHp, changes: &mut Changes) {
         if self.is_player(spawn_id) {
             self.vitals.reported_hp = Some(report);
+            self.vitals.local_hp_damage = 0;
+            self.own_hp_count_current = false;
             self.refresh_item_hp();
             self.show_hp();
             self.bleed_out_news();
@@ -216,7 +218,7 @@ impl ClientWorld {
 
     /// The player's health follows the HP their last report and equipped
     /// items make.
-    fn show_hp(&mut self) {
+    pub(super) fn show_hp(&mut self) {
         if let Some(percent) = self.hit_points().and_then(vitals::percent) {
             self.own_health(percent);
         }

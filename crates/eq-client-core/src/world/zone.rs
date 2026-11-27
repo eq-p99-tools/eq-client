@@ -378,7 +378,7 @@ impl super::ClientWorld {
     /// program's fall lines are the motion's own; its other lines are
     /// unread, so nothing more prints there.
     pub(super) fn hazard_reported(
-        &self,
+        &mut self,
         session_id: u64,
         hazard: crate::hazards::Hazard,
         amount: u32,
@@ -388,6 +388,16 @@ impl super::ClientWorld {
         if self.session_id != Some(session_id) || !prints_hazard_lines(self.generation) {
             changes.ignored = true;
             return;
+        }
+        // The native reporter sends first and subtracts locally afterward
+        // (0x41c905). A transport submission is not a server HP receipt;
+        // retain that report unchanged, and let the next report replace this.
+        if !self.is_dead() && self.pending_transfer.is_none() {
+            self.vitals.local_hp_damage = self
+                .vitals
+                .local_hp_damage
+                .saturating_add(u64::from(amount));
+            self.show_hp();
         }
         changes.notices.push(Notice::EnvironmentalDamage {
             reported: Some(amount),
