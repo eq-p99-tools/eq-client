@@ -59,6 +59,13 @@ pub(super) fn fill_to(node: &mut Mut<Node>, step: Option<&Step>, fraction: f32) 
     }
 }
 
+type LabelResources<'w> = (
+    Res<'w, crate::hud::HudState>,
+    Res<'w, crate::inventory::InventoryState>,
+    Res<'w, crate::spellbook::SpellNames>,
+    Res<'w, crate::hud::messages::Messages>,
+);
+
 type GaugeContentQueries<'w, 's> = (
     Query<'w, 's, (&'static Shows, &'static mut Text, &'static mut TextColor)>,
     Query<
@@ -79,12 +86,7 @@ type GaugeContentQueries<'w, 's> = (
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show(
     online: Res<crate::online::OnlineState>,
-    (hud, inventory, names, messages): (
-        Res<crate::hud::HudState>,
-        Res<crate::inventory::InventoryState>,
-        Res<crate::spellbook::SpellNames>,
-        Res<crate::hud::messages::Messages>,
-    ),
+    labels: LabelResources<'_>,
     breath: Res<crate::breath::State>,
     (combat, trade, book, requests): (
         Res<crate::combat::CombatState>,
@@ -100,16 +102,11 @@ pub(crate) fn show(
     for (normal, mut image) in &mut hp_images {
         image.color = crate::unconscious::hp_tint(world).unwrap_or(normal.0);
     }
-    let load = crate::speed::load(world, &names);
+    let estimate = labels.0.resource_estimate;
     show_boxes(&mut boxes, world, &combat, &trade);
-    fill_gauges(
-        &mut fills,
-        world,
-        (hud.resource_estimate, &requests),
-        &breath,
-    );
+    fill_gauges(&mut fills, world, (estimate, &requests), &breath);
     for (tint, mut image) in &mut lines {
-        let ratio = lines_source(world, (hud.resource_estimate, &requests), tint.0);
+        let ratio = lines_source(world, (estimate, &requests), tint.0);
         let color = if ratio <= -0.01 {
             Color::srgb_u8(192, 192, 192)
         } else {
@@ -119,7 +116,18 @@ pub(crate) fn show(
             image.color = color;
         }
     }
-    for (shows, mut text, mut color) in &mut texts {
+    show_labels(&mut texts, world, &labels, &trade, &book);
+}
+
+fn show_labels(
+    texts: &mut Query<(&Shows, &mut Text, &mut TextColor)>,
+    world: &eq_client_core::world::ClientWorld,
+    (hud, inventory, names, messages): &LabelResources<'_>,
+    trade: &crate::trade::TradeState,
+    book: &crate::spellbook::BookView,
+) {
+    let load = crate::speed::load(world, names);
+    for (shows, mut text, mut color) in texts {
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
             Shows::ExperiencePercent => {
@@ -139,7 +147,7 @@ pub(crate) fn show(
                     .map_or_else(String::new, |shown| names.label(shown.spell_id())),
                 None,
             ),
-            Shows::GemName(gem) => (gem_name(world, &names, gem), None),
+            Shows::GemName(gem) => (gem_name(world, names, gem), None),
             Shows::Coins(place, coin) => (crate::coins::shown(world, place, coin), None),
             Shows::Offered(coin) => (
                 world
@@ -152,9 +160,9 @@ pub(crate) fn show(
             Shows::Corpse | Shows::Merchant | Shows::ChosenName | Shows::ChosenPrice => (
                 trading_text(
                     *shows,
-                    &trade,
+                    trade,
                     world,
-                    &messages,
+                    messages,
                     inventory.merchant_quantity(),
                 ),
                 None,
