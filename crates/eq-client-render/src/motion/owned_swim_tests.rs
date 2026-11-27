@@ -26,7 +26,7 @@ fn news(f: &Native, event: eq_client_core::WorldEvent) {
         .unwrap();
 }
 
-fn frame(f: &mut Native) -> Vec<ClientCommand> {
+fn frame(f: &mut Native, owner: &mut MotionSession) -> Vec<ClientCommand> {
     let step = Duration::from_micros(16_667);
     f.now += step;
     f.app.world_mut().resource_mut::<Time>().advance_by(step);
@@ -38,7 +38,18 @@ fn frame(f: &mut Native) -> Vec<ClientCommand> {
         // must retain the physical end, without padding its native calls.
         .set_test_time(f.now + Duration::from_millis(5));
     f.app.update();
-    f.requests.try_iter().collect()
+    f.requests
+        .try_iter()
+        .filter_map(|command| match command {
+            // A real correction also re-observes body climb before its first
+            // movement frame. Preserve that ordinary owner input in this replay.
+            ClientCommand::ClimbReach { per_step, .. } => {
+                owner.set_climb(per_step);
+                None
+            }
+            other => Some(other),
+        })
+        .collect()
 }
 
 fn anchor(f: &Native, owner: &MotionSession) {
@@ -123,7 +134,7 @@ fn turn_only_and_no_input_never_create_horizontal_travel() {
         let mut count = 0;
         let mut path_xyz = 0_f64;
         for _ in 0..600 {
-            for command in frame(&mut f) {
+            for command in frame(&mut f, &mut owner) {
                 let before = owner.position();
                 let request = settle(&f, &mut owner, command);
                 path_xyz += f64::from(
@@ -159,7 +170,7 @@ fn releasing_strafe_preserves_earned_carry_and_correction_retires_pending_trial(
     );
     latency_tests::key(&mut f.app, KeyCode::KeyZ, true);
     for _ in 0..60 {
-        for command in frame(&mut f) {
+        for command in frame(&mut f, &mut owner) {
             settle(&f, &mut owner, command);
         }
     }
@@ -169,14 +180,14 @@ fn releasing_strafe_preserves_earned_carry_and_correction_retires_pending_trial(
     latency_tests::key(&mut f.app, KeyCode::KeyA, true);
     let mut carry = false;
     for _ in 0..30 {
-        for command in frame(&mut f) {
+        for command in frame(&mut f, &mut owner) {
             let request = settle(&f, &mut owner, command);
             carry |= (request.position.x - before.x).hypot(request.position.y - before.y) > 0.001;
         }
     }
     assert!(carry);
     let stale = loop {
-        if let Some(command) = frame(&mut f).pop() {
+        if let Some(command) = frame(&mut f, &mut owner).pop() {
             break command;
         }
     };
@@ -217,7 +228,7 @@ fn releasing_strafe_preserves_earned_carry_and_correction_retires_pending_trial(
         },
     );
     for _ in 0..60 {
-        for command in frame(&mut f) {
+        for command in frame(&mut f, &mut owner) {
             let request = settle(&f, &mut owner, command);
             assert_eq!(
                 (request.position.x, request.position.y),
@@ -252,7 +263,7 @@ fn held_strafe_and_turn_both_sides_keep_native_carry_and_report_path_and_net() {
             let mut refused = 0_u16;
             let start = f.now;
             while f.now.duration_since(start) < Duration::from_secs(10) {
-                for command in frame(&mut f) {
+                for command in frame(&mut f, &mut owner) {
                     let ClientCommand::SwimFrame { request, controls } = command else {
                         panic!("matched ordinary swim lost owned controls: {command:?}");
                     };
@@ -375,7 +386,7 @@ fn repeated_ordinary_backward_control_keeps_the_native_zero_backward_rate() {
     );
     let mut accepted = 0;
     for _ in 0..120 {
-        for command in frame(&mut f) {
+        for command in frame(&mut f, &mut owner) {
             let request = settle(&f, &mut owner, command);
             assert_eq!((request.position.x, request.position.y), (0., 0.));
             accepted += 1;
