@@ -247,6 +247,9 @@ impl SessionWorker {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
                         }
+                        // This viewer does not request movement-counter probes.
+                        // Their diagnostic response has no world-state authority.
+                        ClientEvent::MovementPacketSnapshot { .. } => None,
                         ClientEvent::Status(status) => status_update(status.state),
                         ClientEvent::Progress(stage) => Some(progress_update(stage)),
                         ClientEvent::Record(record) => match record.event {

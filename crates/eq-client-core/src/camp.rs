@@ -37,7 +37,7 @@ pub struct Completion {
     pub admission_id: Option<u64>,
     /// The requested local destination.
     pub destination: CampTo,
-    /// Received reply or local deadline, without inferring server cleanup.
+    /// Reply, peer close or local deadline, without inferring server cleanup.
     pub outcome: CampOutcome,
 }
 
