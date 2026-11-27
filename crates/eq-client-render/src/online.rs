@@ -600,9 +600,11 @@ type Wording<'a> = (
 
 impl Panels<'_> {
     /// Reconcile merchant intent only with admitted worker updates.
-    fn merchant_news(&mut self, update: &WorldUpdate, changes: &Changes, world: &ClientWorld) {
-        if !changes.ignored {
-            self.trade.merchant_news(update, world);
+    fn merchant_news(&mut self, update: &WorldUpdate, changes: &mut Changes, world: &ClientWorld) {
+        if !changes.ignored
+            && let Some(notice) = self.trade.merchant_news(update, world)
+        {
+            changes.notices.push(notice);
         }
     }
 
@@ -1057,11 +1059,11 @@ pub(super) fn receive(
                 }
                 continue;
             }
-            let (changes, before, old_gems) =
+            let (mut changes, before, old_gems) =
                 apply(&mut state.world, &update, spells, outbox.as_deref());
             state.observe_server_placement(&changes);
             trace(&update, &changes, &state.world);
-            panels.merchant_news(&update, &changes, &state.world);
+            panels.merchant_news(&update, &mut changes, &state.world);
             if let Some(reason) = changes.reset {
                 state.movement_reports.reset();
                 chat.socials = super::socials::Inbox::default();
