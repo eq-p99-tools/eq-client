@@ -546,7 +546,7 @@ mod lines_fill_tests {
     #[test]
     fn every_bubble_finishes_before_the_next_value_resets_the_line() {
         for (value, expected) in [
-            (0, 0.0),
+            (0u16, 0.0),
             (1, 0.0),
             (100, 0.495),
             (200, 0.995),
@@ -555,7 +555,7 @@ mod lines_fill_tests {
             (999, 0.99),
             (1000, 0.995),
         ] {
-            assert!((lines_fraction(value as f32 / 1000.0) - expected).abs() < 0.0001);
+            assert!((lines_fraction(f32::from(value) / 1000.0) - expected).abs() < 0.0001);
         }
     }
 }
