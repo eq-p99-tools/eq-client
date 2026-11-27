@@ -339,9 +339,11 @@ impl super::ClientWorld {
         changes: &mut super::Changes,
     ) {
         changes.damage.push(*damage);
-        if self.generation() == crate::GameDialect::Titanium
-            && damage.kind == crate::combat::SPELL_DAMAGE_KIND
-        {
+        let describes_spell_impacts = match self.generation() {
+            crate::GameDialect::Titanium => true,
+            crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
+        };
+        if describes_spell_impacts && damage.kind == crate::combat::SPELL_DAMAGE_KIND {
             if let Some(notice) = self.spell_impact(damage, now, spells) {
                 changes.notices.push(notice);
             }
