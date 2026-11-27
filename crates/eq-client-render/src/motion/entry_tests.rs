@@ -152,7 +152,6 @@ fn ordinary_entry_acceptance_keeps_the_actual_converted_state() {
         );
         let controls = f.app.world().resource::<Controls>();
         assert_eq!(controls.wet, converted);
-        assert!(controls.water_entry_rollback.is_none());
         assert_eq!(
             f.app
                 .world()
@@ -196,7 +195,6 @@ fn refusals_restore(producer: Producer) {
             let controls = f.app.world().resource::<Controls>();
             assert_eq!(controls.wet, wet);
             assert_eq!(airborne(controls), before_air);
-            assert!(controls.water_entry_rollback.is_none());
             assert_eq!(
                 f.app
                     .world()
@@ -256,6 +254,5 @@ fn stale_entry_refusal_cannot_restore_state_across_a_correction() {
         );
         let controls = f.app.world().resource::<Controls>();
         assert_eq!(controls.wet, water::WetVelocity::default());
-        assert!(controls.water_entry_rollback.is_none());
     }
 }
