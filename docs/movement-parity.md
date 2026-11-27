@@ -102,10 +102,12 @@ proposal or `MotionSent` receipt is not a packet count; socket delivery and
 server acceptance are not established by this counter.
 
 The report carries the typed `run_id`, admission, request identity, worker
-wall-clock coordinate and monotonic scene-to-worker interval. The scene and
+wall-clock coordinate and monotonic scene/worker milliseconds relative to
+this client's first report request, plus the scene-to-worker interval. The scene and
 worker observations are separate boundaries; input may run between them.
 Compare two counts only within the same run and admission, using the two
-worker boundaries for elapsed time. No periodic polling, movement send,
+worker monotonic boundaries for elapsed time; wall-clock time is only a log
+coordinate. No periodic polling, movement send,
 timer reset or forced final update is introduced. Unavailable/full/ended
 requests report a null count, never a guessed zero. Pending reports are
 bounded and discarded as unavailable on an admission reset; late or duplicate

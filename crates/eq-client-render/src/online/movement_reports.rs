@@ -21,13 +21,14 @@ pub(super) struct Report {
 
 impl Report {
     pub(super) fn log(self) {
-        tracing::info!(label = self.label, movement_state = %self.state, "Script movement report");
+        bevy::log::info!(label = self.label, movement_state = %self.state, "Script movement report");
     }
 }
 
 #[derive(Default)]
 pub(super) struct Reports {
     next_id: u64,
+    clock_origin: Option<Instant>,
     pending: BTreeMap<u64, Pending>,
 }
 
@@ -47,6 +48,7 @@ impl Reports {
             return Err(unavailable(label, state, "snapshot_queue_full"));
         }
         self.next_id = request_id;
+        self.clock_origin.get_or_insert(captured);
         self.pending.insert(
             request_id,
             Pending {
@@ -72,6 +74,7 @@ impl Reports {
             return None;
         }
         let mut pending = self.pending.remove(&snapshot.request_id)?;
+        let origin = self.clock_origin?;
         pending.state["movement_packets"] = json!({
             "basis": "successful_player_position_transport_submissions",
             "session_id": snapshot.session_id,
@@ -79,6 +82,8 @@ impl Reports {
             "run_id": snapshot.run_id,
             "sent": snapshot.sent,
             "worker_unix_timestamp_ms": snapshot.unix_timestamp_ms,
+            "scene_monotonic_ms": pending.captured.saturating_duration_since(origin).as_secs_f64() * 1000.0,
+            "worker_monotonic_ms": snapshot.observed.saturating_duration_since(origin).as_secs_f64() * 1000.0,
             "scene_to_worker_ms": snapshot.observed.duration_since(pending.captured).as_secs_f64() * 1000.0,
         });
         Some(Report {
@@ -167,7 +172,26 @@ mod tests {
         assert_eq!(report.state["movement_packets"]["sent"], 2);
         assert_eq!(report.state["movement_packets"]["run_id"], 23);
         assert_eq!(report.state["movement_packets"]["scene_to_worker_ms"], 25.0);
+        assert_eq!(report.state["movement_packets"]["scene_monotonic_ms"], 0.0);
+        assert_eq!(
+            report.state["movement_packets"]["worker_monotonic_ms"],
+            25.0
+        );
         assert!(reports.answer(Some(7), answer).is_none());
+        let second = reports
+            .request(7, "next", json!({}), captured + Duration::from_millis(100))
+            .ok()
+            .unwrap();
+        let later = reports
+            .answer(
+                Some(7),
+                snapshot(second, captured + Duration::from_millis(130)),
+            )
+            .unwrap();
+        assert_eq!(
+            later.state["movement_packets"]["worker_monotonic_ms"],
+            130.0
+        );
     }
 
     #[test]
