@@ -1293,7 +1293,12 @@ impl Scene {
             forward: current.is_some_and(|frame| frame.state.forward()),
             accepted_before_commands,
             accepted: self.owner.position(),
-            ordinary_bridge: self.app.world().resource::<Controls>().ground.ordinary,
+            ordinary_bridge: self
+                .app
+                .world()
+                .resource::<Controls>()
+                .ground
+                .ordinary_for_test(),
         };
         if std::env::var_os("EQ_LAND_TRACE").is_some() {
             println!("land-frame frame={} held={held} {row:?}", self.frame);

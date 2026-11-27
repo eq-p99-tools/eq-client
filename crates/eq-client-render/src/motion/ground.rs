@@ -145,6 +145,11 @@ impl Control {
         self.current.is_some()
     }
 
+    #[cfg(test)]
+    pub(super) fn ordinary_for_test(&self) -> bool {
+        self.ordinary
+    }
+
     pub fn admitted(&self) -> Option<Instant> {
         self.admitted
     }
