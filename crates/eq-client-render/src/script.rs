@@ -6030,6 +6030,97 @@ mod tests {
     }
 
     #[test]
+    fn scripted_loot_buttons_reach_the_normal_request_with_both_destinations() {
+        use crate::online::{OnlineState, testing};
+        use eq_client_core::{
+            ClientCommand, Coins, SpawnKind, WorldEvent,
+            inventory::InventoryUpdate,
+            loot::{LootResponse, LootUpdate},
+        };
+        for auto in [false, true] {
+            let target = ClickTarget::Trade(TradeClick::Take(0));
+            let click = if auto {
+                Step::RightClick(target)
+            } else {
+                Step::Click(target)
+            };
+            let (mut app, _) = background(vec![
+                Step::Press(vec![KeyCode::KeyL]),
+                Step::Wait(Duration::from_millis(100)),
+                click,
+                Step::Wait(Duration::from_secs(2)),
+            ]);
+            let mut online = OnlineState::new(true);
+            testing::admit(&mut online, 5, testing::player(7));
+            testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
+            let mut corpse = testing::pet(9, 7);
+            corpse.kind = SpawnKind::NpcCorpse;
+            corpse.name = "Test corpse".into();
+            testing::spawns(&mut online, vec![corpse]);
+            online.select_target(Some(9));
+            let (tx, rx) = std::sync::mpsc::sync_channel(8);
+            app.insert_resource(online)
+                .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+                .add_systems(
+                    Update,
+                    (crate::online::carry_as, crate::trade::input).chain(),
+                );
+            crate::keys::testing::install(&mut app);
+            app.world_mut().spawn((
+                Button,
+                crate::trade::Action::Take {
+                    place: 0,
+                    auto: false,
+                },
+                Interaction::None,
+                Node::default(),
+                laid_out(Vec2::new(200.0, 200.0), 50.0, 10),
+            ));
+            frame_at(&mut app, 0);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::Loot { corpse_id: 9, .. })
+            ));
+            let mut item = crate::preview::items().remove(0);
+            item.details.flags.clear();
+            testing::news(
+                &mut app.world_mut().resource_mut::<OnlineState>(),
+                [
+                    WorldEvent::Loot(LootUpdate::Opened {
+                        response: LootResponse::Normal,
+                        coins: Coins::default(),
+                    }),
+                    WorldEvent::Loot(LootUpdate::Item {
+                        place: 0,
+                        item: Box::new(item),
+                    }),
+                    WorldEvent::Loot(LootUpdate::Listed { corpse_id: 9 }),
+                ],
+            );
+            for ms in [10, 120, 250, 400, 550, 700, 850, 1000] {
+                frame_at(&mut app, ms);
+            }
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::LootItem { corpse_id: 9, own_id: 7, place: 0, auto: sent, .. }) if sent == auto
+            ));
+            assert!(
+                rx.try_recv().is_err(),
+                "one scripted gesture queues one request"
+            );
+            assert!(
+                app.world()
+                    .resource::<OnlineState>()
+                    .world()
+                    .loot()
+                    .unwrap()
+                    .items
+                    .contains_key(&0)
+            );
+        }
+    }
+
+    #[test]
     fn scripted_drop_click_uses_the_inventory_button_and_ordinary_confirmation() {
         drop_script(false);
     }
