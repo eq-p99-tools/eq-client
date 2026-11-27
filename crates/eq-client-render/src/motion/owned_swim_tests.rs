@@ -5,6 +5,9 @@ use eq_network_game::movement::MotionSession;
 #[path = "delayed_reset_tests.rs"]
 mod delayed_reset_tests;
 
+#[path = "opposed_turn_tests.rs"]
+mod opposed_turn_tests;
+
 fn calibration() -> eq_network_game::movement::MotionCalibration {
     titanium_speeds(&SpeedState {
         run: 0.7,
