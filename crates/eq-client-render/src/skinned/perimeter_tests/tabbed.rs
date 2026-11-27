@@ -222,7 +222,7 @@ fn two_row_options() -> eq_client_assets::sidl::TabBox {
 }
 
 #[test]
-fn default_size_wrapped_qol_shows_the_heading_and_four_lines_down_the_speed_control() {
+fn default_size_wrapped_qol_shows_the_heading_and_scrolls_to_the_speed_control() {
     use crate::windows::pointer::{LINE_PIXELS, Wheel};
     use eq_client_core::options::Level;
 
@@ -292,14 +292,14 @@ fn default_size_wrapped_qol_shows_the_heading_and_four_lines_down_the_speed_cont
             }
         };
         let max_scroll = (content + insets.top + insets.bottom - view.height()).max(0.0);
-        // At the default size the opening view includes the heading, and
-        // run speed, under the Dangerous checkboxes, is four wheel lines down
-        // (including the Duel Answer Card, Use Picks Nearest and Rich
-        // Lighting rows).
+        // Added choices can add rows. The opening view still includes the
+        // heading, and ordinary wheel lines must reach Run Speed below the
+        // Dangerous checkboxes without clipping it at the content's bottom.
         assert_visible(app.world(), &[heading]);
+        let wheel_pixels = (max_scroll / LINE_PIXELS).ceil() * LINE_PIXELS;
         *app.world_mut().resource_mut::<Wheel>() = Wheel {
             surface: Some(page),
-            pixels: -4.0 * LINE_PIXELS,
+            pixels: -wheel_pixels,
             lines: 0.0,
         };
         app.update();
@@ -307,7 +307,7 @@ fn default_size_wrapped_qol_shows_the_heading_and_four_lines_down_the_speed_cont
         app.update();
         assert_visible(app.world(), &[speed]);
         let scroll = app.world().get::<ScrollPosition>(page).unwrap().y;
-        assert!((scroll - max_scroll.min(4.0 * LINE_PIXELS)).abs() < 0.01);
+        assert!((scroll - max_scroll).abs() < 0.01);
     }
 }
 

@@ -741,6 +741,14 @@ impl Keys<'_, '_> {
         self.script.as_ref().is_some_and(|script| script.routing())
     }
 
+    /// A queued or paused run keeps its input sequence ahead of automatic
+    /// melee positioning, even on frames when it holds no movement key.
+    pub(crate) fn script_active(&self) -> bool {
+        self.script
+            .as_ref()
+            .is_some_and(|script| script.status().phase().active())
+    }
+
     /// The heading a running script's `face` step turns the player to.
     pub(crate) fn scripted_facing(&self) -> Option<f32> {
         self.script.as_ref().and_then(|script| script.facing())

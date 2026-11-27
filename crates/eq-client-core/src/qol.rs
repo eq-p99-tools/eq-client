@@ -117,6 +117,9 @@ pub enum Fix {
     /// Opens newly slain nearby NPC corpses naming the player as killer and
     /// uses reply-driven Loot All. NO DROP items remain for manual looting.
     AutoLoot,
+    /// While auto-attack is requested, faces the current valid target and
+    /// approaches ordinary melee reach, yielding to the player's input.
+    MeleePositioning,
     /// Draws received positive damage above known targets without changing chat.
     FloatingCombatText,
     /// Reads the spellbook without automatically sitting.
@@ -217,6 +220,7 @@ impl Fix {
         Self::MoveWhileFeigned,
         Self::StandWhenHit,
         Self::AutoLoot,
+        Self::MeleePositioning,
         Self::FloatingCombatText,
         Self::ReadWhileStanding,
         Self::MemorizeWhileStanding,
@@ -267,6 +271,7 @@ impl Fix {
             Self::MoveWhileFeigned => "move_while_feigned",
             Self::StandWhenHit => "stand_when_hit",
             Self::AutoLoot => "auto_loot",
+            Self::MeleePositioning => "melee_positioning",
             Self::FloatingCombatText => "floating_combat_text",
             Self::ReadWhileStanding => "read_while_standing",
             Self::MemorizeWhileStanding => "memorize_while_standing",
@@ -319,6 +324,7 @@ impl Fix {
             Self::MoveWhileFeigned => "Move While Feigned",
             Self::StandWhenHit => "Stand When Hit",
             Self::AutoLoot => "Loot Corpses Automatically",
+            Self::MeleePositioning => "Stay in Melee Range",
             Self::FloatingCombatText => "Floating Combat Text",
             Self::ReadWhileStanding => "Read the Spellbook Standing",
             Self::MemorizeWhileStanding => "Memorize Without Sitting",
@@ -407,6 +413,9 @@ impl Fix {
             Self::AutoLoot => {
                 "Open newly slain NPC corpses naming you as killer within 20 units and use Loot All. Leave NO DROP items for manual looting. Stop on refusal; supported item results are required."
             }
+            Self::MeleePositioning => {
+                "While you have auto-attack on, face your current target and move into estimated melee reach on clear ground. Your movement, mouse look, scripts and /follow take priority. Stops at obstacles; never selects a target or turns attack on."
+            }
             Self::FloatingCombatText => {
                 "Draw positive damage reported by the server above known targets. Chat remains available and no combat outcome is predicted."
             }
@@ -480,6 +489,7 @@ impl Fix {
             | Self::MoveWhileFeigned
             | Self::StandWhenHit
             | Self::AutoLoot
+            | Self::MeleePositioning
             | Self::Fly
             | Self::JesusMode
             | Self::GillsForDays
@@ -537,7 +547,8 @@ impl Fix {
             | Self::JesusMode
             | Self::GillsForDays
             | Self::MemorizeWhileStanding
-            | Self::ZoneAnywhere => Some(Capability::GameplayDepartures),
+            | Self::ZoneAnywhere
+            | Self::MeleePositioning => Some(Capability::GameplayDepartures),
             // A server with no looting has no corpse to open by itself.
             Self::AutoLoot => Some(Capability::Looting),
             Self::AnswerListPolls => Some(Capability::AnsweringListPolls),
@@ -603,6 +614,7 @@ impl Fix {
             | Self::WalkWhileWinded
             | Self::MoveWhileFeigned
             | Self::AutoLoot
+            | Self::MeleePositioning
             | Self::ReadWhileStanding
             | Self::MemorizeWhileStanding
             | Self::ShowInvisible
@@ -643,6 +655,7 @@ impl Fix {
         matches!(
             self,
             Self::WalkWhileWinded
+                | Self::MeleePositioning
                 | Self::MoveWhileFeigned
                 | Self::StandWhenHit
                 | Self::MemorizeWhileStanding
@@ -764,6 +777,7 @@ mod tests {
                 Fix::MoveWhileFeigned,
                 Fix::StandWhenHit,
                 Fix::AutoLoot,
+                Fix::MeleePositioning,
                 Fix::FloatingCombatText,
                 Fix::ReadWhileStanding,
                 Fix::MemorizeWhileStanding,
@@ -798,6 +812,7 @@ mod tests {
             Fix::WalkWhileWinded,
             Fix::MoveWhileFeigned,
             Fix::AutoLoot,
+            Fix::MeleePositioning,
             Fix::FloatingCombatText,
             Fix::ReadWhileStanding,
             Fix::MemorizeWhileStanding,
@@ -848,6 +863,7 @@ mod tests {
                 Fix::WalkWhileWinded,
                 Fix::MoveWhileFeigned,
                 Fix::StandWhenHit,
+                Fix::MeleePositioning,
                 Fix::MemorizeWhileStanding,
                 Fix::TakeEnvironmentalDamage,
                 Fix::GillsForDays,

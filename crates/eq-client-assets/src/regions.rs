@@ -175,6 +175,45 @@ impl ZoneRegions {
         self
     }
 
+    /// Constructs a finite slab containing a zone trigger for synthetic tests.
+    ///
+    /// # Panics
+    /// Panics unless both bounds are finite and `low < high`.
+    #[cfg(feature = "testing")]
+    #[must_use]
+    pub fn test_zone_line_slab(low: f32, high: f32, route: ZoneLine) -> Self {
+        assert!(low.is_finite() && high.is_finite() && low < high);
+        let leaf = |region| Node {
+            normal: [0.; 3],
+            distance: 0.,
+            region: Some(region),
+            front: None,
+            back: None,
+        };
+        Self {
+            nodes: vec![
+                Node {
+                    normal: [1., 0., 0.],
+                    distance: -low,
+                    region: None,
+                    front: Some(1),
+                    back: Some(2),
+                },
+                Node {
+                    normal: [1., 0., 0.],
+                    distance: -high,
+                    region: None,
+                    front: Some(2),
+                    back: Some(3),
+                },
+                leaf(1),
+                leaf(0),
+            ],
+            routes: BTreeMap::from([(0, route)]),
+            ..Self::default()
+        }
+    }
+
     /// Constructs a horizontal liquid surface for other crates' synthetic tests.
     #[cfg(feature = "testing")]
     #[must_use]

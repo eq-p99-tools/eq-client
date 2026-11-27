@@ -26,6 +26,7 @@ mod ground;
 #[cfg(test)]
 mod ground_tests;
 mod headroom;
+mod melee;
 mod owned_swim;
 mod pad;
 mod placement;
@@ -283,6 +284,8 @@ pub(super) struct Controls {
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
     following: Option<follow::Following>,
+    /// Opt-in melee positioning; every reset discards its target and approach.
+    melee: melee::Assist,
     ground: ground::Control,
 }
 
@@ -447,6 +450,7 @@ impl Default for Controls {
             swim_owner: owned_swim::Owner::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
+            melee: melee::Assist::default(),
             ground: ground::Control::default(),
         }
     }
@@ -2031,6 +2035,9 @@ type InputExtras<'w, 's> = (
     Option<Res<'w, crate::options::MovementSync>>,
     Local<'s, Option<u64>>,
     Option<Res<'w, crate::doors::LiftReach>>,
+    Option<Res<'w, crate::combat::CombatState>>,
+    Option<Res<'w, crate::confirm::Asked>>,
+    Local<'s, melee::InputTrace>,
 );
 
 /// A script run that fails can no longer steer, so the autorun latch goes
@@ -2081,7 +2088,7 @@ pub(super) fn input(
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
     options: Res<crate::options::OptionsState>,
-    (movement_sync, mut told_wait, lifts): InputExtras,
+    (movement_sync, mut told_wait, lifts, combat, asked, mut input_trace): InputExtras,
     mut controls: ResMut<Controls>,
     players: Query<(&PlayerBody, &Transform), With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
@@ -2093,6 +2100,16 @@ pub(super) fn input(
     ),
     (look, aim, spells): Pointing,
 ) {
+    let trace_melee = options.options.qol.on(Fix::MeleePositioning);
+    let (sequence, elapsed, gap) = input_trace.entered(controls.now());
+    trace!(target: "eq_client_render::motion::melee", input_sequence = sequence,
+        input_elapsed_seconds = elapsed, input_gap_seconds = ?gap,
+        option_enabled = trace_melee,
+        attack_requested = combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(online.world().session_id())),
+        input_owned = keys.focused(), pending_sample = controls.pending.is_some(),
+        "Melee positioning input entry");
     let client = settings.0.installed_client;
     // The program's speed-modifier routine ends following once a root
     // stops the player (R6, 0x411076); a server's move does not.
@@ -2146,6 +2163,9 @@ pub(super) fn input(
         || online.world().is_dead()
         || online.world().arrival_held()
     {
+        if trace_melee {
+            melee::held("world_or_arrival_unavailable");
+        }
         controls.following = None;
         *told_wait = None;
         controls.reset(None);
@@ -2155,6 +2175,9 @@ pub(super) fn input(
     // The pad floor step precedes ordinary input/cadence gates and uses
     // the unmodified collision world, even with no voluntary input.
     if controls.pad.is_some() {
+        if trace_melee {
+            melee::held("pad_motion");
+        }
         if let (Some(world), Ok((body, _))) = (collision.0.as_ref(), players.single()) {
             controls.prepare_pad(world, body.feet_offset);
             controls.submit_pad(&outbox, online.world());
@@ -2196,6 +2219,9 @@ pub(super) fn input(
         .as_ref()
         .map_or(Some(wanted), |sync| sync.usable(session_id, wanted))
     else {
+        if trace_melee {
+            melee::held("movement_policy_pending");
+        }
         // Say why once for this wait, including when the queue keeps retrying.
         if *told_wait != session_id {
             chat.history.push(crate::chat::system_line(
@@ -2219,6 +2245,9 @@ pub(super) fn input(
         controls.facing = None;
     }
     if controls.speed.is_none() && controls.airborne.is_none() {
+        if trace_melee {
+            melee::held("movement_grant_unavailable");
+        }
         controls.mouse_heading = None;
         controls.held = Some(Held::Withdrawn);
         return;
@@ -2529,6 +2558,7 @@ pub(super) fn input(
         && !swimming
         && !shoreline_active
         && controls.following.is_none()
+        && !controls.melee.driving()
         && !keys.script_routing()
         && controls.riding.is_none()
         && controls.boat.is_none()
@@ -2722,6 +2752,9 @@ pub(super) fn input(
         }
     }
     if controls.pending.is_some() {
+        if trace_melee {
+            melee::held("pending_sample");
+        }
         if controls.liquid_basis(session_id, now) == LiquidBasis::Unconfirmed {
             controls.pause_prediction();
         }
@@ -2730,6 +2763,9 @@ pub(super) fn input(
     }
     let elapsed = now.duration_since(controls.last_accepted);
     if elapsed < START_CYCLE_DURATION {
+        if trace_melee {
+            melee::held("sample_gate");
+        }
         controls.held = Some(Held::Gate);
         return;
     }
@@ -2738,6 +2774,9 @@ pub(super) fn input(
     if let Some(cost) = controls.unreported.take() {
         controls.unreported = report_fall(&outbox, online.world(), &options.options.qol, cost);
         if controls.unreported.is_some() {
+            if trace_melee {
+                melee::held("fall_report_pending");
+            }
             controls.pause_prediction();
             controls.held = Some(Held::Gate);
             return;
@@ -2749,6 +2788,9 @@ pub(super) fn input(
         moving_world,
         online.world().player(),
     ) else {
+        if trace_melee {
+            melee::held("body_or_collision_unavailable");
+        }
         controls.held = Some(Held::NoBody);
         return;
     };
@@ -2982,6 +3024,126 @@ pub(super) fn input(
     } else {
         None
     };
+    let melee_enabled = options.options.qol.on(Fix::MeleePositioning)
+        && combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(session_id))
+        && [
+            Capability::GameplayDepartures,
+            Capability::Moving,
+            Capability::Combat,
+        ]
+        .into_iter()
+        .all(|capability| online.world().can(capability));
+    let manual = follow::moves(map, &sampled, scripted)
+        || controls.autorun
+        || [Act::Jump, Act::Duck]
+            .into_iter()
+            .any(|act| map.holding(&sampled, scripted).held(act))
+        || look.as_ref().is_some_and(|look| look.held)
+        || mouse_aim.is_some_and(|yaw| yaw != 0.)
+        || mouse_snapshot.is_some()
+        || controls.released_turn != 0.
+        || active_mouse_yaw
+        || keys.pressed(Act::Walk)
+        || scripted_facing.is_some()
+        || keys.script_active();
+    let melee_step = if !melee_enabled {
+        if trace_melee {
+            trace!(target: "eq_client_render::motion::melee", reason = "attack_or_provider_unavailable", forward = false,
+                attack_requested = combat.as_deref().is_some_and(|combat| combat.requested_in(session_id)),
+                moving = online.world().can(Capability::Moving), combat = online.world().can(Capability::Combat),
+                departures = online.world().can(Capability::GameplayDepartures), "Melee positioning held");
+        }
+        controls.melee.clear();
+        None
+    } else if manual || !focused || controls.following.is_some() {
+        trace!(target: "eq_client_render::motion::melee", reason = "input_owner", forward = false,
+            manual, focused, input_owned = keys.focused(), detached, stunned, following = controls.following.is_some(),
+            movement = follow::moves(map, &sampled, scripted), autorun = controls.autorun,
+            rmb = look.as_ref().is_some_and(|look| look.held), mouse_snapshot = mouse_snapshot.is_some(),
+            mouse_yaw = active_mouse_yaw, released_turn = controls.released_turn,
+            scripted_facing = scripted_facing.is_some(), script = keys.script_active(), walk_toggle = keys.pressed(Act::Walk),
+            stance_key = [Act::Jump, Act::Duck].into_iter().any(|act| map.holding(&sampled, scripted).held(act)),
+            "Melee positioning held");
+        controls.melee.yield_input(now);
+        None
+    } else if !standing
+        || stunned
+        || flying
+        || swimming
+        || placement_blocked
+        || controls.refused.is_some()
+        || online.world().camp().is_some()
+        || online.world().casting().holds_actions()
+        || asked
+            .as_deref()
+            .is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer())
+        || controls.riding.is_some()
+        || controls.boat.is_some()
+        || controls.visual_boat.is_some()
+        || controls.jump.is_some()
+        || controls.crouch.is_some()
+        || controls
+            .airborne
+            .as_ref()
+            .is_some_and(|airborne| airborne.velocity() != 0. || airborne.peak().is_some())
+    {
+        trace!(target: "eq_client_render::motion::melee", reason = "context", forward = false,
+            standing, stunned, flying, swimming, placement_blocked, refused = controls.refused.is_some(),
+            camp = online.world().camp().is_some(), casting = online.world().casting().holds_actions(),
+            question = asked.as_deref().is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer()),
+            rider = controls.riding.is_some(), boat = controls.boat.is_some(), display_boat = controls.visual_boat.is_some(),
+            jump = controls.jump.is_some(), crouch = controls.crouch.is_some(),
+            airborne_velocity = ?controls.airborne.as_ref().map(AirborneController::velocity),
+            airborne_peak = ?controls.airborne.as_ref().and_then(AirborneController::peak),
+            "Melee positioning held");
+        controls.melee.clear();
+        None
+    } else {
+        let body = melee::Body {
+            position: accepted.position,
+            height: body.height,
+            offset: body.feet_offset,
+            seconds: span,
+            speeds: (
+                controls.speed.unwrap_or(0.),
+                controls.walk_speed.or(controls.speed).unwrap_or(0.),
+            ),
+            walking: controls.walking,
+        };
+        controls
+            .melee
+            .step(online.world(), world, &online.regions, &body, now)
+    };
+    if let Some(step) = melee_step {
+        let radians = eq_client_core::render_heading(step.heading);
+        intent = MotionInput {
+            mode: if !step.run && controls.walk_speed.is_some() {
+                MovementMode::Walk
+            } else {
+                MovementMode::Forward
+            },
+            speed: if step.run {
+                controls.speed
+            } else {
+                controls.walk_speed.or(controls.speed)
+            }
+            .unwrap_or(0.),
+            direction: if step.forward {
+                Vec3::new(radians.sin(), 0., radians.cos())
+            } else {
+                Vec3::ZERO
+            },
+            turn: 0.,
+            preserve_facing: true,
+            diagonal: None,
+        };
+        if heading_snapshots {
+            heading_update = HeadingUpdate::Snapshot;
+        }
+    }
+    let follow_step = follow_step.or(melee_step);
     let follow_heading = follow_step.map(|step| step.heading);
     if placement_blocked {
         // Keep the turn inputs and ordinary sample timing. Translation,
@@ -3292,7 +3454,15 @@ pub(super) fn input(
         // Stop within one frame of reach at the selected movement rate.
         // Water selects its ordinary swim rate above, so it shares this
         // limit rather than replacing an already limited land speed.
-        speed = speed.min((step.beyond + speed / 60.0) / span.max(f32::EPSILON));
+        let margin = if melee_step.is_some() {
+            0.
+        } else {
+            speed / 60.0
+        };
+        speed = speed.min((step.beyond + margin) / span.max(f32::EPSILON));
+    }
+    if melee_step.is_some() {
+        speed = speed.min(controls.speed.unwrap_or(0.0).max(0.0));
     }
     // A ducking body, or one with its origin in liquid, is swept at its
     // origin (L = 0, 0x489a32), so only the floor sweep's climb holds; else
@@ -3915,6 +4085,30 @@ pub(super) fn input(
         turn_toward(current_heading, facing, TURN_RATE * span)
     };
     trace_proposal(mode, delta, position - origin, heading, facing);
+    if melee_step.is_some()
+        && let Some(reason) = melee::transition_reason(
+            world,
+            &online.regions,
+            origin,
+            position,
+            body.height,
+            body.feet_offset,
+        )
+    {
+        // This disposable assist proposal sent nothing. Keep ordinary manual
+        // crossing, boarding and authoritative corrections on their own path.
+        controls.airborne = previous_airborne;
+        controls.melee.clear();
+        melee::held(reason);
+        controls.held = Some(Held::NoSpeed);
+        return;
+    }
+    if melee_step.is_some() {
+        trace!(target: "eq_client_render::motion::melee", sample_seconds = span,
+            elapsed_since_send = since_sent.as_secs_f64(), granted_run_speed = ?controls.speed,
+            selected_speed = speed, requested_horizontal = delta.with_y(0.0).length(),
+            resolved_horizontal = (position - origin).with_y(0.0).length(), "Melee positioning proposal");
+    }
     trace_contact(world, feet, delta, position - origin, body.height);
     let position_sent = if placement_blocked {
         eq_client_core::WorldPosition {
