@@ -230,7 +230,7 @@ fn merchant_quantity_refusal_and_uncertainty_preserve_holdings_and_never_retry()
     let coins = online.world().coins();
     submit(&mut trade, &online, &outbox, selection, 2).unwrap();
     rx.try_recv().unwrap();
-    trade.merchant_news(
+    let _ = trade.merchant_news(
         &WorldUpdate::Game(WorldEvent::MerchantUnanswered {
             session_id: 9,
             reason: "old".into(),
@@ -238,7 +238,7 @@ fn merchant_quantity_refusal_and_uncertainty_preserve_holdings_and_never_retry()
         online.world(),
     );
     assert_eq!(trade.merchant_status(), Some("Waiting for merchant"));
-    trade.merchant_news(
+    let _ = trade.merchant_news(
         &WorldUpdate::Game(WorldEvent::MerchantUnanswered {
             session_id: 1,
             reason: "unknown".into(),
@@ -246,7 +246,7 @@ fn merchant_quantity_refusal_and_uncertainty_preserve_holdings_and_never_retry()
         online.world(),
     );
     assert_eq!(trade.merchant_status(), Some("Outcome unknown"));
-    trade.merchant_news(
+    let _ = trade.merchant_news(
         &WorldUpdate::Game(stock(
             online.world().merchant().unwrap().stock[&3].item.clone(),
             0,
@@ -254,7 +254,7 @@ fn merchant_quantity_refusal_and_uncertainty_preserve_holdings_and_never_retry()
         )),
         online.world(),
     );
-    trade.merchant_news(
+    let _ = trade.merchant_news(
         &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Bought {
             slot: 4,
             quantity: 2,
@@ -268,7 +268,7 @@ fn merchant_quantity_refusal_and_uncertainty_preserve_holdings_and_never_retry()
             .is_err()
     );
     assert!(rx.try_recv().is_err());
-    trade.merchant_news(
+    let _ = trade.merchant_news(
         &WorldUpdate::Game(WorldEvent::MerchantRefused {
             session_id: 1,
             reason: "refused".into(),
@@ -300,7 +300,7 @@ fn merchant_quantity_matching_received_result_releases_only_its_action() {
                 price: 38,
             },
         };
-        trade.merchant_news(
+        let _ = trade.merchant_news(
             &WorldUpdate::Game(WorldEvent::Merchant(event)),
             online.world(),
         );
@@ -336,7 +336,7 @@ fn merchant_quantity_zero_result_or_received_close_releases_ui_without_delivery(
         let selection = choose(&mut trade, online.world(), chosen);
         submit(&mut trade, &online, &outbox, selection, 2).unwrap();
         rx.try_recv().unwrap();
-        trade.merchant_news(
+        let _ = trade.merchant_news(
             &WorldUpdate::Game(WorldEvent::Merchant(result)),
             online.world(),
         );
@@ -360,7 +360,7 @@ fn merchant_quantity_sale_can_select_the_remaining_received_stack() {
             quantity: 2,
         },
     );
-    trade.merchant_news(
+    let _ = trade.merchant_news(
         &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Sold {
             slot: 23,
             quantity: 2,
@@ -517,7 +517,7 @@ fn merchant_quantity_pending_transfer_and_terminal_end_never_repeat_the_action()
             std::time::Instant::now(),
             &eq_client_core::world::NoSpells,
         );
-        trade.merchant_news(&update, online.world());
+        let _ = trade.merchant_news(&update, online.world());
         assert!(trade.merchant_pending.is_none());
         assert!(!selection.current(&trade, online.world()));
         assert!(rx.try_recv().is_err());
@@ -578,4 +578,176 @@ fn a_buy_follows_the_programs_order_and_lines() {
     );
     assert!(rx.try_recv().is_err());
     assert_eq!(trade.merchant_status(), Some("Waiting for merchant"));
+}
+
+#[test]
+fn titanium_sale_words_wait_for_a_matched_result_after_the_item_has_left() {
+    use eq_client_core::world::Notice;
+    let (mut online, mut trade, outbox, rx) = fixture();
+    let mut item = online.world().inventory().items()[&InventorySlot(23)].clone();
+    item.details.name = "Bat Fur".into();
+    item.details.price = Some(15);
+    item.stack_count = Some(1);
+    testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+    testing::news(
+        &mut online,
+        [WorldEvent::Merchant(MerchantUpdate::Opened {
+            merchant_id: 8,
+            accepted: true,
+            rate: f32::from_bits(0x3f86_bca2),
+        })],
+    );
+    trade.follow(online.world());
+    trade.prices = Some(eq_client_assets::merchants::TITANIUM);
+    let mut merchant = testing::pet(8, 7);
+    merchant.name = "Merchant_Iludarae".into();
+    testing::spawns(&mut online, vec![merchant]);
+    trade.merchant.as_mut().unwrap().name = "Stale window label".into();
+    let selection = choose(&mut trade, online.world(), Chosen::Carried(23));
+    assert_eq!(trade.quantity_quote(online.world(), 1), Some(14));
+    submit(&mut trade, &online, &outbox, selection, 1).unwrap();
+    assert!(matches!(
+        rx.try_recv(),
+        Ok(ClientCommand::Sell {
+            slot: 23,
+            quantity: 1,
+            ..
+        })
+    ));
+    let result = |slot, quantity| {
+        WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Sold {
+            slot,
+            quantity,
+            price: 14,
+        }))
+    };
+    assert_eq!(trade.merchant_news(&result(24, 1), online.world()), None);
+    assert_eq!(trade.merchant_news(&result(23, 2), online.world()), None);
+    assert_eq!(
+        trade.merchant_news(
+            &WorldUpdate::Game(WorldEvent::MerchantUnanswered {
+                session_id: 1,
+                reason: "unknown".into(),
+            }),
+            online.world()
+        ),
+        None
+    );
+    // The session's deduction can reach the host before the sale event.
+    testing::inventory(&mut online, InventoryUpdate::Remove(InventorySlot(23)));
+    let purse = online.world().coins();
+    assert_eq!(
+        trade.merchant_news(&result(23, 1), online.world()),
+        Some(Notice::MerchantSold {
+            merchant: "Merchant Iludarae".into(),
+            item: "Bat Fur".into(),
+            price: 14,
+        })
+    );
+    assert_eq!(trade.merchant_news(&result(23, 1), online.world()), None);
+    assert_eq!(
+        online.world().coins(),
+        purse,
+        "caption never changes custody"
+    );
+    assert!(rx.try_recv().is_err(), "receipt/duplicate never retries");
+}
+
+#[test]
+fn failed_send_refusal_close_and_other_generations_never_say_native_sale_success() {
+    for outcome in [0, 1, 2, 3] {
+        let (online, mut trade, outbox, _rx) = fixture();
+        trade.prices = Some(if outcome == 3 {
+            eq_client_assets::merchants::EQMAC
+        } else {
+            eq_client_assets::merchants::TITANIUM
+        });
+        let selection = choose(&mut trade, online.world(), Chosen::Carried(23));
+        let failed = Outbox::new(None);
+        submit(
+            &mut trade,
+            &online,
+            if outcome == 0 { &failed } else { &outbox },
+            selection,
+            1,
+        )
+        .unwrap();
+        let update = match outcome {
+            1 => MerchantUpdate::Sold {
+                slot: 23,
+                quantity: 0,
+                price: 0,
+            },
+            2 => MerchantUpdate::Closed,
+            _ => MerchantUpdate::Sold {
+                slot: 23,
+                quantity: 1,
+                price: 20,
+            },
+        };
+        assert_eq!(
+            trade.merchant_news(
+                &WorldUpdate::Game(WorldEvent::Merchant(update)),
+                online.world()
+            ),
+            None
+        );
+    }
+}
+
+#[test]
+fn titanium_zero_value_and_unretained_augment_prices_are_not_invented() {
+    let (mut online, mut trade, _, _) = fixture();
+    trade.prices = Some(eq_client_assets::merchants::TITANIUM);
+    for flag in ["NO RENT", "NO DROP"] {
+        let mut item = online.world().inventory().items()[&InventorySlot(23)].clone();
+        item.details.flags = vec![flag.into()];
+        testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+        choose(&mut trade, online.world(), Chosen::Carried(23));
+        assert_eq!(trade.quantity_quote(online.world(), 1), Some(0));
+        assert_eq!(
+            trade.quantity_limit(online.world(), Chosen::Carried(23)),
+            Err(Refused::Silent)
+        );
+    }
+    let mut item = online.world().inventory().items()[&InventorySlot(23)].clone();
+    item.details.flags.clear();
+    item.augments[0] = Some(100);
+    testing::inventory(&mut online, InventoryUpdate::Snapshot(vec![item]));
+    choose(&mut trade, online.world(), Chosen::Carried(23));
+    assert_eq!(trade.quantity_quote(online.world(), 1), None);
+}
+
+#[test]
+fn a_different_merchant_or_admission_drops_the_old_sale_caption() {
+    for fresh_admission in [false, true] {
+        let (mut online, mut trade, outbox, _rx) = fixture();
+        trade.prices = Some(eq_client_assets::merchants::TITANIUM);
+        let selection = choose(&mut trade, online.world(), Chosen::Carried(23));
+        submit(&mut trade, &online, &outbox, selection, 1).unwrap();
+        if fresh_admission {
+            testing::admit(&mut online, 2, testing::player(7));
+        } else {
+            testing::news(
+                &mut online,
+                [WorldEvent::Merchant(MerchantUpdate::Opened {
+                    merchant_id: 9,
+                    accepted: true,
+                    rate: 1.0,
+                })],
+            );
+        }
+        assert_eq!(
+            trade.merchant_news(
+                &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Sold {
+                    slot: 23,
+                    quantity: 1,
+                    price: 20,
+                })),
+                online.world()
+            ),
+            None
+        );
+        assert!(trade.merchant_sale.is_none());
+    }
 }

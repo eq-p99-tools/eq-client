@@ -136,6 +136,7 @@ pub(super) fn slot(
             SlotButton(number),
             hotbar::Pickable(hotbar::Source::Item(number)),
             SkinSlot { in_bag },
+            Outline::new(px(0.0), px(0.0), theme::FOCUS),
             node,
         )),
     };

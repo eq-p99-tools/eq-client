@@ -46,6 +46,8 @@ pub(super) struct TradeState {
     /// admission resolves it for scripted interaction.
     opening_shop: Option<(u64, u16)>,
     merchant_pending: Option<merchant_quantity::Pending>,
+    /// Words/pricing retained for a matched sale result, never a local success.
+    merchant_sale: Option<merchant_quantity::SaleNotice>,
     /// Revisions bound when the current item was selected.
     merchant_choice: Option<MerchantSelection>,
     revision: u64,
@@ -174,6 +176,17 @@ impl TradeState {
         self.merchant.as_ref().and_then(|window| window.chosen)
     }
 
+    /// A persistent inventory selection while its merchant and item remain.
+    pub(crate) fn selected_sale(&self, world: &ClientWorld, slot: i32) -> bool {
+        self.chosen() == Some(Chosen::Carried(slot))
+            && world.merchant().is_some()
+            && !world.inventory().stale()
+            && world
+                .inventory()
+                .items()
+                .contains_key(&eq_client_core::inventory::InventorySlot(slot))
+    }
+
     /// Chooses one of the player's carried items to sell, as a click on it
     /// does while the skin's merchant window is open; false, leaving the
     /// click to the inventory, when no merchant is open or the slot is not
@@ -209,8 +222,11 @@ impl TradeState {
         match self.prices {
             Some(prices) => {
                 let merchant = world.merchant()?;
-                let price = item.details.price.unwrap_or(0);
-                Some(u32::try_from(prices.sale_total(price, merchant.rate, 1)).unwrap_or(u32::MAX))
+                if prices.says_sale && (!merchant.rate.is_finite() || merchant.rate <= 0.0) {
+                    return None;
+                }
+                let price = sale_base(prices, item)?;
+                u32::try_from(prices.sale_total(price, merchant.rate, 1)).ok()
             }
             None => crate::outbox::offered(world, eq_client_core::Capability::MerchantOffers)
                 .then(|| world.merchant()?.offer(item))
@@ -259,6 +275,7 @@ impl TradeState {
             self.merchant = None;
             self.merchant_choice = None;
             self.merchant_pending = None;
+            self.merchant_sale = None;
             self.changed();
         }
         if self.loot.is_some() && world.loot().is_none() {
@@ -269,6 +286,7 @@ impl TradeState {
             (true, None) => {
                 self.merchant = None;
                 self.merchant_pending = None;
+                self.merchant_sale = None;
                 self.merchant_choice = None;
                 self.changed();
             }
@@ -1189,6 +1207,27 @@ fn holds_items(
 }
 
 /// Merchants silently ignore offers of NO DROP items, so they are never offered.
+/// Native sale eligibility precedes the price getter (0x5e1690). Augment
+/// prices are not retained, so their sum remains unknown (6.570 G2).
+fn sale_base(
+    prices: eq_client_assets::merchants::MerchantPrices,
+    item: &InventoryItem,
+) -> Option<u32> {
+    if item.augmented() {
+        return None;
+    }
+    if prices.says_sale
+        && item
+            .details
+            .flags
+            .iter()
+            .any(|flag| flag == "NO RENT" || flag == "NO DROP")
+    {
+        return Some(0);
+    }
+    item.details.price
+}
+
 fn no_drop(item: &InventoryItem) -> bool {
     item.details.flags.iter().any(|flag| flag == "NO DROP")
 }
@@ -1821,7 +1860,7 @@ mod tests {
         assert_eq!(rx.try_iter().count(), 2);
         // Whichever shop the server opens settles the pending request.
         shop_opened(&mut online, 8);
-        trade.merchant_news(
+        let _ = trade.merchant_news(
             &WorldUpdate::Game(WorldEvent::Merchant(MerchantUpdate::Opened {
                 merchant_id: 8,
                 accepted: true,
@@ -2161,7 +2200,7 @@ mod tests {
         let receive = |app: &mut App, update| {
             app.world_mut()
                 .resource_scope(|world, mut trade: Mut<TradeState>| {
-                    trade.merchant_news(
+                    let _ = trade.merchant_news(
                         &WorldUpdate::Game(WorldEvent::Merchant(update)),
                         world.resource::<crate::online::OnlineState>().world(),
                     );
