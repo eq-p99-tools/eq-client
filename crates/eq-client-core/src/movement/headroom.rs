@@ -166,7 +166,7 @@ fn sphere_floor(surface: Surface<'_>, origin: Vec3, radius: f32) -> Option<f32> 
         .intersect_aabb(&bounds)
         .filter_map(|index| {
             let triangle = surface.mesh.triangle(index);
-            if triangle.scaled_normal().dot(down) >= 0.0 {
+            if triangle.scaled_normal().dot(down) > 0.0 {
                 return None;
             }
             cast_shapes(
@@ -207,7 +207,7 @@ fn ceiling_contacts(surface: Surface<'_>, from: Vec3, to: Vec3, radius: f32) -> 
         .intersect_aabb(&bounds)
         .filter_map(|index| {
             let triangle = surface.mesh.triangle(index);
-            if triangle.scaled_normal().dot(up) >= 0.0 {
+            if triangle.scaled_normal().dot(up) > 0.0 {
                 return None;
             }
             let hit = if begin == end {
