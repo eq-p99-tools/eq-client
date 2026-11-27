@@ -422,6 +422,7 @@ fn incomplete_coverage_survives_cache_and_walker_splits() {
     cache::store(&folder, "zone", &triangles, None, &settings(), &mesh).unwrap();
     let read = cache::load(&folder, "zone", &triangles, None, &settings()).unwrap();
     assert!(read.incomplete());
+    assert!(!cache::present(&folder, "zone", &settings()));
     for size in [4.0, 6.0, 9.0] {
         assert!(
             read.split([4.0, 6.0, 9.0])

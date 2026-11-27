@@ -172,9 +172,9 @@ pub fn load(
 }
 
 /// Whether a mesh for `zone` built with `settings` is kept under `directory`,
-/// judged by the header alone: its format and settings, not its key, so the
-/// count of built zones never loads a zone. A file whose triangles have since
-/// changed counts until a load rebuilds it.
+/// judged by its format, settings and nonempty, complete coverage metadata,
+/// not its geometry key, so counting never loads zone assets. A file whose
+/// triangles have since changed counts until a full load rebuilds it.
 #[must_use]
 pub fn present(directory: &Path, zone: &str, settings: &Settings) -> bool {
     // A zone that isn't a plain file name has no file.
@@ -195,8 +195,13 @@ pub fn present(directory: &Path, zone: &str, settings: &Settings) -> bool {
             .and_then(|name| name.strip_suffix(".bin"))
             .and_then(|stem| stem.rsplit_once('-'))
             .is_some_and(|(owner, _)| owner == zone);
-        ours && read_prefix(&entry.path(), expected.len()).is_some_and(|bytes| {
-            bytes[..format] == expected[..format] && bytes[settings_at..] == expected[settings_at..]
+        ours && read_prefix(&entry.path(), expected.len() + 8).is_some_and(|bytes| {
+            let header = &bytes[..expected.len()];
+            let coverage = &bytes[expected.len()..];
+            header[..format] == expected[..format]
+                && header[settings_at..] == expected[settings_at..]
+                && coverage[..4] == 0_u32.to_le_bytes()
+                && coverage[4..] != 0_u32.to_le_bytes()
         })
     })
 }
