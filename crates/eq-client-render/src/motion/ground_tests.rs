@@ -403,6 +403,7 @@ struct MeasuredRun {
     packet_times: Vec<u128>,
     max_time_budget_excess: f64,
     max_session_lead: f64,
+    max_pre_owner_lead: f64,
     max_accepted_budget_excess: f64,
     roundoff: f64,
 }
@@ -422,6 +423,7 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
     let mut stopped = 0;
     let mut max_time_budget_excess = 0_f64;
     let mut max_session_lead = 0_f64;
+    let mut max_pre_owner_lead = 0_f64;
     let mut max_accepted_budget_excess = 0_f64;
     let mut rows = Vec::new();
     let mut roundoff = 4. * f64::from(f32::EPSILON) * f64::from(start.abs().max_element().max(1.));
@@ -450,6 +452,8 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
         max_time_budget_excess = max_time_budget_excess
             .max(horizontal - f64::from(CARRIER_SPEED) * elapsed.as_secs_f64());
         max_session_lead = max_session_lead.max(lead);
+        max_pre_owner_lead =
+            max_pre_owner_lead.max(f64::from(shown.x) - f64::from(row.accepted_before_commands.x));
         max_accepted_budget_excess = max_accepted_budget_excess.max(lead - accepted_allowance);
         roundoff = roundoff
             .max(4. * f64::from(f32::EPSILON) * f64::from(row.shown.abs().max_element().max(1.)));
@@ -491,6 +495,7 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
             "spatial_path": spatial, "stopped_frames": stopped,
             "max_calibrated_time_excess": max_time_budget_excess, "roundoff_bound": roundoff,
             "max_literal_session_lead": max_session_lead,
+            "max_pre_owner_lead": max_pre_owner_lead,
             "max_accepted_elapsed_budget_excess": max_accepted_budget_excess,
             "actual_submissions": packets, "session_acceptance_frames": rows,
         })
@@ -508,6 +513,7 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
         packet_times,
         max_time_budget_excess,
         max_session_lead,
+        max_pre_owner_lead,
         max_accepted_budget_excess,
         roundoff,
     }
@@ -580,6 +586,30 @@ fn installed_qeynos_matched_supported_carrier_crossing() {
 #[test]
 fn native_ground_ten_second_matched_carrier_run() {
     gate326(false, 600);
+}
+
+#[test]
+fn supported_carrier_handover_does_not_add_receipt_delay_to_observation_spacing() {
+    for delay in [0, 6] {
+        let mut scene = matched_carrier(false, true, delay, Instant::now(), MATCHED_APPROACH_X);
+        let run = measure_carrier(&mut scene, 60, false, true);
+        // The first ordinary observation waits at most one50ms interval
+        // after the last native observation, which itself may be less than
+        // one native interval beyond admission. Afterwards ordinary requests
+        // keep50ms spacing regardless of when their receipts arrive. This
+        // bound is actual owner state, never a claim that pending means sent.
+        let admitted_bound = f64::from(CARRIER_SPEED) * 0.1;
+        let before_owner_bound = f64::from(CARRIER_SPEED) * (0.1 + 1. / 60.);
+        assert!(run.max_session_lead <= admitted_bound + run.roundoff);
+        assert!(run.max_pre_owner_lead <= before_owner_bound + run.roundoff);
+        assert_eq!(run.stopped, 0);
+        assert!(run.max_time_budget_excess <= run.roundoff);
+        assert_eq!(run.packet_times, vec![466_666_676]);
+        println!(
+            "BRIDGE327 delay={delay} post_owner={} pre_owner={} post_bound={admitted_bound} pre_bound={before_owner_bound}",
+            run.max_session_lead, run.max_pre_owner_lead
+        );
+    }
 }
 
 #[test]

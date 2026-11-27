@@ -23,6 +23,11 @@ use std::{
 // to retire delayed receipts without playing their distance for a second time.
 const MAX_OBSERVATIONS: usize = 4096;
 
+// Host scheduling only, matching the ordinary guard's existing50ms minimum.
+// Each genuine completed Move still passes that guard; this is not permission
+// to accept a queued observation or spend its time twice.
+const ORDINARY_OBSERVATION_INTERVAL: Duration = Duration::from_millis(50);
+
 #[derive(Clone, Copy)]
 pub(super) struct Frame {
     pub at: Instant,
@@ -88,7 +93,6 @@ impl Frame {
 struct Sent {
     session: u64,
     frame: Frame,
-    ordinary: bool,
 }
 
 /// One current simulation and the genuine completed observations it published.
@@ -107,7 +111,6 @@ pub(super) struct Control {
     retired: Option<Frame>,
     pub cold_handback: bool,
     ordinary: bool,
-    ordinary_answered: Option<Instant>,
 }
 
 impl Control {
@@ -126,7 +129,6 @@ impl Control {
         self.retired = None;
         self.cold_handback = false;
         self.ordinary = false;
-        self.ordinary_answered = None;
     }
 
     /// Retire presentation on a correction/control seam; pending identities
@@ -138,7 +140,6 @@ impl Control {
         self.retired = None;
         self.cold_handback = false;
         self.ordinary = false;
-        self.ordinary_answered = None;
     }
 
     pub fn active(&self) -> bool {
@@ -230,13 +231,9 @@ impl Control {
             return Err(crate::outbox::Refusal::NotAdmitted);
         }
         if self.ordinary
-            && (self.sent.iter().any(|sent| sent.ordinary)
-                || self.last_posted.is_some_and(|at| {
-                    frame.at.saturating_duration_since(at) < START_CYCLE_DURATION
-                })
-                || self
-                    .ordinary_answered
-                    .is_some_and(|at| now.saturating_duration_since(at) < START_CYCLE_DURATION))
+            && self.last_posted.is_some_and(|at| {
+                frame.at.saturating_duration_since(at) < ORDINARY_OBSERVATION_INTERVAL
+            })
         {
             return Ok(None);
         }
@@ -259,11 +256,7 @@ impl Control {
                 "Ordinary carrier handover current-state observation submitted"
             );
         }
-        self.sent.push_back(Sent {
-            session,
-            frame,
-            ordinary: self.ordinary,
-        });
+        self.sent.push_back(Sent { session, frame });
         self.last_posted = Some(frame.at);
         Ok(Some(frame.at))
     }
@@ -311,7 +304,7 @@ impl Control {
         created: Instant,
         position: WorldPosition,
         refused: bool,
-        received: Instant,
+        _received: Instant,
     ) -> bool {
         let Some(index) = self
             .sent
@@ -321,9 +314,6 @@ impl Control {
             return false;
         };
         let sent = self.sent[index];
-        if sent.ordinary {
-            self.ordinary_answered = Some(received);
-        }
         self.sent.drain(..=index);
         if !refused
             && position == sent.frame.position
@@ -741,7 +731,6 @@ mod walk_budget_tests {
         control.sent.push_back(Sent {
             session: 7,
             frame: frame(posted, 0.),
-            ordinary: false,
         });
         let now = start + Duration::from_millis(100);
         assert!(control.within_walk_budget(now, Vec3::Y * 3., 3.));
