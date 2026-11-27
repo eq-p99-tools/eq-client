@@ -336,6 +336,6 @@ fn wrapped_slider_values_extend_the_sections_and_scroll_extent() {
     assert!(speed_value.y > speed.y + speed.height);
     let colors = label(page, "EQC_QoL_CombatTextCaption");
     assert!(colors.area.y > speed_value.y + speed_value.height);
-    let last = label(page, controls::COMBAT_TEXT_COLORS[5].2).area;
+    let last = label(page, super::super::color_picker::COMBAT_COLORS[1].0).area;
     assert_eq!(content_height(page), Some(last.y + last.height + MARGIN));
 }

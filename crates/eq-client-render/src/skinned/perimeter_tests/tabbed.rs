@@ -402,16 +402,11 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
             let mut sliders = app.world_mut().query::<(Entity, &SkinSlider)>();
             let mut labels = app.world_mut().query::<(&ChildOf, &controls::LevelValue)>();
             let mut words = app.world_mut().query::<(&ChildOf, &Text)>();
-            for (level, text) in [
+            let ordinary = [
                 (Level::UiScale, "Interface scale"),
                 (Level::RunSpeed, "Run a Little Faster"),
             ]
-            .into_iter()
-            .chain(
-                controls::COMBAT_TEXT_COLORS
-                    .into_iter()
-                    .map(|(_, _, _, text, level)| (level, text)),
-            ) {
+            .map(|(level, text)| {
                 let slider = sliders
                     .iter(app.world())
                     .find(|(_, slider)| slider.sets == Sets::Level(level))
@@ -429,8 +424,24 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                     .unwrap()
                     .0
                     .parent();
-                let controls = [slider, value, caption];
-                for control in controls {
+                vec![slider, value, caption]
+            });
+            let mut fields = app
+                .world_mut()
+                .query::<(Entity, &super::super::color_picker::Part)>();
+            let mut pickers: Vec<_> = fields
+                .iter(app.world())
+                .map(|(entity, _)| vec![entity])
+                .collect();
+            assert_eq!(pickers.len(), 6);
+            pickers.sort_by(|a, b| {
+                bounds(app.world(), a[0])
+                    .max
+                    .y
+                    .total_cmp(&bounds(app.world(), b[0]).max.y)
+            });
+            for controls in ordinary.into_iter().chain(pickers) {
+                for &control in &controls {
                     let rect = bounds(app.world(), control);
                     assert!(rect.min.x >= viewport.min.x && rect.max.x <= viewport.max.x);
                 }
@@ -438,8 +449,8 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                 // Scroll each complete control into view, including the new
                 // palette below Run Speed; the page owns the sole scroll range.
                 let bottom_edge = controls
-                    .into_iter()
-                    .map(|control| bounds(app.world(), control).max.y)
+                    .iter()
+                    .map(|&control| bounds(app.world(), control).max.y)
                     .fold(viewport.max.y, f32::max);
                 let pixels = (viewport.max.y - bottom_edge) / scale - 2.0;
                 *app.world_mut().resource_mut::<Wheel>() = Wheel {
@@ -450,7 +461,7 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                 app.update();
                 app.world_mut().resource_mut::<Wheel>().pixels = 0.0;
                 app.update();
-                for control in controls {
+                for &control in &controls {
                     let rect = bounds(app.world(), control);
                     let clip = app.world().get::<CalculatedClip>(control).unwrap().clip;
                     assert!(

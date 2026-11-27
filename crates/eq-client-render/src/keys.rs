@@ -652,6 +652,8 @@ pub(crate) struct Typing {
     pub logging_in: bool,
     /// The map's local entity search owns text input.
     pub map_search: bool,
+    /// The Options color editor owns keyboard input this frame.
+    pub color_hex: bool,
     /// The bug report or feedback window's box owns text input.
     pub reporting: bool,
     /// The spellbook's local search owns text input.
@@ -686,6 +688,7 @@ impl Typing {
             && !self.editing_script
             && !self.counting
             && !self.logging_in
+            && !self.color_hex
             && !self.map_search
             && !self.reporting
             && !self.spell_search

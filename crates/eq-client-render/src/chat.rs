@@ -385,7 +385,7 @@ impl ChatState {
         serde_json::json!({
             "composing": typing.composing,
             "composition_window": composition_window,
-            "other_text_input_active": typing.counting || typing.logging_in || typing.map_search || typing.reporting
+            "other_text_input_active": typing.color_hex || typing.counting || typing.logging_in || typing.map_search || typing.reporting
                 || typing.spell_search || typing.spell_search_claimed || typing.spell_set_name
                 || typing.rebinding || typing.editing_script || typing.creating_character,
         })
@@ -1366,7 +1366,12 @@ pub(super) fn input(
         .next()
         .is_some_and(|Send(id)| state.groups.focus(*id));
     // Local text fields keep their keys out of chat.
-    if typing.counting || typing.map_search || typing.reporting || typing.spell_search_claimed {
+    if typing.color_hex
+        || typing.counting
+        || typing.map_search
+        || typing.reporting
+        || typing.spell_search_claimed
+    {
         keyboard.clear();
         paste.clear();
     }

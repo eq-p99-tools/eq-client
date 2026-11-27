@@ -168,15 +168,7 @@ pub(super) fn pages<'a>(
         ) + SECTION_GAP;
     }
     // Append the palette after existing controls, preserving their column/row positions.
-    if let Some((slider, value)) = slider.zip(value) {
-        append_palette(
-            &mut pieces,
-            &layout,
-            (checkbox, caption),
-            (slider, value),
-            y,
-        );
-    }
+    append_palette(&mut pieces, &layout, checkbox, caption, y);
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
 }
@@ -211,34 +203,30 @@ fn option_sliders<'a>(slider: &'a Slider, value: &'a Label) -> [Control<'a>; 2] 
 fn append_palette(
     pieces: &mut Vec<(String, Element)>,
     layout: &Layout,
-    (checkbox, caption): (&Button, Option<&Label>),
-    (slider, value): (&Slider, &Label),
-    y: f32,
+    checkbox: &Button,
+    caption: Option<&Label>,
+    mut y: f32,
 ) {
-    let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
-    pieces.push(Section::CombatText.heading(
-        checkbox,
-        caption,
-        Area {
-            x: layout.margin,
-            y,
-            width: layout.available,
-            height: heading_height,
-        },
-    ));
-    let colors: Vec<_> = controls::COMBAT_TEXT_COLORS
-        .into_iter()
-        .map(
-            |(caption_id, slider_id, value_id, text, _)| Control::Slider {
-                section: Section::CombatText,
-                slider,
-                value,
-                ids: (caption_id, slider_id, value_id),
-                text,
-            },
-        )
-        .collect();
-    layout.append_controls(pieces, &colors, checkbox, y + heading_height + GAP);
+    let mut area = Area {
+        x: layout.margin,
+        y,
+        width: layout.available,
+        height: caption.map_or(checkbox.area.height, |label| label.area.height),
+    };
+    let (id, template) = Section::CombatText.caption(checkbox, caption, area);
+    pieces.push((id, Element::Label(template.clone())));
+    y += area.height + GAP;
+    for (id, title, _) in super::color_picker::COMBAT_COLORS {
+        area.y = y;
+        let mut label = template.clone();
+        label.area = area;
+        title.clone_into(&mut label.text);
+        pieces.push((format!("{id}Caption"), Element::Label(label.clone())));
+        label.area.y += area.height;
+        label.area.height = super::color_picker::height(area.width);
+        y = label.area.y + label.area.height + GAP;
+        pieces.push((id.to_owned(), Element::Label(label)));
+    }
 }
 
 /// Cuts a caption, slider and value label from the skin and returns their bottom edge.
@@ -322,6 +310,11 @@ enum Section {
 
 impl Section {
     fn heading(self, checkbox: &Button, style: Option<&Label>, area: Area) -> (String, Element) {
+        let (id, label) = self.caption(checkbox, style, area);
+        (id, Element::Label(label))
+    }
+
+    fn caption(self, checkbox: &Button, style: Option<&Label>, area: Area) -> (String, Label) {
         let (id, text) = match self {
             Self::Ordinary => ("EQC_QoL_SettingsCaption", "Quality of Life"),
             Self::Dangerous => ("EQC_QoL_UnsafeCaption", "Dangerous"),
@@ -330,7 +323,7 @@ impl Section {
         };
         (
             id.to_owned(),
-            Element::Label(Label {
+            Label {
                 client_value: None,
                 area,
                 anchors: None,
@@ -340,7 +333,7 @@ impl Section {
                 align: Align::Left,
                 font: style.map_or(checkbox.font, |label| label.font),
                 wraps: false,
-            }),
+            },
         )
     }
 }

@@ -29,6 +29,7 @@ pub(crate) use bindings::PET_COMMANDS;
 use bindings::{Does, buff_label, does, pet_posture_button};
 #[cfg(test)]
 use bindings::{GroupButton, RaidButton, effect_label, selector_button};
+pub(crate) mod color_picker;
 mod controls;
 mod fit;
 mod frame;
@@ -2526,6 +2527,12 @@ fn plain_label(
     geometry: Option<reflow::Geometry>,
     owner: WindowId,
 ) {
+    if owner == WindowId::Options
+        && let Some(channels) = color_picker::binding(name)
+    {
+        color_picker::draw(window, channels, node, label.area.width, font(label.font));
+        return;
+    }
     match controls::value_label(name, owner) {
         Some(controls::ValueLabel::Shows(level)) => aligned_in(
             window,

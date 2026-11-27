@@ -7748,7 +7748,8 @@ mod tests {
                 .add_systems(Update, slide.after(drive));
             app.world_mut().spawn((
                 Button,
-                SkinSlider::test_level(level),
+                crate::skinned::color_picker::ScriptChannel,
+                SkinSlider::channel(level),
                 RelativeCursorPosition::default(),
                 laid_out(Vec2::new(240.0, 360.0), 80.0, 1),
             ));
