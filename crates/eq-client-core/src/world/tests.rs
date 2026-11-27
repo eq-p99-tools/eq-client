@@ -1169,6 +1169,7 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
             WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: Some(42),
+                gem: None,
             },
         );
         if began {
@@ -1177,6 +1178,7 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
                 WorldEvent::CastPending {
                     session_id: 1,
                     spell_id: None,
+                    gem: None,
                 },
             );
             game(
@@ -1256,6 +1258,7 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
         WorldEvent::CastPending {
             session_id: 1,
             spell_id: Some(77),
+            gem: None,
         },
     );
     assert!(world.casting().holds_actions());
@@ -1264,6 +1267,7 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
         WorldEvent::CastPending {
             session_id: 1,
             spell_id: None,
+            gem: None,
         },
     );
     game(&mut world, begin(77));
@@ -1427,6 +1431,7 @@ fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
         WorldEvent::CastPending {
             session_id: 1,
             spell_id: Some(42),
+            gem: None,
         },
     );
     game(&mut world, entered(2));
@@ -1490,6 +1495,7 @@ fn a_superseded_song_cannot_end_the_different_cast_that_started() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
 
     for old_began in [false, true] {
@@ -1525,6 +1531,7 @@ fn superseding_an_old_cast_releases_it_before_the_new_pending_spell_begins() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
     let begin = |spell_id| {
         WorldEvent::Spell(SpellUpdate::Began {
@@ -8180,6 +8187,7 @@ fn a_local_cast_clear_drops_the_cast_bar_with_no_line() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
     let begin = |spell_id| {
         WorldEvent::Spell(SpellUpdate::Began {
@@ -8369,4 +8377,50 @@ fn a_duplicate_pad_at_the_same_origin_does_not_restart_its_probe() {
         )
         .ignored
     );
+}
+
+#[test]
+fn a_forwarded_movement_counter_never_changes_world_admission_or_position() {
+    let mut world = admitted();
+    let before = world.player().unwrap().position;
+    let admission = world.session_id();
+    let now = Instant::now();
+    let changes = world.apply(
+        &WorldUpdate::MovementPacketSnapshot(crate::MovementPacketSnapshot {
+            session_id: 999,
+            request_id: 10,
+            run_id: 20,
+            sent: 500,
+            observed: now,
+            unix_timestamp_ms: 0,
+        }),
+        now,
+        &NoSpells,
+    );
+    assert!(changes.reset.is_none());
+    assert_eq!(world.session_id(), admission);
+    assert_eq!(world.player().unwrap().position, before);
+}
+
+#[test]
+fn memorization_progress_does_not_confirm_a_pending_cast() {
+    let mut world = admitted();
+    let session_id = world.session_id().unwrap();
+    game(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id,
+            spell_id: Some(42),
+            gem: None,
+        },
+    );
+    let changes = game(
+        &mut world,
+        WorldEvent::MemorizationProgress {
+            session_id,
+            progress: None,
+        },
+    );
+    assert!(changes.reset.is_none());
+    assert_eq!(world.casting().pending, Some(42));
 }

@@ -226,28 +226,6 @@ impl SessionWorker {
                         sender.send(&worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
-                        // The base frontend issues no snapshot requests. Keep
-                        // the new network diagnostic separate from world state;
-                        // its dedicated frontend consumer is independently owned.
-                        ClientEvent::MovementPacketSnapshot {
-                            session_id,
-                            request_id,
-                            run_id,
-                            sent,
-                            observed,
-                            unix_timestamp_ms,
-                        } => {
-                            tracing::trace!(
-                                session_id,
-                                request_id,
-                                run_id,
-                                sent,
-                                ?observed,
-                                unix_timestamp_ms,
-                                "Movement transport submission snapshot"
-                            );
-                            None
-                        }
                         ClientEvent::FilesChecking(progress) => {
                             if let Some(progress) = progress {
                                 tracing::debug!(
@@ -269,6 +247,23 @@ impl SessionWorker {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
                         }
+                        ClientEvent::MovementPacketSnapshot {
+                            session_id,
+                            request_id,
+                            run_id,
+                            sent,
+                            observed,
+                            unix_timestamp_ms,
+                        } => Some(WorldUpdate::MovementPacketSnapshot(
+                            eq_client_core::MovementPacketSnapshot {
+                                session_id,
+                                request_id,
+                                run_id,
+                                sent,
+                                observed,
+                                unix_timestamp_ms,
+                            },
+                        )),
                         ClientEvent::Status(status) => status_update(status.state),
                         ClientEvent::Progress(stage) => Some(progress_update(stage)),
                         ClientEvent::Record(record) => match record.event {

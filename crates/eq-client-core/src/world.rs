@@ -488,9 +488,10 @@ impl ClientWorld {
                 }],
                 ..Changes::default()
             },
-            WorldUpdate::Chat(_) | WorldUpdate::SpellTable(_) | WorldUpdate::CheckingFiles(_) => {
-                Changes::default()
-            }
+            WorldUpdate::Chat(_)
+            | WorldUpdate::SpellTable(_)
+            | WorldUpdate::CheckingFiles(_)
+            | WorldUpdate::MovementPacketSnapshot(_) => Changes::default(),
         }
     }
 
@@ -2064,10 +2065,14 @@ impl ClientWorld {
             }
 
             // The player's spells.
+            // Compatibility only: the spell-timing feature owns storing and
+            // polling this worker gauge. It is never server confirmation.
+            WorldEvent::MemorizationProgress { .. } => {},
             WorldEvent::Spell(update) => self.spell(update, now, news),
             WorldEvent::CastPending {
                 session_id,
                 spell_id,
+                ..
             } => self.cast_pending(*session_id, *spell_id, news),
             WorldEvent::CastRequestUnconfirmed {
                 session_id,

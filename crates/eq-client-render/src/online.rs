@@ -1703,6 +1703,7 @@ pub(crate) mod testing {
             [WorldEvent::CastPending {
                 session_id,
                 spell_id,
+                gem: None,
             }],
         );
     }
@@ -3024,12 +3025,14 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: Some(42),
+                gem: None,
             }))
             .unwrap();
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 2,
                 spell_id: None,
+                gem: None,
             }))
             .unwrap();
         app.update();
@@ -3070,6 +3073,7 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: None,
+                gem: None,
             }))
             .unwrap();
         app.update();
@@ -3078,6 +3082,7 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: Some(42),
+                gem: None,
             }))
             .unwrap();
         let mut death = eq_client_core::Death {
