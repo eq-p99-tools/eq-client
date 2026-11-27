@@ -357,6 +357,9 @@ impl ClientWorld {
         let outcome = match status {
             CampStatus::Camped => Some(crate::camp::CampOutcome::LogoutReply),
             CampStatus::ClosedWithoutReply => Some(crate::camp::CampOutcome::LocalDeadline),
+            CampStatus::ServerClosedWithoutReply => {
+                Some(crate::camp::CampOutcome::ServerClosedWithoutReply)
+            }
             _ => None,
         };
         if let Some(outcome) = outcome {
@@ -368,7 +371,7 @@ impl ClientWorld {
             let mut changes = self.reset(Reset::Camped);
             self.camped = Some(to);
             self.camp_completion = Some(completion);
-            if outcome == crate::camp::CampOutcome::LocalDeadline {
+            if outcome != crate::camp::CampOutcome::LogoutReply {
                 changes.notices.push(Notice::Camp(status.clone()));
             }
             return changes;
@@ -392,7 +395,8 @@ impl ClientWorld {
             CampStatus::Abandoned { .. }
             | CampStatus::Rejected(_)
             | CampStatus::Camped
-            | CampStatus::ClosedWithoutReply => None,
+            | CampStatus::ClosedWithoutReply
+            | CampStatus::ServerClosedWithoutReply => None,
         };
         if self.camp.is_none() {
             // Abandoned or refused: the next camp ends where it asks.

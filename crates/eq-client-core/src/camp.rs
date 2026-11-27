@@ -25,6 +25,9 @@ pub enum CampOutcome {
     /// The client's documented close deadline elapsed without that reply.
     /// This does not confirm server logout or cleanup.
     LocalDeadline,
+    /// The P99 peer explicitly closed after Logout submission, without a
+    /// preceding application reply. Server cleanup is unconfirmed.
+    ServerClosedWithoutReply,
 }
 
 /// The last completed camp, scoped to its departing admission when known.
@@ -34,7 +37,7 @@ pub struct Completion {
     pub admission_id: Option<u64>,
     /// The requested local destination.
     pub destination: CampTo,
-    /// Received reply or local deadline, without inferring server cleanup.
+    /// Reply, peer close or local deadline, without inferring server cleanup.
     pub outcome: CampOutcome,
 }
 

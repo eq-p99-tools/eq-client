@@ -3918,7 +3918,7 @@ fn a_desktop_camp_leaves_the_program_once_camped_and_a_plain_one_does_not() {
         world.camp().map(|camp| camp.to),
         Some(CampTo::CharacterSelect)
     );
-    let changes = camp(&mut world, CampStatus::Camped);
+    let changes = camp(&mut world, CampStatus::ServerClosedWithoutReply);
     assert_eq!(changes.reset, Some(Reset::Camped));
     assert!(!world.leaving());
 
@@ -3930,7 +3930,7 @@ fn a_desktop_camp_leaves_the_program_once_camped_and_a_plain_one_does_not() {
         CampStatus::Rejected("Enter the world first".into()),
     );
     camp(&mut world, CampStatus::Preparing);
-    camp(&mut world, CampStatus::Camped);
+    camp(&mut world, CampStatus::ServerClosedWithoutReply);
     assert!(!world.leaving());
 }
 
@@ -3942,6 +3942,10 @@ fn a_local_camp_deadline_keeps_its_destination_and_unconfirmed_evidence() {
         for (status, outcome) in [
             (CampStatus::Camped, CampOutcome::LogoutReply),
             (CampStatus::ClosedWithoutReply, CampOutcome::LocalDeadline),
+            (
+                CampStatus::ServerClosedWithoutReply,
+                CampOutcome::ServerClosedWithoutReply,
+            ),
         ] {
             let mut world = admitted();
             let admission_id = world.session_id();
