@@ -116,7 +116,7 @@ fn ten_seconds(assisted: bool, delays: &[u64]) -> Measurement {
     let mut maximum_arrival_rate = 0_f32;
     while elapsed < Duration::from_secs(10) {
         let frame = Duration::from_millis([8, 12, 16, 33][samples.len() % 4]);
-        let step = frame.min(Duration::from_secs(10) - elapsed);
+        let step = frame.min(Duration::from_secs(10).checked_sub(elapsed).unwrap());
         elapsed += step;
         let now = start + elapsed;
         while pending.front().is_some_and(|(due, _, _)| *due <= now) {
