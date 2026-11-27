@@ -73,9 +73,12 @@ impl RangeClose {
         view: (bool, Option<&Model>),
         now: Instant,
     ) {
-        if settings.installed_client != InstalledClient::Titanium {
-            *self = Self::default();
-            return;
+        match settings.installed_client {
+            InstalledClient::Titanium => {}
+            InstalledClient::EqMac | InstalledClient::Rof2 => {
+                *self = Self::default();
+                return;
+            }
         }
         let current = identity(world);
         if self.identity != current {
