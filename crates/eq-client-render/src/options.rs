@@ -38,6 +38,8 @@ pub(crate) struct OptionsState {
     /// Quality-of-life settings this run keeps on for every character,
     /// whatever their saved choice (`--force-qol`, for test runs).
     forced_qol: Vec<eq_client_core::qol::Fix>,
+    /// Saved choices beneath this run's overrides, for the current profile.
+    forced_base: eq_client_core::qol::Settings,
 }
 
 impl Default for OptionsState {
@@ -59,14 +61,17 @@ impl OptionsState {
             chosen: None,
             track_filter: defaults.track_filter,
             forced_qol: Vec::new(),
+            forced_base: defaults.qol,
         }
     }
 
     /// These options, with `fixes` kept on for every character whatever
     /// their saved choice.
     pub(crate) fn forcing(mut self, fixes: &[eq_client_core::qol::Fix]) -> Self {
+        let unforced = self.persisted_options();
         self.forced_qol = fixes.to_vec();
-        self.options = self.with_forced(self.options);
+        self.forced_base = unforced.qol;
+        self.options = self.with_forced(unforced);
         self
     }
 
@@ -79,6 +84,15 @@ impl OptionsState {
     fn with_forced(&self, mut options: Options) -> Options {
         for fix in &self.forced_qol {
             options.qol.set(*fix, true);
+        }
+        options
+    }
+
+    /// Launch overrides affect presentation/session choices, never the file.
+    fn persisted_options(&self) -> Options {
+        let mut options = self.options;
+        for fix in &self.forced_qol {
+            options.qol.set(*fix, self.forced_base.on(*fix));
         }
         options
     }
@@ -286,15 +300,19 @@ pub(crate) fn persist(
         .read(&file_name(state.store.profile.as_ref()))
         .or_else(|| state.store.read(SHARED))
         .unwrap_or_default();
-    state.options = state.read(&text);
+    let saved = Options::read(&text, state.defaults);
+    state.forced_base = saved.qol;
+    state.options = state.with_forced(saved);
     state.track_filter = state.options.track_filter;
-    state.store.loaded_text(state.options.text());
+    let text = state.persisted_options().text();
+    state.store.loaded_text(text);
 }
 
 /// Writes the options to the profile's file when they changed since last time.
 fn save(state: &mut OptionsState) {
     let name = file_name(state.store.profile.as_ref());
-    state.store.save(name, state.options.text(), Instant::now());
+    let text = state.persisted_options().text();
+    state.store.save(name, text, Instant::now());
 }
 
 /// The shared file, or the profile's own.
@@ -448,6 +466,65 @@ mod tests {
         player.name = name.into();
         testing::admit(&mut online, session_id, player);
         app.insert_resource(online);
+    }
+
+    #[test]
+    fn forced_launch_choices_never_leak_into_shared_or_character_files() {
+        use eq_client_core::{options::Level, qol::Fix};
+        let directory = std::env::temp_dir().join(format!(
+            "eq-client-forced-options-{}-{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir(&directory).unwrap();
+        let mut saved = Options::default();
+        // Exercise every forceable setting, including saved-on choices.
+        let forced: Vec<_> = Fix::settings().collect();
+        for (index, fix) in forced.iter().enumerate() {
+            saved.qol.set(*fix, index % 2 == 0);
+        }
+        std::fs::write(directory.join(SHARED), saved.text()).unwrap();
+        let mut app = app(&directory);
+        app.insert_resource(OptionsState::new(&Options::default()).forcing(&forced));
+        app.update();
+        assert!(
+            forced
+                .iter()
+                .all(|fix| app.world().resource::<OptionsState>().options.qol.on(*fix))
+        );
+        for (session, name) in [(1, "Example"), (2, "Another")] {
+            enter(&mut app, session, name);
+            app.update();
+            {
+                let mut state = app.world_mut().resource_mut::<OptionsState>();
+                state.options.wheel_zoom = false;
+                state.options.set_level(Level::CombatTextIncomingBlue, 77);
+            }
+            app.update();
+            let path = directory.join(format!("options-ExampleWorld-{name}.txt"));
+            let read = Options::read(&std::fs::read_to_string(&path).unwrap(), Options::default());
+            assert_eq!(read.qol, saved.qol);
+            assert!(!read.wheel_zoom);
+            assert_eq!(read.combat_text_incoming[2], 77);
+            let mut restarted = self::app(&directory);
+            enter(&mut restarted, session + 10, name);
+            restarted.update();
+            assert_eq!(restarted.world().resource::<OptionsState>().options, read);
+            std::fs::remove_file(path).unwrap();
+        }
+        assert_eq!(
+            Options::read(
+                &std::fs::read_to_string(directory.join(SHARED)).unwrap(),
+                Options::default()
+            )
+            .qol,
+            saved.qol
+        );
+        std::fs::remove_file(directory.join(SHARED)).unwrap();
+        std::fs::remove_dir(directory).unwrap();
     }
 
     #[test]
