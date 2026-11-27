@@ -38,7 +38,7 @@ enum Global {
 
 #[derive(Clone, Copy, Debug)]
 struct Cast {
-    gem: u8,
+    gem: Option<u8>,
     requested: u32,
     actual: Option<u32>,
 }
@@ -105,7 +105,15 @@ impl GemClocks {
         });
         self.global = Some(Global::Until(end));
         self.cast = Some(Cast {
-            gem,
+            gem: Some(gem),
+            requested: spell,
+            actual: None,
+        });
+    }
+
+    pub(super) fn other_submitted(&mut self, spell: u32) {
+        self.cast = Some(Cast {
+            gem: None,
             requested: spell,
             actual: None,
         });
@@ -126,14 +134,16 @@ impl GemClocks {
         else {
             return;
         };
-        let slot = &mut self.gems[usize::from(cast.gem)];
-        if matches!(slot, Some(Lock::Until { spell, provisional: true, .. }) if *spell == cast.requested)
-        {
-            *slot = Some(Lock::Until {
-                spell: cast.requested,
-                end: now,
-                provisional: false,
-            });
+        if let Some(gem) = cast.gem {
+            let slot = &mut self.gems[usize::from(gem)];
+            if matches!(slot, Some(Lock::Until { spell, provisional: true, .. }) if *spell == cast.requested)
+            {
+                *slot = Some(Lock::Until {
+                    spell: cast.requested,
+                    end: now,
+                    provisional: false,
+                });
+            }
         }
         self.global = Some(Global::Until(now));
         self.cast = None;
@@ -163,7 +173,7 @@ impl GemClocks {
         };
         if self
             .cast
-            .is_some_and(|cast| cast.gem == gem && cast.requested == spell)
+            .is_some_and(|cast| cast.gem == Some(gem) && cast.requested == spell)
         {
             self.cast = None;
         }
