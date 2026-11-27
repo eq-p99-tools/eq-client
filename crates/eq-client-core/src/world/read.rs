@@ -299,7 +299,9 @@ impl ClientWorld {
     #[must_use]
     pub fn is_unconscious(&self) -> bool {
         !self.is_dead()
-            && (self.own_unconscious.is_some_and(|(_, state, _)| state)
+            && (self
+                .own_unconscious
+                .is_some_and(|control| control.unconscious)
                 || self
                     .hit_point_basis()
                     .and_then(crate::control::HitPointBasis::current)
@@ -310,8 +312,7 @@ impl ClientWorld {
     /// report or equipment count. It does not acknowledge any server action.
     #[must_use]
     pub fn accepted_hit_point_basis(&self) -> Option<crate::control::HitPointBasis> {
-        self.own_hp_count_current.then_some(())?;
-        self.own_unconscious.map(|(_, _, basis)| basis)
+        self.own_unconscious.and_then(|control| control.basis)
     }
 
     /// A full received HP count ready for Titanium's posture owner. Missing
@@ -855,7 +856,8 @@ impl ClientWorld {
     /// and from unconscious/death state. Other generations remain unread.
     #[must_use]
     pub fn hit_point_gauge(&self) -> Option<super::HpGauge> {
-        self.generation.models_unconscious()
+        self.generation
+            .models_unconscious()
             .then(|| self.vitals.gauge(self.is_dead()))
             .flatten()
     }
