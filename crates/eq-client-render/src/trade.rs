@@ -82,6 +82,47 @@ pub(crate) enum Chosen {
 }
 
 impl TradeState {
+    /// Slash loot shares normal opening/custody without the Loot key's close toggle.
+    pub(crate) fn slash_loot(
+        &mut self,
+        online: &mut OnlineState,
+        outbox: &Outbox,
+        stamp: Stamp,
+        target: u16,
+        revision: Option<u64>,
+    ) {
+        let world = online.world();
+        if self.loot.is_some()
+            || world.loot().is_some()
+            || self.merchant.is_some()
+            || world.merchant().is_some()
+            || self.merchant_pending.is_some()
+            || world.exchange().is_some()
+            || world.container().is_some()
+            || world.pending_container_open().is_some()
+            || world.combining().is_some()
+            || world.training().is_some()
+            || world.inventory_moves_pending()
+            || world.casting().holds_actions()
+        {
+            return;
+        }
+        let Some(spawn) = world.spawn(target).filter(|spawn| {
+            Some(spawn.revision) == revision
+                && world.target().selected == Some(target)
+                && !world.target_stale()
+                && !spawn.state.invisible
+                && matches!(
+                    spawn.state.kind,
+                    SpawnKind::NpcCorpse | SpawnKind::PlayerCorpse
+                )
+        }) else {
+            return;
+        };
+        let name = eq_client_core::entities::display_name(&spawn.state.name);
+        let _ = self.open_loot(online, outbox, stamp, target, name);
+    }
+
     /// The spawn a scene click or the Use key asked to use, until taken.
     #[cfg(test)]
     pub(crate) fn right_clicked(&self) -> Option<u16> {

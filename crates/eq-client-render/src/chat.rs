@@ -185,6 +185,7 @@ pub(super) struct ChatState {
     pub(crate) slash: Option<super::slash::Asked>,
     /// Explicit attack requests retain the admission and time they were made.
     pub(crate) attack_asked: Vec<(crate::outbox::Stamp, bool)>,
+    pub(crate) cast_loot: Vec<crate::cast_loot::Asked>,
     /// A `/hidecorpses`'s words, waiting for its answer.
     pub(crate) hide_corpses: Option<String>,
     /// An `/assist` with words after it, waiting for its answer.
@@ -589,6 +590,7 @@ impl ChatState {
             away_tells,
             slash,
             attack_asked,
+            cast_loot,
             hide_corpses,
             autoinventory,
             channel_asked,
@@ -658,6 +660,7 @@ impl ChatState {
         away_tells.clear();
         *slash = None;
         attack_asked.clear();
+        cast_loot.clear();
         *hide_corpses = None;
         *autoinventory = None;
         channel_asked.clear();
@@ -2117,6 +2120,9 @@ fn submit_line(
     if let Some(result) = super::combat::request(&command, state, online.world(), outbox) {
         return result.map_err(Unsent::Mistake);
     }
+    if let Some(result) = crate::cast_loot::request(&command, state, online.world(), outbox) {
+        return result.map_err(Unsent::Mistake);
+    }
     // A report to the staff goes from a typed line, whoever types it: the
     // keyboard, a social or a script's `slash` step (6.511).
     if let Some(asked) = super::reports::Asked::typed(&command) {
@@ -2340,6 +2346,12 @@ pub(super) fn run_game_command(
     };
     let command = command.as_ref();
     if let Some(result) = super::combat::request(command, chat, online.world(), outbox) {
+        if let Err(reason) = result {
+            chat.refuse(reason);
+        }
+        return;
+    }
+    if let Some(result) = crate::cast_loot::request(command, chat, online.world(), outbox) {
         if let Err(reason) = result {
             chat.refuse(reason);
         }

@@ -559,11 +559,11 @@ pub(super) fn press_gem(
         &crate::ViewerSettings,
     ),
     (map, options): (&super::keys::KeyMap, Option<&crate::options::OptionsState>),
-) {
+) -> bool {
     const BARD: u32 = 8;
     let world = online.world();
     let Some(player) = world.player() else {
-        return;
+        return false;
     };
     let spell = world.gem(usize::from(gem));
     let checks = requests::CastChecks {
@@ -591,7 +591,7 @@ pub(super) fn press_gem(
         },
         (messages, map),
         || super::invisibility::drop_before_cast(world, outbox, names, settings.0.installed_client),
-    );
+    )
 }
 
 /// Sends fresh admitted spell/posture requests; server events determine results.

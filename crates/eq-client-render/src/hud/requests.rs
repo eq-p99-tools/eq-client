@@ -193,7 +193,7 @@ pub(super) fn spell(
     request: &Request,
     wording: (&super::messages::Messages, &crate::keys::KeyMap),
     before: impl FnOnce() -> Vec<eq_client_core::chat::ChatLine>,
-) {
+) -> bool {
     let now = Instant::now();
     let Request {
         gem,
@@ -214,8 +214,11 @@ pub(super) fn spell(
         }
     }
     match check(world, player, request, wording, now) {
-        Err(Some(refusal)) => chat.refuse(refusal),
-        Err(None) => {}
+        Err(Some(refusal)) => {
+            chat.refuse(refusal);
+            false
+        }
+        Err(None) => false,
         Ok(Checked {
             spell_id,
             stand_first,
@@ -228,24 +231,26 @@ pub(super) fn spell(
                     created: stamp.created,
                 });
             }
-            let _ = outbox.post(world, |stamp| {
-                if forgetting {
-                    ClientCommand::ForgetSpell {
-                        session_id: stamp.session_id,
-                        gem,
-                        spell_id,
-                        created: stamp.created,
+            outbox
+                .post(world, |stamp| {
+                    if forgetting {
+                        ClientCommand::ForgetSpell {
+                            session_id: stamp.session_id,
+                            gem,
+                            spell_id,
+                            created: stamp.created,
+                        }
+                    } else {
+                        ClientCommand::CastSpell {
+                            session_id: stamp.session_id,
+                            gem,
+                            spell_id,
+                            target_id,
+                            created: stamp.created,
+                        }
                     }
-                } else {
-                    ClientCommand::CastSpell {
-                        session_id: stamp.session_id,
-                        gem,
-                        spell_id,
-                        target_id,
-                        created: stamp.created,
-                    }
-                }
-            });
+                })
+                .is_ok()
         }
     }
 }

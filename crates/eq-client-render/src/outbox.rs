@@ -121,6 +121,8 @@ pub(crate) struct Outbox {
     /// Present only on a short-lived facade passed by an identified script
     /// dispatch. The shared outbox never stores a script's context.
     chat_admission: Option<u64>,
+    /// An explicit deferred action keeps its original admission and time.
+    origin: Option<Stamp>,
     /// The language the active chat window speaks, by the servers' number
     /// (read R49-4 (b): the builder takes the last window's choice), kept
     /// by [`crate::languages::speak`].
@@ -188,6 +190,7 @@ impl Outbox {
             book: Arc::default(),
             cursor_drop: Arc::default(),
             chat_admission: None,
+            origin: None,
             language: Arc::default(),
             sent_chat: Arc::default(),
             posture: Arc::default(),
@@ -206,6 +209,7 @@ impl Outbox {
             book: self.book.clone(),
             cursor_drop: self.cursor_drop.clone(),
             chat_admission,
+            origin: self.origin,
             language: self.language.clone(),
             sent_chat: Arc::default(),
             posture: self.posture.clone(),
@@ -224,6 +228,13 @@ impl Outbox {
             admission_id: self.chat_admission?,
             zone: world.zone().to_owned(),
         })
+    }
+
+    /// The ordinary request path, bound to an already captured user action.
+    pub(crate) fn for_request(&self, stamp: Stamp) -> Self {
+        let mut facade = self.for_script(Some(stamp.session_id));
+        facade.origin = Some(stamp);
+        facade
     }
 
     /// Speaks every line in this language from now on.
@@ -349,6 +360,11 @@ impl Outbox {
     fn try_stamp(&self, world: &ClientWorld) -> Result<Stamp, Refusal> {
         self.queue.as_ref().ok_or(Refusal::Offline)?;
         let session_id = world.session_id().ok_or(Refusal::NotAdmitted)?;
+        if let Some(origin) = self.origin {
+            return (origin.session_id == session_id)
+                .then_some(origin)
+                .ok_or(Refusal::Away);
+        }
         Ok(Stamp {
             session_id,
             created: self.now(),
@@ -360,10 +376,7 @@ impl Outbox {
     pub(crate) fn peek(&self, world: &ClientWorld) -> Option<Stamp> {
         self.queue.as_ref()?;
         world.in_world().then_some(())?;
-        Some(Stamp {
-            session_id: world.session_id()?,
-            created: self.now(),
-        })
+        self.try_stamp(world).ok()
     }
 
     /// Sends a command, or refuses it with one reason, which the chat says

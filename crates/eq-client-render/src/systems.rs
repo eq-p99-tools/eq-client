@@ -325,6 +325,10 @@ pub(super) fn schedule(app: &mut App) {
                 skinned::slash,
             ),
             hud::actions,
+            crate::cast_loot::run
+                .after(hud::actions)
+                .after(trade::input)
+                .before(hud::melody::melody),
             hud::melody::melody.after(hud::actions),
             (
                 hud::hotbar::update,
