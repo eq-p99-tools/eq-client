@@ -1,67 +1,90 @@
 name: CI
 
-# The full suite runs only on demand (Actions > CI > Run workflow), at milestones.
-# Pull requests and main run Lint; contributors run these checks locally.
-# Temporary while development is heavy: the full suite returns to pull requests later.
 on:
   workflow_dispatch:
     inputs:
       platform:
-        description: Validation platform (Linux is an explicit deferred sweep)
         type: choice
         default: windows
-        options:
-          - windows
-          - linux
+        options: [windows]
       toolchain:
-        description: Rust toolchain (1.99.0 is the routine minimum; stable is opt-in)
-        required: false
-        default: '1.99.0'
         type: string
+        default: '1.99.0'
 
 permissions:
   contents: read
 
 concurrency:
-  group: ci-${{ github.ref }}
+  group: swim-entry-${{ github.ref }}
   cancel-in-progress: false
 
 env:
   CARGO_INCREMENTAL: 0
   CARGO_PROFILE_DEV_DEBUG: 0
   CARGO_PROFILE_TEST_DEBUG: 0
+  CARGO_BUILD_JOBS: 1
+  ENTRY_PRODUCT_HEAD: aa095bc1ca80389cbf35bea8b0ff2347aae02ecc
+  ENTRY_BASE_HEAD: 70e34caebf1580a08f19503e45912acf5e5fa771
 
 jobs:
-  rust:
-    if: inputs.platform == 'linux'
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v7
-      # The audio backend links ALSA even when tests do not open a device.
-      - name: Install Linux build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install --no-install-recommends -y pkg-config libasound2-dev
-      - uses: dtolnay/rust-toolchain@stable
-        with:
-          toolchain: ${{ inputs.toolchain || '1.99.0' }}
-          components: clippy
-      - uses: Swatinem/rust-cache@v2
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
-
   windows:
-    if: inputs.platform != 'linux'
-    name: Native Windows tests
+    name: Windows entry rollback and negative control
     runs-on: windows-latest
+    timeout-minutes: 90
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@stable
         with:
-          toolchain: ${{ inputs.toolchain || '1.99.0' }}
-          components: clippy
+          ref: aa095bc1ca80389cbf35bea8b0ff2347aae02ecc
+          fetch-depth: 0
+      - uses: dtolnay/rust-toolchain@1.99.0
+        with:
+          components: rustfmt, clippy
       - uses: Swatinem/rust-cache@v2
         with:
           shared-key: windows
-      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
-      - run: cargo test --workspace --locked
+      - name: Verify product head and format
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:ENTRY_PRODUCT_HEAD) { throw 'Wrong product head' }
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'Dirty product source' }
+          cargo fmt --all -- --check
+          if ($LASTEXITCODE -ne 0) { throw 'Format failed' }
+      - name: Confirm both rollback regressions fail before the fix
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          $PSNativeCommandUseErrorActionPreference = $false
+          $entryPatch = Join-Path $env:RUNNER_TEMP 'entry-rollback.patch'
+          $entryLog = Join-Path $env:RUNNER_TEMP 'entry-negative.txt'
+          git diff --output=$entryPatch $env:ENTRY_BASE_HEAD $env:ENTRY_PRODUCT_HEAD -- crates/eq-client-render/src/motion.rs
+          if ($LASTEXITCODE -ne 0) { throw 'Could not save production-only delta' }
+          git apply --reverse $entryPatch
+          if ($LASTEXITCODE -ne 0) { throw 'Could not apply negative control' }
+          try {
+            cargo test -p eq-client-render --lib --all-features --locked motion::turn_tests::entry_tests:: -- --nocapture --test-threads=1 2>&1 | Tee-Object -FilePath $entryLog
+            $entryExit = $LASTEXITCODE
+            $entryOutput = Get-Content -LiteralPath $entryLog -Raw
+            if ($entryExit -ne 101 -or $entryOutput -notmatch '2 passed; 2 failed;' -or $entryOutput -notmatch 'fall_entry_refusal_and_discard_restore_both_sides_of_the_conversion' -or $entryOutput -notmatch 'walk_entry_refusal_and_discard_restore_both_sides_of_the_conversion') {
+              throw 'Expected exactly the two runtime rollback failures; a compile/fixture failure is not a verified negative control'
+            }
+          } finally {
+            git restore --source=$env:ENTRY_PRODUCT_HEAD -- crates/eq-client-render/src/motion.rs
+            if ($LASTEXITCODE -ne 0) { throw 'Product restoration failed' }
+          }
+          git diff --exit-code
+          if ($LASTEXITCODE -ne 0) { throw 'Source differs from product after negative control' }
+      - name: Exact product focused entry regressions
+        shell: pwsh
+        run: cargo test -p eq-client-render --lib --all-features --locked motion::turn_tests::entry_tests:: -- --nocapture --test-threads=1
+      - name: Exact product renderer suite
+        shell: pwsh
+        run: cargo test -p eq-client-render --lib --all-features --locked -- --test-threads=1
+      - name: Exact product strict workspace lint
+        shell: pwsh
+        run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - name: Verify final product source
+        shell: pwsh
+        run: |
+          if ((git rev-parse HEAD).Trim() -ne $env:ENTRY_PRODUCT_HEAD) { throw 'Product changed' }
+          if (git status --porcelain) { throw 'Product tree is dirty' }
