@@ -222,6 +222,8 @@ pub(super) struct Controls {
     /// The latest resolved own move failed the strict room test; a route
     /// can stop instead of continuing to push at the same ceiling.
     pub headroom_refused: bool,
+    /// That refusal was standing and armed an admission-local automatic Duck.
+    pub(crate) headroom_retry: bool,
     /// The cost of a landing the session's queue had no room to tell; it
     /// goes before the next sample.
     unreported: Option<FallCost>,
@@ -407,6 +409,7 @@ impl Default for Controls {
             quiet_crouch: false,
             headroom: headroom::State::default(),
             headroom_refused: false,
+            headroom_retry: false,
             unreported: None,
             facing: None,
             mouse_turn: 0.0,
@@ -2185,7 +2188,9 @@ pub(super) fn input(
                 controls.held = Some(Held::Refused);
                 return;
             }
-            Ok(false) => (),
+            Ok(false) => {
+                controls.headroom_retry &= controls.headroom.recovering(online.world());
+            }
         }
     } else {
         controls.headroom.clear();
@@ -3409,7 +3414,7 @@ pub(super) fn input(
     // held server placement also keep their existing paths.
     let refused = (!flying && !swimming && !placement_blocked)
         .then(|| {
-            headroom::refused(
+            headroom::refused_probe(
                 client,
                 world,
                 (
@@ -3422,13 +3427,33 @@ pub(super) fn input(
                         && jump_posture != JumpPosture::StandIfDucked,
                     crate::posture::on_mount(online.world(), spells.as_deref()),
                 ),
+                {
+                    let stand = crate::posture::stand_height(client, online.world(), body);
+                    let lift =
+                        client
+                            .falls()
+                            .and_then(|falls| falls.edge_lift)
+                            .map_or(0.0, |rule| {
+                                rule.lift(eq_client_assets::falls::EdgeBody {
+                                    race: online.world().player().map_or(0, |player| player.race),
+                                    stand_height: stand,
+                                    size: body.size,
+                                    lifted: raised,
+                                })
+                            });
+                    (
+                        crate::posture::headroom_probe(client, online.world(), stand),
+                        lift,
+                    )
+                },
             )
         })
         .flatten();
     controls.headroom_refused = refused.is_some();
+    controls.headroom_retry = false;
     let landing = if let Some(refused) = refused {
-        trace!(?client, ?posture, session = ?session_id, floor = refused.floor,
-            ceiling = refused.ceiling, stand = refused.stand, room = refused.room,
+        trace!(?client, ?posture, session = ?session_id, floor = ?refused.floor,
+            ceiling = ?refused.ceiling, stand = refused.stand, room = refused.room,
             origin = ?refused.origin, candidate = ?refused.candidate, "Movement headroom refused");
         controls.airborne.clone_from(&previous_airborne);
         // A refused endpoint cannot own an unsubmitted surface frame.
@@ -3473,7 +3498,7 @@ pub(super) fn input(
         } else {
             posture
         };
-        controls.headroom.refused(
+        controls.headroom_retry = controls.headroom.refused(
             client,
             online.world(),
             effective_posture,

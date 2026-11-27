@@ -40,6 +40,28 @@ pub(super) fn stand_height(client: InstalledClient, world: &ClientWorld, body: &
     eq_client_core::drawn_feet_offset(scale)
 }
 
+/// Read probe terms; the Titanium model radius remains the existing estimate.
+/// Its engine's actor radius factor is not yet available to this host.
+pub(super) fn headroom_probe(
+    client: InstalledClient,
+    world: &ClientWorld,
+    stand: f32,
+) -> eq_client_core::movement::HeadroomProbe {
+    let mac = client == InstalledClient::EqMac;
+    eq_client_core::movement::HeadroomProbe {
+        floor_radius: if mac { 0.0 } else { 0.1 * stand },
+        ceiling_radius: if mac {
+            0.5
+        } else {
+            eq_client_assets::falls::sphere_radius(stand)
+        },
+        floor_bias: if mac { 0.0 } else { 0.001 },
+        floor_offset: if mac { -0.5 } else { 0.0 },
+        permits_missing_floor: !mac && matches!(world.zone_number(), Some(0x47 | 0x4b | 0x96)),
+        permits_missing_ceiling: !mac,
+    }
+}
+
 /// Need and zero ducked lift are read on Titanium and Mac; the capsule
 /// conversion is ours. Its additional native-radius bound uses the standing
 /// sweep's one estimate; on Mac that bound is inferred, not a read actor shape.
@@ -109,15 +131,17 @@ impl Context {
         };
         let stand = stand_height(self.client, world, &self.body);
         let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+        let probe = headroom_probe(self.client, world, stand);
+        let bounds = self.collision.probe_headroom(origin, probe);
         if ducking {
             // Our origin never loses the native standing lift when ducking,
             // so a rejected transition needs no compensating origin raise.
-            return self
-                .collision
-                .headroom(origin, rule.room(stand, true, self.mounted));
+            return probe.fits(bounds, rule.needed(stand, true, self.mounted), rule.margin);
         }
-        self.collision
-            .posture_clearance(origin, stand, rule.room(stand, false, self.mounted))
+        probe.fits(bounds, rule.needed(stand, false, self.mounted), rule.margin)
+            && bounds
+                .ceiling
+                .is_none_or(|ceiling| ceiling - origin.y >= stand)
     }
 }
 
