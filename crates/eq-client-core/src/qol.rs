@@ -163,13 +163,13 @@ pub enum Fix {
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
+    /// Shows the local frame-rate meter independently of diagnostic logging.
+    ShowFps,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
     /// with no cap set is not checked.
     FrameCap,
-    /// Shows the local frame-rate meter independently of diagnostic logging.
-    ShowFps,
     /// Greys out the controls for what the server type does not offer, and
     /// says on hover why a control is unavailable; the official client only
     /// ever knows its own server.
