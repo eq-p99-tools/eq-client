@@ -1172,6 +1172,49 @@ fn native_ground_an_unobserved_press_release_has_no_input_or_forced_stop_report(
 }
 
 #[test]
+fn native_ground_known_dry_headroom_refusal_reaches_the_ordinary_posture_controller() {
+    let mut scene = Scene::new(0, true);
+    let mut triangles = vec![
+        [[-20., 0., -20.], [-20., 0., 20.], [20., 0., -20.]],
+        [[20., 0., -20.], [-20., 0., 20.], [20., 0., 20.]],
+    ];
+    triangles.extend([
+        [[-20., 7.9, -20.], [20., 7.9, -20.], [-20., 7.9, 20.]],
+        [[20., 7.9, -20.], [20., 7.9, 20.], [-20., 7.9, 20.]],
+    ]);
+    let collision = CollisionWorld::new(triangles).unwrap().with_liquids(Dry);
+    {
+        let world = scene.app.world_mut();
+        let mut players = world.query_filtered::<(&PlayerBody, &Transform), With<Player>>();
+        let (body, transform) = players.single(world).unwrap();
+        let feet = transform.translation - Vec3::Y * body.feet_offset;
+        let online = world.resource::<online::OnlineState>();
+        let stand = crate::posture::stand_height(InstalledClient::Titanium, online.world(), body);
+        assert!(
+            headroom::refused(
+                InstalledClient::Titanium,
+                &collision,
+                (body, stand),
+                (feet, feet),
+                (false, false)
+            )
+            .is_some(),
+            "fixture must hit the existing strict room rule"
+        );
+    }
+    scene.app.insert_resource(Collision(Some(collision)));
+    let before = scene.owner.position();
+    scene.step(true);
+    let controls = scene.app.world().resource::<Controls>();
+    assert!(
+        controls.headroom_refused,
+        "known-dry native eligibility must not bypass the merged headroom refusal; active={}",
+        controls.ground.active()
+    );
+    assert_eq!(scene.owner.position(), before);
+}
+
+#[test]
 fn native_ground_static_riser_uses_the_same_titanium_body_reach_without_a_handback() {
     for delay in [0, 6] {
         let mut scene = Scene::with_speed(delay, true, 29.866_667);
