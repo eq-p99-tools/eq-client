@@ -1,4 +1,5 @@
 //! Production receive, reconciliation and both presentation branches, frame by frame.
+mod range;
 use super::*;
 use crate::{outbox::Outbox, skinned::Skinned, trade::Panel, windows::WindowId};
 use eq_client_core::{Coins, GameDialect, inventory::InventoryUpdate, loot::LootResponse};
