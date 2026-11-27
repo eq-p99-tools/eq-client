@@ -263,7 +263,10 @@ fn stale_entry_refusal_cannot_restore_state_across_a_correction() {
             &mut f,
             eq_client_core::WorldEvent::MotionRefused {
                 session_id: 11,
-                created: request.created - Duration::from_nanos(1),
+                created: request
+                    .created
+                    .checked_sub(Duration::from_nanos(1))
+                    .unwrap(),
                 reason: "older entry result".into(),
             },
         );
