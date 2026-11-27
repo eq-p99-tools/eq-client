@@ -2802,7 +2802,7 @@ pub(super) fn drive(
             );
             report::movement_state(
                 label,
-                &online,
+                &mut online,
                 players.single().ok(),
                 bodies.single().ok(),
                 collision.as_deref().and_then(|world| world.0.as_ref()),
@@ -7176,6 +7176,15 @@ mod tests {
                 .items()
                 .contains_key(&InventorySlot::CURSOR)
         );
+        // The following Report reads a counter boundary; it cannot repeat
+        // the offer, send a move or wait for the trade server's answer.
+        assert!(matches!(
+            rx.try_recv(),
+            Ok(ClientCommand::MovementPacketSnapshot {
+                session_id: 9,
+                request_id: 1
+            })
+        ));
         assert!(rx.try_recv().is_err());
     }
 

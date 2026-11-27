@@ -488,9 +488,10 @@ impl ClientWorld {
                 }],
                 ..Changes::default()
             },
-            WorldUpdate::Chat(_) | WorldUpdate::SpellTable(_) | WorldUpdate::CheckingFiles(_) => {
-                Changes::default()
-            }
+            WorldUpdate::Chat(_)
+            | WorldUpdate::SpellTable(_)
+            | WorldUpdate::CheckingFiles(_)
+            | WorldUpdate::MovementPacketSnapshot(_) => Changes::default(),
         }
     }
 
