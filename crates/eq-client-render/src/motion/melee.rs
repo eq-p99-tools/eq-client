@@ -126,7 +126,7 @@ impl Assist {
         let heading_error = super::arc(heading, desired).abs();
         let reason = if !self.approaching {
             "in_range"
-        } else if heading_error > 0.01 {
+        } else if !heading_error.is_finite() || heading_error > 0.01 {
             "turning"
         } else if !selected.is_finite() || !body.speeds.0.is_finite() || speed <= 0. {
             "speed_unavailable"
