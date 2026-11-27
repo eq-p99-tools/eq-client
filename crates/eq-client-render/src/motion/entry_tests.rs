@@ -118,14 +118,47 @@ fn entry(producer: Producer, wet: water::WetVelocity) -> (Native, MovementReques
         controls.wet = wet;
         controls.suppress_surface = true;
     }
-    let before_air = airborne(f.app.world().resource::<Controls>());
-    let mut proposals = f.frame(0.);
-    assert_eq!(proposals.len(), 1);
-    let request = proposals.pop().unwrap();
-    let controls = f.app.world().resource::<Controls>();
-    assert_ne!(controls.wet, wet, "the real entry seeded a trial");
-    assert_eq!(request.mode == MovementMode::Fall, falling);
-    (f, request, before_air)
+    for _ in 0..120 {
+        let before_air = airborne(f.app.world().resource::<Controls>());
+        for command in f.commands_frame(0.) {
+            let (request, ordinary) = match command {
+                ClientCommand::Move(request) => (request, true),
+                ClientCommand::GroundFrame { request, .. } => (request, false),
+                _ => continue,
+            };
+            let world = f.app.world();
+            let body = world.get::<PlayerBody>(f.player).unwrap();
+            let feet = Vec3::from_array(eq_client_core::render_position(request.position))
+                - Vec3::Y * body.feet_offset;
+            let wet_endpoint = world
+                .resource::<Collision>()
+                .0
+                .as_ref()
+                .unwrap()
+                .in_swimmable_water(feet, body.height);
+            if ordinary && wet_endpoint {
+                assert_ne!(
+                    world.resource::<Controls>().wet,
+                    wet,
+                    "the real crossing seeded a trial: {request:?}"
+                );
+                assert_eq!(request.mode == MovementMode::Fall, falling);
+                return (f, request, before_air);
+            }
+            // Controlled local success echoes advance the actual dry producer.
+            // This fixture tests the frontend transaction, not network admission.
+            receive(
+                &mut f,
+                eq_client_core::WorldEvent::MotionSent {
+                    session_id: request.session_id,
+                    created: request.created,
+                    position: request.position,
+                    refused: None,
+                },
+            );
+        }
+    }
+    panic!("held ordinary input did not produce a water-entry request");
 }
 
 fn receive(f: &mut Native, event: eq_client_core::WorldEvent) {

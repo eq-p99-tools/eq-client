@@ -143,7 +143,7 @@ impl Native {
         }
     }
 
-    fn frame(&mut self, dx: f32) -> Vec<MovementRequest> {
+    fn commands_frame(&mut self, dx: f32) -> Vec<ClientCommand> {
         let step = Duration::from_micros(16_667);
         self.now += step;
         self.app.world_mut().resource_mut::<Time>().advance_by(step);
@@ -160,8 +160,12 @@ impl Native {
                 });
         }
         self.app.update();
-        self.requests
-            .try_iter()
+        self.requests.try_iter().collect()
+    }
+
+    fn frame(&mut self, dx: f32) -> Vec<MovementRequest> {
+        self.commands_frame(dx)
+            .into_iter()
             .filter_map(|command| match command {
                 ClientCommand::Move(request) => Some(request),
                 _ => None,
