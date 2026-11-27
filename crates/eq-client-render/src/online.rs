@@ -1887,7 +1887,7 @@ mod tests {
     #[test]
     fn a_camp_to_the_desktop_ends_the_program_once_camped_and_a_plain_one_does_not() {
         use eq_client_core::{CampStatus, camp::CampTo};
-        let exits = |to| {
+        let exits = |to, status| {
             let mut state = OnlineState::new(true);
             testing::admit(&mut state, 4, testing::player(12));
             state.camp_to(to);
@@ -1904,14 +1904,20 @@ mod tests {
             app.update();
             let before = app.world().resource::<Messages<AppExit>>().len();
             let mut state = app.world_mut().resource_mut::<OnlineState>();
-            testing::news(&mut state, [WorldEvent::Camp(CampStatus::Camped)]);
+            testing::news(&mut state, [WorldEvent::Camp(status)]);
             app.update();
             app.update();
             (before, app.world().resource::<Messages<AppExit>>().len())
         };
         // Nothing before the camp ends; then one exit, said once.
-        assert_eq!(exits(CampTo::Desktop), (0, 1));
-        assert_eq!(exits(CampTo::CharacterSelect), (0, 0));
+        for status in [
+            CampStatus::Camped,
+            CampStatus::ClosedWithoutReply,
+            CampStatus::ServerClosedWithoutReply,
+        ] {
+            assert_eq!(exits(CampTo::Desktop, status.clone()), (0, 1));
+            assert_eq!(exits(CampTo::CharacterSelect, status), (0, 0));
+        }
     }
 
     #[test]

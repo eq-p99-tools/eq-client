@@ -1208,7 +1208,7 @@ fn camp_lines(camp: &CampStatus, messages: Option<&Messages>) -> Vec<Said> {
         }
         CampStatus::LoggingOut => vec!["Logging out...".into()],
         CampStatus::Camped => Vec::new(),
-        CampStatus::ClosedWithoutReply => {
+        CampStatus::ClosedWithoutReply | CampStatus::ServerClosedWithoutReply => {
             vec!["The zone connection closed after logout; no logout reply was received.".into()]
         }
         CampStatus::Rejected(reason) => vec![reason.as_str().into()],
