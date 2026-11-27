@@ -933,6 +933,13 @@ impl ClientWorld {
                 position,
                 refused,
             } => self.motion_sent(*session_id, *created, *position, refused.as_ref(), news),
+            WorldEvent::SwimState { session_id, position, created, basis } => {
+                if self.connected && self.session_id == Some(*session_id) && self.death.is_none() {
+                    news.swim = Some((*position, *created, *basis));
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::MotionRefused { session_id, created, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.replies.push(Reply::MotionRefused {

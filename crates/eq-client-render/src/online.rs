@@ -670,6 +670,8 @@ impl Panels<'_> {
             moved.refused.is_some(),
         );
         if self.motion.moved(admission_id, moved.created) {
+            self.motion
+                .resolve_swim(admission_id, moved.created, moved.refused.is_some());
             self.motion.resolve_surface(
                 admission_id,
                 moved.created,
@@ -1033,6 +1035,19 @@ pub(super) fn receive(
                 }
                 panels.motion.server_chase_placed |=
                     scene.place_server(&mut commands, super::zone::placement(position));
+            }
+            if (changes.entered || changes.placed.is_some())
+                && let (Some(session), Some(player)) =
+                    (state.world.session_id(), state.world.player())
+            {
+                panels.motion.swim_reset_observed(session, player.position);
+            }
+            if let Some((position, created, basis)) = changes.swim
+                && let Some(session) = state.world.session_id()
+            {
+                panels
+                    .motion
+                    .swim_receipt(session, position, created, basis);
             }
             if let Some(pad) = changes.local_pad {
                 info!(entry = ?pad.entry, landing = ?pad.landing, "Crossed a local WLD pad");

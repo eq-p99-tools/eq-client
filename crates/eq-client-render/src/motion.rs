@@ -23,6 +23,7 @@ mod teleport_camera_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
 mod headroom;
+mod owned_swim;
 mod pad;
 mod placement;
 pub(super) mod pose;
@@ -271,6 +272,8 @@ pub(super) struct Controls {
     /// The wet body's velocity between samples (0x4bfe0f; reads R33 and
     /// R41). A correction, placement or admission starts it at rest.
     wet: eq_client_core::movement::water::WetVelocity,
+    /// Matched worker state and the actual physical call ledger.
+    swim_owner: owned_swim::Owner,
     /// Explicit departures; the session checks the same choices independently.
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
@@ -433,6 +436,7 @@ impl Default for Controls {
             surface_hop: None,
             surface_hop_applied: None,
             wet: eq_client_core::movement::water::WetVelocity::default(),
+            swim_owner: owned_swim::Owner::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
         }
@@ -1402,6 +1406,30 @@ impl Controls {
             return true;
         }
         false
+    }
+
+    pub(super) fn swim_reset_observed(
+        &mut self,
+        session: u64,
+        position: eq_client_core::WorldPosition,
+    ) {
+        self.swim_owner.reset_observed(session, position);
+    }
+
+    pub(super) fn swim_receipt(
+        &mut self,
+        session: u64,
+        position: eq_client_core::WorldPosition,
+        created: Option<Instant>,
+        basis: Option<eq_client_core::movement::SwimBasis>,
+    ) {
+        self.swim_owner
+            .receipt(session, position, created, basis, &mut self.wet);
+    }
+
+    pub(super) fn resolve_swim(&mut self, session: Option<u64>, created: Instant, refused: bool) {
+        self.swim_owner
+            .resolved(session, created, refused, &mut self.wet);
     }
 
     /// Settles only the matching proposed carrier link. A rejection retains
@@ -2591,6 +2619,7 @@ pub(super) fn input(
         }
     }
     let current_heading = carried_position.heading;
+    controls.swim_owner.physical_frame(swimming);
     // The clock runs from the previous sample's request stamp (which is
     // never after its answer came), so each sample covers the time since
     // the last one, its round trip included, and never more than the time
@@ -2599,7 +2628,11 @@ pub(super) fn input(
     let since_sent = controls.last_sent.map_or(elapsed, |sent| {
         now.saturating_duration_since(sent).max(elapsed)
     });
-    let span = controls.span(since_sent);
+    let span = if swimming {
+        controls.swim_owner.span(now, controls.span(since_sent))
+    } else {
+        controls.span(since_sent)
+    };
     let mouse_limit = MOUSE_WIRE_RATE * span;
     let mouse_step = controls.mouse_turn.clamp(-mouse_limit, mouse_limit);
     let mouse_snapshot = controls
@@ -2769,6 +2802,7 @@ pub(super) fn input(
     let surface_before_wet = controls.wet;
     let surface_before_airborne = controls.airborne.clone();
     let surface_before_hop = controls.surface_hop;
+    let surface_before_hop_applied = controls.surface_hop_applied;
     let surface_before_water_jump = controls.water_jump;
     let mut surface_plan = None;
     let surface_eligible = water_enabled
@@ -2872,6 +2906,7 @@ pub(super) fn input(
     // The program's wet step for this sample, where the grant reads the
     // generation's water: the travel it gives, before collision.
     let mut wet_travel = None;
+    let mut swim_capture = None;
     if swimming && let Some(swim) = controls.swim {
         // Residual water travel has no facing input of its own. Keep the
         // turn keys' facing when no horizontal stroke was requested.
@@ -2931,6 +2966,20 @@ pub(super) fn input(
             vertical,
             jump,
         };
+        // Observe resolved input before the integrator replaces direction
+        // with residual travel. Special impulses/entry/surface keep the old path.
+        let ordinary = follow_step.is_none()
+            && !controls.stun_active
+            && controls.surface_hop_applied == surface_before_hop_applied
+            && controls.straddle.is_none()
+            && !controls.movement_options.fly;
+        swim_capture = controls.swim_owner.begin(
+            session_id,
+            accepted.position,
+            ordinary
+                .then(|| owned_swim::observed(mode, horizontal, shown))
+                .flatten(),
+        );
         // The program steps the wet set only while the origin is in the
         // water and the dry one from the next frame (read R33): the sample
         // ends at the frame whose travel takes the origin out, and the fall
@@ -2942,7 +2991,11 @@ pub(super) fn input(
         let mut left = span;
         while left > 0.0 {
             let piece = left.min(eq_client_core::movement::water::WET_FRAME_SECONDS);
-            let set = swim.set_for(world.wet_kind(feet + travel, body.height));
+            let kind = world.wet_kind(feet + travel, body.height);
+            let set = swim.set_for(kind);
+            if let Some(capture) = swim_capture.as_mut() {
+                capture.applied(kind, piece);
+            }
             let (across, up) = controls.wet.advance(set, input, piece);
             travel += Vec3::new(across[0], up, across[1]);
             left -= piece;
@@ -3620,16 +3673,34 @@ pub(super) fn input(
         poses.clear_positions();
     }
     let history = poses.history(carried_position, position_sent);
+    let swim_controls = swim_capture
+        .filter(|_| {
+            mode == MovementMode::Swim
+                && !surface_selected
+                && !entering
+                && !placement_blocked
+                && support.is_none()
+                && boat_sample.is_none()
+                && world.in_swimmable_water(landing, body.height)
+        })
+        .and_then(|capture| capture.finish(heading));
+    let owned_swim = swim_controls.is_some();
+    if swimming {
+        trace!(target: "eq_client_render::motion::swim", basis = ?accepted.position,
+            proposed = ?position_sent, dt = span, ?mode, input_ledger = ?swim_controls,
+            verdict = "proposed", "Ordinary swim proposal before local worker validation");
+    }
+    let mut owned_request = None;
     let mut created = now;
     let sent = outbox.post(online.world(), |stamp| {
         // Shoreline physics already ended at the observed frame. Its next
         // request must budget from that same tick, even if planning was slow.
-        created = if surface_selected || boat_sample.is_some() {
+        created = if surface_selected || boat_sample.is_some() || owned_swim {
             now
         } else {
             shore.as_ref().map_or(stamp.created, |plan| plan.created)
         };
-        ClientCommand::Move(MovementRequest {
+        let request = MovementRequest {
             mode,
             session_id: stamp.session_id,
             position: position_sent,
@@ -3640,7 +3711,14 @@ pub(super) fn input(
                 .or(support.map(Support::Door)),
             vertical_speed,
             history,
-        })
+        };
+        match swim_controls {
+            Some(controls) => {
+                owned_request = Some(request.clone());
+                ClientCommand::SwimFrame { request, controls }
+            }
+            None => ClientCommand::Move(request),
+        }
     });
     if let Err(reason) = sent {
         controls.airborne = if surface_selected {
@@ -3648,7 +3726,7 @@ pub(super) fn input(
         } else {
             previous_airborne
         };
-        if surface_selected {
+        if surface_selected || owned_swim {
             controls.wet = surface_before_wet;
         }
         controls.send_failed(reason);
@@ -3670,6 +3748,11 @@ pub(super) fn input(
         });
     }
     controls.surface_rollback = None;
+    if let Some(request) = owned_request {
+        controls
+            .swim_owner
+            .submitted(request, accepted.position, span, surface_before_wet);
+    }
     // Native return tests the successful move's candidate, not its retained
     // origin before the sweep (0x48bd31..0x48be35). A higher next floor can
     // fail 2S+r even when the approach origin passed it. Queue after the

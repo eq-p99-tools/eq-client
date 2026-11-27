@@ -1,0 +1,332 @@
+//! Controlled input through production Receive/Input/Present; no gameplay.
+use super::*;
+use eq_network_game::movement::MotionSession;
+
+fn calibration() -> eq_network_game::movement::MotionCalibration {
+    titanium_speeds(&SpeedState {
+        run: 0.7,
+        walk: 0.46,
+        level: 50,
+        hit_points: Some((500, 500)),
+        rate: 0,
+        weight: 0,
+        capacity: 100,
+        sneaking: false,
+        ducking: false,
+        zone_id: 1,
+        swimming_skill: Some(100),
+    })
+    .motion
+    .unwrap()
+}
+
+fn news(f: &Native, event: eq_client_core::WorldEvent) {
+    f.news
+        .send(eq_client_core::WorldUpdate::Game(event))
+        .unwrap();
+}
+
+fn frame(f: &mut Native) -> Vec<ClientCommand> {
+    let step = Duration::from_micros(16_667);
+    f.now += step;
+    f.app.world_mut().resource_mut::<Time>().advance_by(step);
+    f.app.world_mut().resource_mut::<Controls>().test_now = Some(f.now);
+    f.app
+        .world_mut()
+        .resource_mut::<crate::outbox::Outbox>()
+        .set_test_time(f.now);
+    f.app.update();
+    f.requests.try_iter().collect()
+}
+
+fn anchor(f: &Native, owner: &MotionSession) {
+    news(
+        f,
+        eq_client_core::WorldEvent::Position {
+            spawn_id: 7,
+            position: owner.position(),
+        },
+    );
+    news(
+        f,
+        eq_client_core::WorldEvent::SwimState {
+            session_id: 11,
+            position: owner.position(),
+            created: None,
+            basis: owner.swim_basis(),
+        },
+    );
+}
+
+fn owner(f: &Native) -> MotionSession {
+    let position = f
+        .app
+        .world()
+        .resource::<online::OnlineState>()
+        .world()
+        .player()
+        .unwrap()
+        .position;
+    let mut owner = MotionSession::new(11, 7, position, f.now)
+        .unwrap()
+        .with_swimming(true)
+        .with_heading_snapshots(true)
+        .with_falls(true);
+    owner.calibrate(calibration(), f.now).unwrap();
+    owner
+}
+
+fn settle(f: &Native, owner: &mut MotionSession, command: ClientCommand) -> MovementRequest {
+    let ClientCommand::SwimFrame { request, controls } = command else {
+        panic!("expected actual ordinary input ledger: {command:?}");
+    };
+    owner
+        .send_swim_sample(&request, Some(&controls), f.now, |_| Ok(()))
+        .unwrap();
+    assert!(owner.swim_basis().is_some());
+    news(
+        f,
+        eq_client_core::WorldEvent::MotionSent {
+            session_id: 11,
+            created: request.created,
+            position: owner.position(),
+            refused: None,
+        },
+    );
+    news(
+        f,
+        eq_client_core::WorldEvent::SwimState {
+            session_id: 11,
+            created: Some(request.created),
+            position: owner.position(),
+            basis: owner.swim_basis(),
+        },
+    );
+    request
+}
+
+#[test]
+fn turn_only_and_no_input_never_create_horizontal_travel() {
+    for turn in [false, true] {
+        let mut f = Native::new(false, -15.);
+        let mut owner = owner(&f);
+        anchor(&f, &owner);
+        if turn {
+            latency_tests::key(&mut f.app, KeyCode::KeyA, true);
+        }
+        let mut count = 0;
+        for _ in 0..180 {
+            for command in frame(&mut f) {
+                let request = settle(&f, &mut owner, command);
+                assert!(request.position.x.hypot(request.position.y) < 0.001);
+                count += 1;
+            }
+        }
+        assert!(count > 5);
+        if turn {
+            assert!(owner.position().heading != 0.);
+        }
+    }
+}
+
+#[test]
+fn releasing_strafe_preserves_earned_carry_and_correction_retires_pending_trial() {
+    let mut f = Native::new(false, -15.);
+    let mut owner = owner(&f);
+    anchor(&f, &owner);
+    crate::keys::testing::bind(
+        &mut f.app,
+        Act::StrafeLeft,
+        crate::keys::Chord::key(KeyCode::KeyZ),
+    );
+    latency_tests::key(&mut f.app, KeyCode::KeyZ, true);
+    for _ in 0..60 {
+        for command in frame(&mut f) {
+            settle(&f, &mut owner, command);
+        }
+    }
+    let before = owner.position();
+    latency_tests::key(&mut f.app, KeyCode::KeyZ, false);
+    // Turning continues while input is released; it must not reset real q.
+    latency_tests::key(&mut f.app, KeyCode::KeyA, true);
+    let mut carry = false;
+    for _ in 0..30 {
+        for command in frame(&mut f) {
+            let request = settle(&f, &mut owner, command);
+            carry |= (request.position.x - before.x).hypot(request.position.y - before.y) > 0.001;
+        }
+    }
+    assert!(carry);
+    let stale = loop {
+        if let Some(command) = frame(&mut f).pop() {
+            break command;
+        }
+    };
+    let ClientCommand::SwimFrame { request, controls } = stale else {
+        panic!("missing queued owned step");
+    };
+    f.now += Duration::from_millis(100);
+    let position = owner.position();
+    owner.correct(position, f.now).unwrap();
+    owner.calibrate(calibration(), f.now).unwrap();
+    let reset = owner.swim_basis();
+    assert!(
+        owner
+            .send_swim_sample(&request, Some(&controls), f.now, |_| panic!(
+                "retired step submitted"
+            ))
+            .is_err()
+    );
+    assert_eq!(owner.swim_basis(), reset);
+    anchor(&f, &owner);
+    // A late result from that prior request must not restore its trial.
+    news(
+        &f,
+        eq_client_core::WorldEvent::MotionSent {
+            session_id: 11,
+            created: request.created,
+            position,
+            refused: Some("retired by correction".into()),
+        },
+    );
+    news(
+        &f,
+        eq_client_core::WorldEvent::SwimState {
+            session_id: 11,
+            created: Some(request.created),
+            position,
+            basis: reset,
+        },
+    );
+    for _ in 0..60 {
+        for command in frame(&mut f) {
+            let request = settle(&f, &mut owner, command);
+            assert_eq!(
+                (request.position.x, request.position.y),
+                (position.x, position.y)
+            );
+        }
+    }
+}
+
+#[test]
+fn held_strafe_and_turn_both_sides_keep_native_carry_and_report_path_and_net() {
+    for side in [Act::StrafeLeft, Act::StrafeRight] {
+        for turning in [None, Some(Act::TurnLeft), Some(Act::TurnRight)] {
+            let mut f = Native::new(false, -15.);
+            let mut owner = owner(&f);
+            anchor(&f, &owner);
+            // These are actual held keyboard bindings read by normal input.
+            crate::keys::testing::bind(&mut f.app, side, crate::keys::Chord::key(KeyCode::KeyZ));
+            latency_tests::key(&mut f.app, KeyCode::KeyZ, true);
+            if let Some(turning) = turning {
+                crate::keys::testing::bind(
+                    &mut f.app,
+                    turning,
+                    crate::keys::Chord::key(KeyCode::KeyX),
+                );
+                latency_tests::key(&mut f.app, KeyCode::KeyX, true);
+            }
+            let origin = owner.position();
+            let mut path = 0_f64;
+            let mut accepted = 0_u16;
+            let mut refused = 0_u16;
+            let start = f.now;
+            while f.now.duration_since(start) < Duration::from_secs(10) {
+                for command in frame(&mut f) {
+                    let ClientCommand::SwimFrame { request, controls } = command else {
+                        panic!("matched ordinary swim lost owned controls: {command:?}");
+                    };
+                    let before = owner.position();
+                    let result =
+                        owner.send_swim_sample(&request, Some(&controls), f.now, |_| Ok(()));
+                    if result.is_ok() {
+                        accepted += 1;
+                    } else {
+                        refused += 1;
+                    }
+                    let position = owner.position();
+                    path += f64::from((position.x - before.x).hypot(position.y - before.y));
+                    news(
+                        &f,
+                        eq_client_core::WorldEvent::MotionSent {
+                            session_id: 11,
+                            created: request.created,
+                            position,
+                            refused: result.err().map(|error| error.to_string()),
+                        },
+                    );
+                    news(
+                        &f,
+                        eq_client_core::WorldEvent::SwimState {
+                            session_id: 11,
+                            position,
+                            created: Some(request.created),
+                            basis: owner.swim_basis(),
+                        },
+                    );
+                    assert!(owner.swim_basis().is_some(), "native controls lost proof");
+                }
+            }
+            let end = owner.position();
+            let net = f64::from((end.x - origin.x).hypot(end.y - origin.y));
+            assert_eq!(refused, 0);
+            assert!(accepted > 50 && path > 40.);
+            assert!(net <= path + 0.001);
+            if turning.is_some() {
+                assert!(net < path * 0.8);
+            }
+            eprintln!(
+                "controlled native {side:?}+{turning:?}: accepted={accepted} refused={refused} accepted_path_xy={path} net_xy={net}"
+            );
+        }
+    }
+}
+
+#[test]
+fn reset_receipt_requires_the_actual_uninterrupted_matching_reset() {
+    let mut f = Native::new(false, -15.);
+    let mut owner = owner(&f);
+    let basis = owner.swim_basis().unwrap();
+    let position = owner.position();
+    let mut local = owned_swim::Owner::default();
+    let mut wet = eq_client_core::movement::water::WetVelocity::default();
+    local.receipt(11, position, None, Some(basis), &mut wet);
+    assert!(
+        local
+            .begin(
+                Some(11),
+                position,
+                Some((eq_client_core::movement::SwimInput::Idle, 0.))
+            )
+            .is_none()
+    );
+    local.reset_observed(11, position);
+    local.physical_frame(true);
+    local.receipt(11, position, None, Some(basis), &mut wet);
+    assert!(
+        local
+            .begin(
+                Some(11),
+                position,
+                Some((eq_client_core::movement::SwimInput::Idle, 0.))
+            )
+            .is_none()
+    );
+    local.reset_observed(11, position);
+    local.receipt(11, position, None, Some(basis), &mut wet);
+    assert!(
+        local
+            .begin(
+                Some(11),
+                position,
+                Some((eq_client_core::movement::SwimInput::Idle, 0.))
+            )
+            .is_some()
+    );
+    // Repeated same-position corrections still mint different opaque epochs.
+    f.now += Duration::from_millis(100);
+    owner.correct(position, f.now).unwrap();
+    owner.calibrate(calibration(), f.now).unwrap();
+    assert_ne!(owner.swim_basis(), Some(basis));
+}
