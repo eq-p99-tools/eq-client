@@ -51,6 +51,9 @@ pub(super) struct Zone {
     pub(super) training: Option<crate::training::TrainingOffer>,
     /// A submitted practice or level change invalidated the admitted point count.
     pub(super) training_points_uncertain: bool,
+    /// Native practiced subjects: received updates print independently of
+    /// the locally held value. Reset with the admission, not as a receipt.
+    pub(super) native_practice_skills: std::collections::BTreeSet<u32>,
     /// The world container the player asked to open, until the server
     /// answers.
     pub(super) asked_container: Option<u32>,
