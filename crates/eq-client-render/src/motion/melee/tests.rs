@@ -41,6 +41,10 @@ fn select(online: &mut OnlineState, revision: u64) {
 }
 
 fn world(distance: f32) -> OnlineState {
+    world_with_target(spawn(distance))
+}
+
+fn world_with_target(target: SpawnState) -> OnlineState {
     let mut online = OnlineState::new(true);
     let mut player = testing::player(7);
     player.race = 1;
@@ -50,7 +54,7 @@ fn world(distance: f32) -> OnlineState {
         ..WorldPosition::default()
     };
     testing::admit(&mut online, 11, player);
-    testing::spawn_entry(&mut online, 5, spawn(distance));
+    testing::spawn_entry(&mut online, 5, target);
     select(&mut online, 1);
     assert!(online.world().target_intent().is_some());
     online
@@ -445,6 +449,40 @@ fn melee_ui_option_and_normal_attack_button_drive_one_bounded_move() {
         moves(&rx),
         Vec::new(),
         "one actual proposal stays in flight"
+    );
+}
+
+#[test]
+fn melee_positioning_replaces_the_released_keyboard_facing_owner() {
+    let (mut app, rx) = runtime();
+    let mut target = spawn(0.);
+    target.position.x = 30.;
+    app.insert_resource(world_with_target(target));
+    app.world_mut()
+        .resource_mut::<crate::options::OptionsState>()
+        .options
+        .qol
+        .set(Fix::MeleePositioning, true);
+    let now = app.world().resource::<motion::Controls>().now();
+    app.world_mut()
+        .resource_mut::<motion::Controls>()
+        .key_facing = Some(motion::key_turn::Facing::new(0., now, None));
+    let attack = app
+        .world_mut()
+        .spawn((Interaction::None, crate::skinned::AttackButton))
+        .id();
+    crate::clicks::testing::click(&mut app, attack);
+    let sent = moves(&rx);
+    assert_eq!(sent.len(), 1);
+    // Melee first turns at its existing bounded rate before approaching.
+    assert_eq!((sent[0].position.x, sent[0].position.y), (0., 0.));
+    assert!((sent[0].position.heading - motion::TURN_RATE * 0.1).abs() < 0.000_1);
+    assert!(
+        app.world()
+            .resource::<motion::Controls>()
+            .key_facing
+            .is_none(),
+        "a finished keyboard turn must not override the next melee facing"
     );
 }
 

@@ -26,6 +26,9 @@ mod ground;
 #[cfg(test)]
 mod ground_tests;
 mod headroom;
+mod key_turn;
+#[cfg(test)]
+mod key_turn_tests;
 mod melee;
 mod owned_swim;
 mod pad;
@@ -161,6 +164,11 @@ pub(super) struct Controls {
     /// The last actual controller floor query, distinct from the accepted link.
     carrier_floor: Option<CarrierFloor>,
     visual_boat: Option<boats::DisplayFrame>,
+    /// Actual frame-observed keyboard facing, independent of queued translation.
+    key_facing: Option<key_turn::Facing>,
+    restore_key_facing: bool,
+    #[cfg(test)]
+    suppress_key_facing: bool,
     sent_yaw: SentYaw,
     boundary: BoundaryTracker,
     placement: placement::Check,
@@ -386,6 +394,10 @@ impl Default for Controls {
             boat_pending: None,
             carrier_floor: None,
             visual_boat: None,
+            key_facing: None,
+            restore_key_facing: false,
+            #[cfg(test)]
+            suppress_key_facing: false,
             sent_yaw: SentYaw::Ordinary,
             boundary: BoundaryTracker::default(),
             placement: placement::Check::default(),
@@ -556,6 +568,29 @@ impl Controls {
             .is_some_and(|visual| visual.translation.is_some())
     }
 
+    fn refuse_key_facing(&mut self) {
+        if self.key_facing.take().is_some() {
+            self.restore_key_facing = true;
+            self.released_turn = 0.;
+            self.facing = None;
+        }
+    }
+
+    fn yield_key_facing(&mut self, drawn: Transform) {
+        if self.key_facing.take().is_some() {
+            // A new orientation owner starts from the actual drawn yaw;
+            // old keyboard samples must not resume their heading playback.
+            // During keyboard ownership the queue is left untouched so
+            // translation's existing compatibility checks stay intact.
+            let rotation = self.visual_boat.map_or(drawn.rotation, |frame| {
+                boats::to_local(frame.pose, drawn).rotation
+            });
+            if let Some(visual) = self.visual.as_mut() {
+                visual.face(rotation);
+            }
+        }
+    }
+
     /// Starts only the exact endpoint already accepted by the local command
     /// queue and collision sweep. The worker remains authoritative for the
     /// simulation, permission checks and the next movement sample's basis.
@@ -594,6 +629,16 @@ impl Controls {
         position: eq_client_core::WorldPosition,
         refused: bool,
     ) -> bool {
+        let changed = self.preview.is_some_and(|preview| {
+            Some(preview.session_id) == session_id
+                && preview.created == created
+                && preview.position != position
+        });
+        if self.is_pending_move(session_id, created) && (refused || changed) {
+            // Boat motion has no submitted translation preview, but its
+            // held-facing preview must also yield to a genuine local refusal.
+            self.refuse_key_facing();
+        }
         let Some(preview) = self
             .preview
             .filter(|preview| Some(preview.session_id) == session_id && preview.created == created)
@@ -663,6 +708,43 @@ impl Controls {
         if let Some(position) = self.restored_translation.take() {
             transform.translation = position;
         }
+    }
+
+    fn present_key_facing(
+        &mut self,
+        world: &ClientWorld,
+        transform: &mut Transform,
+    ) -> Option<bool> {
+        let carrier = self.visual_boat;
+        let keyboard = self.key_facing.as_mut().map(|facing| {
+            facing.carry(carrier);
+            (facing.heading, facing.follow)
+        });
+        let heading = if let Some((heading, _)) = keyboard {
+            self.restore_key_facing = false;
+            Some(heading)
+        } else if std::mem::take(&mut self.restore_key_facing) {
+            world.player().map(|player| {
+                self.boat
+                    .and_then(|riding| riding.carried(world.carriers(), Instant::now()))
+                    .map_or(player.position.heading, |riding| riding.position.heading)
+            })
+        } else {
+            None
+        };
+        if let Some(heading) = heading {
+            transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
+            if keyboard.is_none() {
+                // A refused prediction restores the accepted orientation.
+                let rotation = carrier.map_or(transform.rotation, |frame| {
+                    boats::to_local(frame.pose, *transform).rotation
+                });
+                if let Some(visual) = self.visual.as_mut() {
+                    visual.face(rotation);
+                }
+            }
+        }
+        keyboard.map(|(_, follow)| follow)
     }
 
     fn advance_display(&mut self, seconds: f32, transform: &mut Transform) -> bool {
@@ -1066,6 +1148,7 @@ impl Controls {
         self.stun_active = stunned;
         self.stunned = stunned && !self.movement_options.walk_while_stunned;
         if stunned || (changed && revision.is_some()) {
+            self.restore_key_facing |= self.key_facing.take().is_some();
             self.shoreline.reset();
             self.taps = TapBuffer::default();
             self.jump = None;
@@ -1092,6 +1175,7 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
+        self.restore_key_facing |= self.key_facing.take().is_some();
         self.restore_preview |= self.ground.active();
         self.restore_translation |= self.has_translation_playhead() || self.ground.active();
         self.ground.retire();
@@ -1121,6 +1205,7 @@ impl Controls {
     /// Stops prediction without revoking the session's calibration. A pending
     /// proposal still owns the movement slot until its result or its admission ends.
     fn pause_prediction(&mut self) {
+        self.restore_key_facing |= self.key_facing.take().is_some();
         self.restore_surface_trial();
         self.surface.pause();
         self.restore_preview |= self.ground.active();
@@ -1480,6 +1565,9 @@ impl Controls {
         }
         self.last_answer = Some(self.now());
         self.refused = refused.map(str::to_owned);
+        if refused.is_some() {
+            self.refuse_key_facing();
+        }
         if refused.is_none()
             && self
                 .mouse_heading
@@ -1648,6 +1736,7 @@ impl Controls {
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
         if self.is_pending_move(session_id, created) {
             self.resolve_swim(session_id, created, true);
+            self.refuse_key_facing();
             self.surface.refuse(session_id, created);
             self.restore_preview |= self.preview.take().is_some();
             self.resolve_carrier(created, true);
@@ -2248,6 +2337,7 @@ pub(super) fn input(
         if trace_melee {
             melee::held("movement_grant_unavailable");
         }
+        controls.restore_key_facing |= controls.key_facing.take().is_some();
         controls.mouse_heading = None;
         controls.held = Some(Held::Withdrawn);
         return;
@@ -2514,6 +2604,92 @@ pub(super) fn input(
         cap,
         focused && !lying && look.as_deref().is_none_or(|look| !look.held),
     );
+    // Poll actual held input before the worker/sample gates. Position remains
+    // on its ordinary path; facing consumes only frames with a held turn.
+    let frame_turns = match online.world().generation() {
+        eq_client_core::GameDialect::Titanium => time.is_some(),
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    };
+    #[cfg(test)]
+    let frame_turns = frame_turns && !controls.suppress_key_facing;
+    if let (true, Some(player), Ok((_, drawn)), Ok((camera, _))) = (
+        frame_turns,
+        online.world().player(),
+        players.single(),
+        cameras.single(),
+    ) {
+        let mut physical = keyboard.clone();
+        physical.clear();
+        let intent = controls.intent(
+            &physical,
+            map,
+            scripted,
+            focused,
+            (camera.yaw, player.position.heading),
+            look.as_deref(),
+        );
+        let own = focused
+            && !lying
+            && !controls.stun_active
+            && moving_world.is_some()
+            && controls.following.is_none()
+            && scripted_facing.is_none()
+            && controls.mouse_heading.is_none()
+            && (intent.preserve_facing || intent.direction == Vec3::ZERO);
+        if own {
+            let carrier = controls.visual_boat.and_then(|frame| {
+                online
+                    .world()
+                    .carriers()
+                    .latest(frame.sample.spawn_id)
+                    .filter(|report| report.sample().incarnation == frame.sample.incarnation)
+                    .map(|report| boats::DisplayFrame {
+                        sample: report.sample(),
+                        pose: report.pose(now),
+                    })
+            });
+            let accepted_heading = controls
+                .boat
+                .and_then(|riding| riding.carried(online.world().carriers(), now))
+                .map_or(player.position.heading, |riding| riding.position.heading);
+            if controls.key_facing.is_none() && intent.turn != 0. {
+                let forward = drawn.rotation * Vec3::Z;
+                let heading = if std::mem::take(&mut controls.restore_key_facing) {
+                    accepted_heading
+                } else {
+                    eq_client_core::world_heading(forward.x.atan2(forward.z))
+                };
+                controls.key_facing = Some(key_turn::Facing::new(heading, now, carrier));
+            }
+            let turn = controls
+                .turn_held
+                .filter(|_| intent.turn != 0.)
+                .map(|(_, since)| (intent.turn, since));
+            let remaining = if let Some(facing) = controls.key_facing.as_mut() {
+                facing.carry(carrier);
+                facing.observe(
+                    now,
+                    time.as_deref().map_or(Duration::ZERO, Time::delta),
+                    turn,
+                    cap,
+                );
+                if turn.is_none() {
+                    // A final ordinary sample reports the actual held-facing
+                    // remainder, excluding the key-up frame's old inclusive step.
+                    Some(arc(accepted_heading, facing.heading))
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+            if let Some(remaining) = remaining {
+                controls.released_turn = remaining;
+            }
+        } else {
+            controls.yield_key_facing(*drawn);
+        }
+    }
     if focused
         && !controls.stun_active
         && (swimming || shoreline_active)
@@ -3145,6 +3321,11 @@ pub(super) fn input(
     }
     let follow_step = follow_step.or(melee_step);
     let follow_heading = follow_step.map(|step| step.heading);
+    if follow_heading.is_some()
+        && let Ok((_, drawn)) = players.single()
+    {
+        controls.yield_key_facing(*drawn);
+    }
     if placement_blocked {
         // Keep the turn inputs and ordinary sample timing. Translation,
         // jumps and gravity cannot start from the suspect received XYZ.
@@ -3760,6 +3941,12 @@ pub(super) fn input(
                 && !swimming
                 && shore.is_none()
                 && controls.facing.is_none()
+                && controls.key_facing.as_ref().is_none_or(|facing| {
+                    // A diagonal's component budgets use the accepted body
+                    // heading. Keep the existing cardinal path while that
+                    // rate-limited heading catches the stopped keyboard facing.
+                    arc(current_heading, facing.heading) == 0.
+                })
                 && !active_mouse_yaw
                 && world.support(feet).is_some()
         })
@@ -4064,6 +4251,8 @@ pub(super) fn input(
     // follows the facing within the same sample budget as the position.
     let facing = if let Some(heading) = follow_heading {
         heading
+    } else if let Some(facing) = controls.key_facing.as_ref().filter(|_| !mouse_steering) {
+        facing.heading
     } else if matches!(mode, MovementMode::GroundedDiagonal(_)) {
         diagonal_heading
     } else if mouse_steering {
@@ -5281,6 +5470,8 @@ pub(super) fn interpolate(
         && controls.boat.is_none()
         && controls.visual_boat.is_none()
         && controls.restored_translation.is_none()
+        && controls.key_facing.is_none()
+        && !controls.restore_key_facing
     {
         return;
     }
@@ -5324,6 +5515,7 @@ pub(super) fn interpolate(
             visual.face(visual_rotation);
         }
     }
+    let key_follow = controls.present_key_facing(online.world(), &mut transform);
     // Both measurements are the drawn world-space root. A carrier queue
     // temporarily writes local coordinates until the carry above restores
     // them; measuring there would compare different coordinate frames.
@@ -5341,7 +5533,8 @@ pub(super) fn interpolate(
     }
     for (mut camera, free) in &mut cameras {
         camera.focus = transform.translation;
-        if (follow_heading || preview.is_some() || had_preview) && !free {
+        let follow = key_follow.unwrap_or(follow_heading || preview.is_some() || had_preview);
+        if follow && !free {
             crate::camera::start_behind(&mut camera, &transform);
         }
     }

@@ -248,6 +248,14 @@ program's frames in each 50 ms step (inferred, checklists 6.416 and 6.419):
 its falls and jumps go as the original's at 60, the same for every player,
 and never gentler than the original running faster. Project 1999 and Titanium EQEmu sessions
 offer bounded swimming in classic water marked by the installed zone.
+Titanium keyboard facing is observed every rendered frame with that same
+turn ramp (0x4a1d74; the 60 Hz mapping remains inferred). Releasing a turn key
+consumes no extra turn frame and stops the drawn character and chase yaw,
+including on a supported boat. Ordinary paced samples report the facing
+already reached; queued position playback does not play that turn again.
+Forward/backward translation keeps its existing controller. Natural carrier
+yaw and genuine server corrections can still change the world-space facing.
+Mouse look and deliberate camera orbit keep their existing ownership.
 Wet movement starts when the character's body origin enters that region.
 On Titanium, water moves the body as the original client's own water step
 does: velocity carries from frame to frame, the water damps it, and gravity

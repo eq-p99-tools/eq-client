@@ -162,6 +162,9 @@ fn turn_case(heading: f32, code: KeyCode, moving: bool, delay: usize, old_tag: b
             Update,
             (|mut controls: ResMut<Controls>| {
                 controls.sent_yaw = SentYaw::Ordinary;
+                if let Some(facing) = controls.key_facing.as_mut() {
+                    facing.follow = false;
+                }
                 // Input may already have created the submitted dry preview.
                 if let Some(visual) = controls.visual.as_mut() {
                     visual.follow_heading = false;
@@ -339,4 +342,33 @@ fn chase_leaves_detached_camera_under_its_own_turn_controls() {
         before["camera_rotation"],
         "detached view did not turn"
     );
+}
+
+#[test]
+fn rmb_after_a_released_key_turn_uses_the_existing_orbit_without_old_yaw_playback() {
+    let mut rig = Rig::new(511.5, 2);
+    rig.key(KeyCode::ArrowLeft, true);
+    for _ in 0..32 {
+        rig.tick();
+    }
+    rig.key(KeyCode::ArrowLeft, false);
+    for _ in 0..3 {
+        rig.tick();
+    }
+    rig.app
+        .world_mut()
+        .query::<&mut OrbitCamera>()
+        .single_mut(rig.app.world_mut())
+        .unwrap()
+        .yaw += 0.63;
+    let before = rig.tick();
+    crate::camera::testing::button(&mut rig.app, MouseButton::Right, true);
+    for _ in 0..30 {
+        let row = rig.tick();
+        let delta = row["yaw"].as_f64().unwrap() - before["yaw"].as_f64().unwrap();
+        assert!(delta.sin().atan2(delta.cos()).abs() < 0.000_1);
+        assert!(row["facing_error"].as_f64().unwrap() < 0.000_1);
+        assert_eq!(row["pitch"], before["pitch"]);
+        assert_eq!(row["radius"], before["radius"]);
+    }
 }
