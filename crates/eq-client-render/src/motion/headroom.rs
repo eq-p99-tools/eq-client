@@ -329,14 +329,12 @@ impl State {
     }
 }
 
-/// The normal standing sweep lift, retaining a linked carrier's zero lift.
-pub(super) fn standing_lift(
+/// Shared ordinary-walk probe lift; linked callers pass `raised = false`.
+pub(super) fn walking_lift(
     client: InstalledClient,
     world: &ClientWorld,
-    collision: &CollisionWorld,
     body: &PlayerBody,
-    feet: Vec3,
-    linked: bool,
+    raised: bool,
 ) -> f32 {
     client
         .falls()
@@ -346,13 +344,7 @@ pub(super) fn standing_lift(
                 race: world.player().map_or(0, |player| player.race),
                 stand_height: crate::posture::stand_height(client, world, body),
                 size: body.size,
-                lifted: !linked
-                    && super::raised_walk(
-                        collision,
-                        feet,
-                        body.height,
-                        Some(PostureState::Standing),
-                    ),
+                lifted: raised,
             })
         })
 }

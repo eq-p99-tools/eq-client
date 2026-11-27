@@ -144,6 +144,9 @@ pub(crate) const fn is_chat(command: &ClientCommand) -> bool {
 }
 
 fn interrupts_apply(command: &ClientCommand) -> bool {
+    if let ClientCommand::GroundFrame { state, .. } = command {
+        return state.forward() || state.velocity().iter().any(|value| *value != 0.);
+    }
     matches!(
         command,
         ClientCommand::Move(_)
@@ -510,6 +513,17 @@ impl Outbox {
     ) -> Result<(), Refusal> {
         let stamp = self.try_stamp(world)?;
         self.try_send(world, command(stamp), false, None)
+    }
+
+    /// Checks current admission and capability without reserving queue capacity.
+    pub(super) fn check_command(
+        &self,
+        world: &ClientWorld,
+        command: &ClientCommand,
+    ) -> Result<(), Refusal> {
+        // Availability is not a reservation of channel capacity. Publication
+        // still uses try_send and its normal rollback on queue refusal.
+        self.check(world, command).map(|_| ())
     }
 
     /// The queue, if the session can take this command now.

@@ -59,6 +59,7 @@ Run a script from the workbench while logged in to act on your current character
   timed `hold` steps preserve any explicit hold of the same key.
   Completion, stop, error, pause, or native input takeover releases all
   script-owned holds. A genuine native hold remains owned by the user.
+  Resume does not press released latches again; issue `key_down` again after a pause.
   These steps use the ordinary keyboard path and current bindings.
 
   To overlap a mapped movement key with a world RMB turn, for example,

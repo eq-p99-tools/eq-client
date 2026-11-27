@@ -3,6 +3,122 @@
 `[R]` identifies a static program read. `[I]` identifies an inference or
 offline comparison. Offline results do not establish live compatibility.
 
+## 6.670 — ordinary forward run and release glide
+
+[R] Titanium samples input before its motion step. On release it clears
+Forward immediately, while owned horizontal velocity decays by 0.625 per
+frame; input contributes 0.8 while held (`eqgame.exe` `0x4a1d74`,
+`0x4bfe0f`). The following pass's ordinary report block samples current
+position and velocity, subject to its existing more-than-280 ms gate
+(`0x4aba14`). A gated start and stop can coalesce. There is no special final
+endpoint or stop report.
+
+[R] The ordinary own report passes the spawn's stored coordinate block at
+`+0x30` to `0x465244` (`0x4ac561`–`0x4ac565`). That packer copies its
+`+0`, `+4` and `+8` coordinates at `0x465279`, `0x465287` and `0x465293`;
+it does not add velocity or a future time to those positions. The handoff
+is `0x4ac5f0`, before the next input call at `0x4ac9cd`. Thus this is the
+stored position left by completed motion, not a projected endpoint. The
+executable instruction bytes were checked independently of the decompile.
+
+The client owns these completed frames separately from local admission. It
+shows each collision-resolved step immediately, publishes the previous
+completed state before advancing the next input, and never replays an admitted
+prefix. Local refusal or server placement retires prediction. A refusal keeps
+the existing mouse heading; a genuine placement retains its existing reset
+semantics. Unsupported handback waits for a genuinely admitted prefix rather
+than rewinding accepted movement or catching up missing time.
+
+[I] An unchanged docked-carrier handover uses ordinary, guard-checked
+completed observations at 50 ms local spacing. It retains genuine floor
+support and does not wait for an earlier result before queuing another
+observation. This changes no network report timer. In the normal-dispatch
+60 Hz replay with zero or six frames of delayed receipts, horizontal
+display lead is at most 2.489 units at 29.8667 units/s; the stricter tested
+bound is 100 ms of calibrated travel. The three-dimensional deck-step
+lead is tested separately against the existing 150 ms physics frame cap.
+Their prediction alone grants no packet position or movement authority;
+each reported point is separately checked. The existing 250 ms uncertainty
+timeout still handles a stalled worker or result stream.
+
+Each processed observation equals its recorded rendered waypoint. While
+input continues, the live display has already advanced one more frame;
+that residual is not reported as zero. The current display and accepted
+position settle to the same point after the actual stopped prefix is
+processed. A 150 ms frame cap is distinct from one 16.667 ms render frame.
+
+Send-boundary checks use a separate guarded session and recorded completed
+render waypoints. They distinguish a timer release of already committed
+motion from a prepared, guard-checked send: the actual sender commits that
+transaction only after its send callback succeeds. The pre-call committed
+position is recorded separately; an unchecked queued proposal is never
+substituted for acceptance.
+
+[I] The host's precise observed frame duration replaces the native whole-ms
+clock. Input is normalized to the existing independently calibrated steady
+speed; the 150 ms cap, movement guard and packet pacing remain unchanged.
+The per-move stationary-delta test is not inferred from distance. Current
+scope is Titanium ordinary Forward running on positively known, static,
+dry geometry with ordinary grounded support. Static walkable slopes and
+risers use the existing Titanium walking body physics and body-specific reach;
+the horizontal recurrence stays the same through keyboard turns. Per-sample
+rise/drop budgets are checked against both the received basis and every posted
+observation that could already have been admitted, without assuming acceptance.
+Walk, calibrated Strafe and GroundedDiagonal, backward, unsupported edges,
+unknown liquid metadata, moving support, water, flight, crouch, jump, boosted run,
+routes and follow retain their existing paths. Slippery-region friction is
+not separately modeled. Zero vertical wire velocity at this horizontal-only
+seam is inferred, not a native slope-velocity claim.
+
+Camera-relative actions which select Forward and face their direction can
+also use this Forward path; they are distinct from calibrated body-relative
+Strafe. No new lateral normalization or rate is introduced. Uncertain or moving
+support still uses the admitted-prefix handback above; a static riser replay
+does not establish a moving-carrier transfer.
+
+Native dry frames retain the ordinary headroom rule. A starting origin or
+candidate refused by the existing probe hands back to the ordinary posture
+controller before that candidate is drawn or submitted. The standing scale,
+mount terms, zone exceptions, probe lift and linked-carrier suppression are
+shared with the ordinary path; this adds no new ceiling margin or duck rule.
+
+[R] Key-command handler `0x4619cd` writes the forward state; input `0x4a1d74`
+reads it once per frame, before `0x445243` calls `0x4bfe0f` and `0x48ba76`.
+A held state observed in several frames can therefore move before a 100 ms
+legacy sample opportunity. [I] A complete press/release handled before any
+input pass is expected to read up, but the original handler's possible latch
+remains unread. This producer conservatively uses current held state only;
+it does not manufacture a frame from an unobserved press edge. An observed
+60 ms pulse and an unobserved same-pass tap are separate cases.
+
+Offline release/re-press and whole-ms-reference comparisons are distinct
+from gameplay validation. The native target includes a short decreasing
+glide after release; an instant stop is not the selected behavior. The local
+look remains required before merge, and the first public-server movement
+check is attended.
+
+### Movement report boundaries
+
+Each script `report` captures its scene state, then queues one read-only
+`MovementPacketSnapshot` command for the same admission. Its movement report
+is logged when that worker answer arrives, joining the original scene to
+`movement_packets.sent`, the count of successful player-position application
+packet submissions to transport in that worker attempt. An accepted local
+proposal or `MotionSent` receipt is not a packet count; socket delivery and
+server acceptance are not established by this counter.
+
+The report carries the typed `run_id`, admission, request identity, worker
+wall-clock coordinate and monotonic scene/worker milliseconds relative to
+this client's first report request, plus the scene-to-worker interval. The scene and
+worker observations are separate boundaries; input may run between them.
+Compare two counts only within the same run and admission, using the two
+worker monotonic boundaries for elapsed time; wall-clock time is only a log
+coordinate. No periodic polling, movement send,
+timer reset or forced final update is introduced. Unavailable/full/ended
+requests report a null count, never a guessed zero. Pending reports are
+bounded and discarded as unavailable on an admission reset; late or duplicate
+answers cannot relabel a new report.
+
 ## 6.660 — ship rigging, sail and rail as walking walls
 
 [R] Titanium's ordinary walking move (`eqgame.exe` `0x48acef`) uses object

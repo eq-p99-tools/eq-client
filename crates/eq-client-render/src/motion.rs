@@ -22,6 +22,9 @@ mod rider_animation_tests;
 mod teleport_camera_tests;
 pub(crate) use boats::sweep_depth;
 mod follow;
+mod ground;
+#[cfg(test)]
+mod ground_tests;
 mod headroom;
 mod owned_swim;
 mod pad;
@@ -184,6 +187,8 @@ pub(super) struct Controls {
     /// same binary. This switch is absent from production builds.
     #[cfg(test)]
     suppress_submitted_preview: bool,
+    #[cfg(test)]
+    suppress_ground: bool,
     /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
     test_span: Option<f32>,
@@ -278,6 +283,7 @@ pub(super) struct Controls {
     movement_options: eq_client_core::movement::MovementOptions,
     /// The group member the player follows on foot (`/follow`).
     following: Option<follow::Following>,
+    ground: ground::Control,
 }
 
 #[derive(Clone, Copy, Eq, PartialEq)]
@@ -393,6 +399,8 @@ impl Default for Controls {
             #[cfg(test)]
             suppress_submitted_preview: false,
             #[cfg(test)]
+            suppress_ground: false,
+            #[cfg(test)]
             test_span: None,
             #[cfg(test)]
             suppress_release_catchup: false,
@@ -439,6 +447,7 @@ impl Default for Controls {
             swim_owner: owned_swim::Owner::default(),
             movement_options: eq_client_core::movement::MovementOptions::default(),
             following: None,
+            ground: ground::Control::default(),
         }
     }
 }
@@ -976,10 +985,14 @@ impl Controls {
     /// it around the call.
     pub fn reset(&mut self, speed: Option<f32>) {
         self.shoreline.reset();
-        let restore_preview = self.restore_preview || self.preview.is_some();
+        let mut ground = std::mem::take(&mut self.ground);
+        let native = ground.active();
+        ground.retire();
+        let restore_preview = self.restore_preview || self.preview.is_some() || native;
         let restore_translation = self.restore_translation
             || self.restored_translation.is_some()
-            || self.has_translation_playhead();
+            || self.has_translation_playhead()
+            || native;
         *self = Self {
             speed,
             restore_preview,
@@ -995,6 +1008,7 @@ impl Controls {
             // A correction or a server's move keeps following, which then
             // ends by its own rules; a new admission ends it in `input`.
             following: self.following.take(),
+            ground,
             movement_options: self.movement_options,
             // A grant or correction resets prediction, but the same worker
             // can still consume a move that was already queued.
@@ -1060,7 +1074,9 @@ impl Controls {
         }
         if changed && revision.is_some() {
             self.moving = false;
-            self.restore_translation |= self.has_translation_playhead();
+            self.restore_preview |= self.ground.active();
+            self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+            self.ground.retire();
             self.restore_preview |= self.preview.take().is_some();
         }
         self.stunned
@@ -1072,7 +1088,9 @@ impl Controls {
         if previous.same_permissions(options) {
             return;
         }
-        self.restore_translation |= self.has_translation_playhead();
+        self.restore_preview |= self.ground.active();
+        self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+        self.ground.retire();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         if previous.fly != options.fly {
@@ -1101,7 +1119,9 @@ impl Controls {
     fn pause_prediction(&mut self) {
         self.restore_surface_trial();
         self.surface.pause();
-        self.restore_translation |= self.has_translation_playhead();
+        self.restore_preview |= self.ground.active();
+        self.restore_translation |= self.has_translation_playhead() || self.ground.active();
+        self.ground.retire();
         self.restore_preview |= self.preview.take().is_some();
         self.shoreline.reset();
         self.moving = false;
@@ -1151,10 +1171,10 @@ impl Controls {
     }
 
     fn span_limit(&self) -> Duration {
-        if self.moving {
+        if self.moving && !self.ground.cold_handback {
             MAX_CYCLE_DURATION
         } else {
-            Duration::from_millis(100)
+            START_CYCLE_DURATION
         }
     }
     /// Takes the session's word on how the player may move. A new speed
@@ -1172,6 +1192,11 @@ impl Controls {
         grant: eq_client_core::world::MotionGrant,
         root: eq_client_core::RootRules,
     ) {
+        if self.ground.active() {
+            self.restore_translation = true;
+            self.restore_preview = true;
+            self.ground.retire();
+        }
         // Rooted is granted too, at no speed: the program zeroes the speed
         // once and blocks nothing else, so input goes on and the player
         // turns (reads R18, R22).
@@ -1402,6 +1427,7 @@ impl Controls {
 
     pub(super) fn moved(&mut self, session_id: Option<u64>, created: Instant) -> bool {
         if self.is_pending_move(session_id, created) {
+            self.ground.cold_handback = false;
             self.finish();
             return true;
         }
@@ -1430,6 +1456,51 @@ impl Controls {
     pub(super) fn resolve_swim(&mut self, session: Option<u64>, created: Instant, refused: bool) {
         self.swim_owner
             .resolved(session, created, refused, &mut self.wet);
+    }
+
+    /// Native current-state receipts retire observation identities only.
+    /// Their already drawn distance never becomes a playback segment.
+    pub(super) fn ground_result(
+        &mut self,
+        session: Option<u64>,
+        created: Instant,
+        position: eq_client_core::WorldPosition,
+        refused: Option<&str>,
+    ) -> bool {
+        let received = self.now();
+        if !self
+            .ground
+            .reconcile(session, created, position, refused.is_some(), received)
+        {
+            return false;
+        }
+        self.last_answer = Some(self.now());
+        self.refused = refused.map(str::to_owned);
+        if refused.is_none()
+            && self
+                .mouse_heading
+                .is_some_and(|heading| arc(heading, position.heading) == 0.)
+        {
+            self.mouse_heading = None;
+        }
+        if let Some(restore) = self.ground.restore.take() {
+            self.restored_translation =
+                Some(Vec3::from_array(eq_client_core::render_position(restore)));
+            self.visual = Some(VisualMotion::at(restore));
+            self.preview = None;
+            self.clear_poses();
+            self.moving = false;
+        }
+        true
+    }
+
+    pub(super) fn refuse_move(&mut self, world: &ClientWorld, created: Instant, reason: &str) {
+        let native = world.player().is_some_and(|player| {
+            self.ground_result(world.session_id(), created, player.position, Some(reason))
+        });
+        if !native {
+            self.move_refused(world.session_id(), created, reason);
+        }
     }
 
     /// Settles only the matching proposed carrier link. A rejection retains
@@ -1485,6 +1556,41 @@ impl Controls {
         held
     }
 
+    /// Keeps the existing carrier display queue in its received world frame.
+    fn carry_display(
+        &mut self,
+        carriers: &eq_client_core::movement::Carriers,
+        advanced_in_boat: bool,
+        transform: &mut Transform,
+    ) {
+        if let Some(frame) = self.visual_boat {
+            if let Some(report) = carriers
+                .latest(frame.sample.spawn_id)
+                .filter(|report| report.sample().incarnation == frame.sample.incarnation)
+            {
+                let pose = report.pose(Instant::now());
+                // advance() above writes local coordinates. With no remaining
+                // segment, recover the shown local point from its last frame.
+                if !advanced_in_boat {
+                    *transform = boats::to_local(frame.pose, *transform);
+                }
+                *transform = boats::to_world(pose, *transform);
+                self.visual_boat = Some(boats::DisplayFrame {
+                    sample: report.sample(),
+                    pose,
+                });
+            } else {
+                if let Some(visual) = self.visual.as_mut() {
+                    visual.map(|transform| boats::to_world(frame.pose, transform));
+                }
+                if advanced_in_boat {
+                    *transform = boats::to_world(frame.pose, *transform);
+                }
+                self.visual_boat = None;
+            }
+        }
+    }
+
     /// Accepted local carrier basis, for explicit script diagnostics.
     pub(crate) fn carrier_support(
         &self,
@@ -1493,7 +1599,9 @@ impl Controls {
         eq_client_core::WorldPosition,
         eq_client_core::WorldPosition,
     )> {
-        self.boat
+        self.ground
+            .carrier()
+            .or(self.boat)
             .map(|riding| (riding.sample, riding.pose, riding.position))
     }
 
@@ -1594,11 +1702,14 @@ impl Controls {
     }
 
     /// Whether a movement or crossing request still owns the slot.
-    pub const fn waiting(&self) -> bool {
-        self.pending.is_some()
+    pub fn waiting(&self) -> bool {
+        self.pending.is_some() || self.ground.active() && !self.ground.settled()
     }
 
     pub(super) fn liquid_basis(&self, session_id: Option<u64>, now: Instant) -> LiquidBasis {
+        if let Some(basis) = self.ground.basis(session_id, now) {
+            return basis;
+        }
         match self
             .pending
             .filter(|pending| Some(pending.session_id) == session_id)
@@ -1642,6 +1753,7 @@ impl Controls {
 /// Longest span one proposal may cover; the session admits up to 0.25 s per sample.
 const MAX_CYCLE_DURATION: Duration = Duration::from_millis(250);
 const MAX_CYCLE: f32 = MAX_CYCLE_DURATION.as_secs_f32();
+const START_CYCLE_DURATION: Duration = Duration::from_millis(100);
 
 /// The lower of each speed of two grants, as the sample that straddles a
 /// change made in place may ask (`Controls::grant`). A mode either grant
@@ -1963,6 +2075,7 @@ pub(super) fn stop_autorun_after_failed_script(
 )]
 pub(super) fn input(
     keys: crate::keys::Keys,
+    time: Option<Res<Time>>,
     navigation: Res<super::navigation::NavigationKeys>,
     online: Res<online::OnlineState>,
     collision: Res<Collision>,
@@ -2497,6 +2610,117 @@ pub(super) fn input(
     controls
         .taps
         .observe(&keyboard, &movement_keys, focused, now);
+    // A completed-frame producer runs before the legacy future-endpoint gates.
+    // Its input sample deliberately excludes the tap buffer and press-only
+    // edges: no duration is invented for a tap absent from an observed frame.
+    if let (Ok((body, drawn)), Ok((camera, _)), Some(world), Some(player)) = (
+        players.single(),
+        cameras.single(),
+        moving_world,
+        online.world().player(),
+    ) {
+        let mut physical = keyboard.clone();
+        physical.clear();
+        let heading = controls
+            .ground
+            .current
+            .map_or(player.position.heading, |frame| frame.facing);
+        let heading = controls
+            .mouse_heading
+            .or(controls.facing)
+            .unwrap_or(heading);
+        let yaw = controls.mouse_heading.map_or(camera.yaw, |heading| {
+            crate::camera::behind(eq_client_core::render_heading(heading))
+        });
+        let intent = controls.intent(
+            &physical,
+            map,
+            scripted,
+            focused,
+            (yaw, heading),
+            look.as_deref(),
+        );
+        let eligible = time.is_some()
+            && client.owns_ground_frames()
+            && match online.world().generation() {
+                eq_client_core::GameDialect::Titanium => true,
+                eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+            }
+            && focused
+            && standing
+            && !lying
+            && !flying
+            && !swimming
+            && !shoreline_active
+            && !controls.stun_active
+            && controls.straddle.is_none()
+            && controls.following.is_none()
+            && !keys.script_routing()
+            && scripted.is_empty()
+            && scripted_facing.is_none()
+            && controls.unreported.is_none()
+            && controls.jump.is_none()
+            && controls.crouch.is_none()
+            && controls.pad.is_none()
+            && controls.riding.is_none()
+            && controls.boat.is_none()
+            && controls.boat_pending.is_none()
+            && controls.visual_boat.is_none()
+            && controls
+                .airborne
+                .as_ref()
+                .is_none_or(|airborne| airborne.velocity() == 0. && airborne.peak().is_none())
+            && controls.movement_options.run_speed_multiplier
+                == eq_client_core::movement::RunSpeedMultiplier::NORMAL;
+        #[cfg(test)]
+        let eligible = eligible && !controls.suppress_ground;
+        let first_span = time
+            .as_deref()
+            .map_or(Duration::ZERO, Time::delta)
+            .min(now.saturating_duration_since(controls.last_accepted));
+        let mouse_heading = controls.mouse_heading;
+        let feet = controls
+            .ground
+            .current
+            .map_or(drawn.translation - Vec3::Y * body.feet_offset, |frame| {
+                frame.motion.feet()
+            });
+        let raised = raised_walk(world, feet, body.height, posture);
+        let physics = walking(
+            physics(client, online.world().zone_gravity()),
+            client,
+            body,
+            player.race,
+            (raised, false),
+        );
+        let walking_world = carrier_walking_world(world, client, body.feet_offset, false, false);
+        if ground::input(
+            &mut controls,
+            ground::Context {
+                client,
+                online: &online,
+                world: walking_world.as_ref().unwrap_or(world),
+                body,
+                drawn,
+                outbox: &outbox,
+                now,
+                first_span,
+                physics,
+                eligible,
+                mouse_heading,
+                headroom: ground::Headroom::new(
+                    client,
+                    online.world(),
+                    body,
+                    crate::posture::on_mount(online.world(), spells.as_deref()),
+                    raised,
+                ),
+            },
+            intent,
+        ) {
+            return;
+        }
+    }
     if controls.pending.is_some() {
         if controls.liquid_basis(session_id, now) == LiquidBasis::Unconfirmed {
             controls.pause_prediction();
@@ -2505,7 +2729,7 @@ pub(super) fn input(
         return;
     }
     let elapsed = now.duration_since(controls.last_accepted);
-    if elapsed < Duration::from_millis(100) {
+    if elapsed < START_CYCLE_DURATION {
         controls.held = Some(Held::Gate);
         return;
     }
@@ -3160,13 +3384,17 @@ pub(super) fn input(
                     displacement: Vec3::ZERO,
                     seconds: span,
                     diagonal: false,
-                    lift: headroom::standing_lift(
+                    lift: headroom::walking_lift(
                         client,
                         online.world(),
-                        world,
                         body,
-                        feet,
-                        linked.is_some(),
+                        linked.is_none()
+                            && raised_walk(
+                                world,
+                                feet,
+                                body.height,
+                                Some(eq_client_core::PostureState::Standing),
+                            ),
                     ),
                 }),
             ) {
@@ -3526,20 +3754,14 @@ pub(super) fn input(
                 ),
                 {
                     let stand = crate::posture::stand_height(client, online.world(), body);
-                    let lift =
-                        client
-                            .falls()
-                            .and_then(|falls| falls.edge_lift)
-                            .map_or(0.0, |rule| {
-                                rule.lift(eq_client_assets::falls::EdgeBody {
-                                    race: online.world().player().map_or(0, |player| player.race),
-                                    stand_height: stand,
-                                    size: body.size,
-                                    // Native 0x489a32 also leaves the linked
-                                    // boat's probe at the ordinary origin.
-                                    lifted: raised && linked.is_none(),
-                                })
-                            });
+                    // Native 0x489a32 leaves a linked boat's probe at the
+                    // ordinary origin. Native frames share these exact terms.
+                    let lift = headroom::walking_lift(
+                        client,
+                        online.world(),
+                        body,
+                        raised && linked.is_none(),
+                    );
                     (
                         crate::posture::headroom_probe(client, online.world(), stand),
                         lift,
@@ -3846,13 +4068,17 @@ pub(super) fn input(
                 displacement: delta,
                 seconds: span,
                 diagonal: matches!(mode, MovementMode::GroundedDiagonal(_)),
-                lift: headroom::standing_lift(
+                lift: headroom::walking_lift(
                     client,
                     online.world(),
-                    world,
                     body,
-                    landing,
-                    linked.is_some(),
+                    linked.is_none()
+                        && raised_walk(
+                            world,
+                            landing,
+                            body.height,
+                            Some(eq_client_core::PostureState::Standing),
+                        ),
                 ),
             }),
         )
@@ -4845,6 +5071,14 @@ pub(super) fn interpolate(
     }
     controls.restore_observed_preview(online.world());
     controls.prepare_translation_restore(online.world());
+    if ground::present(
+        &mut controls,
+        &mut players,
+        &mut cameras,
+        &mut displayed_mouse,
+    ) {
+        return;
+    }
     let preview = controls.mouse_heading;
     if controls.visual.is_none()
         && preview.is_none()
@@ -4879,34 +5113,7 @@ pub(super) fn interpolate(
                 .rise(door, at, std::time::Instant::now());
         transform.translation.y = transform.translation.y.max(floor);
     }
-    if let Some(frame) = controls.visual_boat {
-        if let Some(report) = online
-            .world()
-            .carriers()
-            .latest(frame.sample.spawn_id)
-            .filter(|report| report.sample().incarnation == frame.sample.incarnation)
-        {
-            let pose = report.pose(Instant::now());
-            // advance() above writes local coordinates. With no remaining
-            // segment, recover the shown local point from its last frame.
-            if !advanced_in_boat {
-                *transform = boats::to_local(frame.pose, *transform);
-            }
-            *transform = boats::to_world(pose, *transform);
-            controls.visual_boat = Some(boats::DisplayFrame {
-                sample: report.sample(),
-                pose,
-            });
-        } else {
-            if let Some(visual) = controls.visual.as_mut() {
-                visual.map(|transform| boats::to_world(frame.pose, transform));
-            }
-            if advanced_in_boat {
-                *transform = boats::to_world(frame.pose, *transform);
-            }
-            controls.visual_boat = None;
-        }
-    }
+    controls.carry_display(online.world().carriers(), advanced_in_boat, &mut transform);
     if let Some(heading) = preview {
         // An older queued pose never overwrites the latest local mouse orientation.
         transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
@@ -4999,6 +5206,7 @@ fn short(requested: Vec3, resolved: Vec3) -> bool {
 }
 
 /// Input intent remains separate from collision, timing and network submission.
+#[derive(Clone, Copy)]
 struct MotionInput {
     mode: MovementMode,
     speed: f32,
@@ -8145,7 +8353,7 @@ pub(super) mod tests {
     }
 
     /// The fixture body's Titanium walk climb: a human standing 3 high.
-    fn fixture_climb() -> f32 {
+    pub(super) fn fixture_climb() -> f32 {
         eq_client_assets::falls::TITANIUM.walk_climb(eq_client_assets::falls::EdgeBody {
             race: 1,
             stand_height: 3.0,

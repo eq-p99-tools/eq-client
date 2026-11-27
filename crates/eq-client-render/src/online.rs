@@ -1,6 +1,7 @@
 //! Session events enter presentation here; this module never decodes wire
 //! packets. The world model in `eq_client_core::world` applies each update;
 //! this module shows what it changed.
+mod movement_reports;
 
 use super::{ViewerSettings, hud};
 use bevy::prelude::*;
@@ -52,6 +53,7 @@ pub(super) struct OnlineState {
     /// loading screen waits for the player's casting gesture over the zone
     /// they are leaving.
     held: Vec<WorldUpdate>,
+    movement_reports: movement_reports::Reports,
 }
 
 /// Last server-sourced placement for the current admission, not a move receipt.
@@ -70,6 +72,43 @@ pub(super) enum PlacementSource {
 }
 
 impl OnlineState {
+    /// Capture one script report's counter on demand, without advancing movement.
+    pub(crate) fn report_movement(
+        &mut self,
+        label: &str,
+        state: serde_json::Value,
+        outbox: &crate::outbox::Outbox,
+    ) {
+        let Some(session_id) = self.world.session_id().filter(|_| self.world.connected()) else {
+            movement_reports::unavailable(label, state, "no_admission").log();
+            return;
+        };
+        let request_id =
+            match self
+                .movement_reports
+                .request(session_id, label, state, std::time::Instant::now())
+            {
+                Ok(id) => id,
+                Err(report) => {
+                    report.log();
+                    return;
+                }
+            };
+        if outbox
+            .send(
+                &self.world,
+                eq_client_core::ClientCommand::MovementPacketSnapshot {
+                    session_id,
+                    request_id,
+                },
+            )
+            .is_err()
+            && let Some(report) = self.movement_reports.failed(request_id)
+        {
+            report.log();
+        }
+    }
+
     /// The last server placement remains separate from local motion submissions.
     pub(super) fn server_placement(&self) -> Option<ServerPlacement> {
         self.server_placement.filter(|entry| {
@@ -251,6 +290,7 @@ impl OnlineState {
     /// said, keeping the player's own choices, and no character choice is
     /// in progress.
     pub(super) fn restart(&mut self) {
+        self.movement_reports.reset();
         self.connection_revision = self.connection_revision.wrapping_add(1);
         self.deletion.ended();
         self.chat_link_expansion = None;
@@ -451,6 +491,7 @@ impl OnlineState {
             placement_revision: 0,
             loading: default(),
             held: Vec::new(),
+            movement_reports: default(),
         }
     }
 }
@@ -672,8 +713,7 @@ impl Panels<'_> {
                 // A crossing without a transfer releases the movement hold.
                 Reply::ZoneLineRefused => self.motion.crossing_resolved(),
                 Reply::MotionRefused { created, reason } => {
-                    self.motion
-                        .move_refused(state.world().session_id(), *created, reason);
+                    self.motion.refuse_move(state.world(), *created, reason);
                 }
             }
         }
@@ -695,6 +735,14 @@ impl Panels<'_> {
             "Current-admission movement worker result; no server acknowledgment implied"
         );
 
+        if self.motion.ground_result(
+            admission_id,
+            moved.created,
+            moved.position,
+            moved.refused.as_deref(),
+        ) {
+            return;
+        }
         let previewed = self.motion.reconcile_preview(
             admission_id,
             moved.created,
@@ -998,12 +1046,24 @@ pub(super) fn receive(
         }
         let news = state.news(batch.into_iter().chain(lost), waiting);
         for update in news {
+            if let WorldUpdate::MovementPacketSnapshot(snapshot) = update {
+                let admission = state
+                    .world
+                    .connected()
+                    .then(|| state.world.session_id())
+                    .flatten();
+                if let Some(report) = state.movement_reports.answer(admission, snapshot) {
+                    report.log();
+                }
+                continue;
+            }
             let (changes, before, old_gems) =
                 apply(&mut state.world, &update, spells, outbox.as_deref());
             state.observe_server_placement(&changes);
             trace(&update, &changes, &state.world);
             panels.merchant_news(&update, &changes, &state.world);
             if let Some(reason) = changes.reset {
+                state.movement_reports.reset();
                 chat.socials = super::socials::Inbox::default();
                 match reason {
                     Reset::Entered => chat.admit_links(&state),
