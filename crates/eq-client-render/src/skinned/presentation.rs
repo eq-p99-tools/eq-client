@@ -61,8 +61,18 @@ pub(super) fn fill_to(node: &mut Mut<Node>, step: Option<&Step>, fraction: f32) 
 
 type GaugeContentQueries<'w, 's> = (
     Query<'w, 's, (&'static Shows, &'static mut Text, &'static mut TextColor)>,
-    Query<'w, 's, (&'static super::LinesFillTint, &'static mut ImageNode), Without<super::HpFillTint>>,
-    Query<'w, 's, (&'static super::HpFillTint, &'static mut ImageNode), Without<super::LinesFillTint>>,
+    Query<
+        'w,
+        's,
+        (&'static super::LinesFillTint, &'static mut ImageNode),
+        Without<super::HpFillTint>,
+    >,
+    Query<
+        'w,
+        's,
+        (&'static super::HpFillTint, &'static mut ImageNode),
+        Without<super::LinesFillTint>,
+    >,
 );
 
 /// Shows the world in the skinned windows' gauges and labels.
@@ -99,7 +109,7 @@ pub(crate) fn show(
         &breath,
     );
     for (tint, mut image) in &mut lines {
-        let ratio = filled(world, (hud.resource_estimate, &requests), tint.0);
+        let ratio = lines_source(world, (hud.resource_estimate, &requests), tint.0);
         let color = if ratio <= -0.01 {
             Color::srgb_u8(192, 192, 192)
         } else {
@@ -221,13 +231,32 @@ fn fill_gauges(
                 filled(world, estimate_and_requests, kind)
             };
             let fraction = if matches!(shows, Shows::LinesFill(_)) {
-                lines_fraction(fraction)
+                lines_fraction(if kind == 8 {
+                    fraction
+                } else {
+                    lines_source(world, estimate_and_requests, kind)
+                })
             } else {
                 fraction.clamp(0.0, 1.0)
             };
             fill_to(&mut node, step, fraction);
         }
     }
+}
+
+/// Lines use the signed gauge input; HP's purple reserve transformation is
+/// already applied to the ordinary fill and must not hide the negative sign.
+fn lines_source(
+    world: &eq_client_core::world::ClientWorld,
+    estimate_and_requests: (Option<(u32, u32)>, &crate::hud::action_bar::ActionRequests),
+    kind: u32,
+) -> f32 {
+    if kind == 1
+        && let Some(gauge) = world.hit_point_gauge()
+    {
+        return f32::from(gauge.value()) / 1000.0;
+    }
+    filled(world, estimate_and_requests, kind)
 }
 
 /// The native gauge's integer thousandths keep a bubble full at its final

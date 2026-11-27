@@ -2743,6 +2743,15 @@ mod tests {
             .world_mut()
             .spawn((Shows::Fill(1), Node::default()))
             .id();
+        let lines_tint = Color::srgb_u8(80, 60, 40);
+        let lines_image = app
+            .world_mut()
+            .spawn((LinesFillTint(1, lines_tint), ImageNode::default()))
+            .id();
+        let lines = app
+            .world_mut()
+            .spawn((Shows::LinesFill(1), Node::default()))
+            .id();
         app.update();
         assert_eq!(
             app.world().get::<Node>(fill).unwrap().width,
@@ -2751,6 +2760,14 @@ mod tests {
         assert_eq!(
             app.world().get::<ImageNode>(image).unwrap().color,
             Color::srgb_u8(128, 0, 128)
+        );
+        assert_eq!(
+            app.world().get::<Node>(lines).unwrap().width,
+            Val::Percent(99.5)
+        );
+        assert_eq!(
+            app.world().get::<ImageNode>(lines_image).unwrap().color,
+            Color::srgb_u8(192, 192, 192)
         );
         testing::news(
             &mut app.world_mut().resource_mut::<OnlineState>(),
@@ -2767,6 +2784,14 @@ mod tests {
             Val::Percent(25.0)
         );
         assert_eq!(app.world().get::<ImageNode>(image).unwrap().color, normal);
+        assert_eq!(
+            app.world().get::<Node>(lines).unwrap().width,
+            Val::Percent(24.5)
+        );
+        assert_eq!(
+            app.world().get::<ImageNode>(lines_image).unwrap().color,
+            lines_tint
+        );
     }
 
     #[test]
