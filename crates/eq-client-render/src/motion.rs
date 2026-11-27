@@ -3444,7 +3444,9 @@ pub(super) fn input(
                                     race: online.world().player().map_or(0, |player| player.race),
                                     stand_height: stand,
                                     size: body.size,
-                                    lifted: raised,
+                                    // Native 0x489a32 also leaves the linked
+                                    // boat's probe at the ordinary origin.
+                                    lifted: raised && linked.is_none(),
                                 })
                             });
                     (
