@@ -318,7 +318,7 @@ impl ClientWorld {
     /// equipment facts withhold the count; displayed zero is not a substitute.
     #[must_use]
     pub fn hit_point_basis(&self) -> Option<crate::control::HitPointBasis> {
-        if self.generation != crate::GameDialect::Titanium || !self.in_world() || self.is_dead() {
+        if !self.generation.models_unconscious() || !self.in_world() || self.is_dead() {
             return None;
         }
         let report = self.vitals.reported_hp?;
@@ -855,7 +855,7 @@ impl ClientWorld {
     /// and from unconscious/death state. Other generations remain unread.
     #[must_use]
     pub fn hit_point_gauge(&self) -> Option<super::HpGauge> {
-        (self.generation == crate::GameDialect::Titanium)
+        self.generation.models_unconscious()
             .then(|| self.vitals.gauge(self.is_dead()))
             .flatten()
     }
