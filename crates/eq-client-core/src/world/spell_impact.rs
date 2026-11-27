@@ -21,9 +21,19 @@ pub struct SpellImpact<'a> {
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SpellImpactLine {
     /// Target-side text, optionally wrapped by native singular/plural strings.
-    Own { text: String, amount: Option<u32> },
+    Own {
+        /// Installed text for the player; known empty text is preserved.
+        text: String,
+        /// Positive received damage when the native amount wrapper applies.
+        amount: Option<u32>,
+    },
     /// A known other target, substituted into its installed suffix.
-    Other { target: String, text: String },
+    Other {
+        /// Server name of the other target.
+        target: String,
+        /// Installed description following the target name.
+        text: String,
+    },
 }
 
 /// The main-buffer filter branch in Titanium 0x4a6bc9-0x4a6d03.
@@ -31,11 +41,11 @@ pub enum SpellImpactLine {
 pub enum SpellImpactFilter {
     /// Own non-Bard source or target bypasses the other-spell filters.
     Own,
-    /// Own Bard: any BardSongs mode except Hide.
+    /// Own Bard: any `BardSongs` mode except `Hide`.
     OwnBard,
-    /// Another Bard: the main-buffer branch accepts Show or GroupOnly.
+    /// Another Bard: the main-buffer branch accepts `Show` or `GroupOnly`.
     Bard,
-    /// Either endpoint is grouped: the PCSpells group branch comes first.
+    /// Either endpoint is grouped: the `PCSpells` group branch comes first.
     Grouped,
     /// An unrelated non-Bard player.
     Player,
