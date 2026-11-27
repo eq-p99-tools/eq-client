@@ -910,7 +910,7 @@ fn ducked_room_and_mount_precedence_remain_per_generation() {
             (from, from),
             (false, false)
         )
-        .is_none()
+        .is_some()
     );
 }
 
