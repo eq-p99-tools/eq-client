@@ -65,6 +65,10 @@ struct CarrierFixture {
     native: bool,
 }
 
+#[allow(
+    clippy::too_many_lines,
+    reason = "one qualified fixture keeps installed and controlled geometry explicit"
+)]
 fn docked_carrier(native: bool, installed: bool) -> CarrierFixture {
     use eq_client_core::movement::{CollisionInstance, CollisionMesh};
     use std::sync::Arc;
@@ -274,6 +278,20 @@ fn supported_carrier_handover_release_and_late_results_never_replay_travel() {
         for _ in 0..120 {
             scene.step(true);
         }
+        assert!(
+            scene
+                .app
+                .world()
+                .resource::<Controls>()
+                .ground
+                .current
+                .is_some_and(|frame| {
+                    frame
+                        .carrier
+                        .is_some_and(|riding| riding.sample.spawn_id == 172)
+                }),
+            "release fixture must exercise the active supported-carrier continuation"
+        );
         assert!(scene.ordinary_supports.iter().any(|support| {
             matches!(support, Some(Support::Spawn(sample)) if sample.spawn_id == 172)
         }));
@@ -316,6 +334,20 @@ fn supported_carrier_handover_genuine_correction_retires_the_continuation() {
     for _ in 0..120 {
         scene.step(true);
     }
+    assert!(
+        scene
+            .app
+            .world()
+            .resource::<Controls>()
+            .ground
+            .current
+            .is_some_and(|frame| {
+                frame
+                    .carrier
+                    .is_some_and(|riding| riding.sample.spawn_id == 172)
+            }),
+        "correction fixture must exercise the active supported-carrier continuation"
+    );
     let corrected = eq_client_core::WorldPosition {
         x: 220.,
         y: 10.,
@@ -591,6 +623,10 @@ impl Scene {
         Self::with_carrier_fixture(delay, known, speed, lateral, None)
     }
 
+    #[allow(
+        clippy::too_many_lines,
+        reason = "one real input/receive/present fixture and unchanged session calibration"
+    )]
     fn with_carrier_fixture(
         delay: u32,
         known: bool,
@@ -644,13 +680,14 @@ impl Scene {
                 let world = app.world_mut();
                 world.resource_mut::<Controls>().suppress_ground = !fixture.native;
                 world.resource_mut::<Controls>().airborne = Some(AirborneController::default());
-                let mut online = world.resource_mut::<online::OnlineState>();
-                crate::online::testing::place(&mut online, fixture.origin);
-                crate::online::testing::news(
-                    &mut online,
-                    [spawned, eq_client_core::WorldEvent::Carriers(changes)],
-                );
-                drop(online);
+                {
+                    let mut online = world.resource_mut::<online::OnlineState>();
+                    crate::online::testing::place(&mut online, fixture.origin);
+                    crate::online::testing::news(
+                        &mut online,
+                        [spawned, eq_client_core::WorldEvent::Carriers(changes)],
+                    );
+                }
                 let mut player =
                     world.query_filtered::<(&mut Transform, &mut PlayerBody), With<Player>>();
                 let (mut transform, mut body) = player.single_mut(world).unwrap();

@@ -113,13 +113,13 @@ pub(super) struct Control {
 impl Control {
     // This seeds only the already observed stationary state. The frame's
     // observation stamp is never treated as a new accepted worker time.
-    pub fn start(&mut self, session: u64, rest: Frame) {
+    pub fn start(&mut self, session: u64, rest: &Frame) {
         if self.session != Some(session) {
             self.sent.clear();
         }
         self.session = Some(session);
-        self.accepted = Some(rest);
-        self.current = Some(rest);
+        self.accepted = Some(*rest);
+        self.current = Some(*rest);
         self.last_posted = None;
         self.admitted = None;
         self.epoch = Some(rest.at);
@@ -474,7 +474,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         ) else {
             return false;
         };
-        controls.ground.start(session, rest);
+        controls.ground.start(session, &rest);
     }
     // Only an established native owner publishes its body reach. A restored
     // grant on unsupported geometry must not manufacture a setup command.
@@ -731,7 +731,7 @@ mod walk_budget_tests {
     fn delayed_receipts_do_not_multiply_the_existing_per_sample_height_budget() {
         let start = Instant::now();
         let mut control = Control::default();
-        control.start(7, frame(start, 0.));
+        control.start(7, &frame(start, 0.));
         let posted = start + Duration::from_millis(50);
         control.sent.push_back(Sent {
             session: 7,
@@ -746,7 +746,7 @@ mod walk_budget_tests {
         );
         assert!(!control.within_walk_budget(now, Vec3::Y * -2.01, 3.));
         control.retire();
-        control.start(7, frame(now, 100.));
+        control.start(7, &frame(now, 100.));
         assert!(
             control.within_walk_budget(now + Duration::from_millis(50), Vec3::Y * 101., 3.),
             "a retained old receipt identity is not a new epoch's movement basis"

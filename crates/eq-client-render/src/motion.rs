@@ -1514,6 +1514,41 @@ impl Controls {
         held
     }
 
+    /// Keeps the existing carrier display queue in its received world frame.
+    fn carry_display(
+        &mut self,
+        carriers: &eq_client_core::movement::Carriers,
+        advanced_in_boat: bool,
+        transform: &mut Transform,
+    ) {
+        if let Some(frame) = self.visual_boat {
+            if let Some(report) = carriers
+                .latest(frame.sample.spawn_id)
+                .filter(|report| report.sample().incarnation == frame.sample.incarnation)
+            {
+                let pose = report.pose(Instant::now());
+                // advance() above writes local coordinates. With no remaining
+                // segment, recover the shown local point from its last frame.
+                if !advanced_in_boat {
+                    *transform = boats::to_local(frame.pose, *transform);
+                }
+                *transform = boats::to_world(pose, *transform);
+                self.visual_boat = Some(boats::DisplayFrame {
+                    sample: report.sample(),
+                    pose,
+                });
+            } else {
+                if let Some(visual) = self.visual.as_mut() {
+                    visual.map(|transform| boats::to_world(frame.pose, transform));
+                }
+                if advanced_in_boat {
+                    *transform = boats::to_world(frame.pose, *transform);
+                }
+                self.visual_boat = None;
+            }
+        }
+    }
+
     /// Accepted local carrier basis, for explicit script diagnostics.
     pub(crate) fn carrier_support(
         &self,
@@ -4725,34 +4760,7 @@ pub(super) fn interpolate(
                 .rise(door, at, std::time::Instant::now());
         transform.translation.y = transform.translation.y.max(floor);
     }
-    if let Some(frame) = controls.visual_boat {
-        if let Some(report) = online
-            .world()
-            .carriers()
-            .latest(frame.sample.spawn_id)
-            .filter(|report| report.sample().incarnation == frame.sample.incarnation)
-        {
-            let pose = report.pose(Instant::now());
-            // advance() above writes local coordinates. With no remaining
-            // segment, recover the shown local point from its last frame.
-            if !advanced_in_boat {
-                *transform = boats::to_local(frame.pose, *transform);
-            }
-            *transform = boats::to_world(pose, *transform);
-            controls.visual_boat = Some(boats::DisplayFrame {
-                sample: report.sample(),
-                pose,
-            });
-        } else {
-            if let Some(visual) = controls.visual.as_mut() {
-                visual.map(|transform| boats::to_world(frame.pose, transform));
-            }
-            if advanced_in_boat {
-                *transform = boats::to_world(frame.pose, *transform);
-            }
-            controls.visual_boat = None;
-        }
-    }
+    controls.carry_display(online.world().carriers(), advanced_in_boat, &mut transform);
     if let Some(heading) = preview {
         // An older queued pose never overwrites the latest local mouse orientation.
         transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
