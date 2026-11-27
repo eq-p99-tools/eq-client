@@ -160,11 +160,11 @@ pub enum Fix {
     /// view and uses only what it hits: the first spawn, else a door (read
     /// R49-19). Off by default; the reach checks are the same either way.
     UsePicksNearest,
+    /// Shows the local frame-rate meter independently of diagnostic logging.
+    ShowFps,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
-    /// Shows the local frame-rate meter independently of diagnostic logging.
-    ShowFps,
     /// Starts the Options window's Max FPS at 60 frames a second rather than
     /// as fast as vsync allows; the slider and the installation's
     /// `eqclient.ini` still set another cap. What the official client does
@@ -230,8 +230,8 @@ impl Fix {
         Self::ZoneAnywhere,
         Self::DuelAnswerCard,
         Self::UsePicksNearest,
-        Self::MapEverywhere,
         Self::ShowFps,
+        Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
         Self::CampCountdown,
