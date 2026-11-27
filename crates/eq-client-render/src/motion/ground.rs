@@ -360,21 +360,6 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         controls.ground.blocked = false;
         return true;
     }
-    if eligible
-        && let Some(session) = online.world().session_id()
-        && controls.climb_sent != Some((session, physics.reach()))
-    {
-        let per_step = physics.reach();
-        if let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::ClimbReach {
-            session_id: stamp.session_id,
-            per_step,
-        }) {
-            controls.send_failed(reason);
-            controls.held = Some(Held::Refused);
-            return true;
-        }
-        controls.climb_sent = Some((session, per_step));
-    }
     match controls.ground.report(online.world(), outbox) {
         Ok(Some(created)) => {
             controls.last_sent = Some(created);
@@ -439,6 +424,23 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
             return false;
         };
         controls.ground.start(session, rest);
+    }
+    // Only an established native owner publishes its body reach. A restored
+    // grant on unsupported geometry must not manufacture a setup command.
+    if eligible
+        && let Some(session) = online.world().session_id()
+        && controls.climb_sent != Some((session, physics.reach()))
+    {
+        let per_step = physics.reach();
+        if let Err(reason) = outbox.post(online.world(), |stamp| ClientCommand::ClimbReach {
+            session_id: stamp.session_id,
+            per_step,
+        }) {
+            controls.send_failed(reason);
+            controls.held = Some(Held::Refused);
+            return true;
+        }
+        controls.climb_sent = Some((session, per_step));
     }
     let current = controls.ground.current.expect("active ground frame");
     let seconds = if current.at == now {
