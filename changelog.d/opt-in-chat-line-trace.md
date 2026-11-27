@@ -1,0 +1,1 @@
+- Testers can opt in to finalized chat and combat lines in diagnostic logs with `eq_client_render::chat_lines=trace`; normal logging keeps chat contents private.
