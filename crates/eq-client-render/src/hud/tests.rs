@@ -324,6 +324,61 @@ fn bar_app(tx: std::sync::mpsc::SyncSender<ClientCommand>) -> App {
     app
 }
 
+#[test]
+fn dimmed_normal_and_skinned_gems_still_print_the_normal_click_warning() {
+    for fallback in [true, false] {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = bar_app(tx);
+        crate::clicks::testing::install(&mut app);
+        let mut player = caster();
+        player.spell_refresh_ms = Some([30_000; 8]);
+        {
+            let mut state = online(&mut app);
+            testing::generation(&mut state, eq_client_core::GameDialect::Titanium);
+            testing::admit(&mut state, 8, player);
+        }
+        app.add_systems(
+            Update,
+            (crate::skinned::gem::refresh, crate::skinned::gem::pieces)
+                .chain()
+                .before(actions),
+        );
+        let gem = app.world_mut().spawn((SpellGem(0), Interaction::None)).id();
+        if fallback {
+            app.world_mut().entity_mut(gem).insert(FallbackGem);
+        }
+        let icon = app
+            .world_mut()
+            .spawn((
+                crate::skinned::gem::GemPiece::Icon,
+                Node::default(),
+                ImageNode::default(),
+            ))
+            .id();
+        app.world_mut().entity_mut(gem).add_child(icon);
+        for _ in 0..10 {
+            app.update();
+        }
+        assert_eq!(
+            app.world().get::<ImageNode>(icon).unwrap().color,
+            Color::srgba_u8(255, 255, 255, 45)
+        );
+        crate::clicks::testing::click(&mut app, gem);
+        assert!(rx.try_recv().is_err());
+        assert!(
+            app.world()
+                .resource::<ChatState>()
+                .newest()
+                .contains("Spell available in")
+        );
+        assert_eq!(world(&app).gem(0), Some(73));
+        assert_eq!(
+            app.world().get::<Node>(icon).unwrap().display,
+            Display::Flex
+        );
+    }
+}
+
 /// Presses one key alone.
 fn tap(app: &mut App, key: KeyCode) {
     let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
