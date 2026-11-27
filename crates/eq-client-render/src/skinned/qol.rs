@@ -189,32 +189,49 @@ pub(super) fn pages<'a>(
     }
     // Append the palette after existing controls, preserving their column/row positions.
     if let Some((slider, value)) = slider.zip(value) {
-        pieces.push(Section::CombatText.heading(
-            checkbox,
-            caption,
-            Area {
-                x: layout.margin,
-                y,
-                width: layout.available,
-                height: heading_height,
-            },
-        ));
-        let colors: Vec<_> = controls::COMBAT_TEXT_COLORS
-            .into_iter()
-            .map(
-                |(caption_id, slider_id, value_id, text, _)| Control::Slider {
-                    section: Section::CombatText,
-                    slider,
-                    value,
-                    ids: (caption_id, slider_id, value_id),
-                    text,
-                },
-            )
-            .collect();
-        layout.append_controls(&mut pieces, &colors, checkbox, y + heading_height + GAP);
+        append_palette(
+            &mut pieces,
+            &layout,
+            (checkbox, caption),
+            (slider, value),
+            y,
+        );
     }
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
+}
+
+fn append_palette(
+    pieces: &mut Vec<(String, Element)>,
+    layout: &Layout,
+    (checkbox, caption): (&Button, Option<&Label>),
+    (slider, value): (&Slider, &Label),
+    y: f32,
+) {
+    let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
+    pieces.push(Section::CombatText.heading(
+        checkbox,
+        caption,
+        Area {
+            x: layout.margin,
+            y,
+            width: layout.available,
+            height: heading_height,
+        },
+    ));
+    let colors: Vec<_> = controls::COMBAT_TEXT_COLORS
+        .into_iter()
+        .map(
+            |(caption_id, slider_id, value_id, text, _)| Control::Slider {
+                section: Section::CombatText,
+                slider,
+                value,
+                ids: (caption_id, slider_id, value_id),
+                text,
+            },
+        )
+        .collect();
+    layout.append_controls(pieces, &colors, checkbox, y + heading_height + GAP);
 }
 
 /// Cuts a caption, slider and value label from the skin and returns their bottom edge.

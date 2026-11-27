@@ -223,6 +223,15 @@ fn two_row_options() -> eq_client_assets::sidl::TabBox {
 
 #[test]
 fn default_size_wrapped_qol_shows_the_heading_and_scrolls_to_the_speed_control() {
+    default_size_wrapped_qol_reaches_speed(None);
+}
+
+#[test]
+fn default_size_wrapped_qol_shows_the_heading_and_four_lines_down_the_speed_control() {
+    default_size_wrapped_qol_reaches_speed(Some(4.0));
+}
+
+fn default_size_wrapped_qol_reaches_speed(wheel_lines: Option<f32>) {
     use crate::windows::pointer::{LINE_PIXELS, Wheel};
     use eq_client_core::options::Level;
 
@@ -296,7 +305,10 @@ fn default_size_wrapped_qol_shows_the_heading_and_scrolls_to_the_speed_control()
         // heading, and ordinary wheel lines must reach Run Speed below the
         // Dangerous checkboxes without clipping it at the content's bottom.
         assert_visible(app.world(), &[heading]);
-        let wheel_pixels = (max_scroll / LINE_PIXELS).ceil() * LINE_PIXELS;
+        let wheel_pixels = wheel_lines.map_or_else(
+            || (max_scroll / LINE_PIXELS).ceil() * LINE_PIXELS,
+            |lines| lines * LINE_PIXELS,
+        );
         *app.world_mut().resource_mut::<Wheel>() = Wheel {
             surface: Some(page),
             pixels: -wheel_pixels,
@@ -307,7 +319,7 @@ fn default_size_wrapped_qol_shows_the_heading_and_scrolls_to_the_speed_control()
         app.update();
         assert_visible(app.world(), &[speed]);
         let scroll = app.world().get::<ScrollPosition>(page).unwrap().y;
-        assert!((scroll - max_scroll).abs() < 0.01);
+        assert!((scroll - max_scroll.min(wheel_pixels)).abs() < 0.01);
     }
 }
 
