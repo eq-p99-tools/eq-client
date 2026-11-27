@@ -474,7 +474,9 @@ pub(super) fn report(
         complete = !loaded.mesh.incomplete(),
         "Navmesh loaded"
     );
-    if loaded.mesh.incomplete() {
+    if loaded.mesh.polygon_count() == 0 {
+        warn!(zone, "Navmesh failed: no walkable polygons");
+    } else if loaded.mesh.incomplete() {
         warn!(zone, "Navmesh partial: some build coverage was refused");
     } else {
         info!(
