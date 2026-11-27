@@ -82,7 +82,7 @@ pub(super) enum GridReason {
     Building,
     /// No mesh was started for this zone, or its build was stopped.
     Missing,
-    /// The walker is taller than the tallest mesh size.
+    /// No profile covers the walker's drawn size, capsule and standing room.
     TooTall,
     /// The current build failed or produced no walkable polygons.
     Failed,
@@ -97,7 +97,7 @@ impl GridReason {
             Self::Disabled => "navigation meshes are off (--no-navmesh)",
             Self::Building => "the zone's navigation mesh is still being built",
             Self::Missing => "this zone has no navigation mesh",
-            Self::TooTall => "the character is taller than the tallest navigation mesh size",
+            Self::TooTall => "no navigation mesh profile fits this body's size and headroom",
             Self::Failed => "the current zone navigation mesh failed to load or build",
             Self::NoFloor => "the navigation mesh has no floor for this character size",
         }
@@ -257,8 +257,7 @@ impl ZoneNavMesh {
 
     /// The shown zone's mesh for a walker drawn `size` tall, once it is
     /// ready: the smallest of its sizes that fits the walker. Otherwise why
-    /// the walker plans on the grid, including a walker taller than the
-    /// tallest size.
+    /// it is unavailable, including a walker outside every profile.
     pub(super) fn for_walker(&self, size: f32) -> Result<Arc<navmesh::NavMesh>, GridReason> {
         match &self.mesh {
             Some(mesh) => mesh
