@@ -119,6 +119,17 @@ pub fn display_name(raw: &str) -> String {
         .to_owned()
 }
 
+/// Whether a corpse's ordinary server name identifies this player as its
+/// owner. Both corpse kinds qualify: Titanium's ownership check compares
+/// names, independently of the corpse-kind byte. Unknown name forms do not
+/// claim ownership, and this never grants permission to loot or move it.
+#[must_use]
+pub fn owns_corpse(player: &str, corpse: &SpawnState) -> bool {
+    matches!(corpse.kind, SpawnKind::PlayerCorpse | SpawnKind::NpcCorpse)
+        && display_name(&corpse.name.replace('`', "'"))
+            .eq_ignore_ascii_case(&format!("{}'s corpse", display_name(player)))
+}
+
 /// Whether `to` lies within `range` of `from`, in three-dimensional EQ world units.
 #[must_use]
 pub fn within(from: WorldPosition, to: WorldPosition, range: f32) -> bool {
@@ -136,6 +147,28 @@ mod tests {
         assert_eq!(display_name("a_rat00"), "a rat");
         assert_eq!(display_name("Guard_Philips12"), "Guard Philips");
         assert_eq!(display_name("Marton_Sayer000"), "Marton Sayer");
+    }
+
+    #[test]
+    fn corpse_ownership_uses_the_name_independently_of_the_corpse_kind() {
+        let mut corpse = spawn(9, 0.0);
+        for kind in [SpawnKind::PlayerCorpse, SpawnKind::NpcCorpse] {
+            corpse.kind = kind;
+            for name in [
+                "Example's corpse679",
+                "eXaMpLe's_corpse679",
+                "Example`s_corpse679",
+            ] {
+                corpse.name = name.into();
+                assert!(owns_corpse("Example", &corpse));
+                assert!(!owns_corpse("Exam", &corpse));
+                assert!(!owns_corpse("Other", &corpse));
+            }
+        }
+        for kind in [SpawnKind::Player, SpawnKind::Npc, SpawnKind::Unknown(4)] {
+            corpse.kind = kind;
+            assert!(!owns_corpse("Example", &corpse));
+        }
     }
 
     #[test]

@@ -6180,11 +6180,10 @@ mod tests {
     fn scripted_loot_buttons_reach_the_normal_request_with_both_destinations() {
         use crate::online::{OnlineState, testing};
         use eq_client_core::{
-            ClientCommand, Coins, SpawnKind, WorldEvent,
-            inventory::InventoryUpdate,
+            ClientCommand, Coins, WorldEvent,
             loot::{LootResponse, LootUpdate},
         };
-        for auto in [false, true] {
+        for (auto, own) in [(false, false), (true, false), (false, true), (true, true)] {
             let target = ClickTarget::Trade(TradeClick::Take(0));
             let click = if auto {
                 Step::RightClick(target)
@@ -6197,38 +6196,8 @@ mod tests {
                 click,
                 Step::Wait(Duration::from_secs(2)),
             ]);
-            let mut online = OnlineState::new(true);
-            testing::admit(&mut online, 5, testing::player(7));
-            testing::inventory(&mut online, InventoryUpdate::Snapshot(Vec::new()));
-            let mut corpse = testing::pet(9, 7);
-            corpse.kind = SpawnKind::NpcCorpse;
-            corpse.name = "Test corpse".into();
-            testing::spawns(&mut online, vec![corpse]);
-            online.select_target(Some(9));
-            let (tx, rx) = std::sync::mpsc::sync_channel(8);
-            app.insert_resource(online)
-                .insert_resource(crate::outbox::Outbox::new(Some(tx)))
-                .add_systems(
-                    Update,
-                    (crate::online::carry_as, crate::trade::input).chain(),
-                );
-            crate::keys::testing::install(&mut app);
-            // The direct loot command has no native default; choose one here.
-            crate::keys::testing::bind(
-                &mut app,
-                crate::keys::Act::Loot,
-                crate::keys::Chord::key(KeyCode::KeyL),
-            );
-            app.world_mut().spawn((
-                Button,
-                crate::trade::Action::Take {
-                    place: 0,
-                    auto: false,
-                },
-                Interaction::None,
-                Node::default(),
-                laid_out(Vec2::new(200.0, 200.0), 50.0, 10),
-            ));
+            let online = scripted_loot_world(own);
+            let rx = scripted_loot_input(&mut app, online);
             frame_at(&mut app, 0);
             assert!(matches!(
                 rx.try_recv(),
@@ -6236,6 +6205,9 @@ mod tests {
             ));
             let mut item = crate::preview::items().remove(0);
             item.details.flags.clear();
+            if own {
+                item.details.flags.push("NO DROP".into());
+            }
             testing::news(
                 &mut app.world_mut().resource_mut::<OnlineState>(),
                 [
@@ -6252,6 +6224,10 @@ mod tests {
             );
             for ms in [10, 120, 250, 400, 550, 700, 850, 1000] {
                 frame_at(&mut app, ms);
+                assert_eq!(
+                    app.world().resource::<crate::confirm::Asked>().question(),
+                    None
+                );
             }
             assert!(matches!(
                 rx.try_recv(),
@@ -6271,6 +6247,179 @@ mod tests {
                     .contains_key(&0)
             );
         }
+    }
+
+    fn scripted_loot_world(own: bool) -> crate::online::OnlineState {
+        use crate::online::{OnlineState, testing};
+        let mut online = OnlineState::new(true);
+        testing::admit(&mut online, 5, testing::player(7));
+        testing::inventory(
+            &mut online,
+            eq_client_core::inventory::InventoryUpdate::Snapshot(Vec::new()),
+        );
+        let mut corpse = testing::pet(9, 7);
+        corpse.kind = eq_client_core::SpawnKind::NpcCorpse;
+        corpse.name = if own {
+            "eXaMpLe's_corpse679"
+        } else {
+            "Test corpse"
+        }
+        .into();
+        testing::spawns(&mut online, vec![corpse]);
+        online.select_target(Some(9));
+        online
+    }
+
+    #[test]
+    fn scripted_loot_confirmation_answers_while_the_question_is_open() {
+        for auto in [false, true] {
+            for accept in [false, true] {
+                let target = ClickTarget::Trade(TradeClick::Take(0));
+                let (mut app, _) = background(vec![
+                    Step::Press(vec![KeyCode::KeyL]),
+                    Step::Wait(Duration::from_millis(100)),
+                    if auto {
+                        Step::RightClick(target)
+                    } else {
+                        Step::Click(target)
+                    },
+                    Step::Wait(Duration::from_millis(400)),
+                    Step::Click(ClickTarget::Answer(accept)),
+                ]);
+                let rx = scripted_loot_input(&mut app, scripted_loot_world(false));
+                app.add_systems(
+                    Update,
+                    (crate::confirm::buttons, crate::confirm::window)
+                        .chain()
+                        .before(crate::trade::no_drop::confirm),
+                );
+                let dialog = app
+                    .world_mut()
+                    .spawn(Node {
+                        display: Display::None,
+                        ..default()
+                    })
+                    .id();
+                app.world_mut().spawn((
+                    Button,
+                    crate::confirm::AnswerButton(accept),
+                    ChildOf(dialog),
+                    laid_out(Vec2::new(600.0, 360.0), 40.0, 20),
+                ));
+                frame_at(&mut app, 0);
+                assert!(matches!(
+                    rx.try_recv(),
+                    Ok(eq_client_core::ClientCommand::Loot { .. })
+                ));
+                scripted_no_drop_listing(&mut app);
+                let mut saw_question = false;
+                for ms in (10..=1600).step_by(10) {
+                    let visible = app
+                        .world()
+                        .resource::<crate::confirm::Asked>()
+                        .question()
+                        .is_some();
+                    saw_question |= visible;
+                    app.world_mut().get_mut::<Node>(dialog).unwrap().display = if visible {
+                        Display::Flex
+                    } else {
+                        Display::None
+                    };
+                    frame_at(&mut app, ms);
+                }
+                assert!(
+                    saw_question,
+                    "another corpse must ask before the scripted answer"
+                );
+                assert_eq!(
+                    app.world().resource::<crate::confirm::Asked>().question(),
+                    None
+                );
+                if accept {
+                    assert!(
+                        matches!(rx.try_recv(), Ok(eq_client_core::ClientCommand::LootItem { auto: sent, .. }) if sent==auto)
+                    );
+                }
+                assert!(rx.try_recv().is_err(), "No sends nothing; Yes sends once");
+                assert!(
+                    app.world()
+                        .resource::<crate::online::OnlineState>()
+                        .world()
+                        .loot()
+                        .unwrap()
+                        .items
+                        .contains_key(&0)
+                );
+            }
+        }
+    }
+
+    fn scripted_no_drop_listing(app: &mut App) {
+        use eq_client_core::{
+            Coins, WorldEvent,
+            loot::{LootResponse, LootUpdate},
+        };
+        let mut item = crate::preview::items().remove(0);
+        item.details.flags = vec!["NO DROP".into()];
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [
+                WorldEvent::Loot(LootUpdate::Opened {
+                    response: LootResponse::Normal,
+                    coins: Coins::default(),
+                }),
+                WorldEvent::Loot(LootUpdate::Item {
+                    place: 0,
+                    item: Box::new(item),
+                }),
+                WorldEvent::Loot(LootUpdate::Listed { corpse_id: 9 }),
+            ],
+        );
+    }
+
+    fn scripted_loot_input(
+        app: &mut App,
+        online: crate::online::OnlineState,
+    ) -> std::sync::mpsc::Receiver<eq_client_core::ClientCommand> {
+        let (tx, rx) = std::sync::mpsc::sync_channel(8);
+        app.insert_resource(online)
+            .insert_resource(crate::outbox::Outbox::new(Some(tx)))
+            .init_resource::<crate::confirm::Asked>()
+            .add_systems(
+                Update,
+                (
+                    crate::online::carry_as,
+                    crate::trade::input,
+                    crate::trade::no_drop::confirm,
+                )
+                    .chain(),
+            );
+        app.world_mut()
+            .resource_mut::<crate::ViewerSettings>()
+            .0
+            .installed_client = eq_client_assets::ui::InstalledClient::Titanium;
+        app.world_mut()
+            .resource_mut::<crate::options::OptionsState>()
+            .options
+            .loot_no_drop = eq_client_core::no_drop::LootNoDrop::Ask;
+        crate::keys::testing::install(app);
+        // Direct looting has no native default. Bind the key that the fixture presses.
+        crate::keys::testing::bind(
+            app,
+            crate::keys::Act::Loot,
+            crate::keys::Chord::key(KeyCode::KeyL),
+        );
+        app.world_mut().spawn((
+            Button,
+            crate::trade::Action::Take {
+                place: 0,
+                auto: false,
+            },
+            Interaction::None,
+            Node::default(),
+            laid_out(Vec2::new(200.0, 200.0), 50.0, 10),
+        ));
+        rx
     }
 
     #[test]

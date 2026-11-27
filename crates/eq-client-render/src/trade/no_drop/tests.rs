@@ -1,7 +1,9 @@
 use super::super::{Action, LootWindow, TradeState, input};
 use super::*;
 use crate::online::{OnlineState, testing};
-use eq_client_core::{SpawnState, WorldEvent, WorldUpdate, loot::LootUpdate, world::NoSpells};
+use eq_client_core::{
+    SpawnKind, SpawnState, WorldEvent, WorldUpdate, loot::LootUpdate, world::NoSpells,
+};
 use std::sync::mpsc::Receiver;
 
 /// An item from the preview, NO DROP or not, that a warrior can or can't use.
@@ -38,6 +40,7 @@ fn world(loot: InventoryItem) -> OnlineState {
             corpse(10, SpawnKind::PlayerCorpse, "Example's corpse0"),
             corpse(11, SpawnKind::PlayerCorpse, "Other's corpse0"),
             corpse(12, SpawnKind::PlayerCorpse, "Example`s_corpse3"),
+            corpse(13, SpawnKind::NpcCorpse, "eXaMpLe's_corpse679"),
         ],
     );
     online.open_loot(9);
@@ -78,7 +81,7 @@ fn each_choice_asks_only_about_another_corpses_no_drop_item_as_the_click_does() 
             assert!(!asks(world, corpse_id, &item(false, false), choice));
         }
         // The player's own corpse never asks, however the server spells it.
-        for own in [10, 12] {
+        for own in [10, 12, 13] {
             assert!(!asks(world, own, &item(true, false), choice));
         }
     }

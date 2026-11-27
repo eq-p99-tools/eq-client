@@ -211,6 +211,49 @@ fn request(app: &App, rx: &Receiver<ClientCommand>, auto: bool) {
 }
 
 #[test]
+fn own_no_drop_loot_never_asks_in_either_ui_or_destination() {
+    use crate::online::{OnlineState, testing};
+    use eq_client_core::{SpawnKind, no_drop::LootNoDrop};
+    for skin in [false, true] {
+        for auto in [false, true] {
+            for own in [false, true] {
+                let (mut app, rx, cells) = fixture(skin, true);
+                let mut corpse = testing::pet(9, 0);
+                corpse.kind = SpawnKind::NpcCorpse;
+                corpse.name = if own {
+                    "eXaMpLe's_corpse679"
+                } else {
+                    "Other's_corpse9"
+                }
+                .into();
+                testing::spawns(
+                    &mut app.world_mut().resource_mut::<OnlineState>(),
+                    vec![corpse],
+                );
+                app.world_mut()
+                    .resource_mut::<crate::options::OptionsState>()
+                    .options
+                    .loot_no_drop = LootNoDrop::Ask;
+                if auto {
+                    right_press(&mut app, cells[0], false);
+                    right_release(&mut app, Some(cells[0]));
+                } else {
+                    crate::clicks::testing::press(&mut app, Some(cells[0]));
+                }
+                let question = app.world().resource::<crate::confirm::Asked>().question();
+                if own {
+                    assert_eq!(question, None, "own corpse must never ask, even Always Ask");
+                    request(&app, &rx, auto);
+                } else {
+                    assert!(question.is_some(), "another corpse remains the control");
+                    assert!(rx.try_recv().is_err());
+                }
+            }
+        }
+    }
+}
+
+#[test]
 fn real_ordinary_and_skinned_cells_keep_both_button_destinations() {
     for skin in [false, true] {
         let (mut app, rx, cells) = fixture(skin, false);

@@ -2701,19 +2701,47 @@ pub(super) fn assisted(words: &str, online: &super::online::OnlineState) -> Resu
         .ok_or_else(|| format!("No one named {name} is in the zone."))
 }
 
-/// The player corpse the player targets.
+/// The targeted corpse; no target means none, including for `/corpsedrop`.
 fn targeted_corpse(online: &super::online::OnlineState) -> Result<u16, String> {
     let world = online.world();
-    world
-        .target()
-        .selected
-        .filter(|id| {
-            world
-                .spawn(*id)
-                .is_some_and(|spawn| spawn.state.kind == eq_client_core::SpawnKind::PlayerCorpse)
+    if let Some(id) = world.target().selected.filter(|id| {
+        world.spawn(*id).is_some_and(|spawn| {
+            spawn.state.kind == eq_client_core::SpawnKind::PlayerCorpse
+                || (world.generation() == eq_client_core::GameDialect::Titanium
+                    && spawn.state.kind == eq_client_core::SpawnKind::NpcCorpse)
         })
-        .ok_or_else(|| "You must first target a corpse.".to_owned())
+    }) {
+        return Ok(id);
+    }
+    Err("You must first target a corpse.".to_owned())
 }
+
+/// A single own corpse can be pulled without a target. Several require an
+/// explicit choice until the native spawn-list traversal order is represented.
+fn corpse_for_pull(online: &super::online::OnlineState) -> Result<u16, String> {
+    if let Ok(id) = targeted_corpse(online) {
+        return Ok(id);
+    }
+    let world = online.world();
+    if world.generation() == eq_client_core::GameDialect::Titanium
+        && let Some(player) = world.player()
+    {
+        let mut own = world
+            .spawns()
+            .values()
+            .filter(|spawn| eq_client_core::entities::owns_corpse(&player.name, &spawn.state));
+        if let Some(corpse) = own.next()
+            && own.next().is_none()
+        {
+            return Ok(corpse.state.spawn_id);
+        }
+    }
+    Err("You must first target a corpse.".to_owned())
+}
+
+#[cfg(test)]
+#[path = "chat_corpse_tests.rs"]
+mod corpse_tests;
 
 /// The words of a plain `/who`, which lists the zone's players; None for
 /// anything else, `/who all` among it.
@@ -2967,7 +2995,7 @@ fn game_commands(
         // The rest take no words; with words, they are chat.
         _ if !words.is_empty() => return None,
         // A player's corpse the player targets, pulled close or dragged.
-        "corpse" | "corpsedrag" => targeted_corpse(online).and_then(|spawn_id| {
+        "corpse" | "corpsedrag" => corpse_for_pull(online).and_then(|spawn_id| {
             let session_id = stamp()?.session_id;
             Ok(vec![if name == "corpse" {
                 ClientCommand::SummonCorpse {

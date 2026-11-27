@@ -1,0 +1,1 @@
+Skip NO DROP confirmation on your own corpse even when its record uses the other corpse kind, for both loot destinations and script forms. Allow targeting either corpse kind for Titanium corpse commands, and pull a single own corpse without selecting it first. Multiple own corpses still require a target.
