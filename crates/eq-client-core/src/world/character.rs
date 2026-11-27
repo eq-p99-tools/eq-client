@@ -242,10 +242,7 @@ impl ClientWorld {
     /// predicted tick. The session counts the items by the server type's own
     /// rule too, and refuses a report it rules out.
     fn bleed_out_news(&mut self) {
-        let current = self
-            .player
-            .as_ref()
-            .and_then(|player| self.vitals.counted_hp(player, &self.inventory));
+        let current = self.counted_hit_points();
         self.bled_out = current.filter(|current| {
             self.death.is_none()
                 && self.can(crate::Capability::BleedingOut)
