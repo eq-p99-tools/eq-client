@@ -235,6 +235,7 @@ mod tests {
                     doors: vec![7],
                     drops: true,
                     scope,
+                    goal_height: None,
                 });
                 let found = run(&mut before, &world);
                 assert_eq!(run(&mut *now, &world), found, "gap {gap}, {scope:?}");
