@@ -26,11 +26,31 @@ clock. Input is normalized to the existing independently calibrated steady
 speed; the 150 ms cap, movement guard and packet pacing remain unchanged.
 The per-move stationary-delta test is not inferred from distance. Current
 scope is Titanium ordinary Forward running on positively known, static,
-flat dry geometry. Walk, backward/strafe/diagonal, slopes/edges, unknown
-liquid metadata, moving support, water, flight, crouch, jump, boosted run,
+dry geometry with ordinary grounded support. Static walkable slopes and
+risers use the existing Titanium walking body physics and body-specific reach;
+the horizontal recurrence stays the same through keyboard turns. Per-sample
+rise/drop budgets are checked against both the received basis and every posted
+observation that could already have been admitted, without assuming acceptance.
+Walk, calibrated Strafe and GroundedDiagonal, backward, unsupported edges,
+unknown liquid metadata, moving support, water, flight, crouch, jump, boosted run,
 routes and follow retain their existing paths. Slippery-region friction is
 not separately modeled. Zero vertical wire velocity at this horizontal-only
 seam is inferred, not a native slope-velocity claim.
+
+Camera-relative actions which select Forward and face their direction can
+also use this Forward path; they are distinct from calibrated body-relative
+Strafe. No new lateral normalization or rate is introduced. Uncertain or moving
+support still uses the admitted-prefix handback above; a static riser replay
+does not establish a moving-carrier transfer.
+
+[R] Key-command handler `0x4619cd` writes the forward state; input `0x4a1d74`
+reads it once per frame, before `0x445243` calls `0x4bfe0f` and `0x48ba76`.
+A held state observed in several frames can therefore move before a 100 ms
+legacy sample opportunity. [I] A complete press/release handled before any
+input pass is expected to read up, but the original handler's possible latch
+remains unread. This producer conservatively uses current held state only;
+it does not manufacture a frame from an unobserved press edge. An observed
+60 ms pulse and an unobserved same-pass tap are separate cases.
 
 Offline release/re-press and whole-ms-reference comparisons are distinct
 from gameplay validation. The native target includes a short decreasing
