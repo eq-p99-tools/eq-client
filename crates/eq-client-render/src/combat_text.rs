@@ -7,7 +7,10 @@ use eq_client_core::{
 use std::collections::VecDeque;
 
 const LIMIT: usize = 64;
-const LIFETIME: f32 = 1.4;
+// Readability defaults in logical pixels and seconds. The longer lifetime
+// carries the slower numbers farther while the existing fade runs to zero.
+const LIFETIME: f32 = 2.4;
+const RISE_SPEED: f32 = 24.0;
 
 #[derive(Resource, Default)]
 pub(crate) struct CombatText {
@@ -163,7 +166,7 @@ pub(crate) fn update(
             });
         *visibility = if let Some(at) = place {
             node.left = px(at.x);
-            node.top = px(at.y - 32.0 * number.age);
+            node.top = px(at.y - RISE_SPEED * number.age);
             Visibility::Inherited
         } else {
             Visibility::Hidden
@@ -195,7 +198,7 @@ fn draw(commands: &mut Commands, session: u64, hit: &Hit) {
             invisible: hit.invisible,
         },
         Text::new(hit.points.to_string()),
-        crate::theme::font(crate::theme::Size::Body),
+        crate::theme::bold_font(crate::theme::Size::Display),
         TextColor(if hit.incoming {
             Color::srgb(1.0, 0.3, 0.25)
         } else {
