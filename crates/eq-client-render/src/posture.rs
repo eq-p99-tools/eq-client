@@ -47,7 +47,10 @@ pub(super) fn headroom_probe(
     world: &ClientWorld,
     stand: f32,
 ) -> eq_client_core::movement::HeadroomProbe {
-    let mac = client == InstalledClient::EqMac;
+    let mac = match client {
+        InstalledClient::EqMac => true,
+        InstalledClient::Titanium | InstalledClient::Rof2 => false,
+    };
     eq_client_core::movement::HeadroomProbe {
         floor_radius: if mac { 0.0 } else { 0.1 * stand },
         ceiling_radius: if mac {

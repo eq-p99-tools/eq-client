@@ -233,7 +233,10 @@ pub(super) fn refused(
     (feet, candidate): (Vec3, Vec3),
     (ducking, mounted): (bool, bool),
 ) -> Option<Refused> {
-    let mac = client == InstalledClient::EqMac;
+    let mac = match client {
+        InstalledClient::EqMac => true,
+        InstalledClient::Titanium | InstalledClient::Rof2 => false,
+    };
     let probe = eq_client_core::movement::HeadroomProbe {
         floor_radius: if mac { 0.0 } else { 0.1 * stand },
         ceiling_radius: if mac {
