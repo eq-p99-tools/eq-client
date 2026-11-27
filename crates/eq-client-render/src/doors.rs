@@ -398,8 +398,8 @@ pub(super) fn tell_radii(
     }
 }
 
-/// How far each drawn hinged door has swung toward its open pose, from 0
-/// shut to 1 open, as drawn this frame; the same pose its collider takes.
+/// Drawn completion of a supported passage door, from 0 shut to 1 open.
+/// Hinges and ordinary Titanium slides share the pose their collider takes.
 #[derive(Resource, Default)]
 pub(super) struct Hinges(pub BTreeMap<u8, f32>);
 
@@ -448,13 +448,31 @@ fn open_swing(door: &Door) -> Option<f32> {
     }
 }
 
-/// A door a route may pass by clicking it while it is shut, as the player
-/// would: one this client swings on its hinge, so its open pose is drawn and
-/// walked against. Its state now does not matter, since an open door shuts
-/// again on its own before the walker may reach it. Other mechanisms stay
-/// walls to a route.
+/// Whether the generation models this ordinary hinge, in either endpoint.
+/// Scripted passage eligibility also includes the separately modeled slide.
 pub(super) fn swings(door: &Door, generation: GameDialect) -> bool {
     hinge_target(door, generation).is_some()
+}
+
+/// Only mechanisms already modeled as ordinary passages may be opened by a
+/// route. Vertical/combined lifts and unknown mechanisms remain obstacles.
+pub(super) fn route_usable(door: &Door, generation: GameDialect) -> bool {
+    swings(door, generation)
+        || generation == GameDialect::Titanium
+            && door.open_type == 15
+            && endpoint(door, generation).is_some()
+            && eq_client_core::doors::Slide::of(door).is_some()
+}
+
+fn passage_fraction(door: &Door, generation: GameDialect, swing: f32, slide: f32) -> Option<f32> {
+    if let Some(open) = open_swing(door) {
+        return Some(hinge_fraction(swing, open));
+    }
+    if generation != GameDialect::Titanium || door.open_type != 15 {
+        return None;
+    }
+    let full = eq_client_core::doors::Slide::of(door)?.distance;
+    (full > 0.0).then(|| (slide / full).clamp(0.0, 1.0))
 }
 
 /// Titanium's slides (type 15, and 78-81, which also rise or sink) move along
@@ -703,8 +721,9 @@ pub(super) fn reconcile(
             let hinge = state.world().doors().hinge_fraction(door.id);
             let lift = doors.lift_offset(door.id, now);
             let next = door.update_pose(definition, generation, (hinge, lift), time.delta_secs());
-            if let Some(open) = open_swing(definition) {
-                hinges.0.insert(door.id, hinge_fraction(door.swing, open));
+            if let Some(fraction) = passage_fraction(definition, generation, door.swing, door.slide)
+            {
+                hinges.0.insert(door.id, fraction);
             }
             if *transform != next {
                 door.collider = models
@@ -750,10 +769,10 @@ pub(super) fn reconcile(
             .hinge_fraction(id)
             .and_then(|fraction| open_swing(door).map(|open| open * fraction))
             .unwrap_or_else(|| hinge_target(door, generation).unwrap_or(0.0));
-        if let Some(open) = open_swing(door) {
-            hinges.0.insert(id, hinge_fraction(swing, open));
-        }
         let (slide, offset) = slide_pose(door, generation, None, 0.0);
+        if let Some(fraction) = passage_fraction(door, generation, swing, slide) {
+            hinges.0.insert(id, fraction);
+        }
         let transform = posed(door, swing, offset + rise(doors.lift_offset(id, now)));
         let collider = collider(model, &transform);
         obstacles.extend(
@@ -1041,6 +1060,36 @@ mod tests {
         assert!(hit_point(ray, &entity, &shut, Visibility::Hidden, &models).is_none());
     }
 
+    #[test]
+    fn ordinary_slide_routes_use_the_drawn_passage_fraction() {
+        let door = sliding_door();
+        assert!(route_usable(&door, GameDialect::Titanium));
+        assert!(!route_usable(&door, GameDialect::EqMac));
+        assert!(!route_usable(&door, GameDialect::Rof2));
+        assert_eq!(
+            passage_fraction(&door, GameDialect::Titanium, 0.0, 0.0),
+            Some(0.0)
+        );
+        assert_eq!(
+            passage_fraction(&door, GameDialect::Titanium, 0.0, 5.0),
+            Some(0.5)
+        );
+        assert_eq!(
+            passage_fraction(&door, GameDialect::Titanium, 0.0, 10.0),
+            Some(1.0)
+        );
+        for open_type in [9, 54, 58, 78, 79, 80, 81, 120, 255] {
+            let other = Door {
+                open_type,
+                ..door.clone()
+            };
+            assert!(!route_usable(&other, GameDialect::Titanium), "{open_type}");
+            assert_eq!(
+                passage_fraction(&other, GameDialect::Titanium, 0.0, 10.0),
+                None
+            );
+        }
+    }
     fn sliding_door() -> Door {
         Door {
             id: 23,
@@ -1152,6 +1201,7 @@ mod tests {
         };
         assert_eq!(observe(&app, 0.0), (Vec3::ZERO, true, true));
         assert_eq!(observe(&app, 10.0), (Vec3::ZERO, false, false));
+        assert_eq!(app.world().resource::<Hinges>().0.get(&23), Some(&0.0));
         let advance = |app: &mut App| {
             app.world_mut()
                 .resource_mut::<Time>()
@@ -1174,13 +1224,14 @@ mod tests {
         let opened = Vec3::Z * 10.0;
         assert_eq!(observe(&app, 0.0), (opened, false, false));
         assert_eq!(observe(&app, 10.0), (opened, true, true));
-        assert!(app.world().resource::<Hinges>().0.is_empty());
+        assert_eq!(app.world().resource::<Hinges>().0.get(&23), Some(&1.0));
         move_door(&mut app, 3);
         for _ in 0..14 {
             advance(&mut app);
         }
         assert_eq!(observe(&app, 0.0), (Vec3::ZERO, true, true));
         assert_eq!(observe(&app, 10.0), (Vec3::ZERO, false, false));
+        assert_eq!(app.world().resource::<Hinges>().0.get(&23), Some(&0.0));
     }
 
     #[test]

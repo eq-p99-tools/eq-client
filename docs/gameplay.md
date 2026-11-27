@@ -77,6 +77,14 @@ units, under every standing body's climb; a small body ducking, or with its
 origin in water, climbs less than that, so a route may lead it to an edge
 its walk refuses until it stands or leaves the water.
 
+Scripted walks can connect mesh islands beside a modeled usable door. Each
+connection must pass the ordinary collision walk with only that door removed;
+static walls, missing ground and other closed doors still block it. Following
+approaches the door, uses the existing interaction, then waits until its actual
+collider allows passage. A rejected or nonopening door is excluded from the
+replanned route. Ordinary hinges and Titanium type-15 slides are supported;
+lifts and unsupported mechanisms remain obstacles. A door request is not
+confirmation that the server unlocked or opened it.
 Ducking lowers the movement collision top to the program's ducked room:
 S + 1.5 on Titanium, S + 0.5 on Mac, where S is the model's stand height
 including the zone's classic scale. The existing capsule radius and base

@@ -131,6 +131,7 @@ enum Stage {
 struct Leg {
     to: Vec3,
     drop: bool,
+    door: Option<u8>,
     piece: bool,
     mid: bool,
 }
@@ -154,6 +155,7 @@ fn legs(start: Vec3, goal: Vec3, corridor: &[Crossing]) -> Vec<Leg> {
             .map(|to| Leg {
                 to,
                 drop: false,
+                door: None,
                 piece: false,
                 mid: false,
             })
@@ -164,11 +166,24 @@ fn legs(start: Vec3, goal: Vec3, corridor: &[Crossing]) -> Vec<Leg> {
     for crossing in corridor {
         match *crossing {
             Crossing::Edge(portal) => portals.push(portal),
+            Crossing::Door { id, start, end } => {
+                legs.extend(stretch(from, start, &portals));
+                legs.push(Leg {
+                    to: end,
+                    drop: false,
+                    door: Some(id),
+                    piece: false,
+                    mid: false,
+                });
+                portals.clear();
+                from = end;
+            }
             Crossing::Drop { top, landing } => {
                 legs.extend(stretch(from, top, &portals));
                 legs.push(Leg {
                     to: landing,
                     drop: true,
+                    door: None,
                     piece: false,
                     mid: false,
                 });
@@ -232,16 +247,21 @@ impl MeshSearch {
         else {
             return self.fall_back(Fallback::OffMesh);
         };
-        if !self.mesh.reaches(from, to, self.request.drops) {
+        let doors =
+            super::doors::links(&self.mesh, world, &self.request.doors, self.request.height);
+        if doors.is_empty() && !self.mesh.reaches(from, to, self.request.drops) {
             return self.fall_back(Fallback::OtherIsland);
         }
-        Stage::Polygons(PolygonSearch::new(
-            (start, from),
-            (goal, to),
-            MESH_WEIGHT,
-            self.areas(world),
-            self.request.drops,
-        ))
+        Stage::Polygons(
+            PolygonSearch::new(
+                (start, from),
+                (goal, to),
+                MESH_WEIGHT,
+                self.areas(world),
+                self.request.drops,
+            )
+            .with_doors(doors),
+        )
     }
 
     /// Checks the next leg, from where the last one ended: a long leg is
@@ -311,7 +331,10 @@ impl MeshSearch {
                 return Checked::Stood;
             }
         }
-        if let Some(door) = world.door_between(&self.request.doors, from, to, DOOR_REACH) {
+        if let Some(door) = leg
+            .door
+            .or_else(|| world.door_between(&self.request.doors, from, to, DOOR_REACH))
+        {
             if self.through_door(world, door, to) {
                 return Checked::Stood;
             }
@@ -346,6 +369,7 @@ impl MeshSearch {
                         Vec3::new(along.x, floor.unwrap_or(along.y), along.z)
                     },
                     drop: false,
+                    door: None,
                     piece: true,
                     mid: k != count,
                 }
