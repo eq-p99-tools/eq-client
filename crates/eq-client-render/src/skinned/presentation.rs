@@ -425,7 +425,6 @@ pub(super) fn filled(
 }
 
 /// How full a gauge is, by the official client's numbering.
-#[allow(clippy::cast_possible_truncation, reason = "a fraction for drawing")]
 pub(super) fn fraction(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
@@ -434,6 +433,7 @@ pub(super) fn fraction(
     fraction_at(world, estimate, kind, std::time::Instant::now())
 }
 
+#[allow(clippy::cast_possible_truncation, reason = "a fraction for drawing")]
 pub(super) fn fraction_at(
     world: &eq_client_core::world::ClientWorld,
     estimate: Option<(u32, u32)>,
