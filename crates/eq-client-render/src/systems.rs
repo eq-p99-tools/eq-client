@@ -407,7 +407,7 @@ pub(super) fn schedule(app: &mut App) {
                 skinned::scroll_lists,
                 motion::interpolate,
                 (crate::camera::fly_camera, crate::camera::look_keys).chain(),
-                orbit_camera,
+                (select_preview::orbit_input, orbit_camera).chain(),
                 weather::update,
                 crate::camera::show_player,
                 update_hud,
