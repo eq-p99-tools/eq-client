@@ -1084,6 +1084,13 @@ the selection. Only one merchant action can be pending. An unanswered action
 shows an unknown outcome and is never retried automatically; received items
 and coin updates remain the session's responsibility.
 
+Selecting a carried item for a merchant keeps its inventory square highlighted
+when the pointer leaves. Titanium shows its local sale quote before submission;
+its listed buy prices are already rated. A matching received sale produces the
+native sale line after the result arrives, even if the item has already left the
+inventory display. The line does not spend or credit coins itself. Missing base
+metadata or unretained augment prices remain unknown.
+
 On Titanium EQEmu and P99, supported resurrection and translocate offers open
 a Yes or No dialog.
 An answer applies to the displayed offer. If the question changes while a

@@ -311,6 +311,15 @@ pub enum Notice {
     TradeRefused(String),
     /// A merchant has not answered; no purchase or sale outcome is established.
     MerchantUnanswered(String),
+    /// A matched received native sale; price is its displayed local quote.
+    MerchantSold {
+        /// Merchant name captured with the submitted sale.
+        merchant: String,
+        /// Sold item name captured before inventory settlement.
+        item: String,
+        /// Native sale text's amount, not a new purse mutation.
+        price: u64,
+    },
     /// No give window opened, or it closed, and why.
     GiveRefused(String),
     /// An item on the ground could not be picked up, and why.

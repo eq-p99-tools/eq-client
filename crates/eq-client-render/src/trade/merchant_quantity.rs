@@ -58,6 +58,17 @@ impl Selection {
     }
 }
 
+/// Retains native caption inputs before the session's inventory deduction.
+/// This conveys no success; only a matched positive received sale uses it.
+#[derive(Clone, Debug)]
+pub(super) struct SaleNotice {
+    merchant: String,
+    item: String,
+    base: u32,
+    rate: f32,
+    prices: eq_client_assets::merchants::MerchantPrices,
+}
+
 /// Local button exclusion, never a prediction of money or item delivery.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Pending {
@@ -92,9 +103,13 @@ impl TradeState {
                     .items()
                     .get(&eq_client_core::inventory::InventorySlot(slot))?;
                 if let Some(prices) = self.prices {
+                    let rate = world.merchant()?.rate;
+                    if prices.says_sale && (!rate.is_finite() || rate <= 0.0) {
+                        return None;
+                    }
                     return u32::try_from(prices.sale_total(
-                        item.details.price?,
-                        world.merchant()?.rate,
+                        super::sale_base(prices, item)?,
+                        rate,
                         quantity,
                     ))
                     .ok();
@@ -205,6 +220,11 @@ impl TradeState {
                     .items()
                     .get(&eq_client_core::inventory::InventorySlot(slot))
                     .ok_or("Choose a current carried item")?;
+                if self.prices.is_some_and(|prices| prices.says_sale)
+                    && self.sale_price(world, item) == Some(0)
+                {
+                    return Err(Refused::Silent);
+                }
                 if super::no_drop(item) {
                     return Err("The merchant will not buy NO DROP items.".into());
                 }
@@ -261,6 +281,32 @@ impl TradeState {
             },
         };
         if outbox.send(world, command).is_ok() {
+            self.merchant_sale = (|| {
+                let Chosen::Carried(slot) = selection.chosen else {
+                    return None;
+                };
+                let prices = self.prices.filter(|prices| prices.says_sale)?;
+                let item = world
+                    .inventory()
+                    .items()
+                    .get(&eq_client_core::inventory::InventorySlot(slot))?;
+                let base = super::sale_base(prices, item)?;
+                let rate = world.merchant()?.rate;
+                if !rate.is_finite() || rate <= 0.0 {
+                    return None;
+                }
+                Some(SaleNotice {
+                    merchant: world
+                        .merchant()
+                        .and_then(|merchant| world.spawn(merchant.merchant_id))
+                        .map(|spawn| eq_client_core::entities::display_name(&spawn.state.name))
+                        .unwrap_or_default(),
+                    item: item.details.name.clone(),
+                    base,
+                    rate,
+                    prices,
+                })
+            })();
             self.merchant_pending = Some(Pending {
                 session: stamp.session_id,
                 merchant: selection.merchant,
@@ -275,7 +321,11 @@ impl TradeState {
 
     /// Called only for news accepted by the world. A stock refresh or unrelated
     /// reply cannot release a queued action. Uncertainty never retries it.
-    pub(crate) fn merchant_news(&mut self, update: &WorldUpdate, world: &ClientWorld) {
+    pub(crate) fn merchant_news(
+        &mut self,
+        update: &WorldUpdate,
+        world: &ClientWorld,
+    ) -> Option<eq_client_core::world::Notice> {
         // Whichever shop the server opens or refuses settles the pending
         // request; the fence follows the open window from here.
         if let WorldUpdate::Game(WorldEvent::Merchant(
@@ -283,10 +333,13 @@ impl TradeState {
         )) = update
         {
             self.reset_opening_shop();
+            self.merchant_choice = None;
+            if let Some(window) = self.merchant.as_mut() {
+                window.chosen = None;
+            }
+            self.changed();
         }
-        let Some(pending) = self.merchant_pending else {
-            return;
-        };
+        let pending = self.merchant_pending?;
         if world.session_id() != Some(pending.session)
             || !world.in_world()
             || world
@@ -294,8 +347,9 @@ impl TradeState {
                 .is_some_and(|open| open.merchant_id != pending.merchant)
         {
             self.merchant_pending = None;
+            self.merchant_sale = None;
             self.changed();
-            return;
+            return None;
         }
         let done = match update {
             WorldUpdate::Game(WorldEvent::Merchant(
@@ -325,8 +379,27 @@ impl TradeState {
             }
             _ => false,
         };
+        let notice = match (done, update, self.merchant_sale.as_ref()) {
+            (
+                true,
+                WorldUpdate::Game(WorldEvent::Merchant(
+                    eq_client_core::merchant::MerchantUpdate::Sold { slot, quantity, .. },
+                )),
+                Some(sale),
+            ) if *slot >= 0 && *quantity > 0 => {
+                u32::try_from(sale.prices.sale_total(sale.base, sale.rate, *quantity))
+                    .ok()
+                    .map(|price| eq_client_core::world::Notice::MerchantSold {
+                        merchant: sale.merchant.clone(),
+                        item: sale.item.clone(),
+                        price: u64::from(price),
+                    })
+            }
+            _ => None,
+        };
         if done {
             self.merchant_pending = None;
+            self.merchant_sale = None;
             self.merchant_choice = None;
             // A fresh explicit choice is required for the next transaction.
             if let Some(window) = self.merchant.as_mut() {
@@ -334,5 +407,6 @@ impl TradeState {
             }
             self.changed();
         }
+        notice
     }
 }

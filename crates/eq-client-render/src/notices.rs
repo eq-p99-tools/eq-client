@@ -548,6 +548,49 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
         } => chat(crate::surname::answer(*accepted, name, last_name, messages)),
         Notice::ItemRefused => chat("You cannot take that item.".into()),
         Notice::ShopRefused => chat("That merchant will not trade with you.".into()),
+        Notice::MerchantSold {
+            merchant,
+            item,
+            price,
+        } => {
+            // Titanium received-sale handler0x5384e2: native quote text,
+            // merchant and item are the three arguments of0x551, type0x114.
+            let amount = eq_client_assets::merchants::MerchantPrices::split(*price)
+                .into_iter()
+                .zip(eq_client_assets::merchants::TITANIUM.coins)
+                .zip(["platinum", "gold", "silver", "copper"])
+                .filter(|((count, _), _)| *count > 0)
+                .map(|((count, id), coin)| {
+                    let fallback = format!(" {count} {coin}");
+                    messages.map_or_else(
+                        || fallback.clone(),
+                        |table| {
+                            table
+                                .said_or(id, &[count.to_string()], &fallback)
+                                .words
+                                .text
+                        },
+                    )
+                })
+                .collect::<String>();
+            let merchant = if merchant.is_empty() {
+                messages.map_or_else(
+                    || "The merchant".to_owned(),
+                    |table| table.said_or(0x555, &[], "The merchant").words.text,
+                )
+            } else {
+                merchant.clone()
+            };
+            let fallback = format!("You receive{amount} from {merchant} for the {item}(s).");
+            chat(messages.map_or_else(
+                || Said::own(fallback.clone()).typed(0x114),
+                |table| {
+                    table
+                        .said_or(0x551, &[amount, merchant, item.clone()], &fallback)
+                        .typed(0x114)
+                },
+            ))
+        }
         Notice::ProgramLine {
             string_id,
             arguments,
@@ -1403,6 +1446,25 @@ const fn link_text(link: Link) -> &'static str {
 mod tests {
     use super::*;
     use eq_client_core::Coins;
+
+    #[test]
+    fn received_sale_uses_native_coin_fragments_arguments_and_message_type() {
+        let messages = Messages::parse(
+            "EQST0002\n0 4\n1361 amount%1 merchant=%2 item=%3\n1365 fallback merchant\n2411  %1S\n2412  %1C\n",
+        );
+        let notice = Notice::MerchantSold {
+            merchant: "Iludarae".into(),
+            item: "Bat Fur".into(),
+            price: 14,
+        };
+        assert_eq!(
+            wording(&notice, Some(&messages)),
+            [(
+                Place::Chat,
+                Said::official("amount 1S 4C merchant=Iludarae item=Bat Fur").typed(0x114)
+            )]
+        );
+    }
 
     #[test]
     fn practice_bookkeeping_does_not_invent_chat() {
