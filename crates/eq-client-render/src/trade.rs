@@ -14,6 +14,7 @@ use eq_client_core::{ClientCommand, SpawnKind, inventory::InventoryItem, world::
 use super::windows;
 
 mod auto_loot;
+pub(crate) mod loot_range;
 mod loot_requests;
 mod merchant;
 mod merchant_quantity;
@@ -35,6 +36,7 @@ const BANKER_CLASS: u8 = 40;
 /// lists, which say what is on the corpse and for sale.
 #[derive(Resource, Default)]
 pub(super) struct TradeState {
+    range: loot_range::RangeClose,
     automatic: auto_loot::AutoLoot,
     /// One scene click, consumed once in its own admission.
     right_clicked: Option<(u64, u16)>,
@@ -103,6 +105,8 @@ impl TradeState {
             )
             .map_err(Refusal::text)?;
         online.open_loot(corpse_id);
+        // Reopening even the same corpse is a fresh native close latch.
+        self.range = loot_range::RangeClose::default();
         self.loot = Some(LootWindow {
             name,
             opening: Some(PendingLoot::new(
@@ -623,6 +627,11 @@ pub(super) fn input(
         say_refused(&mut chat, &messages, &trade, online.world(), reason);
     }
     for action in clicked {
+        if trade.range.closing(online.world())
+            && matches!(action, Action::Take(_) | Action::TakeAll | Action::EndLoot)
+        {
+            continue;
+        }
         if match settings.0.installed_client {
             eq_client_assets::ui::InstalledClient::Titanium => true,
             // Titanium's, inferred for RoF2 (6.489).
@@ -879,6 +888,7 @@ pub(super) fn input(
         .loot
         .as_ref()
         .filter(|window| window.loot_all && window.pending.is_none())
+        .filter(|_| !trade.range.closing(online.world()))
         .filter(|_| online.world().loot_continuation().automatic())
         .and(online.world().loot())
         .filter(|loot| loot.listed)

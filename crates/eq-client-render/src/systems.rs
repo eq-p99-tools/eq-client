@@ -282,6 +282,7 @@ pub(super) fn schedule(app: &mut App) {
             ),
             (combat::input, combat::idle_swings).chain(),
             (
+                trade::loot_range::input,
                 trade::input,
                 trade::no_drop::confirm,
                 trade::no_drop::command,

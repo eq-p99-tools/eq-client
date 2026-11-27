@@ -26,8 +26,19 @@ impl Basis {
             return None;
         }
         let model = model?;
+        Self::load_model(directory, model)
+    }
+
+    /// The same native reference for a checked creature model, including
+    /// corpses whose model declares its own ROffset (read6.698).
+    pub(crate) fn load_model(directory: &Path, model: &str) -> Option<Self> {
         let text = std::fs::read_to_string(directory.join("Resources").join("moddat.ini")).ok()?;
         reference(&text, model)
+    }
+
+    pub(crate) fn scaled(self, scale: f32) -> Option<f32> {
+        let offset = self.0 * scale;
+        (offset.is_finite() && offset > 0.0).then_some(offset)
     }
 
     pub(super) fn for_player(

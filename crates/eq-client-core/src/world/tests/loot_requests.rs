@@ -1,5 +1,34 @@
 //! The core forwards local disposition; the requesting front end correlates it.
 use super::*;
+
+#[test]
+fn received_loot_close_clears_the_target_only_while_a_loot_lease_exists() {
+    let mut world = admitted();
+    world.select_target(Some(5));
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::Loot(crate::loot::LootUpdate::Closed)
+        )
+        .ignored
+    );
+    assert_eq!(world.target().selected, Some(5));
+    world.open_loot(5);
+    game(
+        &mut world,
+        WorldEvent::Loot(crate::loot::LootUpdate::Closed),
+    );
+    assert_eq!(world.target().selected, None);
+    world.select_target(Some(6));
+    assert!(
+        game(
+            &mut world,
+            WorldEvent::Loot(crate::loot::LootUpdate::Closed)
+        )
+        .ignored
+    );
+    assert_eq!(world.target().selected, Some(6));
+}
 use crate::loot::{LootRequest, LootRequestStatus};
 
 #[test]

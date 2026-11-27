@@ -1,0 +1,1 @@
+- Titanium requests closure once when its native range check finds the corpse too far away, retaining the loot window until the server closes it.
