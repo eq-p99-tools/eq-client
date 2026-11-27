@@ -11,6 +11,48 @@ use eq_client_core::{
 
 use super::hud::messages::Messages;
 
+/// Only the explicit forms are established here. Bare `/attack` keeps the
+/// slash parser's existing refusal; malformed words never become a toggle.
+fn explicit_attack(input: &str) -> Option<Result<bool, String>> {
+    let mut words = input.strip_prefix('/')?.split_whitespace();
+    if !words.next()?.eq_ignore_ascii_case("attack") {
+        return None;
+    }
+    let argument = words.next()?;
+    Some(if words.next().is_some() {
+        Err("Use /attack on or /attack off".into())
+    } else if argument.eq_ignore_ascii_case("on") {
+        Ok(true)
+    } else if argument.eq_ignore_ascii_case("off") {
+        Ok(false)
+    } else {
+        Err("Use /attack on or /attack off".into())
+    })
+}
+
+/// Queue a typed, social or button request for the combat owner. Never mint
+/// a new admission when that owner consumes it on a later frame.
+pub(super) fn request(
+    input: &str,
+    chat: &mut super::chat::ChatState,
+    world: &eq_client_core::world::ClientWorld,
+    outbox: &crate::outbox::Outbox,
+) -> Option<Result<(), String>> {
+    Some(explicit_attack(input)?.and_then(|enabled| {
+        if outbox
+            .script_world(world)
+            .is_some_and(|expected| Some(expected.admission_id) != world.session_id())
+        {
+            return Err(crate::outbox::Refusal::Away.text().into());
+        }
+        let stamp = outbox
+            .stamp(world)
+            .map_err(|reason| reason.text().to_owned())?;
+        chat.attack_asked.push((stamp, enabled));
+        Ok(())
+    }))
+}
+
 /// Capture the current target and loadout for a single Actions, hotbar or
 /// slash-command request. The session checks both again before sending.
 pub(super) fn ranged_command(
@@ -237,6 +279,7 @@ pub(super) fn input(
 ) {
     use super::keys::Act;
     let world = online.world();
+    let requests = std::mem::take(&mut chat.attack_asked);
     combat.follow_session(
         world.session_id(),
         match world.generation() {
@@ -315,6 +358,22 @@ pub(super) fn input(
         combat.idle = IdleSwings::default();
         chat.history.push(toggle_line(toggle, true, &messages));
     }
+    if live {
+        for (stamp, enabled) in requests {
+            if Some(stamp.session_id) == world.session_id() {
+                set_attack(
+                    enabled,
+                    Some(stamp),
+                    world,
+                    &outbox,
+                    &mut combat,
+                    &mut chat,
+                    &messages,
+                    toggle,
+                );
+            }
+        }
+    }
     if !live || !keys.focused() {
         return;
     }
@@ -350,30 +409,75 @@ pub(super) fn input(
         == Some(super::hud::hotbar::Action::Attack);
     let pressed = keys.pressed(Act::Attack) || attack_button.iter().next().is_some() || bar_attack;
     if pressed {
-        let enable = !combat.auto_attack;
-        // Not standing, the key only turns auto attack off. It needs no
-        // target, but the Titanium client will not turn it on against the
-        // player themselves.
-        if enable && let Some(posture) = posture {
-            feedback(messages.said(refusal(toggle, posture), &[]));
-            return;
-        }
-        let own = world.target().selected == Some(player.spawn_id);
-        if enable
-            && own
-            && let Some(id) = toggle.self_target
-        {
-            feedback(messages.said(id, &[]));
-            return;
-        }
-        if outbox.post(world, attack(enable)).is_err() {
-            return;
-        }
-        combat.auto_attack = enable;
-        combat.last_sent = Some(enable);
-        combat.idle = IdleSwings::default();
-        chat.history.push(toggle_line(toggle, enable, &messages));
+        let enabled = !combat.auto_attack;
+        set_attack(
+            enabled,
+            None,
+            world,
+            &outbox,
+            &mut combat,
+            &mut chat,
+            &messages,
+            toggle,
+        );
     }
+}
+
+/// All manual attack actions use the same posture, self-target and outbox
+/// checks. Repeating a desired state neither flips it nor repeats its packet.
+#[allow(clippy::too_many_arguments)]
+fn set_attack(
+    enabled: bool,
+    stamp: Option<crate::outbox::Stamp>,
+    world: &eq_client_core::world::ClientWorld,
+    outbox: &crate::outbox::Outbox,
+    combat: &mut CombatState,
+    chat: &mut super::chat::ChatState,
+    messages: &Messages,
+    toggle: eq_client_assets::ui::AttackToggle,
+) {
+    if enabled == combat.auto_attack {
+        return;
+    }
+    let Some(player) = world.player() else {
+        return;
+    };
+    if enabled
+        && let Some(posture) = world
+            .posture(player.spawn_id)
+            .filter(|posture| *posture != PostureState::Standing)
+    {
+        chat.refuse(messages.said(refusal(toggle, posture), &[]));
+        return;
+    }
+    if enabled
+        && world.target().selected == Some(player.spawn_id)
+        && let Some(id) = toggle.self_target
+    {
+        chat.refuse(messages.said(id, &[]));
+        return;
+    }
+    let stamp = match stamp.map_or_else(|| outbox.stamp(world), Ok) {
+        Ok(stamp) => stamp,
+        Err(_) => return,
+    };
+    if outbox
+        .send(
+            world,
+            ClientCommand::AutoAttack {
+                session_id: stamp.session_id,
+                enabled,
+                created: stamp.created,
+            },
+        )
+        .is_err()
+    {
+        return;
+    }
+    combat.auto_attack = enabled;
+    combat.last_sent = Some(enabled);
+    combat.idle = IdleSwings::default();
+    chat.history.push(toggle_line(toggle, enabled, messages));
 }
 
 /// While auto attack is on with no one to swing at, says the installed
@@ -791,6 +895,173 @@ mod tests {
         keys.reset_all();
         keys.press(KeyCode::Digit3);
         app.update();
+    }
+
+    /// Exercise the actual typed/social route or button route, before the
+    /// combat system consumes the request on its next frame.
+    fn attack_line(app: &mut App, line: &str, button: bool) -> Result<(), String> {
+        let world = app.world_mut();
+        let mut online = world
+            .remove_resource::<crate::online::OnlineState>()
+            .unwrap();
+        let mut chat = world.remove_resource::<crate::chat::ChatState>().unwrap();
+        let outbox = world.remove_resource::<crate::outbox::Outbox>().unwrap();
+        let settings = eq_client_core::qol::Settings::default();
+        let result = if button {
+            crate::chat::run_game_command(line, &mut online, &outbox, &mut chat, &settings);
+            Ok(())
+        } else {
+            crate::chat::submit_typed_line(line, &mut chat, &mut online, &outbox, &settings)
+        };
+        world.insert_resource(online);
+        world.insert_resource(chat);
+        world.insert_resource(outbox);
+        world.resource_mut::<ButtonInput<KeyCode>>().reset_all();
+        result
+    }
+
+    #[test]
+    fn explicit_attack_forms_are_idempotent_through_typed_and_button_routes() {
+        for button in [false, true] {
+            let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+            for (line, expected) in [
+                ("/AtTaCk On", Some(true)),
+                ("/attack on", None),
+                ("/attack off", Some(false)),
+                ("/attack OFF", None),
+            ] {
+                attack_line(&mut app, line, button).unwrap();
+                app.update();
+                assert_eq!(sent(&rx), expected);
+            }
+            assert_eq!(lines(&app).len(), 2);
+            assert!(!app.world().resource::<CombatState>().auto_attack);
+            // Existing hotbar input still toggles both ways.
+            press(&mut app);
+            assert_eq!(sent(&rx), Some(true));
+            press(&mut app);
+            assert_eq!(sent(&rx), Some(false));
+        }
+    }
+
+    #[test]
+    fn explicit_attack_keeps_order_and_the_original_request_stamp() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        let made = std::time::Instant::now();
+        app.world_mut()
+            .resource_mut::<crate::outbox::Outbox>()
+            .set_test_time(made);
+        attack_line(&mut app, "/attack on", false).unwrap();
+        attack_line(&mut app, "/attack off", false).unwrap();
+        app.world_mut()
+            .resource_mut::<crate::outbox::Outbox>()
+            .set_test_time(made + std::time::Duration::from_secs(1));
+        app.update();
+        for enabled in [true, false] {
+            assert!(matches!(rx.try_recv(), Ok(ClientCommand::AutoAttack {
+                session_id: 7, enabled: actual, created,
+            }) if actual == enabled && created == made));
+        }
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn bare_attack_stays_unhandled_and_malformed_arguments_never_toggle() {
+        assert_eq!(explicit_attack("/attack"), None);
+        assert_eq!(explicit_attack("/attack   "), None);
+        for line in [
+            "/attack yes",
+            "/attack 1",
+            "/attack on off",
+            "/attack off now",
+        ] {
+            let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+            assert!(attack_line(&mut app, line, false).is_err());
+            app.update();
+            assert_eq!(sent(&rx), None);
+            assert!(!app.world().resource::<CombatState>().auto_attack);
+        }
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        assert!(attack_line(&mut app, "/attack", false).is_err());
+        app.update();
+        assert_eq!(sent(&rx), None);
+    }
+
+    #[test]
+    fn explicit_attack_uses_the_existing_self_target_guard() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        app.world_mut()
+            .resource_mut::<crate::online::OnlineState>()
+            .select_target(Some(12));
+        attack_line(&mut app, "/attack on", false).unwrap();
+        app.update();
+        assert_eq!(sent(&rx), None);
+        assert_eq!(newest(&app).0, "Self.");
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+    }
+
+    #[test]
+    fn explicit_attack_obeys_posture_and_runs_without_keyboard_focus() {
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [eq_client_core::WorldEvent::Posture {
+                spawn_id: 12,
+                posture: PostureState::Sitting,
+            }],
+        );
+        attack_line(&mut app, "/attack on", false).unwrap();
+        app.update();
+        assert_eq!(sent(&rx), None);
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        crate::online::testing::news(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            [eq_client_core::WorldEvent::Posture {
+                spawn_id: 12,
+                posture: PostureState::Standing,
+            }],
+        );
+        let world = app.world_mut();
+        let mut windows = world.query::<&mut Window>();
+        for mut window in windows.iter_mut(world) {
+            window.focused = false;
+        }
+        attack_line(&mut app, "/attack on", false).unwrap();
+        app.update();
+        assert_eq!(sent(&rx), Some(true));
+    }
+
+    #[test]
+    fn explicit_attack_does_not_replay_into_a_new_admission_or_after_forgetting() {
+        use crate::online::testing;
+        let (mut app, rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        attack_line(&mut app, "/attack on", false).unwrap();
+        testing::admit(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            8,
+            testing::player(12),
+        );
+        app.update();
+        assert!(rx.try_recv().is_err());
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        attack_line(&mut app, "/attack on", false).unwrap();
+        app.world_mut()
+            .resource_mut::<crate::chat::ChatState>()
+            .forget_admission();
+        app.update();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn explicit_attack_does_not_change_state_when_the_session_queue_is_full() {
+        let (mut app, _rx) = attacking(eq_client_assets::ui::InstalledClient::Titanium);
+        let (tx, full) = std::sync::mpsc::sync_channel(0);
+        app.insert_resource(crate::outbox::Outbox::new(Some(tx)));
+        attack_line(&mut app, "/attack on", false).unwrap();
+        app.update();
+        assert!(full.try_recv().is_err());
+        assert!(!app.world().resource::<CombatState>().auto_attack);
+        assert!(lines(&app).is_empty());
     }
 
     #[test]
