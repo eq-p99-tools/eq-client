@@ -8366,3 +8366,26 @@ fn a_duplicate_pad_at_the_same_origin_does_not_restart_its_probe() {
         .ignored
     );
 }
+
+#[test]
+fn a_forwarded_movement_counter_never_changes_world_admission_or_position() {
+    let mut world = admitted();
+    let before = world.player().unwrap().position;
+    let admission = world.session_id();
+    let now = Instant::now();
+    let changes = world.apply(
+        &WorldUpdate::MovementPacketSnapshot(crate::MovementPacketSnapshot {
+            session_id: 999,
+            request_id: 10,
+            run_id: 20,
+            sent: 500,
+            observed: now,
+            unix_timestamp_ms: 0,
+        }),
+        now,
+        &NoSpells,
+    );
+    assert!(changes.reset.is_none());
+    assert_eq!(world.session_id(), admission);
+    assert_eq!(world.player().unwrap().position, before);
+}
