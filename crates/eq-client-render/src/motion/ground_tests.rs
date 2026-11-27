@@ -1179,8 +1179,8 @@ fn native_ground_known_dry_headroom_refusal_reaches_the_ordinary_posture_control
         [[20., 0., -20.], [-20., 0., 20.], [20., 0., 20.]],
     ];
     triangles.extend([
-        [[-20., 7.9, -20.], [20., 7.9, -20.], [-20., 7.9, 20.]],
-        [[20., 7.9, -20.], [20., 7.9, 20.], [-20., 7.9, 20.]],
+        [[-20., 6.3, -20.], [20., 6.3, -20.], [-20., 6.3, 20.]],
+        [[20., 6.3, -20.], [20., 6.3, 20.], [-20., 6.3, 20.]],
     ]);
     let collision = CollisionWorld::new(triangles).unwrap().with_liquids(Dry);
     {
@@ -1190,6 +1190,12 @@ fn native_ground_known_dry_headroom_refusal_reaches_the_ordinary_posture_control
         let feet = transform.translation - Vec3::Y * body.feet_offset;
         let online = world.resource::<online::OnlineState>();
         let stand = crate::posture::stand_height(InstalledClient::Titanium, online.world(), body);
+        assert!(
+            collision
+                .clearance(feet, body.height, 0.)
+                .is_some_and(|room| room >= 0.),
+            "ordinary capsule fits; only the strict native room rule refuses"
+        );
         assert!(
             headroom::refused(
                 InstalledClient::Titanium,
