@@ -461,6 +461,23 @@ mod tests {
     }
 
     #[test]
+    fn server_dialog_geometry_stays_in_memory_while_other_windows_save() {
+        let mut placed = saved(px(45), false);
+        placed.size = Some(super::super::resize::Size {
+            scope: u64::from_be_bytes(*b"dialog01"),
+            dimensions: Vec2::new(610.0, 390.0),
+        });
+        let text = encode(&BTreeMap::from([
+            (super::super::WindowId::ServerDialog, placed),
+            (super::super::WindowId::Map, placed),
+        ]));
+        let restored = decode(&text);
+        assert_eq!(restored.len(), 1);
+        assert!(!restored.contains_key(&super::super::WindowId::ServerDialog));
+        assert_eq!(restored[&super::super::WindowId::Map].size, placed.size);
+    }
+
+    #[test]
     fn windows_the_player_never_moved_are_not_kept() {
         let untouched = Saved {
             placed: false,

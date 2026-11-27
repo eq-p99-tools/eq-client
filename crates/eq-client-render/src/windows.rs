@@ -4,6 +4,8 @@
 
 use crate::theme::{self, Size};
 use bevy::{prelude::*, ui::FocusPolicy, window::PrimaryWindow};
+#[cfg(test)]
+mod dialog_tests;
 mod layout;
 pub(super) mod menu;
 pub(super) mod pointer;
@@ -370,7 +372,16 @@ pub(super) fn titled(commands: &mut Commands, entity: Entity, id: WindowId) {
 
 /// Adds a compact drag bar and its minimize or close control.
 pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: WindowId) {
-    let title = id.describe().title;
+    title_bar_with_label(parent, frame, id, id.describe().title);
+}
+
+/// Shared chrome for windows whose title comes from received content.
+pub(crate) fn title_bar_with_label(
+    parent: &mut ChildSpawnerCommands,
+    frame: Entity,
+    id: WindowId,
+    title: &str,
+) {
     parent
         .spawn((
             Button,
@@ -390,6 +401,11 @@ pub(super) fn title_bar(parent: &mut ChildSpawnerCommands, frame: Entity, id: Wi
         ))
         .with_children(|bar| {
             bar.spawn(theme::text(title, Size::Small, theme::INK));
+            // LargeDialogWindow has neither native title-box control. Its
+            // offer-scoped response row remains the only dismissal surface.
+            if id == WindowId::ServerDialog {
+                return;
+            }
             let mut button = bar.spawn((
                 Button,
                 crate::skinned::TitleBox {

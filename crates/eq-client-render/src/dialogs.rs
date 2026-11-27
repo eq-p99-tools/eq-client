@@ -305,6 +305,7 @@ fn scroller() -> impl Bundle {
         Node {
             overflow: Overflow::scroll_y(),
             flex_grow: 1.0,
+            min_width: px(0),
             min_height: px(0),
             flex_direction: FlexDirection::Column,
             row_gap: px(4),
@@ -316,7 +317,22 @@ fn scroller() -> impl Bundle {
 }
 
 fn dialog(commands: &mut Commands, offer: &PopupOffer) -> Entity {
-    let panel = frame(commands, WindowId::ServerDialog, 460.0, 320.0);
+    let panel = windows::resizable_frame(
+        commands,
+        WindowId::ServerDialog,
+        Node {
+            // Client usability minima, not native decoration measurements.
+            min_width: px(240),
+            min_height: px(180),
+            flex_direction: FlexDirection::Column,
+            row_gap: px(8),
+            padding: UiRect::all(px(12)),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        Vec2::new(460.0, 320.0),
+        u64::from_be_bytes(*b"dialog01"),
+    );
     let popup = &offer.popup;
     commands.entity(panel).with_children(|body| {
         let title = if popup.title.trim().is_empty() {
@@ -324,12 +340,14 @@ fn dialog(commands: &mut Commands, offer: &PopupOffer) -> Entity {
         } else {
             &popup.title
         };
-        body.spawn(theme::text(title, Size::Heading, theme::INK_WARM));
+        windows::title_bar_with_label(body, panel, WindowId::ServerDialog, title);
         body.spawn(scroller())
+            .insert((windows::KeepsPress, bevy::ui::FocusPolicy::Block))
             .with_children(|body| stml::Document::parse(&popup.text).spawn(body));
         body.spawn(Node {
             column_gap: px(8),
             justify_content: JustifyContent::End,
+            flex_shrink: 0.0,
             ..default()
         })
         .with_children(|buttons| {
@@ -353,6 +371,7 @@ fn dialog(commands: &mut Commands, offer: &PopupOffer) -> Entity {
             }
             add(buttons, PopupAction::Dismiss, "Close");
         });
+        windows::resize_border(body, panel);
     });
     panel
 }
