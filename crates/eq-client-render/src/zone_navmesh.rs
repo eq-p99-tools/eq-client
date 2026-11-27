@@ -14,6 +14,9 @@ use std::time::Instant;
 /// More refused tiles than this are summed up by reason, not listed.
 const LISTED_REFUSALS: usize = 10;
 
+#[cfg(test)]
+mod lifecycle;
+
 /// Starts the shown zone's mesh, empty; its poll runs each frame. With the
 /// switch off, startup says so, since every scripted walk then plans on the
 /// grid.
@@ -44,6 +47,16 @@ pub(super) struct ZoneNavMesh {
     mesh: Option<SizedMeshes>,
     making: Option<Making>,
     source: Option<Source>,
+    generation: u64,
+    failure: Option<&'static str>,
+    summary: Option<Summary>,
+}
+
+struct Summary {
+    source: &'static str,
+    polygons: usize,
+    islands: usize,
+    incomplete: bool,
 }
 
 /// Retain shared build inputs so a late zone-header scale changes both the
@@ -68,6 +81,10 @@ pub(super) enum GridReason {
     Missing,
     /// The walker is taller than the tallest mesh size.
     TooTall,
+    /// The current build failed or produced no walkable polygons.
+    Failed,
+    /// The selected size has no walkable polygons in this mesh.
+    NoFloor,
 }
 
 impl GridReason {
@@ -78,12 +95,15 @@ impl GridReason {
             Self::Building => "the zone's navigation mesh is still being built",
             Self::Missing => "this zone has no navigation mesh",
             Self::TooTall => "the character is taller than the tallest navigation mesh size",
+            Self::Failed => "the current zone navigation mesh failed to load or build",
+            Self::NoFloor => "the navigation mesh has no floor for this character size",
         }
     }
 }
 
 struct Making {
     zone: String,
+    generation: u64,
     threads: usize,
     started: Instant,
     /// Set on leaving the zone; the build's threads stop at their next tile.
@@ -92,6 +112,49 @@ struct Making {
 }
 
 impl ZoneNavMesh {
+    #[cfg(test)]
+    pub(super) fn set_test_settings(&mut self, settings: Settings) {
+        self.source.as_mut().unwrap().settings = settings;
+    }
+    #[cfg(test)]
+    pub(super) fn hold_for_test(&mut self, zone: &str, triangles: Vec<[[f32; 3]; 3]>) {
+        self.start(zone, triangles, None, None, Settings::sized(walker_sizes()));
+        let making = self.making.as_mut().unwrap();
+        making.cancel.store(true, Ordering::Relaxed);
+        making.cancel = Arc::new(AtomicBool::new(false));
+        making.task =
+            AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(std::future::pending());
+    }
+
+    #[cfg(test)]
+    pub(super) fn complete_for_test(&mut self, mesh: Option<navmesh::NavMesh>) {
+        let sizes = self.source.as_ref().unwrap().settings.sizes;
+        self.making.as_mut().unwrap().task = AsyncComputeTaskPool::get_or_init(TaskPool::new)
+            .spawn(async move {
+                mesh.map(|mesh| {
+                    (
+                        cache::Loaded {
+                            mesh,
+                            source: cache::Source::Cache,
+                            cached: Ok(0),
+                        },
+                        sizes,
+                    )
+                })
+            });
+    }
+
+    pub(super) const fn generation(&self) -> u64 {
+        self.generation
+    }
+
+    pub(super) fn floors(&self, zone: &str) -> Option<Arc<Vec<[[f32; 3]; 3]>>> {
+        self.source
+            .as_ref()
+            .filter(|source| source.zone == zone)
+            .map(|source| Arc::clone(&source.triangles))
+    }
+
     /// Reads or builds `zone`'s mesh over `triangles`, its drops tried in
     /// the zone's `world` when there is one, keeping it under
     /// `settings_directory` when there is one. It is tagged for the three
@@ -105,6 +168,9 @@ impl ZoneNavMesh {
         settings: Settings,
     ) {
         self.leave();
+        if !self.enabled {
+            return;
+        }
         self.source = Some(Source {
             zone: zone.to_owned(),
             triangles: Arc::new(triangles),
@@ -123,6 +189,9 @@ impl ZoneNavMesh {
             making.cancel.store(true, Ordering::Relaxed);
         }
         self.mesh = None;
+        self.summary = None;
+        self.failure = None;
+        self.generation = self.generation.wrapping_add(1);
         let cancel = Arc::new(AtomicBool::new(false));
         let threads = navmesh::build_threads();
         let task = {
@@ -131,20 +200,25 @@ impl ZoneNavMesh {
             // One task that runs its own threads, so the tiles don't crowd
             // out the pool's other work.
             AsyncComputeTaskPool::get_or_init(TaskPool::new).spawn(async move {
-                cache::load_or_build(
-                    source.directory.as_deref(),
-                    &source.zone,
-                    &source.triangles,
-                    source.world.as_ref(),
-                    &source.settings,
-                    threads,
-                    &cancel,
-                )
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                    cache::load_or_build(
+                        source.directory.as_deref(),
+                        &source.zone,
+                        &source.triangles,
+                        source.world.as_ref(),
+                        &source.settings,
+                        threads,
+                        &cancel,
+                    )
+                }))
+                .ok()
+                .flatten()
                 .map(|loaded| (loaded, source.settings.sizes))
             })
         };
         self.making = Some(Making {
             zone: source.zone,
+            generation: self.generation,
             threads,
             started: Instant::now(),
             cancel,
@@ -159,6 +233,9 @@ impl ZoneNavMesh {
         }
         self.mesh = None;
         self.source = None;
+        self.summary = None;
+        self.failure = None;
+        self.generation = self.generation.wrapping_add(1);
     }
 
     /// The shown zone's mesh for a walker drawn `size` tall, once it is
@@ -167,11 +244,71 @@ impl ZoneNavMesh {
     /// tallest size.
     pub(super) fn for_walker(&self, size: f32) -> Result<Arc<navmesh::NavMesh>, GridReason> {
         match &self.mesh {
-            Some(mesh) => mesh.for_height(size).ok_or(GridReason::TooTall),
+            Some(mesh) => mesh
+                .for_height(size)
+                .ok_or(GridReason::TooTall)
+                .and_then(|mesh| {
+                    if mesh.polygon_count() == 0 {
+                        Err(GridReason::NoFloor)
+                    } else {
+                        Ok(mesh)
+                    }
+                }),
             None if !self.enabled => Err(GridReason::Disabled),
             None if self.making.is_some() => Err(GridReason::Building),
+            None if self.failure.is_some() => Err(GridReason::Failed),
             None => Err(GridReason::Missing),
         }
+    }
+
+    pub(super) fn for_zone_walker(
+        &self,
+        zone: &str,
+        size: f32,
+    ) -> Result<Arc<navmesh::NavMesh>, GridReason> {
+        if self.enabled
+            && self
+                .source
+                .as_ref()
+                .is_none_or(|source| source.zone != zone)
+        {
+            return Err(GridReason::Missing);
+        }
+        self.for_walker(size)
+    }
+
+    pub(super) fn status(&self, zone: &str, size: Option<f32>) -> serde_json::Value {
+        let current = self
+            .source
+            .as_ref()
+            .is_some_and(|source| source.zone == zone);
+        let summary = current.then_some(self.summary.as_ref()).flatten();
+        let phase = if !self.enabled {
+            "disabled"
+        } else if !current {
+            "missing"
+        } else if self.making.is_some() {
+            "building"
+        } else if self.failure.is_some() {
+            "failed"
+        } else if summary.is_some_and(|summary| summary.incomplete) {
+            "partial"
+        } else if summary.is_some() {
+            "ready"
+        } else {
+            "missing"
+        };
+        let walker = size.map(|size| {
+            self.for_zone_walker(zone, size)
+                .map(|_| ())
+                .map_err(GridReason::describe)
+        });
+        serde_json::json!({"zone":zone,"phase":phase,"ready":phase=="ready",
+            "generation":self.generation,"source":summary.map(|s|s.source),
+            "polygons":summary.map(|s|s.polygons),"islands":summary.map(|s|s.islands),
+            "failure":current.then_some(self.failure).flatten(),
+            "walker_ready":walker.as_ref().map(Result::is_ok),"walker_error":walker.and_then(Result::err),
+            "elapsed_ms":current.then(|| self.making.as_ref().map(|m|m.started.elapsed().as_millis())).flatten()})
     }
 }
 
@@ -198,6 +335,8 @@ fn refresh(
     );
     if source.settings != wanted {
         source.settings = wanted;
+        navmesh.build();
+    } else if navmesh.mesh.is_none() && navmesh.making.is_none() && navmesh.failure.is_none() {
         navmesh.build();
     }
 }
@@ -264,8 +403,22 @@ fn poll(mut navmesh: ResMut<ZoneNavMesh>) {
         return;
     };
     let making = navmesh.making.take().expect("polled above");
-    // None only for a cancelled build, whose zone is gone.
+    if making.generation != navmesh.generation
+        || navmesh
+            .source
+            .as_ref()
+            .is_none_or(|source| source.zone != making.zone)
+    {
+        return;
+    }
     let Some((loaded, sizes)) = loaded else {
+        navmesh.failure = Some("build failed or was cancelled");
+        warn!(zone = making.zone, "Navmesh failed");
+        return;
+    };
+    if loaded.mesh.polygon_count() == 0 {
+        navmesh.failure = Some("no walkable polygons");
+        warn!(zone = making.zone, "Navmesh failed: no walkable polygons");
         return;
     };
     report(
@@ -274,6 +427,16 @@ fn poll(mut navmesh: ResMut<ZoneNavMesh>) {
         &loaded,
         sizes,
     );
+    navmesh.summary = Some(Summary {
+        source: if matches!(&loaded.source, cache::Source::Cache) {
+            "cache"
+        } else {
+            "built"
+        },
+        polygons: loaded.mesh.polygon_count(),
+        islands: loaded.mesh.island_count(),
+        incomplete: loaded.mesh.incomplete(),
+    });
     navmesh.mesh = Some(loaded.mesh.split(sizes));
 }
 
@@ -303,13 +466,24 @@ pub(super) fn report(
         tiles,
         polygons = loaded.mesh.polygon_count(),
         islands = loaded.mesh.island_count(),
-        failed_tiles = refused.len(),
+        failed_tiles = tiles.map(|_| refused.len()),
         drop_links = loaded.mesh.drop_links().count(),
         drop_seconds,
         bytes,
         sizes = ?sizes,
-        "Navmesh ready"
+        complete = !loaded.mesh.incomplete(),
+        "Navmesh loaded"
     );
+    if loaded.mesh.incomplete() {
+        warn!(zone, "Navmesh partial: some build coverage was refused");
+    } else {
+        info!(
+            zone,
+            polygons = loaded.mesh.polygon_count(),
+            islands = loaded.mesh.island_count(),
+            "Navmesh ready"
+        );
+    }
     if let Err(error) = &loaded.cached {
         warn!(zone = zone, %error, "Navmesh not kept");
     }

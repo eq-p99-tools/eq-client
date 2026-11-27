@@ -164,6 +164,9 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `approach("object", kind, range, milliseconds)`: approach a tradeskill container type.
 - `walk(range, milliseconds)`: follow a searched path toward the target.
 - `walk("object", kind, range, milliseconds)`: path toward a tradeskill container type.
+- `walk_to(x, y, z, range, milliseconds)`: path to EQ coordinates at the requested floor (feet), without selecting a target. A partial route or timeout fails unless the place is reached.
+- `walk_exit(reference, range, milliseconds)`: path to reachable floor inside an authored current-zone line with this reference number.
+- `walk_exit("zone", zone_id, range, milliseconds)`: choose an authored current-zone line embedding this destination zone ID. The embedded arrival coordinates belong to the next zone and are never used as a current-zone goal. Missing or unreachable lines fail. Follow with `wait_zone` to observe the server's transition.
 - `chase(range, milliseconds)`: follow the target until it dies, leaves or times out.
 - `give()`: queue an offer of the cursor item or coins to the current NPC or
   player target. The run stops at this line if the offer cannot be queued,
@@ -178,7 +181,7 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
   merchants and corpses, check a subsequent economy report for the matching
   received shop or loot listing before using its controls.
 
-Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Walk uses the zone's navigation mesh once it is ready, which is the default. Without one, or with `--no-navmesh`, it falls back to grid search and the Execution tab and log say why. A reachable destination and the session's movement grant are still required. Keep the camera attached when using movement scripts; free-camera mode consumes movement input for the camera.
+Movement uses the client's ordinary movement and collision behavior. It is not a teleport. Zone entry loads or builds its cached navigation mesh in the background by default. Walk waits visibly for that current-zone build within its time limit. A failed build stops the walk; a disabled mesh (`--no-navmesh`) or unsupported character size explicitly uses grid search. Reports include mesh phase, generation and coverage; a partial mesh is not reported ready. Zoning or a new admission cancels an active walk. A reachable destination and the session's movement grant are still required. Keep the camera attached when using movement scripts; free-camera mode consumes movement input for the camera.
 
 Approach, walk and chase hold the camera-relative forward command, independent of key bindings. Object commands choose the nearest matching tradeskill container when they start. Missing targets, unreachable routes and timeouts stop the run. `wait_dead` only recognizes NPC corpses or a target leaving the zone; a player's death does not satisfy it while their corpse remains.
 

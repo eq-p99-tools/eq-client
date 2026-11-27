@@ -13,6 +13,17 @@ const MAX_HOLD: Duration = Duration::from_secs(10);
 pub(super) const MAX_WAIT: Duration = Duration::from_mins(2);
 const MAX_TRACE: Duration = Duration::from_secs(10);
 const MAX_WALK: Duration = Duration::from_mins(1);
+
+/// A target-independent destination in the current zone.
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum PlaceDestination {
+    /// EQ x/y/z of the destination floor, not a character's origin.
+    Coordinates([f32; 3]),
+    /// An authored source-region reference in the server's zone-point table.
+    ExitReference(u32),
+    /// Source regions with this embedded destination zone; arrival XYZ is ignored.
+    ExitZone(u16),
+}
 /// A script's AA request (checklist 6.569). The session alone decides
 /// whether it goes; the client checks nothing about the rank or the points.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -169,6 +180,16 @@ pub enum Step {
     /// Walks a searched path around walls to within a distance of the current
     /// target, for a bounded duration.
     Walk(f32, Duration),
+    /// Walks to explicit EQ feet coordinates or an authored source zone line,
+    /// without changing the selected target.
+    WalkPlace {
+        /// EQ feet coordinates or an authored current-zone line selector.
+        destination: PlaceDestination,
+        /// Horizontal distance that counts as reaching the place.
+        range: f32,
+        /// Maximum time, including geometry and mesh waits.
+        duration: Duration,
+    },
     /// Walks a searched path around walls toward the nearest world container
     /// of one tradeskill kind, chosen as the step starts, until it is within a
     /// distance, for a bounded duration.
@@ -644,6 +665,8 @@ pub(crate) const COMMANDS: &[&str] = &[
     "approach",
     "chase",
     "walk",
+    "walk_to",
+    "walk_exit",
     "give",
     "interact",
     "popup",
@@ -788,6 +811,32 @@ pub(super) fn parse_words(command: &str, rest: &[&str]) -> Result<Step, String> 
         ("chase", [range, limit]) => {
             Step::Chase(number(range, 1.0, 200.0)?, millis(limit, MAX_WAIT)?)
         }
+        ("walk_to", [x, y, z, range, duration]) => Step::WalkPlace {
+            destination: PlaceDestination::Coordinates([
+                number(x, -1_000_000.0, 1_000_000.0)?,
+                number(y, -1_000_000.0, 1_000_000.0)?,
+                number(z, -1_000_000.0, 1_000_000.0)?,
+            ]),
+            range: number(range, 1.0, 200.0)?,
+            duration: millis(duration, MAX_WALK)?,
+        },
+        ("walk_exit", [reference, range, duration]) => Step::WalkPlace {
+            destination: PlaceDestination::ExitReference(
+                reference
+                    .parse()
+                    .map_err(|_| "expected a zone-line reference number")?,
+            ),
+            range: number(range, 1.0, 200.0)?,
+            duration: millis(duration, MAX_WALK)?,
+        },
+        ("walk_exit", ["zone", zone, range, duration]) => Step::WalkPlace {
+            destination: PlaceDestination::ExitZone(
+                zone.parse()
+                    .map_err(|_| "expected an embedded destination zone ID")?,
+            ),
+            range: number(range, 1.0, 200.0)?,
+            duration: millis(duration, MAX_WALK)?,
+        },
         ("walk", ["object", kind, range, duration]) => Step::WalkObject {
             kind: station(kind)?,
             range: number(range, 1.0, 200.0)?,
@@ -3030,6 +3079,27 @@ mod tests {
         }
         let long = format!("click(\"button\", \"bank\", \"{}\")", "A".repeat(65));
         assert!(parse(&long, base).is_err());
+    }
+
+    #[test]
+    fn parses_place_walks_without_a_target() {
+        let base = Path::new("private");
+        assert_eq!(parse("walk_to(12, -34, 5, 2, 15000)\nwalk_exit(7, 1, 20000)\nwalk_exit(\"zone\", 54, 1, 20000)", base).unwrap(), [
+            Step::WalkPlace { destination: PlaceDestination::Coordinates([12.0, -34.0, 5.0]), range: 2.0, duration: Duration::from_millis(15000) },
+            Step::WalkPlace { destination: PlaceDestination::ExitReference(7), range: 1.0, duration: Duration::from_millis(20000) },
+            Step::WalkPlace { destination: PlaceDestination::ExitZone(54), range: 1.0, duration: Duration::from_millis(20000) },
+        ]);
+        for bad in [
+            "walk_to(NaN, 0, 0, 1, 10)",
+            "walk_to(0, inf, 0, 1, 10)",
+            "walk_to(1000001, 0, 0, 1, 10)",
+            "walk_to(0, 0, 0, 0, 10)",
+            "walk_exit(-1, 1, 10)",
+            "walk_exit(\"zone\", 65536, 1, 10)",
+            "walk_exit(7, 1, 60001)",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
+        }
     }
 
     #[test]

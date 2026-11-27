@@ -314,7 +314,12 @@ impl MeshSearch {
                     .is_some_and(|floor| (floor - end.y).abs() <= HEIGHT_REACH)
         };
         if let Some(end) = walked {
-            let strict = (end.y - to.y).abs() <= MAX_GROUNDED_STEP;
+            let allowed = if to == self.request.goal {
+                self.request.goal_height.unwrap_or(MAX_GROUNDED_STEP)
+            } else {
+                MAX_GROUNDED_STEP
+            };
+            let strict = (end.y - to.y).abs() <= allowed;
             if strict || loose(&end) {
                 self.loose += usize::from(!strict);
                 let to = if strict {
@@ -392,6 +397,7 @@ impl MeshSearch {
             PathSearch::new(from, to, reach, self.request.height)
                 .with_drops(self.request.drops)
                 .with_doors(self.request.doors.clone())
+                .with_goal_height(if last { self.request.goal_height } else { None })
                 .with_max_expansions(LOCAL_EXPANSIONS),
         )
     }
@@ -431,9 +437,14 @@ impl MeshSearch {
         };
         let opened = world.without_doors(&[door]);
         let start = stop.map_or(from, |(stop, _)| stop);
-        let Some(end) = walk(&opened, start, Vec2::new(to.x, to.z), height)
-            .filter(|end| (end.y - to.y).abs() <= MAX_GROUNDED_STEP)
-        else {
+        let Some(end) = walk(&opened, start, Vec2::new(to.x, to.z), height).filter(|end| {
+            let allowed = if to == self.request.goal {
+                self.request.goal_height.unwrap_or(MAX_GROUNDED_STEP)
+            } else {
+                MAX_GROUNDED_STEP
+            };
+            (end.y - to.y).abs() <= allowed
+        }) else {
             return false;
         };
         match stop {

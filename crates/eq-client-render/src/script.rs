@@ -30,6 +30,7 @@ pub(crate) mod pointer;
 mod program;
 mod report;
 mod scope;
+mod walking;
 pub(crate) use scope::ExpectedWorld;
 
 use execution::RunMode;
@@ -43,8 +44,8 @@ mod source;
 pub use source::read_source;
 
 pub use parse::{
-    AbilityPage, BookEdit, CharacterClick, ClickTarget, PickButton, RaidClick, SliderClick, Step,
-    TradeClick, TrainingClick, parse,
+    AbilityPage, BookEdit, CharacterClick, ClickTarget, PickButton, PlaceDestination, RaidClick,
+    SliderClick, Step, TradeClick, TrainingClick, parse,
 };
 pub(crate) use pointer::ScriptPointer;
 
@@ -141,6 +142,11 @@ pub struct Script {
     owns_input: bool,
     /// The route a `walk` step is searching for or following.
     route: Option<eq_client_core::movement::Route>,
+    walk_scope: Option<walking::Scope>,
+    walk_generation: Option<u64>,
+    walk_waiting: Option<&'static str>,
+    place: Option<walking::PlaceGoal>,
+    place_lookup: Option<walking::FindingExit>,
     /// The closed door the walk is opening, if any.
     door_wait: Option<DoorWait>,
     /// Where the walk last headed, for the stall line and the follower trace.
@@ -289,6 +295,11 @@ impl Script {
             length: RunLength::Default,
             owns_input: false,
             route: None,
+            walk_scope: None,
+            walk_generation: None,
+            walk_waiting: None,
+            place: None,
+            place_lookup: None,
             door_wait: None,
             following: None,
             quiet: None,
@@ -687,6 +698,11 @@ impl Script {
         self.current = None;
         self.follow = None;
         self.route = None;
+        self.walk_scope = None;
+        self.walk_generation = None;
+        self.walk_waiting = None;
+        self.place = None;
+        self.place_lookup = None;
         self.glide = None;
         self.scrolling = None;
         self.notch = None;
@@ -1727,7 +1743,9 @@ pub(super) fn drive(
                 }
                 distance <= *range
             }
-            Step::Walk(_, duration) | Step::WalkObject { duration, .. } => {
+            Step::Walk(_, duration)
+            | Step::WalkObject { duration, .. }
+            | Step::WalkPlace { duration, .. } => {
                 use eq_client_core::movement::RouteStep;
                 // An object walk ends only within its range; a plain walk also
                 // ends at the end of a partial route or out of time.
@@ -1735,15 +1753,80 @@ pub(super) fn drive(
                     Step::WalkObject { range, .. } => Some(*range),
                     _ => None,
                 };
+                let place_range = match &step {
+                    Step::WalkPlace { range, .. } => Some(*range),
+                    _ => None,
+                };
                 // Only an object walk has chosen an object.
+                match walking::scene_ready(&mut script, &online) {
+                    Ok(true) => (),
+                    Ok(false) => {
+                        script.release_step(&mut keys, &mut mouse);
+                        if elapsed >= *duration {
+                            script.stop(
+                                &mut keys,
+                                &mut mouse,
+                                "walk ran out of time waiting for current-zone geometry",
+                            );
+                        }
+                        return;
+                    }
+                    Err(reason) => {
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
+                    }
+                }
                 let body = bodies.single().ok().copied();
                 let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
-                let ends = body
-                    .and_then(|body| walk_ends(&online, client, body, script.approached, world));
-                let (Some((feet, goal)), Some(world), Some(body)) = (ends, world, body) else {
+                let (Some(world), Some(body)) = (world, body) else {
                     script.stop(&mut keys, &mut mouse, "walk lost its goal or collision");
+                    return;
+                };
+                let range = match &step {
+                    Step::Walk(range, _)
+                    | Step::WalkObject { range, .. }
+                    | Step::WalkPlace { range, .. } => *range,
+                    _ => unreachable!(),
+                };
+                match walking::prepare(
+                    &mut script,
+                    &step,
+                    &online,
+                    client,
+                    body,
+                    world,
+                    observed.7.as_deref(),
+                    observed.4.airborne.is_some(),
+                    range,
+                ) {
+                    Ok(true) => (),
+                    Ok(false) => {
+                        script.release_step(&mut keys, &mut mouse);
+                        if elapsed >= *duration {
+                            script.stop(&mut keys,&mut mouse,"walk ran out of time waiting for its destination or current-zone mesh");
+                        }
+                        return;
+                    }
+                    Err(reason) => {
+                        script.stop(&mut keys, &mut mouse, &reason);
+                        return;
+                    }
+                }
+                let Some((feet, goal)) = walk_ends(
+                    &online,
+                    client,
+                    body,
+                    script.approached,
+                    script.place.as_ref(),
+                    Some(world),
+                ) else {
+                    script.stop(
+                        &mut keys,
+                        &mut mouse,
+                        "walk lost its current-zone destination",
+                    );
                     return;
                 };
                 let posture = online
@@ -2028,9 +2111,12 @@ pub(super) fn drive(
                         (false, elapsed >= *duration)
                     }
                 };
-                match object_range
-                    .map(|range| object_walk_end(distance, range, arrived, out_of_time))
-                {
+                let ended = if let Some(range) = place_range {
+                    Some(walking::end(feet, goal, range, arrived, out_of_time))
+                } else {
+                    object_range.map(|range| object_walk_end(distance, range, arrived, out_of_time))
+                };
+                match ended {
                     None => arrived || out_of_time,
                     Some(Ok(done)) => {
                         if done {
@@ -2263,6 +2349,11 @@ pub(super) fn drive(
         script.release_step(&mut keys, &mut mouse);
         script.current = None;
         script.route = None;
+        script.walk_scope = None;
+        script.walk_generation = None;
+        script.walk_waiting = None;
+        script.place = None;
+        script.place_lookup = None;
         script.glide = None;
         script.scrolling = None;
         script.following = None;
@@ -2880,7 +2971,7 @@ pub(super) fn drive(
             }
             script.acts = vec![FORWARD];
         }
-        Step::Walk(range, _) | Step::WalkObject { range, .. } => {
+        Step::Walk(range, _) | Step::WalkObject { range, .. } | Step::WalkPlace { range, .. } => {
             if let Step::WalkObject { kind, .. } = &step {
                 script.approached = nearest_station(&online, *kind);
                 if script.approached.is_none() {
@@ -2892,60 +2983,41 @@ pub(super) fn drive(
                     return;
                 }
             }
-            let creating = std::time::Instant::now();
-            let route = bodies.single().ok().and_then(|body| {
-                let floors = collision
+            let scene = match walking::scene_ready(&mut script, &online) {
+                Ok(ready) => ready,
+                Err(reason) => {
+                    script.stop(&mut keys, &mut mouse, &reason);
+                    return;
+                }
+            };
+            if scene {
+                let body = bodies.single().ok().copied();
+                let world = collision
                     .as_ref()
                     .and_then(|collision| collision.0.as_ref());
-                let (feet, goal) = walk_ends(&online, client, *body, script.approached, floors)?;
-                // Ledges are routes only where the session simulates falls.
-                let route = eq_client_core::movement::Route::new(feet, goal, *range, body.height)
-                    .with_drops(observed.4.airborne.is_some())
-                    .with_doors(openable_doors(&online))
-                    .with_background(std::sync::Arc::new(super::background::ComputePool));
-                // With the zone's mesh ready for this body's size, the mesh
-                // plans; else the grid, and the walk says why.
-                let mesh = observed
-                    .7
-                    .as_ref()
-                    .map_or(Err(super::zone_navmesh::GridReason::Missing), |meshes| {
-                        meshes.for_walker(body.mesh_size())
-                    });
-                Some(match mesh {
-                    Ok(mesh) => (
-                        route.with_navigator(Box::new(
-                            eq_client_core::movement::navmesh::MeshNavigator::new(mesh),
-                        )),
-                        None,
-                    ),
-                    Err(reason) => (route, Some(reason)),
-                })
-            });
-            let creating = creating.elapsed();
-            if creating >= SLOW_ROUTE_CALL {
-                info!(
-                    ms = creating.as_secs_f32() * 1000.0,
-                    "Script walk route made slowly"
-                );
+                let (Some(body), Some(world)) = (body, world) else {
+                    script.stop(
+                        &mut keys,
+                        &mut mouse,
+                        "walk needs current player geometry and collision",
+                    );
+                    return;
+                };
+                if let Err(reason) = walking::prepare(
+                    &mut script,
+                    &step,
+                    &online,
+                    client,
+                    body,
+                    world,
+                    observed.7.as_deref(),
+                    observed.4.airborne.is_some(),
+                    *range,
+                ) {
+                    script.stop(&mut keys, &mut mouse, &reason);
+                    return;
+                }
             }
-            let Some((route, grid)) = route else {
-                script.stop(&mut keys, &mut mouse, "walk needs a visible target");
-                return;
-            };
-            if let Some(reason) = grid {
-                let reason = reason.describe();
-                warn!(
-                    reason,
-                    "Script walk planning with grid search, not the navigation mesh"
-                );
-                script
-                    .progress
-                    .event(format!("Walk uses grid search: {reason}"));
-            }
-            script.route = Some(route);
-            script.door_wait = None;
-            script.following = None;
-            script.quiet = None;
         }
         Step::WaitDead(_) => script.awaited = online.world().target().selected,
         Step::WaitServers
@@ -4400,11 +4472,14 @@ fn walk_ends(
     client: eq_client_assets::ui::InstalledClient,
     body: super::PlayerBody,
     object: Option<u32>,
+    place: Option<&walking::PlaceGoal>,
     floors: Option<&eq_client_core::movement::CollisionWorld>,
 ) -> Option<(Vec3, Vec3)> {
     let world = online.world();
     let player = world.player()?;
-    let goal = if let Some(drop_id) = object {
+    let goal = if let Some(place) = place {
+        place.current(online)?
+    } else if let Some(drop_id) = object {
         Vec3::from_array(eq_client_core::render_position(
             world.objects().entries().get(&drop_id)?.position,
         ))
@@ -4816,8 +4891,15 @@ mod tests {
             height: 6.0,
             size: 6.0,
         };
-        let (_, goal) =
-            walk_ends(&online, InstalledClient::Titanium, body, None, Some(&world)).unwrap();
+        let (_, goal) = walk_ends(
+            &online,
+            InstalledClient::Titanium,
+            body,
+            None,
+            None,
+            Some(&world),
+        )
+        .unwrap();
         assert!(goal.y.abs() < 1e-3, "{goal}");
         assert!(
             (goal.x - 4.0).abs() < 1e-3 && (goal.z - 1.0).abs() < 1e-3,
@@ -4841,6 +4923,7 @@ mod tests {
             InstalledClient::Titanium,
             body,
             Some(40),
+            None,
             Some(&world),
         )
         .unwrap();
@@ -6256,7 +6339,7 @@ mod tests {
 
     /// Production `PreUpdate` input/drive/click order, without any OS window or
     /// network connection. The script has public-session input permissions.
-    fn background(steps: Vec<Step>) -> (App, Entity) {
+    pub(super) fn background(steps: Vec<Step>) -> (App, Entity) {
         let mut app = crate::testing::app();
         app.insert_resource(Time::<Real>::new(std::time::Instant::now()))
             .init_resource::<crate::windows::Moves>()
@@ -6806,7 +6889,7 @@ mod tests {
     }
 
     /// Runs a frame `ms` into the run.
-    fn frame_at(app: &mut App, ms: u64) {
+    pub(super) fn frame_at(app: &mut App, ms: u64) {
         let mut time = app.world_mut().resource_mut::<Time<Real>>();
         let startup = time.startup();
         time.update_with_instant(startup + Duration::from_millis(ms));

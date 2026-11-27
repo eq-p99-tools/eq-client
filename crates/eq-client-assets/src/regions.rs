@@ -16,6 +16,40 @@ struct Node {
     back: Option<usize>,
 }
 
+/// Clips a floor polygon at actor-origin height to one side of a BSP plane.
+fn clip_boundary(polygon: &[Vec3], node: &Node, front: bool) -> Vec<Vec3> {
+    let normal = Vec3::from_array(node.normal);
+    let distance = |point: Vec3| normal.dot(point) + node.distance;
+    let inside = |distance: f32| {
+        if front {
+            distance > 0.0
+        } else {
+            distance < 0.0
+        }
+    };
+    let mut clipped = Vec::new();
+    let Some(&last) = polygon.last() else {
+        return clipped;
+    };
+    let mut previous = last;
+    let mut before = distance(previous);
+    for &point in polygon {
+        let after = distance(point);
+        if inside(before) != inside(after) {
+            let fraction = before / (before - after);
+            if fraction.is_finite() {
+                clipped.push(previous.lerp(point, fraction));
+            }
+        }
+        if inside(after) {
+            clipped.push(point);
+        }
+        previous = point;
+        before = after;
+    }
+    clipped
+}
+
 /// Destination metadata encoded by a local WLD boundary.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ZoneLine {
@@ -401,6 +435,72 @@ impl ZoneRegions {
     /// A point exactly on a split plane, a broken tree, or a cycle yields no route.
     pub fn zone_line_at(&self, position: [f32; 3]) -> Option<ZoneLine> {
         self.routes.get(&self.region_at(position)?).copied()
+    }
+
+    /// Floor points inside matching source boundary regions. Embedded arrival
+    /// coordinates are never interpreted as positions in this zone. Triangles
+    /// are clipped by the authored BSP planes at the actor's origin height;
+    /// a narrow region therefore needs no arbitrary sampling stride.
+    #[must_use]
+    pub fn zone_line_floor_points(
+        &self,
+        floors: &[[[f32; 3]; 3]],
+        feet_offset: f32,
+        keep: impl Fn(ZoneLine) -> bool,
+        cancelled: &impl Fn() -> bool,
+    ) -> Vec<[f32; 3]> {
+        if !feet_offset.is_finite() || self.routes.is_empty() {
+            return Vec::new();
+        }
+        let mut points = Vec::new();
+        for triangle in floors {
+            if cancelled() {
+                break;
+            }
+            let [a, b, c] = triangle.map(Vec3::from_array);
+            let normal = (b - a).cross(c - a).normalize_or_zero();
+            if normal.y < 0.7 {
+                continue;
+            }
+            let polygon = vec![
+                a + Vec3::Y * feet_offset,
+                b + Vec3::Y * feet_offset,
+                c + Vec3::Y * feet_offset,
+            ];
+            let mut pending = vec![(0_usize, polygon, 0_usize)];
+            let mut visits = 0;
+            while let Some((index, polygon, depth)) = pending.pop() {
+                visits += 1;
+                if visits > self.nodes.len().saturating_mul(2) {
+                    break;
+                }
+                if depth >= self.nodes.len() || cancelled() {
+                    continue;
+                }
+                let Some(node) = self.nodes.get(index) else {
+                    continue;
+                };
+                if let Some(region) = node.region {
+                    if self.routes.get(&region).copied().is_some_and(&keep) {
+                        #[allow(clippy::cast_precision_loss)]
+                        // A clipped triangle has few vertices.
+                        let centre = polygon.iter().copied().sum::<Vec3>() / polygon.len() as f32;
+                        if self.zone_line_at(centre.to_array()).is_some_and(&keep) {
+                            points.push((centre - Vec3::Y * feet_offset).to_array());
+                        }
+                    }
+                    continue;
+                }
+                for (child, front) in [(node.front, true), (node.back, false)] {
+                    let Some(child) = child else { continue };
+                    let clipped = clip_boundary(&polygon, node, front);
+                    if clipped.len() >= 3 {
+                        pending.push((child, clipped, depth + 1));
+                    }
+                }
+            }
+        }
+        points
     }
 
     /// What fills the zone at a position in the renderer's frame: water,
@@ -1071,6 +1171,100 @@ mod tests {
             front: None,
             back: None,
         }
+    }
+
+    #[test]
+    fn exit_floor_clipping_finds_a_narrow_source_region_not_its_arrival_coordinates() {
+        let arrival = ZoneLine::Absolute {
+            zone_id: 54,
+            position: [9000.0, 8000.0, 7000.0],
+            heading: 0.0,
+        };
+        let regions = ZoneRegions {
+            nodes: vec![
+                Node {
+                    normal: [1.0, 0.0, 0.0],
+                    distance: -10.0,
+                    region: None,
+                    front: Some(1),
+                    back: Some(3),
+                },
+                Node {
+                    normal: [-1.0, 0.0, 0.0],
+                    distance: 10.01,
+                    region: None,
+                    front: Some(2),
+                    back: Some(3),
+                },
+                leaf(0),
+                leaf(1),
+            ],
+            routes: BTreeMap::from([(0, arrival)]),
+            ..ZoneRegions::default()
+        };
+        // No vertex lies in the narrow x10..10.01 region.
+        let floors = [[[0.0, 0.0, 0.0], [0.0, 0.0, 20.0], [20.0, 0.0, 0.0]]];
+        let points =
+            regions.zone_line_floor_points(&floors, 3.75, |line| line == arrival, &|| false);
+        assert_eq!(points.len(), 1);
+        assert!(points[0][0] > 10.0 && points[0][0] < 10.01);
+        assert_eq!(points[0][1], 0.0);
+        assert_eq!(
+            regions.zone_line_at((Vec3::from_array(points[0]) + Vec3::Y * 3.75).to_array()),
+            Some(arrival)
+        );
+        assert!(
+            regions
+                .zone_line_floor_points(&floors, 3.75, |_| true, &|| true)
+                .is_empty()
+        );
+    }
+
+    #[test]
+    fn exit_floor_clipping_uses_actor_origin_height_and_rejects_walls() {
+        let regions = ZoneRegions {
+            nodes: vec![
+                Node {
+                    normal: [0.0, 1.0, 0.0],
+                    distance: -3.0,
+                    region: None,
+                    front: Some(1),
+                    back: Some(2),
+                },
+                leaf(0),
+                leaf(1),
+            ],
+            routes: BTreeMap::from([(0, ZoneLine::Reference(7))]),
+            ..ZoneRegions::default()
+        };
+        let floors = [[[0.0, 0.0, 0.0], [0.0, 0.0, 20.0], [20.0, 0.0, 0.0]]];
+        assert!(
+            regions
+                .zone_line_floor_points(&floors, 2.0, |_| true, &|| false)
+                .is_empty()
+        );
+        assert!(
+            regions
+                .zone_line_floor_points(&floors, 3.0, |_| true, &|| false)
+                .is_empty()
+        );
+        assert_eq!(
+            regions
+                .zone_line_floor_points(
+                    &floors,
+                    4.0,
+                    |line| line == ZoneLine::Reference(7),
+                    &|| false
+                )
+                .len(),
+            1
+        );
+        let walls = [[[0.0, 0.0, 0.0], [0.0, 20.0, 0.0], [20.0, 0.0, 0.0]]];
+        assert!(
+            regions
+                .zone_line_floor_points(&walls, 4.0, |_| true, &|| false)
+                .is_empty()
+        );
     }
 
     fn tree() -> ZoneRegions {
