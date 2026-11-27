@@ -54,6 +54,208 @@ struct Scene {
     early_refuse: bool,
     ordinary_stops: usize,
     ordinary_modes: Vec<MovementMode>,
+    ordinary_supports: Vec<Option<Support>>,
+}
+
+struct CarrierFixture {
+    collision: CollisionWorld,
+    origin: eq_client_core::WorldPosition,
+    body: PlayerBody,
+    ship: eq_client_core::SpawnState,
+    native: bool,
+}
+
+fn docked_carrier(native: bool, installed: bool) -> CarrierFixture {
+    use eq_client_core::movement::{CollisionInstance, CollisionMesh};
+    use std::sync::Arc;
+    let pose = eq_client_core::WorldPosition {
+        x: 277.,
+        y: 21.,
+        z: -19.5,
+        heading: 0.75,
+    };
+    let transform = crate::zone::placement(pose)
+        .with_rotation(Quat::from_rotation_y(eq_client_core::static_yaw(
+            pose.heading,
+        )))
+        .with_scale(Vec3::splat(
+            crate::entities::Drawn::by(InstalledClient::Titanium, None, (72, 2, 0.)).scale,
+        ));
+    let mut height = 6.;
+    let (mut world, local) = if installed {
+        let directory = std::env::var("EQ_CARRIER_TRANSFER_DIR")
+            .expect("set the authorized local Titanium asset directory");
+        let directory = std::path::Path::new(&directory);
+        let zone = eq_client_assets::load_zone_collision(directory, "qeynos").unwrap();
+        let actor =
+            eq_client_assets::actors::load_installed_actor(directory, "qeynos", "PRE").unwrap();
+        let human = eq_client_assets::characters::load_installed_character(
+            directory,
+            "qeynos",
+            "HUM",
+            &eq_client_assets::characters::DonorArchives::default(),
+        )
+        .unwrap();
+        height = human.height();
+        println!(
+            "installed carrier172 PRE triangles={} scale={} player_height={height} feet=3.75 pose={pose:?}",
+            actor.model.collision.len(),
+            transform.scale.x
+        );
+        (
+            crate::scene_collision::zone_collision(&zone)
+                .unwrap()
+                .with_swim_origin(3.75),
+            actor.model.collision,
+        )
+    } else {
+        // A deterministic supported-carrier seam; the ignored installed row
+        // below separately qualifies the exact authored Qeynos/PRE geometry.
+        let point = |x, y| {
+            Vec3::from_array(eq_client_core::render_position(
+                eq_client_core::WorldPosition {
+                    x,
+                    y,
+                    z: 2.25,
+                    heading: 0.,
+                },
+            ))
+        };
+        let mut triangles = vec![
+            [point(243.5, 0.), point(270., 0.), point(243.5, 20.)],
+            [point(270., 0.), point(270., 20.), point(243.5, 20.)],
+        ];
+        let inverse = transform.compute_affine().inverse();
+        for triangle in &mut triangles {
+            if (triangle[1] - triangle[0])
+                .cross(triangle[2] - triangle[0])
+                .y
+                < 0.
+            {
+                triangle.swap(1, 2);
+            }
+            *triangle = triangle.map(|point| inverse.transform_point3(point));
+        }
+        let floor = CollisionWorld::new([
+            [
+                [-2000., 0., -2000.],
+                [-2000., 0., 2000.],
+                [2000., 0., -2000.],
+            ],
+            [[2000., 0., -2000.], [-2000., 0., 2000.], [2000., 0., 2000.]],
+        ])
+        .unwrap()
+        .with_liquids(Dry);
+        (
+            floor,
+            triangles
+                .into_iter()
+                .map(|triangle| triangle.map(|point| point.to_array()))
+                .collect(),
+        )
+    };
+    let mesh = Arc::new(
+        CollisionMesh::new(local.into_iter().map(|triangle| {
+            triangle.map(|point| (Vec3::from_array(point) * transform.scale).to_array())
+        }))
+        .unwrap(),
+    );
+    world.set_spawn_instances(vec![(
+        172,
+        CollisionInstance::new(mesh, transform.translation, transform.rotation)
+            .unwrap()
+            .with_spawn_kind(eq_client_core::SpawnKind::Npc),
+    )]);
+    let mut ship = crate::online::testing::pet(172, 7);
+    ship.race = 72;
+    ship.gender = 2;
+    ship.position = pose;
+    ship.forward = 0.;
+    ship.velocity = [0.; 3];
+    CarrierFixture {
+        collision: world,
+        origin: eq_client_core::WorldPosition {
+            x: 200.,
+            y: 10.,
+            z: 3.75,
+            heading: 128.,
+        },
+        body: PlayerBody {
+            feet_offset: 3.75,
+            height,
+            size: 6.,
+        },
+        ship,
+        native,
+    }
+}
+
+fn carrier_crossing(installed: bool) {
+    let mut failed = Vec::new();
+    for delay in [0, 6] {
+        let mut distances = Vec::new();
+        for native in [false, true] {
+            let mut scene = Scene::with_carrier_fixture(
+                delay,
+                true,
+                29.866_667,
+                false,
+                Some(docked_carrier(native, installed)),
+            );
+            for _ in 0..60 {
+                scene.step(true);
+            }
+            let mut previous = latency_tests::shown(&mut scene.app).0;
+            let mut distance = 0.;
+            let mut stopped = 0;
+            let mut stopped_run = 0;
+            let mut longest_stop = 0;
+            for _ in 0..60 {
+                let shown = scene.step(true).shown;
+                let delta = (shown - previous).with_y(0.).length();
+                distance += delta;
+                stopped += usize::from(delta < 0.000_01);
+                stopped_run = if delta < 0.000_01 { stopped_run + 1 } else { 0 };
+                longest_stop = longest_stop.max(stopped_run);
+                previous = shown;
+            }
+            assert!(
+                scene.ordinary_supports.iter().any(
+                    |support| matches!(support,Some(Support::Spawn(sample)) if sample.spawn_id==172)
+                ),
+                "fixture never produced an actual supported-carrier request"
+            );
+            assert_eq!(scene.refusals, 0);
+            let end = world_position(previous.to_array(), 128.);
+            println!(
+                "carrier-crossing installed={installed} delay={delay} native={native} path={distance} stopped_frames={stopped} longest_stop_frames={longest_stop} end={end:?} native_observations={}",
+                scene.observations
+            );
+            if native && longest_stop >= 6 {
+                failed.push((delay, "zero-frame"));
+            }
+            distances.push(distance);
+        }
+        if (distances[1] - distances[0]).abs() / distances[0] > 0.01 {
+            failed.push((delay, "distance"));
+        }
+    }
+    assert_eq!(
+        failed,
+        Vec::new(),
+        "supported carrier handover lost time/distance"
+    );
+}
+
+#[test]
+fn native_ground_transfers_once_to_supported_carrier_without_a_zero_sample() {
+    carrier_crossing(false);
+}
+
+#[test]
+#[ignore = "requires authorized installed Titanium assets; offline CPU collision only"]
+fn installed_qeynos_pre_carrier172_crossing_matches_main() {
+    carrier_crossing(true);
 }
 
 // Each piece meets its neighbour exactly; the collision owner's capsule,
@@ -301,6 +503,16 @@ impl Scene {
     }
 
     fn with_rates(delay: u32, known: bool, speed: f32, lateral: bool) -> Self {
+        Self::with_carrier_fixture(delay, known, speed, lateral, None)
+    }
+
+    fn with_carrier_fixture(
+        delay: u32,
+        known: bool,
+        speed: f32,
+        lateral: bool,
+        fixture: Option<CarrierFixture>,
+    ) -> Self {
         let (mut app, commands, news) = latency_tests::timing_app();
         app.world_mut().resource_mut::<Controls>().speed = Some(speed);
         let diagonal = if lateral {
@@ -336,9 +548,33 @@ impl Scene {
         } else {
             collision
         };
-        app.insert_resource(Collision(Some(collision)));
         let base = Instant::now();
         let start = base.checked_sub(Duration::from_secs(1)).unwrap();
+        let carrier = fixture.is_some();
+        if let Some(fixture) = fixture {
+            let mut reports = eq_client_core::movement::Carriers::default();
+            let spawned = eq_client_core::WorldEvent::Spawns(vec![fixture.ship]);
+            let changes = reports.observe(&spawned, eq_client_core::GameDialect::Titanium, start);
+            {
+                let world = app.world_mut();
+                world.resource_mut::<Controls>().suppress_ground = !fixture.native;
+                let mut online = world.resource_mut::<online::OnlineState>();
+                crate::online::testing::place(&mut online, fixture.origin);
+                crate::online::testing::news(
+                    &mut online,
+                    [spawned, eq_client_core::WorldEvent::Carriers(changes)],
+                );
+                drop(online);
+                let mut player =
+                    world.query_filtered::<(&mut Transform, &mut PlayerBody), With<Player>>();
+                let (mut transform, mut body) = player.single_mut(world).unwrap();
+                *transform = crate::zone::placement(fixture.origin);
+                *body = fixture.body;
+            }
+            app.insert_resource(Collision(Some(fixture.collision)));
+        } else {
+            app.insert_resource(Collision(Some(collision)));
+        }
         app.world_mut().resource_mut::<Controls>().last_accepted = start;
         let origin = app
             .world()
@@ -358,7 +594,7 @@ impl Scene {
             .calibrate(
                 eq_client_core::MotionCalibration {
                     units_per_second: speed,
-                    velocity_scale: 1.,
+                    velocity_scale: if carrier { 0.05 } else { 1. },
                     animation: 12,
                     swim: None,
                     swim_backward_units_per_second: None,
@@ -375,7 +611,23 @@ impl Scene {
                 start,
             )
             .unwrap();
-        owner.set_climb(super::tests::fixture_climb());
+        let climb = {
+            let world = app.world_mut();
+            let body = world
+                .query_filtered::<&PlayerBody, With<Player>>()
+                .single(world)
+                .unwrap();
+            walking(
+                physics(InstalledClient::Titanium, None),
+                InstalledClient::Titanium,
+                body,
+                1,
+                (true, false),
+            )
+            .reach()
+        };
+        owner.set_climb(climb);
+        app.world_mut().resource_mut::<Controls>().climb_sent = Some((11, climb));
         let mut scene = Self {
             app,
             commands,
@@ -392,6 +644,7 @@ impl Scene {
             early_refuse: false,
             ordinary_stops: 0,
             ordinary_modes: Vec::new(),
+            ordinary_supports: Vec::new(),
         };
         scene.step(false);
         scene
@@ -453,6 +706,19 @@ impl Scene {
             }
             ClientCommand::Move(request) => {
                 self.ordinary_modes.push(request.mode);
+                self.ordinary_supports.push(request.support);
+                let carrier = match request.support {
+                    Some(Support::Spawn(sample)) => self
+                        .app
+                        .world()
+                        .resource::<online::OnlineState>()
+                        .world()
+                        .carriers()
+                        .pose(sample, request.created)
+                        .map(|pose| (sample, pose)),
+                    _ => None,
+                };
+                self.owner.allow_carrier(carrier);
                 self.ordinary_stops += usize::from(request.position == self.owner.position());
                 let packets = &mut self.packets;
                 self.owner

@@ -185,6 +185,8 @@ pub(super) struct Controls {
     /// same binary. This switch is absent from production builds.
     #[cfg(test)]
     suppress_submitted_preview: bool,
+    #[cfg(test)]
+    suppress_ground: bool,
     /// Deterministic elapsed time for command-equivalence fixtures only.
     #[cfg(test)]
     test_span: Option<f32>,
@@ -386,6 +388,8 @@ impl Default for Controls {
             release_sample: false,
             #[cfg(test)]
             suppress_submitted_preview: false,
+            #[cfg(test)]
+            suppress_ground: false,
             #[cfg(test)]
             test_span: None,
             #[cfg(test)]
@@ -2540,6 +2544,8 @@ pub(super) fn input(
                 .is_none_or(|airborne| airborne.velocity() == 0. && airborne.peak().is_none())
             && controls.movement_options.run_speed_multiplier
                 == eq_client_core::movement::RunSpeedMultiplier::NORMAL;
+        #[cfg(test)]
+        let eligible = eligible && !controls.suppress_ground;
         let first_span = time
             .as_deref()
             .map_or(Duration::ZERO, Time::delta)
