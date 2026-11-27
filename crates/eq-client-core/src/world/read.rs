@@ -323,6 +323,11 @@ impl ClientWorld {
             return None;
         }
         let report = self.vitals.reported_hp?;
+        // The native getter caps current at maximum. A nonpositive
+        // reconstructed maximum supplies no usable cap for this model.
+        if self.hit_points()?.1 == 0 {
+            return None;
+        }
         Some(crate::control::HitPointBasis {
             reported_current: report.current,
             reported_maximum: report.maximum,

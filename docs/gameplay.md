@@ -23,6 +23,13 @@ control transition can be counted; a raw negative report can still describe a
 living player wearing HP gear. Positive 1 HP can round down to 0% without being
 unconscious.
 
+The control basis reconstructs the received packet's current HP using its
+declared item-bonus convention. It uses the received maximum, rather than
+replacing it with a class or stamina estimate. This does not model the native
+HP-bonus field's unread writer or the unread class/stat coefficients of the
+native maximum-HP formula. Missing or unresolved equipped contributions, and
+a nonpositive reconstructed maximum, withhold that control basis.
+
 Both HP gauges use Titanium's signed per-mille value. Negative values below
 -9 use the separate purple reserve scale; this is a display rule rather than
 a death threshold. The effect-328 damage cutoff is applied only where its

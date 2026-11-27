@@ -218,6 +218,7 @@ pub(super) fn state(
         hp_reported = ?online.world().vitals().reported_hp,
         hp_item_bonus = ?online.world().vitals().item_hp,
         hp_counted = ?online.world().counted_hit_points(),
+        hp_control_basis = ?online.world().hit_point_basis(),
         hp_local_damage = online.world().vitals().local_hp_damage,
         mana = ?online.world().vitals().mana,
         endurance = ?online.world().vitals().endurance,
