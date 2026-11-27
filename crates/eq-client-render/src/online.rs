@@ -965,16 +965,16 @@ type Definitions<'w> = (
 )]
 pub(super) fn receive(
     mut commands: Commands,
-    (updates, front, outbox): (
+    (updates, front, outbox, mut damage_trace_ordinal): (
         Res<Updates>,
         Option<Res<super::login::FrontEnd>>,
         Option<Res<super::outbox::Outbox>>,
+        Local<u64>,
     ),
     definitions: Definitions<'_>,
     mut state: ResMut<OnlineState>,
     mut panels: Panels,
     mut chat: ResMut<super::chat::ChatState>,
-    mut damage_trace_ordinal: Local<u64>,
     (mut scene, loading): (super::zone::Scene, Option<Res<super::loading::Loading>>),
 ) {
     let (settings, mut spell_names, messages, options) = definitions;
