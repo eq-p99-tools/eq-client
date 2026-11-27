@@ -462,7 +462,7 @@ mod tests {
         let target = online.world().spawn(9).unwrap().state.position;
         let mut feet = Vec3::new(9.0, 53.0, 0.0);
         let started = Instant::now();
-        for frame in 0_u64..20_000 {
+        loop {
             let result = aim(
                 &mut script,
                 &online,
@@ -473,7 +473,7 @@ mod tests {
                 Some(&AirborneController::default()),
                 target,
                 1.0,
-                Duration::from_millis(frame),
+                started.elapsed(),
             );
             match result {
                 Err(reason) => {
@@ -499,10 +499,18 @@ mod tests {
                 }
                 Ok(None) => (),
             }
-            assert!(started.elapsed() < Duration::from_secs(30));
-            std::thread::yield_now();
+            assert!(
+                started.elapsed() < Duration::from_secs(30),
+                "unsafe chase never reported its refusal"
+            );
+            if script
+                .route
+                .as_ref()
+                .is_some_and(eq_client_core::movement::Route::is_searching)
+            {
+                std::thread::sleep(Duration::from_millis(1));
+            }
         }
-        panic!("unsafe chase never reported its refusal");
     }
 
     #[test]
