@@ -11,6 +11,63 @@ fn probe_point(name: &str) -> Vec3 {
     Vec3::new(values[0], values[1], values[2])
 }
 
+/// Optional private snapshot of closed door placements for offline routing.
+/// Configuration rows and received definitions must be labeled separately by
+/// the caller; this neither opens a connection nor supplies native evidence.
+fn probe_closed_doors(
+    zone: &eq_client_assets::ZoneAsset,
+    world: &mut eq_client_core::movement::CollisionWorld,
+) {
+    use eq_client_core::movement::CollisionMesh;
+    use std::sync::Arc;
+    let Ok(path) = std::env::var("EQ_PROBE_CLOSED_DOORS") else {
+        return;
+    };
+    let rows: Vec<serde_json::Value> =
+        serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+    let mut obstacles = Vec::new();
+    for row in rows {
+        let id: u8 = serde_json::from_value(row["id"].clone()).unwrap();
+        let name = row["model"].as_str().unwrap();
+        let position: [f32; 3] = serde_json::from_value(row["position"].clone()).unwrap();
+        let heading: f32 = serde_json::from_value(row["heading"].clone()).unwrap();
+        let size: f32 = serde_json::from_value(row["size"].clone()).unwrap();
+        let key = eq_client_assets::model_key(name);
+        let model = zone
+            .models
+            .iter()
+            .find(|model| eq_client_assets::model_key(&model.name) == key)
+            .expect("snapshot model in installed zone");
+        let transform = Transform {
+            translation: Vec3::from_array(eq_client_core::render_position(
+                eq_client_core::WorldPosition {
+                    x: position[0],
+                    y: position[1],
+                    z: position[2],
+                    heading,
+                },
+            )),
+            rotation: Quat::from_rotation_y(eq_client_core::static_yaw(heading)),
+            scale: Vec3::splat(size / 100.0),
+        };
+        let faces =
+            crate::doors::collision(model.collision.clone(), model.no_hit_collision.clone());
+        let solid = CollisionMesh::new(faces.into_iter().map(|face| {
+            face.map(|point| {
+                transform
+                    .transform_point(Vec3::from_array(point))
+                    .to_array()
+            })
+        }))
+        .unwrap();
+        println!(
+            "closed_snapshot_door={id} model={key} position={position:?} heading={heading} size={size}"
+        );
+        obstacles.push((id, Arc::new(solid)));
+    }
+    world.set_door_obstacles(obstacles);
+}
+
 #[test]
 #[ignore = "requires EQ_PROBE_INSTALL, EQ_PROBE_ZONE, EQ_PROBE_FEET and EQ_PROBE_GOAL"]
 fn inspect_path() {
@@ -1766,7 +1823,7 @@ fn inspect_mesh_routes() {
     let zone_name = std::env::var("EQ_PROBE_ZONE").unwrap();
     let zone = eq_client_assets::load_zone(&install, &zone_name).unwrap();
     let triangles = collision_triangles(&zone);
-    let world = build_collision(&zone).unwrap();
+    let mut world = build_collision(&zone).unwrap();
     let height = std::env::var("EQ_PROBE_MODEL").map_or(6.0, |model| {
         eq_client_assets::characters::load_character(&install.join("global_chr.s3d"), &model)
             .unwrap()
@@ -1810,6 +1867,9 @@ fn inspect_mesh_routes() {
         report.refused_stretches,
         if triangles_world { "triangles" } else { "zone" },
     );
+    // Bake the existing static inputs first, as at normal zone entry. Runtime
+    // door candidates belong to the subsequent route search, never the cache.
+    probe_closed_doors(&zone, &mut world);
     let liquids = ZoneLiquids(zone.regions.clone());
     // The cache file's size, written to a folder of the probe's own and
     // removed again.
