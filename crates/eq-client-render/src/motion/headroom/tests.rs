@@ -882,7 +882,9 @@ fn ducked_room_and_mount_precedence_remain_per_generation() {
         assert!(
             refused(
                 client,
-                &room(threshold + 0.001),
+                // Titanium's actual floor-probe return includes +.001.
+                // Keep the positive control beyond that read bias too.
+                &room(threshold + 0.01),
                 (&HUMAN, 3.75),
                 (from, to),
                 (true, true)
