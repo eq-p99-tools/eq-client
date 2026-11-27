@@ -612,8 +612,12 @@ pub(super) fn damage_text(
 ) -> Option<super::chat::Said> {
     let own_attack = damage.source_id == own_id;
     let own_defense = damage.target_id == own_id;
+    let titanium = match generation {
+        eq_client_core::GameDialect::Titanium => true,
+        eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
+    };
     if damage.kind == SPELL_DAMAGE_KIND {
-        if generation == eq_client_core::GameDialect::Titanium {
+        if titanium {
             return None;
         }
         return match damage.outcome {
@@ -639,10 +643,7 @@ pub(super) fn damage_text(
         // Titanium's own-source/own-target branch chooses the installed
         // reflexive word (0x4a590a-0x4a5937). Other dialects keep their
         // existing wording until their own program has been read.
-        let word = if generation == eq_client_core::GameDialect::Titanium
-            && own_attack
-            && damage.kind < SPELL_DAMAGE_KIND
-        {
+        let word = if titanium && own_attack && damage.kind < SPELL_DAMAGE_KIND {
             12186
         } else {
             12187

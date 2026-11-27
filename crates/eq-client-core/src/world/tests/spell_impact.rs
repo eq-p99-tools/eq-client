@@ -202,10 +202,9 @@ fn missing_spawns_and_missing_catalog_or_fields_do_not_invent_impact_text() {
     for missing in [5, 6] {
         let mut world = fixture();
         world.zone.spawns.remove(&missing);
-        assert!(
-            receive(&mut world, damage(6, 5, 2), &Catalog::default())
-                .notices
-                .is_empty()
+        assert_eq!(
+            receive(&mut world, damage(6, 5, 2), &Catalog::default()).notices,
+            [] as [Notice; 0]
         );
     }
     let mut world = fixture();
@@ -223,13 +222,12 @@ fn missing_spawns_and_missing_catalog_or_fields_do_not_invent_impact_text() {
             ..Catalog::default()
         },
     ] {
-        assert!(
-            receive(&mut world, damage(9, 5, 2), &catalog)
-                .notices
-                .is_empty()
+        assert_eq!(
+            receive(&mut world, damage(9, 5, 2), &catalog).notices,
+            [] as [Notice; 0]
         );
     }
-    assert!(
+    assert_eq!(
         receive(
             &mut world,
             damage(6, 9, 2),
@@ -238,8 +236,8 @@ fn missing_spawns_and_missing_catalog_or_fields_do_not_invent_impact_text() {
                 ..Catalog::default()
             }
         )
-        .notices
-        .is_empty()
+        .notices,
+        [] as [Notice; 0]
     );
     let empty_target = receive(
         &mut world,
@@ -259,10 +257,9 @@ fn missing_spawns_and_missing_catalog_or_fields_do_not_invent_impact_text() {
     for id in [None, Some(0), Some(10_000), Some(u16::MAX)] {
         let mut record = damage(9, 5, 2);
         record.spell_id = id;
-        assert!(
-            receive(&mut world, record, &Catalog::default())
-                .notices
-                .is_empty()
+        assert_eq!(
+            receive(&mut world, record, &Catalog::default()).notices,
+            [] as [Notice; 0]
         );
     }
 }
@@ -314,10 +311,9 @@ fn source_zero_uses_the_known_target_actor_and_unknown_class_is_not_guessed() {
         SpellImpactFilter::Npc
     );
     world.zone.spawns.get_mut(&6).unwrap().state.class = None;
-    assert!(
-        receive(&mut world, damage(6, 5, 2), &Catalog::default())
-            .notices
-            .is_empty()
+    assert_eq!(
+        receive(&mut world, damage(6, 5, 2), &Catalog::default()).notices,
+        [] as [Notice; 0]
     );
 }
 
@@ -345,7 +341,7 @@ fn other_dialects_and_ordinary_melee_keep_their_existing_damage_notices() {
             }]
         ));
     }
-    assert!(
+    assert_eq!(
         receive(
             &mut world,
             damage(9, 9, 2),
@@ -354,7 +350,7 @@ fn other_dialects_and_ordinary_melee_keep_their_existing_damage_notices() {
                 ..Catalog::default()
             }
         )
-        .notices
-        .is_empty()
+        .notices,
+        [] as [Notice; 0]
     );
 }
