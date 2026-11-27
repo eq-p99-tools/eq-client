@@ -102,9 +102,12 @@ the candidate's return clearance plus its ordinary stand test. Holding forward
 under a gallery that still fails those tests keeps the body ducked. A scripted
 route can continue through this recovery, using the observed ducked height;
 an unarmed or ducked refusal stops it. Swimmers retain the existing exemption.
-Any server placement, even at unchanged coordinates, or entering swimming
-withdraws this automatic cycle before it can send a pending posture request.
-This does not replace the observed posture with a locally assumed Stand.
+A same-admission server placement or water entry drops only an unobserved
+automatic request. An observed automatic Duck keeps its original return
+deadline and tests clearance at the new place, including while swimming.
+Titanium permits ducked swimming; water entry does not force an immediate
+Stand. Manual ducks have no automatic return cycle. A queued Stand remains
+a request until the session observes it.
 
 A ducked move stays ducked on Titanium and Mac, at the session's ducked
 speed grant. At jump launch the host makes one stand-clearance decision:

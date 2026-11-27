@@ -1368,7 +1368,11 @@ impl Controls {
         let released_turn = self.released_turn;
         let speeds = self.speeds();
         let straddle = self.straddle;
+        // A same-admission placement resets prediction, not the provenance
+        // of an observed automatic Duck. Its destination still decides return.
+        let headroom = std::mem::take(&mut self.headroom);
         self.reset(None);
+        self.headroom = headroom;
         self.set_speeds(speeds);
         self.straddle = straddle;
         (
@@ -2216,7 +2220,7 @@ pub(super) fn input(
             });
     if controls
         .headroom
-        .observe(online.placement_revision(), swimming)
+        .observe(online.world(), online.placement_revision(), swimming)
     {
         controls.headroom_retry = false;
         controls.headroom_refused = false;
@@ -3075,7 +3079,7 @@ pub(super) fn input(
         // Preserve idle return at its unchanged origin. Native zero-delta
         // call frequency is unread; it is not a reason to remove this host
         // behavior. A move or jump above never takes this idle branch.
-        if !placement_blocked && !flying && !swimming {
+        if !placement_blocked && !flying {
             match controls.headroom.drive(
                 client,
                 online.world(),
@@ -3671,7 +3675,6 @@ pub(super) fn input(
     // fail 2S+r even when the approach origin passed it. Queue after the
     // move succeeds; a jump has already made its one stand decision.
     if !flying
-        && !swimming
         && !placement_blocked
         && !jumped
         && refused.is_none()

@@ -1325,9 +1325,30 @@ fn headroom_ducked_low_opening_can_leave_a_standing_slide_path() {
     let displacement = Vec3::Z * 2.0;
     let standing = world.step(from, displacement, HUMAN.height);
     let height = eq_client_core::movement::ducked_height(3.75, 4.75, 0.65, HUMAN.height);
-    let ducked = world.clone().with_collision_height(height).step(from, displacement, HUMAN.height);
+    let ducked = world
+        .clone()
+        .with_collision_height(height)
+        .step(from, displacement, HUMAN.height);
     assert!(standing.z < 0.0, "{standing:?}");
     assert!(ducked.z > 0.9, "{ducked:?}");
-    assert!(refused(InstalledClient::Titanium, &world, (&HUMAN, 3.75), (from, ducked), (false, false)).is_some());
-    assert!(refused(InstalledClient::Titanium, &world, (&HUMAN, 3.75), (from, ducked), (true, false)).is_none());
+    assert!(
+        refused(
+            InstalledClient::Titanium,
+            &world,
+            (&HUMAN, 3.75),
+            (from, ducked),
+            (false, false)
+        )
+        .is_some()
+    );
+    assert!(
+        refused(
+            InstalledClient::Titanium,
+            &world,
+            (&HUMAN, 3.75),
+            (from, ducked),
+            (true, false)
+        )
+        .is_none()
+    );
 }

@@ -22,6 +22,7 @@ pub(super) struct Refused {
 pub(super) struct State {
     automatic: Option<Automatic>,
     placement_revision: Option<u64>,
+    swimming: bool,
 }
 
 struct Automatic {
@@ -38,15 +39,38 @@ struct Automatic {
 }
 
 impl State {
-    /// Placement breaks this local recovery even at unchanged XYZ. Water
-    /// withdraws it before a pending Duck can preempt the swimming path.
-    pub(super) fn observe(&mut self, placement_revision: u64, swimming: bool) -> bool {
+    /// Placement or water entry drops an unobserved request, but an observed
+    /// automatic Duck retains its original return deadline at the new place.
+    pub(super) fn observe(
+        &mut self,
+        world: &ClientWorld,
+        placement_revision: u64,
+        swimming: bool,
+    ) -> bool {
         let replaced = self.placement_revision.replace(placement_revision);
-        let invalid = swimming || replaced.is_some_and(|prior| prior != placement_revision);
-        if invalid {
-            self.clear();
+        let entered_water = swimming && !self.swimming;
+        self.swimming = swimming;
+        let changed = entered_water || replaced.is_some_and(|prior| prior != placement_revision);
+        if changed {
+            let owned_duck = self.automatic.as_mut().filter(|automatic| {
+                world.session_id() == Some(automatic.session)
+                    && world.zone() == automatic.zone
+                    && world
+                        .player()
+                        .is_some_and(|player| player.spawn_id == automatic.spawn)
+                    && world.posture(automatic.spawn) == Some(PostureState::Ducking)
+                    && (automatic.ducked
+                        || matches!(automatic.requested, Some((Posture::Ducking, _))))
+            });
+            if let Some(automatic) = owned_duck {
+                automatic.ducked = true;
+                automatic.requested = None;
+                automatic.launch_stand = None;
+            } else {
+                self.clear();
+            }
         }
-        invalid
+        changed
     }
 
     pub(super) fn recovering(&self, world: &ClientWorld) -> bool {
