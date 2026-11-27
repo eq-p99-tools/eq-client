@@ -19,24 +19,18 @@ pub(super) struct InputTrace {
 }
 
 impl InputTrace {
-    pub fn entered(
-        &mut self,
-        now: Instant,
-        enabled: bool,
-        attack: bool,
-        owned: bool,
-        pending: bool,
-    ) {
+    pub fn entered(&mut self, now: Instant) -> (u64, f64, Option<f64>) {
         self.sequence = self.sequence.saturating_add(1);
         let elapsed = now.saturating_duration_since(*self.started.get_or_insert(now));
         let gap = self
             .previous
             .map(|previous| now.saturating_duration_since(previous));
         self.previous = Some(now);
-        trace!(target: "eq_client_render::motion::melee", input_sequence = self.sequence,
-            input_elapsed_seconds = elapsed.as_secs_f64(), input_gap_seconds = ?gap.map(|gap| gap.as_secs_f64()),
-            option_enabled = enabled, attack_requested = attack, input_owned = owned, pending_sample = pending,
-            "Melee positioning input entry");
+        (
+            self.sequence,
+            elapsed.as_secs_f64(),
+            gap.map(|gap| gap.as_secs_f64()),
+        )
     }
 }
 

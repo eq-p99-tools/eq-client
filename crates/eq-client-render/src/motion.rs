@@ -1959,15 +1959,15 @@ pub(super) fn input(
     (look, aim, spells): Pointing,
 ) {
     let trace_melee = options.options.qol.on(Fix::MeleePositioning);
-    input_trace.entered(
-        controls.now(),
-        trace_melee,
-        combat
+    let (sequence, elapsed, gap) = input_trace.entered(controls.now());
+    trace!(target: "eq_client_render::motion::melee", input_sequence = sequence,
+        input_elapsed_seconds = elapsed, input_gap_seconds = ?gap,
+        option_enabled = trace_melee,
+        attack_requested = combat
             .as_deref()
             .is_some_and(|combat| combat.requested_in(online.world().session_id())),
-        keys.focused(),
-        controls.pending.is_some(),
-    );
+        input_owned = keys.focused(), pending_sample = controls.pending.is_some(),
+        "Melee positioning input entry");
     let client = settings.0.installed_client;
     // The program's speed-modifier routine ends following once a root
     // stops the player (R6, 0x411076); a server's move does not.
