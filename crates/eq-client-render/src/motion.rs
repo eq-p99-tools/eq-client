@@ -1343,7 +1343,9 @@ impl Controls {
         let pad_landing = self.pad_landing;
         // Following outlasts a change of speed, and a withdrawal while the
         // session places the player; a root ends it in `input`.
+        let reset = self.swim_owner.untouched_reset(self.wet);
         self.reset(grant.units_per_second);
+        self.swim_owner = reset;
         self.pad = pad;
         self.pad_landing = pad_landing;
         self.autorun = autorun;
@@ -1787,6 +1789,9 @@ impl Controls {
     }
 
     fn wait_for(&mut self, session_id: Option<u64>, created: Instant, kind: PendingKind) {
+        if matches!(kind, PendingKind::Move) {
+            self.swim_owner.invalidate_reset("submitted_motion");
+        }
         self.pending = session_id.map(|session_id| Pending {
             session_id,
             created,
@@ -2924,6 +2929,7 @@ pub(super) fn input(
             },
             intent,
         ) {
+            controls.swim_owner.invalidate_reset("ground_owner");
             return;
         }
     }
@@ -3075,6 +3081,8 @@ pub(super) fn input(
         }
     }
     let current_heading = carried_position.heading;
+    let wet = controls.wet;
+    controls.swim_owner.observe_state(accepted.position, wet);
     controls.swim_owner.physical_frame(swimming);
     // The clock runs from the previous sample's request stamp (which is
     // never after its answer came), so each sample covers the time since
@@ -3577,6 +3585,7 @@ pub(super) fn input(
             if let Some(capture) = swim_capture.as_mut() {
                 capture.applied(kind, piece);
             }
+            controls.swim_owner.invalidate_reset("wet_model_advanced");
             let (across, up) = controls.wet.advance(set, input, piece);
             travel += Vec3::new(across[0], up, across[1]);
             left -= piece;

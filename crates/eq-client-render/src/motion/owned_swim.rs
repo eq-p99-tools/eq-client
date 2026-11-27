@@ -33,13 +33,35 @@ impl Owner {
         })
     }
     pub fn physical_frame(&mut self, swimming: bool) {
-        // A reset not yet matched before physics cannot anchor later state.
-        self.reset = None;
+        // Input passes can return without consuming any physics while a grant
+        // is pending. Keep only the actual observed, still untouched reset.
         if !swimming {
             self.basis = None;
         }
     }
+
+    pub fn observe_state(&mut self, position: eq_client_core::WorldPosition, wet: WetVelocity) {
+        if self.reset.is_some_and(|(_, at)| at != position) || wet != WetVelocity::default() {
+            self.invalidate_reset("position_or_model_changed");
+        }
+    }
+
+    pub fn untouched_reset(&self, wet: WetVelocity) -> Self {
+        Self {
+            reset: self.reset.filter(|_| wet == WetVelocity::default()),
+            ..Self::default()
+        }
+    }
+
+    pub fn invalidate_reset(&mut self, reason: &'static str) {
+        if self.reset.take().is_some() {
+            trace!(target: "eq_client_render::motion::swim", reason,
+                verdict = "reset_witness_invalidated", "Observed swim reset was consumed");
+        }
+    }
     pub fn reset_observed(&mut self, session: u64, position: eq_client_core::WorldPosition) {
+        trace!(target: "eq_client_render::motion::swim", session, ?position,
+            verdict = "reset_observed", "Observed actual placement or admission");
         *self = Self {
             reset: Some((session, position)),
             ..Self::default()
@@ -57,12 +79,13 @@ impl Owner {
         if created.is_none()
             && basis.is_some_and(SwimBasis::is_reset)
             && self.reset == Some((session, position))
+            && *wet == WetVelocity::default()
         {
             // This marker was recorded at the actual admission/correction,
             // not inferred from a blocked or unchanged endpoint.
-            self.reset = None;
-            *wet = WetVelocity::default();
             self.basis = basis.map(|basis| (session, position, basis));
+            trace!(target: "eq_client_render::motion::swim", session, ?position, ?basis,
+                verdict = "reset_receipt_accepted", "Matched untouched real swim reset");
         } else if let Some(created) = created {
             if let Some((seen, at, accepted)) = self.result
                 && (seen, at) == (session, created)
@@ -77,6 +100,11 @@ impl Owner {
             }
         } else if basis.is_none() {
             self.basis = None;
+        }
+        if created.is_none() && self.basis.is_none() {
+            trace!(target: "eq_client_render::motion::swim", session, ?position, ?basis,
+                observed = ?self.reset, untouched_wet = (*wet == WetVelocity::default()),
+                verdict = "reset_receipt_unmatched", "No new swim anchor inferred");
         }
     }
 
