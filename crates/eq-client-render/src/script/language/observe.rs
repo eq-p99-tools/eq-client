@@ -628,6 +628,38 @@ mod tests {
     const PLAYER: u16 = 7;
     const TARGET: u16 = 42;
 
+    #[test]
+    fn p99_script_gem_readiness_matches_the_inclusive_early_start_boundary() {
+        use std::time::{Duration, Instant};
+        let start = Instant::now();
+        let at = start + Duration::from_secs(4);
+        let names = crate::hud::p99_tests::names();
+        let mut online = crate::hud::p99_tests::admitted(start, &names);
+        crate::hud::p99_tests::completed(&mut online, at, &names);
+        for (millis, ready) in [(5999, false), (6000, true), (6001, true)] {
+            let sight = Sight {
+                world: online.world(),
+                spells: Some(&names),
+                clock: TITANIUM,
+                now: at + Duration::from_millis(millis),
+                chat: None,
+                filters: None,
+            };
+            assert_eq!(
+                Field::parse("gem1.ready").unwrap().read(&sight),
+                Value::Bool(ready)
+            );
+            assert_eq!(
+                Field::parse("gem2.ready").unwrap().read(&sight),
+                Value::Bool(true)
+            );
+            assert_eq!(
+                Field::parse("gem3.ready").unwrap().read(&sight),
+                Value::Bool(ready)
+            );
+        }
+    }
+
     fn read(online: &OnlineState, name: &str) -> Value {
         read_with(online, name, None, TITANIUM)
     }

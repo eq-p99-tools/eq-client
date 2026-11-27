@@ -165,6 +165,78 @@ fn scripted_gem_clicks_and_hotkeys_send_nothing_during_post_memorize_refresh() {
 }
 
 #[test]
+fn p99_normal_script_clicks_and_hotkeys_keep_b_usable_and_gate_repeated_a() {
+    use crate::{hud, outbox::Outbox};
+    use eq_client_core::ClientCommand;
+    use std::time::Instant;
+    for hotkey in [false, true] {
+        for (index, spell, elapsed, allowed) in
+            [(0, 73, 1, false), (0, 73, 7, true), (1, 74, 0, true)]
+        {
+            let step = if hotkey {
+                Step::Press(vec![
+                    KeyCode::AltLeft,
+                    if index == 0 {
+                        KeyCode::Digit1
+                    } else {
+                        KeyCode::Digit2
+                    },
+                ])
+            } else {
+                Step::Click(ClickTarget::SpellGem(index))
+            };
+            let (mut app, _, gem, _) = fixture(vec![step]);
+            app.world_mut()
+                .entity_mut(gem)
+                .remove::<crate::give::GiveButton>()
+                .insert(hud::SpellGem(index));
+            let names = hud::p99_tests::names();
+            let at = Instant::now() - Duration::from_secs(elapsed);
+            let mut online = hud::p99_tests::admitted(at - Duration::from_secs(4), &names);
+            hud::p99_tests::completed(&mut online, at, &names);
+            let (tx, rx) = std::sync::mpsc::sync_channel(8);
+            app.insert_resource(online)
+                .insert_resource(names)
+                .insert_resource(Outbox::new(Some(tx)))
+                .add_systems(Update, hud::actions);
+            for ms in (0..=800).step_by(10) {
+                frame_at(&mut app, ms);
+            }
+            if allowed {
+                assert!(
+                    matches!(rx.try_recv(), Ok(ClientCommand::CastSpell { gem, spell_id, .. }) if gem == index && spell_id == spell)
+                );
+            }
+            assert!(
+                rx.try_recv().is_err(),
+                "a single gesture sends at most once; a denied one sends nothing"
+            );
+            if hotkey {
+                let digit = if index == 0 {
+                    KeyCode::Digit1
+                } else {
+                    KeyCode::Digit2
+                };
+                assert!(
+                    app.world()
+                        .resource::<SeenKeys>()
+                        .0
+                        .iter()
+                        .any(|event| event.key_code == digit && event.state.is_pressed())
+                );
+            } else {
+                assert!(
+                    app.world()
+                        .resource::<Recorded>()
+                        .left_clicks
+                        .contains(&gem)
+                );
+            }
+        }
+    }
+}
+
+#[test]
 fn background_clicks_minimize_and_restore_a_skinned_map_without_focus() {
     use crate::windows::{self, Frame, Minimize, WindowId};
 

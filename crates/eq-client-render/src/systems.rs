@@ -442,7 +442,7 @@ pub(super) fn schedule(app: &mut App) {
             (
                 resources::update,
                 hud::update,
-                hud::spell_details,
+                (skinned::gem::refresh, hud::spell_details).chain(),
                 hud::key_help,
                 target::key_help,
                 hud::hotbar::item_artwork,
@@ -461,7 +461,11 @@ pub(super) fn schedule(app: &mut App) {
                     buffs::cancel,
                 ),
                 (
-                    (spell_icons::update, skinned::gem::pieces),
+                    (
+                        spell_icons::update,
+                        skinned::gem::pieces.after(skinned::gem::refresh),
+                    )
+                        .chain(),
                     (logs::write, logs::trace_lines).chain(),
                     options::tell_session,
                 ),

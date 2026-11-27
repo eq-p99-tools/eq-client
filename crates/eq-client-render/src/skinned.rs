@@ -979,10 +979,9 @@ fn spell_gem(
                 }
             };
             piece(gem_node, gem.background.as_ref(), gem::GemPiece::Background);
-            gem_node.spawn(super::spell_icons::gem_artwork(
-                usize::from(index),
-                gem,
-                skin,
+            gem_node.spawn((
+                super::spell_icons::gem_artwork(usize::from(index), gem, skin),
+                gem::GemPiece::Icon,
             ));
             piece(gem_node, gem.highlight.as_ref(), gem::GemPiece::Highlight);
             piece(gem_node, gem.holder.as_ref(), gem::GemPiece::Holder);

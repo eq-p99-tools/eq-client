@@ -10,6 +10,7 @@ mod levels;
 mod loot_requests;
 mod own_stun;
 mod own_unconscious;
+mod p99_gems;
 mod pet_buffs;
 mod qol;
 mod spell_impact;

@@ -25,6 +25,7 @@ mod link;
 mod melody;
 mod motions;
 mod notice;
+mod p99_gems;
 mod pet_buffs;
 mod raid;
 mod read;
@@ -523,6 +524,9 @@ impl ClientWorld {
         if let Some(clocks) = &mut self.casting.gem_clocks {
             clocks.resolve(spells);
         }
+        self.casting
+            .p99_gems
+            .resolve(spells, self.generation == crate::GameDialect::Titanium);
         self.expire_casts(now);
     }
 

@@ -33,6 +33,18 @@ pub trait SpellCatalog {
     /// A spell's recovery and recast times, when known.
     fn timing(&self, spell: u32) -> Option<SpellTiming>;
 
+    /// Whether this producer explicitly selects P99's requested early-start
+    /// input policy. This is not selected from the installed client dialect.
+    fn p99_gem_start(&self) -> bool {
+        false
+    }
+
+    /// Applicable cast duration where known. An observed own Begin duration
+    /// takes precedence for a subsequent repeat of that spell.
+    fn cast_duration(&self, _spell: u32) -> Option<Duration> {
+        None
+    }
+
     /// Whether a spell's effect is over at once, leaving no buff behind.
     fn instant_effect(&self, spell: u32) -> bool;
 
@@ -249,6 +261,7 @@ pub struct Casting {
     pub cooldowns: Cooldowns,
     /// Local Titanium gem clocks; other dialects retain their existing timers.
     pub(super) gem_clocks: Option<super::gem_timing::GemClocks>,
+    pub(super) p99_gems: super::p99_gems::Gems,
     /// When the admitted knight's profile or locally estimated recovery elapses.
     pub(super) knight_ready: Option<(Instant, crate::knights::ReuseSource)>,
     pub(super) discipline_timers: Timers,
@@ -257,6 +270,12 @@ pub struct Casting {
 }
 
 impl Casting {
+    /// Whether the producer selected the P99 early-start input policy.
+    /// Eligibility remains a local decision, not guaranteed server acceptance.
+    #[must_use]
+    pub const fn p99_gem_start(&self) -> bool {
+        self.p99_gems.enabled
+    }
     /// Whether a cast is under way that holds other actions back: one
     /// awaiting the server's answer, or one in progress that isn't the
     /// song a Bard is singing. The program holds nothing because of a song
@@ -343,6 +362,13 @@ impl Casting {
         now: Instant,
         click: bool,
     ) -> Option<Duration> {
+        if self.p99_gems.enabled {
+            let own = self.p99_gems.wait(spell, now)?;
+            let linked = linked
+                .and_then(|timer| self.linked_wait(timer, now))
+                .unwrap_or_default();
+            return Some(own.max(linked));
+        }
         let Some(clocks) = &self.gem_clocks else {
             return Some(self.spell_wait(spell, linked, now));
         };
@@ -353,12 +379,14 @@ impl Casting {
     }
 
     pub(super) fn gem_submitted(&mut self, gem: u8, spell: u32, now: Instant) {
+        self.p99_gems.submitted(gem, spell);
         if let Some(clocks) = &mut self.gem_clocks {
             clocks.submitted(gem, spell, now);
         }
     }
 
     pub(super) fn other_submitted(&mut self, spell: u32) {
+        self.p99_gems.clear_attempt();
         if let Some(clocks) = &mut self.gem_clocks {
             clocks.other_submitted(spell);
         }
@@ -428,6 +456,7 @@ impl Casting {
         update: &SpellUpdate,
         now: Instant,
     ) -> Option<CastNews> {
+        self.p99_gems.observe(own_id, gems, update, now);
         self.observe_gem_clocks(gems, update, now);
         let casting = |spell_id: u32| {
             self.cast.is_some_and(|(active, _, _)| {
@@ -535,6 +564,7 @@ impl Casting {
             return false;
         }
         self.cast = None;
+        self.p99_gems.clear_attempt();
         self.pending = self.pending.filter(|&pending| pending != spell_id);
         self.requested = None;
         true
@@ -542,6 +572,7 @@ impl Casting {
 
     /// Drops what was in flight: the cast, the request and the interruption.
     pub(super) fn drop_actions(&mut self) {
+        self.p99_gems.clear_attempt();
         self.cast = None;
         self.pending = None;
         self.requested = None;
@@ -557,6 +588,7 @@ impl Casting {
         self.next_requested = None;
         self.cooldowns = Cooldowns::default();
         self.gem_clocks = None;
+        self.p99_gems = super::p99_gems::Gems::default();
         self.knight_ready = None;
         self.discipline_timers = Timers::default();
         self.linked_timers = Timers::default();
