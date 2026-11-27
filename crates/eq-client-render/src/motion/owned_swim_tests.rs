@@ -34,7 +34,9 @@ fn frame(f: &mut Native) -> Vec<ClientCommand> {
     f.app
         .world_mut()
         .resource_mut::<crate::outbox::Outbox>()
-        .set_test_time(f.now);
+        // Dispatch finishes later than the physical slice. Qualified swim
+        // must retain the physical end, without padding its native calls.
+        .set_test_time(f.now + Duration::from_millis(5));
     f.app.update();
     f.requests.try_iter().collect()
 }
@@ -82,6 +84,7 @@ fn settle(f: &Native, owner: &mut MotionSession, command: ClientCommand) -> Move
     let ClientCommand::SwimFrame { request, controls } = command else {
         panic!("expected actual ordinary input ledger: {command:?}");
     };
+    assert_eq!(request.created, f.now);
     owner
         .send_swim_sample(&request, Some(&controls), f.now, |_| Ok(()))
         .unwrap();
