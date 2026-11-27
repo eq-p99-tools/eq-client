@@ -82,7 +82,7 @@ fn delayed(admission: bool, delay: usize, unloaded: bool) -> (Native, MotionSess
         strafe_walk_units_per_second: None,
         swim_backward_units_per_second: None,
         swim: None,
-        diagonal: None,
+        diagonal: eq_client_core::DiagonalRates::default(),
         falls: true,
         jump_factor: 1.,
     };
