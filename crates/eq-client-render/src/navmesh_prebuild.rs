@@ -407,6 +407,9 @@ impl Zones for Installed {
             return Built::Stopped;
         };
         crate::zone_navmesh::report(zone, (started, threads), &loaded, settings.sizes);
+        if loaded.mesh.polygon_count() == 0 || loaded.mesh.incomplete() {
+            return Built::Failed("empty or incomplete walkable coverage".to_owned());
+        }
         match &loaded.cached {
             Ok(_) => Built::Kept,
             Err(error) => Built::Failed(error.to_string()),

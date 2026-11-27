@@ -318,6 +318,7 @@ pub struct Route {
     /// it found one; None after a search of the whole way.
     detoured: Option<bool>,
     reach: f32,
+    goal_height: Option<f32>,
     height: f32,
     partial: bool,
     /// Steering time so far, counted only while heading somewhere.
@@ -358,6 +359,7 @@ impl Route {
                     doors: Vec::new(),
                     drops: false,
                     scope: Scope::Whole,
+                    goal_height: None,
                 },
                 None,
             )),
@@ -371,6 +373,7 @@ impl Route {
             detoured: None,
             reach,
             height,
+            goal_height: None,
             partial: false,
             steering: Duration::ZERO,
             last_call: None,
@@ -398,6 +401,16 @@ impl Route {
     pub fn with_doors(mut self, doors: Vec<u8>) -> Self {
         self.restart(|request| request.doors.clone_from(&doors));
         self.doors = doors;
+        self
+    }
+
+    /// A coordinate or authored exit must reach its floor, rather than using
+    /// the legacy tolerance for a spawn's approximate reported height.
+    #[must_use]
+    pub fn with_exact_height(mut self) -> Self {
+        let height = Some(self.reach.clamp(0.0, MAX_GROUNDED_STEP));
+        self.restart(|request| request.goal_height = height);
+        self.goal_height = height;
         self
     }
 
@@ -492,6 +505,7 @@ impl Route {
             doors: self.doors.clone(),
             drops: self.drops,
             scope: Scope::Local,
+            goal_height: None,
         };
         self.search = Some(Search::new(request, Some(rejoin + 1)));
         self.best = None;
@@ -506,6 +520,7 @@ impl Route {
             doors: self.doors.clone(),
             drops: self.drops,
             scope: Scope::Whole,
+            goal_height: self.goal_height,
         };
         self.search = Some(Search::new(request, None));
         self.waypoints.clear();
@@ -677,7 +692,11 @@ impl Route {
         goal: Vec3,
         budget: usize,
     ) -> RouteStep {
-        if super::path::within_reach(feet, goal, self.reach) {
+        if super::path::within_reach(feet, goal, self.reach)
+            && self
+                .goal_height
+                .is_none_or(|height| (feet.y - goal.y).abs() <= height)
+        {
             return RouteStep::Arrived;
         }
         if let Some(search) = self.search.take() {
