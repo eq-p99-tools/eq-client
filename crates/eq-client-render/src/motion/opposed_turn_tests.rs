@@ -28,7 +28,7 @@ fn scene(slope: bool, pitch: f32) -> (Native, MotionSession) {
         camera.look = pitch;
     }
     if slope {
-        let at = |x: f32, z: f32| [x, -18.78 - 0.075 * x + 0.043 * z, z];
+        let at = |x: f32, z: f32| [x, -18.78 - 0.08 * x + 0.04 * z, z];
         let world = CollisionWorld::new([
             [at(-200., -200.), at(200., 200.), at(200., -200.)],
             [at(-200., -200.), at(-200., 200.), at(200., 200.)],
@@ -67,17 +67,20 @@ fn scene(slope: bool, pitch: f32) -> (Native, MotionSession) {
 
 fn answer(f: &Native, session: &mut MotionSession, command: ClientCommand, out: &mut Outcome) {
     let before = session.position();
+    // The worker handles even a fallback stamped at dispatch, after the
+    // physical caller slice. No extra consumption is inserted into the tape.
+    let now = f.now + Duration::from_millis(10);
     let (request, result) = match command {
         ClientCommand::SwimFrame { request, controls } => {
             if let Err(reason) = session.inspect_swim_replay(&request, &controls) {
                 out.replay_mismatches += 1;
                 out.first_mismatch.get_or_insert_with(|| reason.to_string());
             }
-            let result = session.send_swim_sample(&request, Some(&controls), f.now, |_| Ok(()));
+            let result = session.send_swim_sample(&request, Some(&controls), now, |_| Ok(()));
             (request, result)
         }
         ClientCommand::Move(request) => {
-            let result = session.send_move_sample(&request, f.now, |_| Ok(()));
+            let result = session.send_move_sample(&request, now, |_| Ok(()));
             (request, result)
         }
         _ => panic!("unexpected ordinary swim command"),
