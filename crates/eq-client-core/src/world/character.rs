@@ -76,7 +76,7 @@ impl ClientWorld {
     /// One of the player's skills; a rise is told, as the official client
     /// tells it.
     pub(super) fn skill_news(&mut self, skill_id: u32, value: u32, changes: &mut Changes) {
-        let projected = self.zone.training_skill_projections.remove(&skill_id);
+        let projected = self.zone.native_practice_skills.contains(&skill_id);
         match self.player.as_mut() {
             Some(player) if self.connected => {
                 let before = skill_value(player, skill_id);
@@ -165,9 +165,7 @@ impl ClientWorld {
                 }
             }
             TrainingUpdate::Practiced { subject, from, .. } => {
-                self.zone
-                    .training_skill_projections
-                    .insert(subject.update_id());
+                self.zone.native_practice_skills.insert(subject.update_id());
                 let trainer = self
                     .zone
                     .training

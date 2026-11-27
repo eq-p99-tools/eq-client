@@ -4757,12 +4757,19 @@ fn titanium_practice_press_is_local_and_skill_news_never_spends_twice() {
         }]
     );
     assert_eq!(world.training_points(), PracticePoints::Balance(2));
-    game(
+    let corrected = game(
         &mut world,
         WorldEvent::Skill {
             skill_id: 30,
             value: 10,
         },
+    );
+    assert_eq!(
+        corrected.notices,
+        [Notice::SkillUp {
+            skill: 30,
+            value: 10
+        }]
     );
     assert_eq!(world.player().unwrap().skills.as_ref().unwrap()[30], 10);
     assert_eq!(world.training_points(), PracticePoints::Balance(2));

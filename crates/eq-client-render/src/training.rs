@@ -358,8 +358,6 @@ mod tests {
         let (tx, rx) = std::sync::mpsc::sync_channel(4);
         let mut app = crate::testing::app();
         app.insert_resource(Outbox::new(Some(tx)))
-            .init_resource::<Shown>()
-            .init_resource::<Chosen>()
             .add_systems(Update, window);
         let mut online = OnlineState::new(true);
         testing::admit(&mut online, 1, testing::player(7));
