@@ -1213,10 +1213,9 @@ mod tests {
             regions.zone_line_at((Vec3::from_array(points[0]) + Vec3::Y * 3.75).to_array()),
             Some(arrival)
         );
-        assert!(
-            regions
-                .zone_line_floor_points(&floors, 3.75, |_| true, &|| true)
-                .is_empty()
+        assert_eq!(
+            regions.zone_line_floor_points(&floors, 3.75, |_| true, &|| true),
+            [] as [[f32; 3]; 0]
         );
     }
 
@@ -1238,15 +1237,13 @@ mod tests {
             ..ZoneRegions::default()
         };
         let floors = [[[0.0, 0.0, 0.0], [0.0, 0.0, 20.0], [20.0, 0.0, 0.0]]];
-        assert!(
-            regions
-                .zone_line_floor_points(&floors, 2.0, |_| true, &|| false)
-                .is_empty()
+        assert_eq!(
+            regions.zone_line_floor_points(&floors, 2.0, |_| true, &|| false),
+            [] as [[f32; 3]; 0]
         );
-        assert!(
-            regions
-                .zone_line_floor_points(&floors, 3.0, |_| true, &|| false)
-                .is_empty()
+        assert_eq!(
+            regions.zone_line_floor_points(&floors, 3.0, |_| true, &|| false),
+            [] as [[f32; 3]; 0]
         );
         assert_eq!(
             regions
@@ -1260,10 +1257,9 @@ mod tests {
             1
         );
         let walls = [[[0.0, 0.0, 0.0], [0.0, 20.0, 0.0], [20.0, 0.0, 0.0]]];
-        assert!(
-            regions
-                .zone_line_floor_points(&walls, 4.0, |_| true, &|| false)
-                .is_empty()
+        assert_eq!(
+            regions.zone_line_floor_points(&walls, 4.0, |_| true, &|| false),
+            [] as [[f32; 3]; 0]
         );
     }
 
