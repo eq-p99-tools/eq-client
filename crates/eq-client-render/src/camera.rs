@@ -469,6 +469,7 @@ pub(super) fn orbit_camera(
     players: Query<(&PlayerBody, &Transform), (With<Player>, Without<OrbitCamera>)>,
     windows: Query<&Window, With<bevy::window::PrimaryWindow>>,
     ui: windows::pointer::PointerUi,
+    preview: Option<Res<crate::select_preview::Preview>>,
 ) {
     let player = players.single().ok();
     let body = player.map(|(body, _)| body);
@@ -539,7 +540,11 @@ pub(super) fn orbit_camera(
             camera.reset_view();
         }
         // The orthographic view keeps its own pitch and zoom ranges.
-        if matches!(projection.as_deref(), Some(Projection::Orthographic(_))) {
+        if preview.as_ref().is_some_and(|preview| preview.showing()) {
+            // Selection owns its angles and distance, without gameplay's
+            // chase clamps or first-person transitions reshaping its frame.
+            *transform = preview_orbit(&mut camera, world, body.head, time.delta_secs());
+        } else if matches!(projection.as_deref(), Some(Projection::Orthographic(_))) {
             if camera.is_first_person() {
                 camera.reset_view();
             }
@@ -573,6 +578,24 @@ pub(super) fn orbit_camera(
             );
         }
     }
+}
+
+/// Retains selection's eye pivot and requested distance at any orbit angle.
+fn preview_orbit(
+    camera: &mut OrbitCamera,
+    world: Option<&CollisionWorld>,
+    head: f32,
+    seconds: f32,
+) -> Transform {
+    let center = camera.focus;
+    place_orbit(
+        camera,
+        world,
+        center + Vec3::Y * head,
+        center,
+        None,
+        seconds,
+    )
 }
 
 /// Changes visibility on the existing local model/gear hierarchy in the
