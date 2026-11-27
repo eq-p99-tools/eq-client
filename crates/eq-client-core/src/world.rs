@@ -777,7 +777,7 @@ impl ClientWorld {
     fn connection(&mut self, connected: bool, ended: bool) -> Changes {
         let transferring = self.pending_transfer.is_some();
         self.connected = connected;
-        self.zone.line_zones_staged = false;
+        self.zone.line_zones.staged = false;
         self.ended = ended;
         if connected {
             self.zone.pet_buffs.accepts_staged_entry = false;
@@ -1476,11 +1476,11 @@ impl ClientWorld {
             WorldEvent::WearChange(change) => self.wear(change),
             WorldEvent::ZoneLineZones { session_id, zones } => {
                 if self.session_id == Some(*session_id)
-                    && (self.connected || self.zone.line_zones_staged)
+                    && (self.connected || self.zone.line_zones.staged)
                 {
-                    if self.zone.line_zones != *zones {
-                        self.zone.line_zones.clone_from(zones);
-                        self.zone.line_zones_revision = self.zone.line_zones_revision.wrapping_add(1);
+                    if self.zone.line_zones.destinations != *zones {
+                        self.zone.line_zones.destinations.clone_from(zones);
+                        self.zone.line_zones.revision = self.zone.line_zones.revision.wrapping_add(1);
                     }
                 } else {
                     news.ignored = true;
@@ -2476,7 +2476,7 @@ impl ClientWorld {
 
     /// Forgets what the reason makes stale, and says so.
     fn reset(&mut self, reason: Reset) -> Changes {
-        self.zone.line_zones_staged = false;
+        self.zone.line_zones.staged = false;
         self.zone.boat_control = crate::boats::ControlState::Unknown;
         self.zone.boat_notice = None;
         self.zone.arrival = None;

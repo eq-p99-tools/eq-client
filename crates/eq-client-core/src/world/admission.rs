@@ -144,7 +144,7 @@ impl ClientWorld {
         self.capabilities = capabilities.to_vec();
         self.choices = choices.to_vec();
         self.session_id = Some(session_id);
-        self.zone.line_zones_staged = true;
+        self.zone.line_zones.staged = true;
         self.target.accepts_updates = true;
         self.zone.pet_buffs.accepts_staged_entry = true;
         zone.clone_into(&mut self.zone_name);

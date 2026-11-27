@@ -13,6 +13,14 @@ use crate::{
 };
 use std::{collections::BTreeMap, time::Instant};
 
+/// One admission's received exit mapping and its publication state.
+#[derive(Default)]
+pub(super) struct LineZones {
+    pub(super) destinations: BTreeMap<u32, u16>,
+    pub(super) revision: u64,
+    pub(super) staged: bool,
+}
+
 /// The zone's contents, as the server described them.
 #[derive(Default)]
 pub(super) struct Zone {
@@ -34,10 +42,8 @@ pub(super) struct Zone {
     /// as the session last said; a new admission starts with none.
     pub(super) feign_held: bool,
     pub(super) doors: DoorTable,
-    /// Received destination zones by authored boundary reference, replaced whole.
-    pub(super) line_zones: BTreeMap<u32, u16>,
-    pub(super) line_zones_revision: u64,
-    pub(super) line_zones_staged: bool,
+    /// Received destination zones by authored reference and their admission state.
+    pub(super) line_zones: LineZones,
     pub(super) objects: Objects,
     /// The corpse and the merchant are the zone's.
     pub(super) trade: Trade,
