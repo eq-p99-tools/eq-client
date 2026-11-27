@@ -174,7 +174,7 @@ pub(crate) fn input(
     let shown = panels.iter().any(|(panel, node, visible)| {
         panel.0 == Rows::Loot
             && node.display != Display::None
-            && visible.is_none_or(InheritedVisibility::get)
+            && visible.is_none_or(|visible| visible.get())
     });
     let model = online.world().loot().and_then(|loot| {
         models
