@@ -554,6 +554,8 @@ pub struct Label {
     /// What the label shows, in the official client's numbering; None for
     /// fixed text.
     pub eq_type: Option<u32>,
+    /// An optional namespaced client value, independent of native EQType ids.
+    pub client_value: Option<LabelValue>,
     /// The text, or a sample of it when the label shows something.
     pub text: String,
     /// The text's colour.
@@ -565,6 +567,13 @@ pub struct Label {
     /// Whether its words wrap onto more lines (`NoWrap` false); one that
     /// says nothing keeps to one line (unchecked).
     pub wraps: bool,
+}
+
+/// A label value in this client's XML extension namespace.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum LabelValue {
+    /// The reported progress through the current level, formatted as a percent.
+    ExperiencePercent,
 }
 
 /// One thing a window shows.
@@ -1296,6 +1305,10 @@ impl Library {
             // Words the skin writes, or the client fills: StaticText is how
             // the skin writes a book's page numbers.
             "Label" | "StaticText" => Element::Label(Label {
+                client_value: node
+                    .attribute(("https://eq-p99-tools.github.io/eq-client/skin", "value"))
+                    .filter(|value| *value == "experience-percent")
+                    .map(|_| LabelValue::ExperiencePercent),
                 area: at(),
                 anchors: flag(node, "AutoStretch").then(|| anchors(node)),
                 eq_type: number(node, "EQType"),
@@ -2763,5 +2776,34 @@ mod tests {
             library.screen(WINDOW, "OtherWindow"),
             Err(UiLayoutError::MissingWindow(name)) if name == "OtherWindow"
         ));
+    }
+}
+
+#[cfg(test)]
+mod extension_label_tests {
+    use super::*;
+
+    #[test]
+    fn client_values_require_the_explicit_namespace_and_supported_name() {
+        let library = Library::parse("<XML/>", "<XML/>").unwrap();
+        let xml = r#"<XML xmlns:eqc="https://eq-p99-tools.github.io/eq-client/skin">
+            <Label item="Progress" eqc:value="experience-percent"><Text>Sample</Text></Label>
+            <Screen item="Example"><Size><CX>100</CX><CY>50</CY></Size><Pieces>Progress</Pieces></Screen></XML>"#;
+        for (source, expected) in [
+            (xml.to_owned(), Some(LabelValue::ExperiencePercent)),
+            (xml.replace("eqc:value", "value"), None),
+            (xml.replace("experience-percent", "unknown"), None),
+            (
+                xml.replace("https://eq-p99-tools.github.io/eq-client/skin", "urn:other"),
+                None,
+            ),
+        ] {
+            let screen = library.screen(&source, "Example").unwrap();
+            let Element::Label(label) = &screen.pieces[0].1 else {
+                panic!("label")
+            };
+            assert_eq!(label.client_value, expected);
+            assert_eq!(label.text, "Sample");
+        }
     }
 }

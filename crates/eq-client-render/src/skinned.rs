@@ -131,6 +131,8 @@ pub(crate) enum Shows {
     GaugeText(u32),
     /// A label's text.
     Label(u32),
+    /// The custom skin's reported experience percentage.
+    ExperiencePercent,
     /// The box that shows the player is attacking.
     Attacking,
     /// The coins of one kind in a place: the purse, the bank or the give
@@ -2271,6 +2273,23 @@ fn label(
     inside: &Area,
     owner: WindowId,
 ) {
+    if label.client_value == Some(eq_client_assets::sidl::LabelValue::ExperiencePercent) {
+        aligned(
+            window,
+            label_node(label, inside),
+            label.align,
+            (
+                Shows::ExperiencePercent,
+                theme::text(
+                    "",
+                    font(label.font),
+                    label.color.map_or(theme::INK_BRIGHT, rgb),
+                ),
+            ),
+        );
+        return;
+    }
+
     let bag = match owner {
         WindowId::Bag(bag) if name == "Container_Label" => {
             Some(items::BagPart::Name(InventorySlot(bag)))
@@ -3302,6 +3321,7 @@ mod tests {
     #[test]
     fn a_containers_augment_labels_go_with_its_buttons() {
         let label = Element::Label(eq_client_assets::sidl::Label {
+            client_value: None,
             area: Area {
                 x: 0.0,
                 y: 0.0,

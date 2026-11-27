@@ -92,6 +92,9 @@ pub(crate) fn show(
     for (shows, mut text, mut color) in &mut texts {
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
+            Shows::ExperiencePercent => {
+                (experience_percent(world.vitals().experience_ratio()), None)
+            }
             // The spell the player casts.
             Shows::Label(134) => (
                 crate::hud::action_bar::cast_spell(world)
@@ -312,6 +315,13 @@ fn price_text(
         .join(" ")
 }
 
+/// Format only the server-reported level progress, without deriving hidden XP.
+fn experience_percent(ratio: Option<f64>) -> String {
+    ratio.map_or_else(String::new, |value| {
+        format!("{:.2}%", value.clamp(0.0, 1.0) * 100.0)
+    })
+}
+
 /// How full a gauge is drawn: as `fraction` says, or the spellbook's
 /// memorization (9) and scribe (10), as their gauges' names say; empty
 /// where nothing says.
@@ -522,4 +532,28 @@ pub(super) fn target_health(world: &eq_client_core::world::ClientWorld) -> Optio
             .filter(|player| player.spawn_id == target)
             .and_then(|player| player.hp_percent)
     })
+}
+
+#[cfg(test)]
+mod experience_percent_tests {
+    use super::experience_percent;
+    use eq_client_core::world::Vitals;
+
+    #[test]
+    fn unknown_progress_is_blank_and_reported_steps_keep_their_precision() {
+        for (raw, expected) in [
+            (None, ""),
+            (Some(0), "0.00%"),
+            (Some(1), "0.30%"),
+            (Some(123), "37.27%"),
+            (Some(329), "99.70%"),
+            (Some(330), "100.00%"),
+        ] {
+            let vitals = Vitals {
+                experience: raw,
+                ..Default::default()
+            };
+            assert_eq!(experience_percent(vitals.experience_ratio()), expected);
+        }
+    }
 }
