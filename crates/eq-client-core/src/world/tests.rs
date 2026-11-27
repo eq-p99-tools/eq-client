@@ -4720,6 +4720,72 @@ fn trainee_with_skills_and_languages() -> ClientWorld {
 }
 
 #[test]
+fn titanium_practice_press_is_local_and_skill_news_never_spends_twice() {
+    use crate::training::{PracticePoints, TrainingSubject, TrainingUpdate};
+    let mut world = trainee_with_skills_and_languages();
+    game(&mut world, WorldEvent::PracticePoints(3));
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 12,
+        },
+    );
+    let press = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Practiced {
+            subject: TrainingSubject::Skill(30),
+            from: 12,
+            cost: 0,
+        }),
+    );
+    assert_eq!(press.notices, Vec::<Notice>::new());
+    assert_eq!(world.player().unwrap().skills.as_ref().unwrap()[30], 13);
+    game(&mut world, WorldEvent::PracticePoints(2));
+    let received = game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 13,
+        },
+    );
+    assert_eq!(
+        received.notices,
+        [Notice::SkillUp {
+            skill: 30,
+            value: 13
+        }]
+    );
+    assert_eq!(world.training_points(), PracticePoints::Balance(2));
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 10,
+        },
+    );
+    assert_eq!(world.player().unwrap().skills.as_ref().unwrap()[30], 10);
+    assert_eq!(world.training_points(), PracticePoints::Balance(2));
+    game(&mut world, WorldEvent::Training(TrainingUpdate::Ended));
+    assert_eq!(world.training_points(), PracticePoints::Balance(2));
+    game(&mut world, WorldEvent::PracticePoints(7));
+    assert_eq!(world.training_points(), PracticePoints::Balance(7));
+    let first = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Practiced {
+            subject: TrainingSubject::Skill(0),
+            from: 0,
+            cost: 0,
+        }),
+    );
+    assert!(matches!(
+        first.notices.as_slice(),
+        [Notice::SkillPracticed { skill: 0, .. }]
+    ));
+    assert_eq!(world.player().unwrap().skills.as_ref().unwrap()[0], 0);
+}
+
+#[test]
 fn training_opens_raises_skills_with_a_line_and_closes() {
     use crate::training::{TrainingOffer, TrainingUpdate};
     let mut world = trainee_with_skills_and_languages();

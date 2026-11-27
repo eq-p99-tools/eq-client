@@ -76,6 +76,7 @@ impl ClientWorld {
     /// One of the player's skills; a rise is told, as the official client
     /// tells it.
     pub(super) fn skill_news(&mut self, skill_id: u32, value: u32, changes: &mut Changes) {
+        let projected = self.zone.training_skill_projections.remove(&skill_id);
         match self.player.as_mut() {
             Some(player) if self.connected => {
                 let before = skill_value(player, skill_id);
@@ -84,10 +85,20 @@ impl ClientWorld {
                 if before != after {
                     self.skills_revision = self.skills_revision.wrapping_add(1);
                 }
-                if skill_id < LANGUAGE_SKILLS && before.is_some_and(|before| value > before) {
+                if skill_id < LANGUAGE_SKILLS
+                    && (projected || before.is_some_and(|before| value > before))
+                {
                     changes.notices.push(super::Notice::SkillUp {
                         skill: skill_id,
                         value,
+                    });
+                } else if projected && skill_id >= LANGUAGE_SKILLS {
+                    changes.notices.push(super::Notice::LanguageSkillUp {
+                        language: u8::try_from(skill_id - LANGUAGE_SKILLS).unwrap_or(u8::MAX),
+                        value,
+                        common_alternate: self
+                            .language_zero_selector
+                            .map(crate::rules::LanguageZeroSelector::alternate_name),
                     });
                 }
             }
@@ -151,6 +162,42 @@ impl ClientWorld {
                             .language_zero_selector
                             .map(crate::rules::LanguageZeroSelector::alternate_name),
                     });
+                }
+            }
+            TrainingUpdate::Practiced { subject, from, .. } => {
+                self.zone
+                    .training_skill_projections
+                    .insert(subject.update_id());
+                let trainer = self
+                    .zone
+                    .training
+                    .as_ref()
+                    .and_then(|offer| self.zone.spawns.get(&offer.trainer))
+                    .map(|spawn| crate::entities::display_name(&spawn.state.name))
+                    .unwrap_or_default();
+                match subject {
+                    crate::training::TrainingSubject::Skill(skill) if *from > 0 => {
+                        if let Some(player) = self.player.as_mut() {
+                            player.apply_skill(*skill, from.saturating_add(1));
+                            self.skills_revision = self.skills_revision.wrapping_add(1);
+                        }
+                    }
+                    crate::training::TrainingSubject::Skill(skill) => {
+                        changes.notices.push(super::Notice::SkillPracticed {
+                            trainer,
+                            skill: *skill,
+                        });
+                    }
+                    crate::training::TrainingSubject::Language(language) => {
+                        changes.notices.push(super::Notice::LanguagePracticed {
+                            trainer,
+                            language: *language,
+                            first: *from == 0,
+                            common_alternate: self
+                                .language_zero_selector
+                                .map(crate::rules::LanguageZeroSelector::alternate_name),
+                        });
+                    }
                 }
             }
             TrainingUpdate::Practice(update) => {

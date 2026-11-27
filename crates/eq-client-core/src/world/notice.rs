@@ -458,6 +458,22 @@ pub enum Notice {
         /// None until the world says.
         common_alternate: Option<bool>,
     },
+    /// Titanium's press-time first-skill line (0x2f22, read 6.683).
+    SkillPracticed {
+        /// Guildmaster displayed in the training window.
+        trainer: String,
+        /// Ordinary skill being learned from zero.
+        skill: u32,
+    },
+    /// A received language update following a Titanium practice (0x2f3b).
+    LanguageSkillUp {
+        /// Language bank index.
+        language: u8,
+        /// Received proficiency, replacing any local value.
+        value: u32,
+        /// Common tongue naming selector, if available.
+        common_alternate: Option<bool>,
+    },
     /// A training request or projection from the current admission.
     TrainingPractice(crate::training::PracticeUpdate),
     /// An answer to a resurrection was not sent, and why.

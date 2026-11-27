@@ -663,6 +663,46 @@ pub(super) fn wording(notice: &Notice, messages: Option<&Messages>) -> Vec<(Plac
             *common_alternate,
             messages,
         )),
+        Notice::LanguageSkillUp {
+            language,
+            value,
+            common_alternate,
+        } => {
+            let name = messages
+                .and_then(|table| installed_language_name(*language, *common_alternate, table))
+                .unwrap_or_else(|| format!("language {language}"));
+            let fallback = format!("Your {name} skill rises to {value}.");
+            chat(messages.map_or_else(
+                || Said::own(fallback.clone()),
+                |table| {
+                    table
+                        .said_or(0x2f3b, &[name, value.to_string()], &fallback)
+                        .typed(0x10e)
+                },
+            ))
+        }
+        Notice::SkillPracticed { trainer, skill } => {
+            let name = messages
+                .and_then(|table| {
+                    eq_client_core::skills::name_string(*skill)
+                        .and_then(|id| table.argument_free(id))
+                })
+                .map(str::to_owned)
+                .unwrap_or_else(|| {
+                    eq_client_core::skills::name(*skill)
+                        .unwrap_or("skill")
+                        .to_owned()
+                });
+            let fallback = format!("You begin to learn {name} from {trainer}.");
+            chat(messages.map_or_else(
+                || Said::own(fallback.clone()),
+                |table| {
+                    table
+                        .said_or(0x2f22, &[trainer.clone(), name], &fallback)
+                        .typed(EQMAC_PRACTICE_COLOR)
+                },
+            ))
+        }
         // Local bookkeeping is diagnostic state, not a server message.
         Notice::TrainingPractice(_) => Vec::new(),
         Notice::Channel(line) => chat(channel_line(line)),
