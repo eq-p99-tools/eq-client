@@ -5,6 +5,8 @@ use crate::{
 };
 use eq_client_core::{ClientCommand, SpawnState, WorldEvent, qol::Fix};
 
+mod cadence;
+
 fn spawn(distance: f32) -> SpawnState {
     SpawnState {
         name: "MeleeFixture".into(),

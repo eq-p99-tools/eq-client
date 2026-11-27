@@ -9,6 +9,11 @@ use std::time::{Duration, Instant};
 const MAX_DISTANCE: f32 = 200.;
 const MANUAL_PAUSE: Duration = Duration::from_millis(500);
 
+/// Opt in with `eq_client_render::motion::melee=trace`; ordinary logging is quiet.
+pub(super) fn held(reason: &'static str) {
+    trace!(target: "eq_client_render::motion::melee", reason, forward = false, "Melee positioning held");
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 struct Scope {
     session: u64,
@@ -61,14 +66,20 @@ impl Assist {
         now: Instant,
     ) -> Option<follow::Step> {
         if self.paused_until.is_some_and(|until| now < until) {
+            held("manual_release_pause");
             return None;
         }
-        let Some((scope, there, radius, in_range)) = target(world, body.position, now) else {
-            self.clear();
-            return None;
+        let (scope, there, radius, in_range) = match target(world, body.position, now) {
+            Ok(target) => target,
+            Err(reason) => {
+                self.clear();
+                held(reason);
+                return None;
+            }
         };
         if !(body.seconds.is_finite() && (0.0..=0.25).contains(&body.seconds)) {
             self.clear();
+            held("sample_interval");
             return None;
         }
         let from = Vec3::from_array(eq_client_core::render_position(body.position));
@@ -78,6 +89,11 @@ impl Assist {
         let dz = to.y - from.y;
         if !distance.is_finite() || distance > MAX_DISTANCE || dz.abs() >= radius {
             self.clear();
+            held(if distance > MAX_DISTANCE {
+                "distance_limit"
+            } else {
+                "height_or_coordinate"
+            });
             return None;
         }
         // The existing Titanium ability check is horizontal. Staying inside
@@ -103,14 +119,23 @@ impl Assist {
             super::TURN_RATE * body.seconds,
         );
         let run = !body.walking && distance - stop > 8.;
-        let speed = if run { body.speeds.0 } else { body.speeds.1 };
+        let selected = if run { body.speeds.0 } else { body.speeds.1 };
+        let speed = selected.min(body.speeds.0);
         let beyond = (distance - stop).max(0.);
         // Turn first, so an approach never travels along the old facing.
-        let forward = self.approaching
-            && super::arc(heading, desired).abs() <= 0.01
-            && speed.is_finite()
-            && speed > 0.
-            && clear_approach(collision, body, from, to, beyond.min(speed * body.seconds));
+        let heading_error = super::arc(heading, desired).abs();
+        let reason = if !self.approaching {
+            "in_range"
+        } else if heading_error > 0.01 {
+            "turning"
+        } else if !selected.is_finite() || !body.speeds.0.is_finite() || speed <= 0. {
+            "speed_unavailable"
+        } else {
+            approach_reason(collision, body, from, to, beyond.min(speed * body.seconds))
+        };
+        let forward = reason == "forward";
+        trace!(target: "eq_client_render::motion::melee", reason, forward, sample_seconds = body.seconds,
+            selected_speed = speed, distance, beyond, heading_error, "Melee positioning decision");
         self.driving = forward;
         Some(follow::Step {
             heading,
@@ -125,25 +150,30 @@ fn target(
     world: &ClientWorld,
     own: WorldPosition,
     now: Instant,
-) -> Option<(Scope, WorldPosition, f32, bool)> {
-    let session = world.session_id()?;
-    let intent = world.target_intent()?;
-    let id = intent.spawn_id?;
-    let player = world.player()?;
-    let spawn = world.spawn(id)?;
-    if id == player.spawn_id
-        || !matches!(spawn.state.kind, SpawnKind::Npc | SpawnKind::Player)
-        || spawn.health == Some(0)
-        || !world.interacts_with(&spawn.state)
-    {
-        return None;
+) -> Result<(Scope, WorldPosition, f32, bool), &'static str> {
+    let session = world.session_id().ok_or("no_session")?;
+    let intent = world.target_intent().ok_or("target_authority")?;
+    let id = intent.spawn_id.ok_or("no_target")?;
+    let player = world.player().ok_or("no_player")?;
+    let spawn = world.spawn(id).ok_or("target_missing")?;
+    if id == player.spawn_id {
+        return Err("target_self");
+    }
+    if !matches!(spawn.state.kind, SpawnKind::Npc | SpawnKind::Player) {
+        return Err("target_kind");
+    }
+    if spawn.health == Some(0) {
+        return Err("target_zero_health");
+    }
+    if !world.interacts_with(&spawn.state) {
+        return Err("target_not_interactable");
     }
     let there = spawn.carried(world.generation(), now);
     if ![own.x, own.y, own.z, own.heading, there.x, there.y, there.z]
         .into_iter()
         .all(f32::is_finite)
     {
-        return None;
+        return Err("target_coordinates");
     }
     let size = if player.size.is_finite() && player.size > 0. {
         player.size
@@ -151,7 +181,7 @@ fn target(
         abilities::player_size(player.race)
     };
     if !spawn.state.size.is_finite() || spawn.state.size < 0. {
-        return None;
+        return Err("target_size");
     }
     let own_body = abilities::Body {
         race: player.race,
@@ -183,7 +213,7 @@ fn target(
             abilities::in_melee_range(own_body, target_body),
         ),
     };
-    Some((
+    Ok((
         Scope {
             session,
             target_id: id,
@@ -212,27 +242,36 @@ fn reach(own: abilities::Body, mut target: abilities::Body) -> f32 {
     low
 }
 
-fn clear_approach(
+fn approach_reason(
     collision: &eq_client_core::movement::CollisionWorld,
     body: &Body,
     from: Vec3,
     to: Vec3,
     distance: f32,
-) -> bool {
+) -> &'static str {
     let offset = to - from;
     let length = offset.length();
     if collision
         .ray_distance(from, offset.normalize_or_zero(), length)
         .is_some_and(|hit| hit < length - 0.5)
     {
-        return false;
+        return "line_of_sight";
     }
     let feet = from - Vec3::Y * body.offset;
     let flat = Vec3::new(offset.x, 0., offset.z).normalize_or_zero() * distance;
     let achieved = collision.step(feet, flat, body.height);
-    Vec2::new(achieved.x - feet.x - flat.x, achieved.z - feet.z - flat.z).length() <= 0.02
-        && collision.support(achieved).is_some()
-        && !collision.in_liquid(achieved)
+    let error = Vec2::new(achieved.x - feet.x - flat.x, achieved.z - feet.z - flat.z).length();
+    trace!(target: "eq_client_render::motion::melee", requested_horizontal = distance,
+        achieved_horizontal = (achieved - feet).with_y(0.).length(), error, "Melee approach clearance");
+    if !error.is_finite() || error > 0.02 {
+        "path_shortened"
+    } else if collision.support(achieved).is_none() {
+        "no_support"
+    } else if collision.in_liquid(achieved) {
+        "liquid"
+    } else {
+        "forward"
+    }
 }
 
 #[cfg(test)]

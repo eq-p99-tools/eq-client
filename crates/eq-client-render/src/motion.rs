@@ -1944,6 +1944,10 @@ pub(super) fn input(
     (look, aim, spells): Pointing,
 ) {
     let client = settings.0.installed_client;
+    let trace_melee = options.options.qol.on(Fix::MeleePositioning)
+        && combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(online.world().session_id()));
     // The program's speed-modifier routine ends following once a root
     // stops the player (R6, 0x411076); a server's move does not.
     if let Some(following) = controls.following.as_ref()
@@ -2415,6 +2419,9 @@ pub(super) fn input(
         .taps
         .observe(&keyboard, &movement_keys, focused, now);
     if controls.pending.is_some() {
+        if trace_melee {
+            melee::held("pending_sample");
+        }
         if controls.liquid_basis(session_id, now) == LiquidBasis::Unconfirmed {
             controls.pause_prediction();
         }
@@ -2423,6 +2430,9 @@ pub(super) fn input(
     }
     let elapsed = now.duration_since(controls.last_accepted);
     if elapsed < Duration::from_millis(100) {
+        if trace_melee {
+            melee::held("sample_gate");
+        }
         controls.held = Some(Held::Gate);
         return;
     }
@@ -2442,6 +2452,9 @@ pub(super) fn input(
         moving_world,
         online.world().player(),
     ) else {
+        if trace_melee {
+            melee::held("body_or_collision_unavailable");
+        }
         controls.held = Some(Held::NoBody);
         return;
     };
@@ -2698,6 +2711,13 @@ pub(super) fn input(
         controls.melee.clear();
         None
     } else if manual || !focused || controls.following.is_some() {
+        trace!(target: "eq_client_render::motion::melee", reason = "input_owner", forward = false,
+            manual, focused, following = controls.following.is_some(),
+            movement = follow::moves(map, &sampled, scripted), autorun = controls.autorun,
+            rmb = look.as_ref().is_some_and(|look| look.held), mouse_snapshot = mouse_snapshot.is_some(),
+            mouse_yaw = active_mouse_yaw, released_turn = controls.released_turn,
+            scripted_facing = scripted_facing.is_some(), script = keys.script_active(),
+            "Melee positioning held");
         controls.melee.yield_input(now);
         None
     } else if !standing
@@ -2721,6 +2741,15 @@ pub(super) fn input(
             .as_ref()
             .is_some_and(|airborne| airborne.velocity() != 0. || airborne.peak().is_some())
     {
+        trace!(target: "eq_client_render::motion::melee", reason = "context", forward = false,
+            standing, stunned, flying, swimming, placement_blocked, refused = controls.refused.is_some(),
+            camp = online.world().camp().is_some(), casting = online.world().casting().holds_actions(),
+            question = asked.as_deref().is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer()),
+            rider = controls.riding.is_some(), boat = controls.boat.is_some(), display_boat = controls.visual_boat.is_some(),
+            jump = controls.jump.is_some(), crouch = controls.crouch.is_some(),
+            airborne_velocity = ?controls.airborne.as_ref().map(AirborneController::velocity),
+            airborne_peak = ?controls.airborne.as_ref().and_then(AirborneController::peak),
+            "Melee positioning held");
         controls.melee.clear();
         None
     } else {
@@ -3061,6 +3090,9 @@ pub(super) fn input(
             speed / 60.0
         };
         speed = speed.min((step.beyond + margin) / span.max(f32::EPSILON));
+    }
+    if melee_step.is_some() {
+        speed = speed.min(controls.speed.unwrap_or(0.0).max(0.0));
     }
     // A ducking body, or one with its origin in liquid, is swept at its
     // origin (L = 0, 0x489a32), so only the floor sweep's climb holds; else
@@ -3527,6 +3559,12 @@ pub(super) fn input(
         turn_toward(current_heading, facing, TURN_RATE * span)
     };
     trace_proposal(mode, delta, position - origin, heading, facing);
+    if melee_step.is_some() {
+        trace!(target: "eq_client_render::motion::melee", sample_seconds = span,
+            elapsed_since_send = since_sent.as_secs_f64(), granted_run_speed = ?controls.speed,
+            selected_speed = speed, requested_horizontal = delta.with_y(0.0).length(),
+            resolved_horizontal = (position - origin).with_y(0.0).length(), "Melee positioning proposal");
+    }
     trace_contact(world, feet, delta, position - origin, body.height);
     let position_sent = if placement_blocked {
         eq_client_core::WorldPosition {
