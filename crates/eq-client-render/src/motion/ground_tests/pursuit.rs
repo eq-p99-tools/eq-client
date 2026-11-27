@@ -2,10 +2,21 @@
 use super::*;
 use eq_client_core::{SpawnKind, WorldEvent, WorldPosition, qol::Fix};
 
+mod background;
+
 fn pursuit(known: bool, bridge: bool) -> Scene {
-    let mut scene = Scene::new(0, known);
+    pursuit_with_speed(known, bridge, 6.)
+}
+
+fn pursuit_with_speed(known: bool, bridge: bool, speed: f32) -> Scene {
+    let mut scene = Scene::with_speed(0, known, speed);
     scene
         .app
+        .add_message::<bevy::window::WindowFocused>()
+        .add_systems(
+            PreUpdate,
+            crate::keys::release_on_focus_loss.after(bevy::input::InputSystems),
+        )
         .init_resource::<crate::combat::CombatState>()
         .init_resource::<crate::hud::hotbar::Bindings>()
         .add_systems(Update, crate::combat::input.before(input));
@@ -177,7 +188,7 @@ fn pursuit_6716_real_script_and_manual_look_yield_then_release() {
 }
 
 #[test]
-fn pursuit_6716_manual_movement_and_focus_loss_keep_priority() {
+fn pursuit_6716_manual_movement_yields_and_focus_loss_keeps_pursuing() {
     for known in [false, true] {
         let mut scene = pursuit(known, true);
         let before = scene
@@ -206,8 +217,8 @@ fn pursuit_6716_manual_movement_and_focus_loss_keep_priority() {
             .single_mut(world)
             .unwrap()
             .focused = false;
-        let (_, proposals, _) = observe(&mut scene, 60);
-        assert_eq!(proposals, 0);
+        let (_, proposals, travel) = observe(&mut scene, 60);
+        assert!(proposals > 0 && travel > 1.);
         let world = scene.app.world_mut();
         world
             .query::<&mut Window>()

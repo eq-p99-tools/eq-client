@@ -2372,6 +2372,8 @@ pub(super) fn input(
         return;
     }
     let focused = keys.focused() && !detached && !stunned && controls.speed.is_some();
+    let melee_available =
+        keys.automatic_input_available() && !detached && !stunned && controls.speed.is_some();
     // Where the program holds a lying player still (read R19 c), the keys
     // neither move nor turn them, nor jump; mouse look turns them in the
     // chase views only.
@@ -2859,31 +2861,32 @@ pub(super) fn input(
     // Decide ownership before native ground can retain an idle frame. Observe
     // buffered taps without consuming them or giving them a physical duration.
     let ownership_keys = controls.taps.sample(&keyboard);
-    let manual = follow::moves(map, &ownership_keys, scripted)
-        || controls.autorun
-        || [Act::Jump, Act::Duck]
-            .into_iter()
-            .any(|act| map.holding(&ownership_keys, scripted).held(act))
-        || look.as_ref().is_some_and(|look| look.held)
-        || mouse_aim.is_some_and(|yaw| yaw != 0.)
-        || controls.mouse_turn != 0.
-        || controls.mouse_heading.is_some_and(|heading| {
-            online
-                .world()
-                .player()
-                .is_some_and(|player| arc(player.position.heading, heading) != 0.)
-        })
-        || controls.released_turn != 0.
-        || keys.pressed(Act::Walk)
-        || scripted_facing.is_some()
-        || keys.script_active();
+    let manual = controls.autorun
+        || keys.script_active()
+        || (focused
+            && (follow::moves(map, &ownership_keys, scripted)
+                || [Act::Jump, Act::Duck]
+                    .into_iter()
+                    .any(|act| map.holding(&ownership_keys, scripted).held(act))
+                || look.as_ref().is_some_and(|look| look.held)
+                || mouse_aim.is_some_and(|yaw| yaw != 0.)
+                || controls.mouse_turn != 0.
+                || controls.mouse_heading.is_some_and(|heading| {
+                    online
+                        .world()
+                        .player()
+                        .is_some_and(|player| arc(player.position.heading, heading) != 0.)
+                })
+                || controls.released_turn != 0.
+                || keys.pressed(Act::Walk)
+                || scripted_facing.is_some()));
     if !melee_enabled {
         controls.melee.clear();
-    } else if manual || !focused || controls.following.is_some() {
+    } else if manual || !melee_available || controls.following.is_some() {
         controls.melee.yield_input(now);
     }
     let melee_waiting = melee_enabled
-        && focused
+        && melee_available
         && !manual
         && controls.following.is_none()
         && controls.melee.ready(now);
@@ -3293,7 +3296,7 @@ pub(super) fn input(
         }
         controls.melee.clear();
         None
-    } else if manual || !focused || controls.following.is_some() {
+    } else if manual || !melee_available || controls.following.is_some() {
         trace!(target: "eq_client_render::motion::melee", reason = "input_owner", forward = false,
             manual, focused, input_owned = keys.focused(), detached, stunned, following = controls.following.is_some(),
             movement = follow::moves(map, &sampled, scripted), autorun = controls.autorun,
