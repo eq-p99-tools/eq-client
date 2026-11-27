@@ -5,6 +5,7 @@ use eq_network_game::movement::{GroundSampleResult, MotionSession, TITANIUM_FLAG
 use std::{collections::VecDeque, sync::mpsc};
 
 mod camera_locked;
+mod guidance;
 mod orbit;
 mod pursuit;
 mod turn_release;

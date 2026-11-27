@@ -61,15 +61,16 @@ use crate::keys::Act;
 use parse::{MAX_STEPS, MAX_WAIT, MoveCommand};
 
 /// The command the steps that move toward something hold: forward the way
-/// the camera looks, which they turn toward their aim.
-const FORWARD: Act = Act::CameraForward;
+/// the character faces, as normal Forward-plus-Turn guidance does.
+#[cfg(test)]
+const FORWARD: Act = Act::Forward;
 
 const HEADROOM_REFUSED: &str =
     "walk refused: too little headroom over the floor ahead to stand there";
-/// Longest a `face` step waits for the server to have its heading: a half
+/// Longest a `face` step waits for admitted movement to have its heading: a half
 /// turn at the turn keys' rate takes about a second.
 const FACE_LIMIT: Duration = Duration::from_secs(5);
-/// How near the heading the server has must come to a `face` step's, in
+/// How near the admitted heading must come to a `face` step's, in
 /// heading units.
 const FACED: f32 = 0.5;
 const MAX_ONLINE_WAIT: Duration = Duration::from_mins(3);
@@ -108,6 +109,8 @@ pub struct Script {
     acts: Vec<Act>,
     /// The heading a `face` step turns the player to, until it is reached.
     facing: Option<f32>,
+    /// A route's desired bearing, consumed by the normal turn owner.
+    guidance: Option<f32>,
     /// The mouse button a scripted click holds down until the next frame.
     clicked: Option<MouseButton>,
     /// A bounded semantic gesture captured over visible world space.
@@ -281,6 +284,7 @@ impl Script {
             latched: Vec::new(),
             acts: Vec::new(),
             facing: None,
+            guidance: None,
             clicked: None,
             world_gesture: None,
             pressed: None,
@@ -522,6 +526,7 @@ impl Script {
             && self.facing.is_none()
             && self.following.is_none()
             && self.follow.is_none()
+            && self.guidance.is_none()
             && self.world_gesture.is_none()
             && self.current.as_ref().is_none_or(|(step, _)| {
                 matches!(
@@ -548,6 +553,10 @@ impl Script {
     /// The heading a `face` step turns the player to.
     pub(crate) const fn facing(&self) -> Option<f32> {
         self.facing
+    }
+
+    pub(crate) fn guidance(&self) -> Option<f32> {
+        self.guidance.or(self.facing)
     }
 
     /// A script holding these movement acts and this `face` heading, as its
@@ -588,12 +597,24 @@ impl Script {
         self
     }
 
+    #[cfg(test)]
+    pub(crate) fn guidance_for_test(mut self, heading: f32) -> Self {
+        self.guidance = Some(heading);
+        self
+    }
+
+    #[cfg(test)]
+    pub(crate) fn guide_for_test(&mut self, heading: f32) {
+        self.guidance = Some(heading);
+    }
+
     /// Whether cancellation must release input before yielding the window.
     fn holding(&self) -> bool {
         !self.held.is_empty()
             || !self.latched.is_empty()
             || !self.acts.is_empty()
             || self.facing.is_some()
+            || self.guidance.is_some()
             || self.clicked.is_some()
             || self.world_gesture.is_some()
     }
@@ -709,6 +730,7 @@ impl Script {
         }
         self.acts.clear();
         self.facing = None;
+        self.guidance = None;
         // The scene reads the real pointer again from the next frame
         // (`lease_scene`).
         self.scene = None;
@@ -1765,7 +1787,7 @@ pub(super) fn drive(
                 }
             }
             Step::Approach(range, duration) => {
-                let distance = face(&online, &players, &mut cameras);
+                let distance = guide_target(script, &online, &players);
                 distance.is_none_or(|distance| distance <= *range) || elapsed >= *duration
             }
             Step::Chase(range, limit) => match chase(
@@ -1781,11 +1803,13 @@ pub(super) fn drive(
                     true
                 }
                 Ok(Chase::Aim(aim)) => {
-                    let running = runs(face_toward(aim, &players, &mut cameras), *range);
+                    let running = runs(guide_toward(script, aim, &players), *range);
                     if running && script.acts.is_empty() {
-                        script.acts = vec![FORWARD];
+                        script.acts = vec![Act::Forward];
                     } else if !running && script.holding() {
+                        let guidance = script.guidance;
                         script.release_step(&mut keys, &mut mouse);
+                        script.guidance = guidance;
                     }
                     false
                 }
@@ -1797,9 +1821,7 @@ pub(super) fn drive(
             Step::ApproachObject {
                 range, duration, ..
             } => {
-                let Some(distance) =
-                    face_object(script.approached, &online, &players, &mut cameras)
-                else {
+                let Some(distance) = guide_object(script, &online, &players) else {
                     script.stop(&mut keys, &mut mouse, "approach object lost its object");
                     return;
                 };
@@ -2194,11 +2216,9 @@ pub(super) fn drive(
                             info!(id, waited, "Script walk door opened");
                         }
                         let to = next - feet;
-                        for mut camera in &mut cameras {
-                            camera.yaw = super::behind(to.x.atan2(to.z));
-                        }
+                        script.guidance = Some(eq_client_core::world_heading(to.x.atan2(to.z)));
                         if script.acts.is_empty() {
-                            script.acts = vec![FORWARD];
+                            script.acts = vec![Act::Forward];
                         }
                         (false, elapsed >= *duration)
                     }
@@ -3051,23 +3071,23 @@ pub(super) fn drive(
             return;
         }
         Step::Approach(..) => {
-            if face(&online, &players, &mut cameras).is_none() {
+            if guide_target(script, &online, &players).is_none() {
                 script.stop(&mut keys, &mut mouse, "approach needs a visible target");
                 return;
             }
-            script.acts = vec![FORWARD];
+            script.acts = vec![Act::Forward];
         }
         Step::Chase(..) => {
             script.awaited = online.world().target().selected;
             script.chase_seen = None;
-            if face(&online, &players, &mut cameras).is_none() {
+            if guide_target(script, &online, &players).is_none() {
                 script.stop(&mut keys, &mut mouse, "chase needs a visible target");
                 return;
             }
         }
         Step::ApproachObject { kind, .. } => {
             script.approached = nearest_station(&online, *kind);
-            if face_object(script.approached, &online, &players, &mut cameras).is_none() {
+            if guide_object(script, &online, &players).is_none() {
                 script.stop(
                     &mut keys,
                     &mut mouse,
@@ -3075,7 +3095,7 @@ pub(super) fn drive(
                 );
                 return;
             }
-            script.acts = vec![FORWARD];
+            script.acts = vec![Act::Forward];
         }
         Step::Walk(range, _) | Step::WalkObject { range, .. } | Step::WalkPlace { range, .. } => {
             if let Step::WalkObject { kind, .. } = &step {
@@ -4674,16 +4694,44 @@ fn face(
     face_toward(spawn.position, players, cameras)
 }
 
-/// [`face`] toward a world object instead of the target, or None without a
-/// player or once the object has left the zone.
-fn face_object(
-    drop_id: Option<u32>,
+/// Continuous guidance requests a normal turn, leaving the camera to its owner.
+fn guide_target(
+    script: &mut Script,
     online: &super::online::OnlineState,
     players: &Query<&Transform, With<super::Player>>,
-    cameras: &mut Query<&mut super::OrbitCamera>,
 ) -> Option<f32> {
-    let object = online.world().objects().entries().get(&drop_id?)?;
-    face_toward(object.position, players, cameras)
+    let spawn = online
+        .world()
+        .target()
+        .selected
+        .and_then(|id| online.world().spawn(id))?;
+    guide_toward(script, spawn.state.position, players)
+}
+
+fn guide_object(
+    script: &mut Script,
+    online: &super::online::OnlineState,
+    players: &Query<&Transform, With<super::Player>>,
+) -> Option<f32> {
+    let object = online
+        .world()
+        .objects()
+        .entries()
+        .get(&script.approached?)?;
+    guide_toward(script, object.position, players)
+}
+
+fn guide_toward(
+    script: &mut Script,
+    position: eq_client_core::WorldPosition,
+    players: &Query<&Transform, With<super::Player>>,
+) -> Option<f32> {
+    let transform = players.single().ok()?;
+    let to = Vec3::from_array(eq_client_core::render_position(position)) - transform.translation;
+    let flat = Vec2::new(to.x, to.z);
+    script.guidance =
+        (flat.length() > f32::EPSILON).then(|| eq_client_core::world_heading(flat.x.atan2(flat.y)));
+    Some(flat.length())
 }
 
 /// Points the camera from the player toward a position and returns the flat

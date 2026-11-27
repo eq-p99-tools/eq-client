@@ -361,6 +361,9 @@ fn runtime() -> (App, std::sync::mpsc::Receiver<ClientCommand>) {
             (crate::options::toggle, crate::combat::input, motion::input).chain(),
         );
     app.world_mut()
+        .resource_mut::<Time>()
+        .advance_by(Duration::from_nanos(16_666_667));
+    app.world_mut()
         .resource_mut::<ButtonInput<KeyCode>>()
         .reset_all();
     crate::clicks::testing::install(&mut app);
@@ -476,14 +479,18 @@ fn melee_positioning_replaces_the_released_keyboard_facing_owner() {
     crate::clicks::testing::click(&mut app, attack);
     let sent = moves(&rx);
     assert_eq!(sent.len(), 1);
-    // Melee first turns at its existing bounded rate before approaching.
+    // Melee starts the actual keyboard ramp before approaching.
     assert_eq!((sent[0].position.x, sent[0].position.y), (0., 0.));
-    assert!((sent[0].position.heading - motion::TURN_RATE * 0.1).abs() < 0.000_1);
+    assert!((sent[0].position.heading - 1. / 3.).abs() < 0.000_1);
     assert!(
         app.world()
             .resource::<motion::Controls>()
             .key_facing
-            .is_none(),
+            .as_ref()
+            .is_some_and(|facing| matches!(
+                facing.source,
+                Some(motion::key_turn::Source::Melee { .. })
+            )),
         "a finished keyboard turn must not override the next melee facing"
     );
 }

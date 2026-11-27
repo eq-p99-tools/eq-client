@@ -147,6 +147,37 @@ impl Assist {
             })
     }
 
+    /// The ordinary facing owner chooses the turn; this only names its goal.
+    pub fn facing_goal(
+        &self,
+        world: &ClientWorld,
+        body: &Body,
+        input: OrbitInput,
+        now: Instant,
+    ) -> Option<f32> {
+        if !self.owns_facing() || !self.ready(now) {
+            return None;
+        }
+        let (scope, there, _, _) = target(world, body.position, now).ok()?;
+        if self.scope != Some(scope) {
+            return None;
+        }
+        let from = Vec3::from_array(eq_client_core::render_position(body.position));
+        let to = Vec3::from_array(eq_client_core::render_position(there));
+        if self
+            .lock
+            .radius
+            .is_some_and(|radius| (to - from).with_y(0.).length() <= radius + 0.25)
+            && input.side != 0.
+            && let Some(plan) = orbit::plan(from, to, body.position.heading, body.seconds, input)
+        {
+            return Some(plan.heading);
+        }
+        let toward = (to - from).with_y(0.);
+        (toward.length_squared() > f32::EPSILON)
+            .then(|| eq_client_core::world_heading(toward.x.atan2(toward.z)))
+    }
+
     pub fn status(&self) -> (&'static str, &'static str) {
         (self.lock.phase.word(), self.lock.reason)
     }

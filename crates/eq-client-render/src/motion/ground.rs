@@ -420,13 +420,16 @@ pub(super) fn present(
         if let Some(heading) = preview {
             transform.rotation = Quat::from_rotation_y(eq_client_core::render_heading(heading));
         }
+        let key_follow = controls.present_key_facing(world, &mut transform);
         *displayed_mouse = preview.map(|_| entity);
         controls.drawn_pose = Some(frame.pose);
         for (mut camera, free) in cameras {
             camera.focus = transform.translation;
             // A retained ground follow flag shares the legacy presenter's
             // camera ownership; it cannot override a target lock's view.
-            if (frame.follows || preview.is_some()) && !free && !controls.melee_camera_locked(world)
+            if key_follow.unwrap_or(frame.follows || preview.is_some())
+                && !free
+                && !controls.melee_camera_locked(world)
             {
                 crate::camera::start_behind(&mut camera, &transform);
             }
@@ -563,7 +566,13 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
     let seconds = seconds.min(Duration::from_millis(150));
     let forward = intent.mode == MovementMode::Forward && intent.direction != Vec3::ZERO;
     let mut facing = current.facing;
-    if let Some(mouse) = mouse_heading {
+    if let Some(owned) = controls
+        .key_facing
+        .as_ref()
+        .filter(|_| mouse_heading.is_none())
+    {
+        facing = owned.heading;
+    } else if let Some(mouse) = mouse_heading {
         facing = mouse;
     } else if intent.preserve_facing || !forward {
         let cap = turn_cap(online.world().player().map_or(0, |player| player.race));

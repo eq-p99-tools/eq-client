@@ -5,6 +5,7 @@ use crate::script::{
     FORWARD, InputMode, Phase,
     tests::{background, frame_at},
 };
+use bevy::ecs::system::RunSystemOnce;
 use bevy::prelude::*;
 use std::time::{Duration, Instant};
 
@@ -16,6 +17,10 @@ fn floor() -> Vec<[[f32; 3]; 3]> {
 }
 
 fn pending_walk() -> App {
+    place_walk(true)
+}
+
+fn place_walk(mesh_pending: bool) -> App {
     let (mut app, _) = background(Vec::new());
     let body = PlayerBody {
         feet_offset: 3.75,
@@ -35,10 +40,12 @@ fn pending_walk() -> App {
         assert!(online.world().target().selected.is_none());
         online.world().zone().to_owned()
     };
-    crate::zone_navmesh::install(&mut app, true);
-    app.world_mut()
-        .resource_mut::<ZoneNavMesh>()
-        .hold_for_test(&zone, floor());
+    crate::zone_navmesh::install(&mut app, mesh_pending);
+    if mesh_pending {
+        app.world_mut()
+            .resource_mut::<ZoneNavMesh>()
+            .hold_for_test(&zone, floor());
+    }
     // Use the same header-dependent settings as production refresh so it
     // does not replace our deliberately pending task on the first frame.
     let viewer = app.world().resource::<crate::ViewerSettings>();
@@ -62,6 +69,107 @@ fn pending_walk() -> App {
         .input_mode(InputMode::Background),
     );
     app
+}
+
+fn authored_camera(app: &mut App) -> Entity {
+    app.world_mut()
+        .run_system_once(|mut commands: Commands| {
+            crate::camera::spawn_camera(
+                &mut commands,
+                Transform::from_xyz(0., 3.75, 0.),
+                30.,
+                crate::ProjectionStyle::Perspective,
+            );
+        })
+        .unwrap();
+    let world = app.world_mut();
+    let entity = world
+        .query_filtered::<Entity, With<crate::OrbitCamera>>()
+        .single(world)
+        .unwrap();
+    world.get_mut::<crate::OrbitCamera>(entity).unwrap().yaw = 0.83;
+    entity
+}
+
+#[test]
+fn grid_and_navmesh_walk_entry_publish_guidance_without_writing_camera_yaw() {
+    for mesh in [false, true] {
+        let mut app = place_walk(mesh);
+        let camera = authored_camera(&mut app);
+        frame_at(&mut app, 0);
+        if mesh {
+            let ready = NavMesh::build(
+                &floor(),
+                &eq_client_core::movement::navmesh::Settings::walker(6.),
+                1,
+                &AtomicBool::new(false),
+            )
+            .unwrap()
+            .0;
+            app.world_mut()
+                .resource_mut::<ZoneNavMesh>()
+                .complete_for_test(Some(ready));
+        }
+        let deadline = Instant::now() + Duration::from_secs(30);
+        let mut ms = 50;
+        loop {
+            frame_at(&mut app, ms);
+            assert!(
+                Instant::now() < deadline,
+                "normal route did not publish guidance"
+            );
+            let script = app.world().resource::<Script>();
+            assert_eq!(script.status().phase(), Phase::Running);
+            if let Some(goal) = script.guidance {
+                assert!((goal.rem_euclid(512.) - 256.).abs() < 0.001);
+                assert_eq!(script.acts(), &[crate::keys::Act::Forward]);
+                assert!(
+                    (app.world().get::<crate::OrbitCamera>(camera).unwrap().yaw - 0.83).abs()
+                        < 1e-5
+                );
+                break;
+            }
+            ms += 1;
+            std::thread::yield_now();
+        }
+    }
+}
+
+#[test]
+fn explicit_camera_only_face_keeps_its_existing_instant_view_semantics() {
+    let mut app = place_walk(false);
+    let camera = authored_camera(&mut app);
+    {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        let mut target = testing::pet(9, 0);
+        target.position = eq_client_core::world_position([20., 3.75, 0.], 0.);
+        testing::spawn_entry(&mut online, 9, target);
+        online.select_target(Some(9));
+        let request_id = online.world().next_target_request() - 1;
+        testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::TargetChanged {
+                session_id: 1,
+                request_id,
+                state: eq_network_game::targets::TargetState {
+                    revision: 1,
+                    spawn_id: Some(9),
+                    available: true,
+                },
+            }],
+        );
+    }
+    app.insert_resource(Script::new(vec![Step::Face]).input_mode(InputMode::Background));
+    frame_at(&mut app, 0);
+    let script = app.world().resource::<Script>();
+    assert!(script.guidance().is_none());
+    assert!((app.world().get::<crate::OrbitCamera>(camera).unwrap().yaw - 0.83).abs() > 0.1);
+    let world = app.world_mut();
+    let player = world
+        .query_filtered::<&Transform, With<crate::Player>>()
+        .single(world)
+        .unwrap();
+    assert!(player.rotation.angle_between(Quat::IDENTITY) < 0.001);
 }
 
 #[test]

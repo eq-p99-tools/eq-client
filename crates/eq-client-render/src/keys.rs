@@ -778,6 +778,12 @@ impl Keys<'_, '_> {
         self.script.as_ref().and_then(|script| script.facing())
     }
 
+    /// Desired guidance is distinct from a mouse/camera orientation write.
+    pub(crate) fn scripted_guidance(&self) -> Option<(f32, std::sync::Arc<()>)> {
+        let script = self.script.as_ref()?;
+        Some((script.guidance()?, script.status().run().clone()))
+    }
+
     /// Whether this frame's Escape belongs to the game, not to closing the chat.
     pub(crate) fn escape_free(&self) -> bool {
         self.focused() && !self.typing.escape_consumed

@@ -149,24 +149,24 @@ pub enum Step {
     /// current target.
     Face,
     /// Turns the player to an EQ heading (0..512), whatever the camera does,
-    /// as moving with the camera-relative keys turns them: the heading sent
-    /// turns at the turn keys' rate. It ends once the server has the heading.
+    /// through the ordinary keyboard turn owner and ramp. It ends once the
+    /// admitted movement state has the heading.
     FaceHeading(f32),
     /// Holds a movement command for a bounded duration, as holding its key
     /// does, whatever keys the key table gives it; traced as `hold` is.
     Move(MoveCommand, Duration),
-    /// Moves forward the way the camera looks toward the current target until it is within a distance, for a
-    /// bounded duration.
+    /// Moves forward while ordinary keyboard turns guide toward the current
+    /// target, until it is within a distance, for a bounded duration.
     Approach(f32, Duration),
     /// Chases the current target as a player's hands would: every frame it
-    /// faces where the target is drawn now (its last reported position
+    /// turns toward where the target is drawn now (its last reported position
     /// carried on as the generation's program carries it) and moves forward while the target
     /// is beyond the distance, standing within it. It ends only when the
     /// target dies or leaves the zone, or when the time runs out, never
     /// merely on reaching the target; auto-attack is the script's to turn on
     /// first.
     Chase(f32, Duration),
-    /// Moves forward the way the camera looks toward the nearest world container of one tradeskill kind
+    /// Moves forward while ordinary turns guide toward the nearest world container of one tradeskill kind
     /// (its container type, such as a pottery wheel's), chosen as the step
     /// starts, until it is within a distance, for a bounded duration.
     ApproachObject {

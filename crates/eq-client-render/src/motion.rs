@@ -556,6 +556,21 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
+    fn melee_input(&self, side: f32) -> melee::OrbitInput {
+        melee::OrbitInput {
+            side,
+            strafe: if self.walking {
+                self.strafe_walk_speed.or(self.strafe_speed)
+            } else {
+                self.strafe_speed
+            }
+            .unwrap_or(0.)
+            .min(self.speed.unwrap_or(0.).max(0.)),
+            walking: self.walking,
+            ..Default::default()
+        }
+    }
+
     pub(crate) fn melee_camera_locked(&self, world: &ClientWorld) -> bool {
         self.melee.camera_locked(world, self.now())
     }
@@ -2435,6 +2450,12 @@ pub(super) fn input(
         .then(|| keys.scripted_facing())
         .flatten()
         .filter(|_| !lying);
+    let script_guidance = focused
+        .then(|| keys.scripted_guidance())
+        .flatten()
+        .filter(|_| {
+            !lying && (scripted_facing.is_some() || look.as_ref().is_none_or(|look| !look.held))
+        });
     let scripted = keys.scripted();
     let scripted_turn =
         !lying && (scripted.contains(&Act::TurnLeft) || scripted.contains(&Act::TurnRight));
@@ -2799,11 +2820,43 @@ pub(super) fn input(
         && controls.melee.ready(now)
         && !controls.melee.native_idle(online.world(), orbit_side, now);
 
-    if controls.melee.owns_facing()
-        && let Ok((_, drawn)) = players.single()
-    {
-        controls.yield_key_facing(*drawn);
-    }
+    let guidance = script_guidance
+        .as_ref()
+        .map(|(goal, run)| (*goal, key_turn::Source::Script(run.clone())))
+        .or_else(|| {
+            if manual || context_holds || !focused || controls.following.is_some() {
+                return None;
+            }
+            let player = online.world().player()?;
+            let (body, _) = players.single().ok()?;
+            let goal_body = melee::Body {
+                position: player.position,
+                height: body.height,
+                offset: body.feet_offset,
+                seconds: controls.span(now.saturating_duration_since(controls.last_accepted)),
+                speeds: (
+                    controls.speed.unwrap_or(0.),
+                    controls.walk_speed.or(controls.speed).unwrap_or(0.),
+                ),
+                walking: controls.walking,
+            };
+            let goal = controls.melee.facing_goal(
+                online.world(),
+                &goal_body,
+                controls.melee_input(orbit_side),
+                now,
+            )?;
+            Some((
+                goal,
+                key_turn::Source::Melee {
+                    admission: online.world().session_id()?,
+                    attack: combat
+                        .as_deref()
+                        .map_or(0, crate::combat::CombatState::positioning_intent),
+                    choice: online.world().next_target_request(),
+                },
+            ))
+        });
     let frame_turns = match online.world().generation() {
         eq_client_core::GameDialect::Titanium => time.is_some(),
         eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
@@ -2811,7 +2864,7 @@ pub(super) fn input(
     #[cfg(test)]
     let frame_turns = frame_turns && !controls.suppress_key_facing;
     if let (true, Some(player), Ok((_, drawn)), Ok((camera, _))) = (
-        frame_turns,
+        frame_turns || guidance.is_some(),
         online.world().player(),
         players.single(),
         cameras.single(),
@@ -2835,7 +2888,61 @@ pub(super) fn input(
             && scripted_facing.is_none()
             && controls.mouse_heading.is_none()
             && (intent.preserve_facing || intent.direction == Vec3::ZERO);
-        if own {
+        if let Some((goal, source)) = guidance.as_ref().filter(|_| {
+            focused
+                && !controls.stun_active
+                && moving_world.is_some()
+                && controls.following.is_none()
+                && controls.mouse_heading.is_none()
+        }) {
+            let carrier = controls.visual_boat.and_then(|frame| {
+                online
+                    .world()
+                    .carriers()
+                    .latest(frame.sample.spawn_id)
+                    .filter(|report| report.sample().incarnation == frame.sample.incarnation)
+                    .map(|report| boats::DisplayFrame {
+                        sample: report.sample(),
+                        pose: report.pose(now),
+                    })
+            });
+            if controls
+                .key_facing
+                .as_ref()
+                .is_none_or(|facing| facing.source.as_ref() != Some(source))
+            {
+                controls.yield_key_facing(*drawn);
+                let forward = drawn.rotation * Vec3::Z;
+                let heading = if std::mem::take(&mut controls.restore_key_facing) {
+                    controls
+                        .boat
+                        .and_then(|riding| riding.carried(online.world().carriers(), now))
+                        .map_or(player.position.heading, |riding| riding.position.heading)
+                } else {
+                    eq_client_core::world_heading(forward.x.atan2(forward.z))
+                };
+                controls.key_facing = Some(key_turn::Facing::new(heading, now, carrier));
+            }
+            let facing = controls.key_facing.as_mut().expect("guidance facing owner");
+            facing.source = Some(source.clone());
+            facing.carry(carrier);
+            facing.guide(
+                now,
+                time.as_deref().map_or(Duration::ZERO, Time::delta),
+                *goal,
+                cap,
+            );
+            controls.facing = None;
+            controls.released_turn = 0.;
+        } else if own {
+            if controls
+                .key_facing
+                .as_ref()
+                .is_some_and(|facing| facing.source.is_some())
+            {
+                controls.yield_key_facing(*drawn);
+                controls.released_turn = 0.;
+            }
             let carrier = controls.visual_boat.and_then(|frame| {
                 online
                     .world()
@@ -3021,6 +3128,7 @@ pub(super) fn input(
             .map_or(player.position.heading, |frame| frame.facing);
         let heading = controls
             .mouse_heading
+            .or_else(|| controls.key_facing.as_ref().map(|facing| facing.heading))
             .or(controls.facing)
             .unwrap_or(heading);
         let yaw = controls.mouse_heading.map_or(camera.yaw, |heading| {
@@ -3315,15 +3423,17 @@ pub(super) fn input(
     if mouse_snapshot.is_none() {
         controls.mouse_heading = None;
     }
-    // A script's `face` step turns the player as moving with the
-    // camera-relative keys does: the facing it names at once, the heading
-    // sent toward it at the turn keys' rate.
-    if let Some(heading) = scripted_facing {
-        controls.facing = Some(heading.rem_euclid(512.0));
-    } else if mouse_steering {
+    // Guidance already advanced the normal per-frame turn owner. Sampling
+    // consumes its achieved facing, never the desired waypoint heading.
+    if mouse_steering {
         controls.facing = None;
     }
-    let shown = controls.facing.unwrap_or(steered_heading);
+    let shown = controls
+        .key_facing
+        .as_ref()
+        .map(|facing| facing.heading)
+        .or(controls.facing)
+        .unwrap_or(steered_heading);
     let yaw = if mouse_steering {
         crate::camera::behind(eq_client_core::render_heading(steered_heading))
     } else {
@@ -3499,12 +3609,27 @@ pub(super) fn input(
                 },
             ),
         };
+        let turn_budget = controls
+            .key_facing
+            .as_ref()
+            .filter(|facing| matches!(facing.source, Some(key_turn::Source::Melee { .. })))
+            .map_or(0., |facing| {
+                arc(accepted.position.heading, facing.heading).abs()
+            });
         controls.melee.steer(
             online.world(),
             world,
             &online.regions,
             &body,
-            orbit_input,
+            melee::OrbitInput {
+                turn_budget: Some(
+                    orbit_input
+                        .turn_budget
+                        .unwrap_or(turn_budget)
+                        .min(turn_budget),
+                ),
+                ..orbit_input
+            },
             now,
         )
     };
@@ -3513,7 +3638,12 @@ pub(super) fn input(
         .and_then(|steering| steering.orbit.as_ref());
     let melee_step = steering.as_ref().map(|steering| steering.follow);
     if let Some(step) = melee_step {
-        let radians = eq_client_core::render_heading(step.heading);
+        let achieved = controls
+            .key_facing
+            .as_ref()
+            .filter(|facing| matches!(facing.source, Some(key_turn::Source::Melee { .. })))
+            .map_or(step.heading, |facing| facing.heading);
+        let radians = eq_client_core::render_heading(achieved);
         intent = MotionInput {
             mode: if !step.run && controls.walk_speed.is_some() {
                 MovementMode::Walk
@@ -3552,6 +3682,10 @@ pub(super) fn input(
     let follow_step = follow_step.or(melee_step);
     let follow_heading = follow_step.map(|step| step.heading);
     if follow_heading.is_some()
+        && !controls
+            .key_facing
+            .as_ref()
+            .is_some_and(|facing| matches!(facing.source, Some(key_turn::Source::Melee { .. })))
         && let Ok((_, drawn)) = players.single()
     {
         controls.yield_key_facing(*drawn);
@@ -4482,7 +4616,13 @@ pub(super) fn input(
     // The turn keys turn at their own rate. Camera-relative movement faces
     // its direction unless mouse-look is steering the body. The sent heading
     // follows the facing within the same sample budget as the position.
-    let facing = if let Some(heading) = follow_heading {
+    let facing = if let Some(facing) = controls
+        .key_facing
+        .as_ref()
+        .filter(|facing| facing.source.is_some() && !mouse_steering)
+    {
+        facing.heading
+    } else if let Some(heading) = follow_heading {
         heading
     } else if let Some(facing) = controls.key_facing.as_ref().filter(|_| !mouse_steering) {
         facing.heading
@@ -4501,7 +4641,11 @@ pub(super) fn input(
     } else {
         eq_client_core::world_heading(direction.x.atan2(direction.z))
     };
-    let heading = if mouse_steering || follow_heading.is_some() {
+    let guided = controls
+        .key_facing
+        .as_ref()
+        .is_some_and(|facing| facing.source.is_some());
+    let heading = if mouse_steering || follow_heading.is_some() && !guided {
         facing
     } else {
         turn_toward(current_heading, facing, TURN_RATE * span)
@@ -11583,6 +11727,9 @@ pub(super) mod tests {
                 );
             }
             Attempt::Face(heading) => {
+                let mut time = Time::<()>::default();
+                time.advance_by(Duration::from_nanos(16_666_667));
+                app.insert_resource(time);
                 app.insert_resource(
                     crate::script::Script::new(Vec::new())
                         .holding_for_test(Vec::new(), Some(heading)),
@@ -11663,6 +11810,9 @@ pub(super) mod tests {
                 );
             }
             Attempt::Face(heading) => {
+                let mut time = Time::<()>::default();
+                time.advance_by(Duration::from_nanos(16_666_667));
+                app.insert_resource(time);
                 app.insert_resource(
                     crate::script::Script::new(Vec::new())
                         .holding_for_test(Vec::new(), Some(heading)),

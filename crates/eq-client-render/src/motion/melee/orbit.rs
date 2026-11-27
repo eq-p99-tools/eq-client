@@ -178,7 +178,21 @@ pub(super) fn plan(
     seconds: f32,
     input: Input,
 ) -> Option<Plan> {
+    plan_with_budget(from, target, heading, seconds, input, TURN_RATE * seconds)
+}
+
+/// The same chord, bounded by facing already consumed by the keyboard owner.
+pub(super) fn plan_with_budget(
+    from: Vec3,
+    target: Vec3,
+    heading: f32,
+    seconds: f32,
+    input: Input,
+    turn_budget: f32,
+) -> Option<Plan> {
     if !(seconds.is_finite() && seconds > 0. && seconds <= 0.25)
+        || !turn_budget.is_finite()
+        || turn_budget < 0.
         || !input.strafe.is_finite()
         || input.strafe <= 0.
         || !input.side.is_finite()
@@ -197,7 +211,8 @@ pub(super) fn plan(
     if !budget.is_finite() || budget < 0. {
         return None;
     }
-    let angular_budget = (budget.min(TURN_RATE * seconds) - arc(heading, desired).abs()).max(0.);
+    let angular_budget =
+        (budget.min(turn_budget).min(TURN_RATE * seconds) - arc(heading, desired).abs()).max(0.);
     let angle =
         (input.strafe * seconds / radius).min(angular_budget * std::f32::consts::TAU / 512.);
     if angle <= f32::EPSILON {
@@ -218,4 +233,31 @@ pub(super) fn plan(
             diagonal: None,
         },
     })
+}
+
+#[cfg(test)]
+mod guidance_tests {
+    use super::*;
+
+    #[test]
+    fn orbit_chord_consumes_only_the_achieved_facing_budget() {
+        let from = Vec3::new(0., 0., -10.);
+        for side in [-1., 1.] {
+            let input = Input {
+                side,
+                strafe: 6.,
+                walking: false,
+                ..Default::default()
+            };
+            let normal = plan(from, Vec3::ZERO, 0., 0.1, input).unwrap();
+            let limited = plan_with_budget(from, Vec3::ZERO, 0., 0.1, input, 1. / 3.).unwrap();
+            assert!(arc(0., limited.heading).abs() <= 1. / 3. + 0.0001);
+            assert!(limited.motion.speed < normal.motion.speed);
+            assert!(limited.motion.direction.x * side > 0.);
+            let end = from + limited.motion.direction * limited.motion.speed * 0.1;
+            assert!((end.length() - from.length()).abs() < 0.0001);
+            assert!(plan_with_budget(from, Vec3::ZERO, 0., 0.1, input, 0.).is_none());
+            assert!(plan_with_budget(from, Vec3::ZERO, 0., 0.1, input, f32::NAN).is_none());
+        }
+    }
 }

@@ -149,9 +149,9 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 ## Camera and movement
 
 - `camera(heading, pitch[, distance])`: position the camera; pitch is -89 (straight down) to 89 (straight up) degrees in the chase view. Use `camera("player", offset, pitch[, distance])` for an offset from the player's heading.
-- `face()`: turn the camera toward the target.
-- `face(heading)`: turn the character to an absolute heading at the ordinary turn rate, waiting up to 5 seconds for server confirmation.
-  The turn keys' rate is at most 240 heading units a second, after a short ramp, so a half turn takes over a second and a near-full turn over two. An autorunning character keeps running along the arc meanwhile. For a quick turn, use `look("world", x, 0, milliseconds)`, as a mouse turn would, or stop first.
+- `face()`: turn the camera toward the target immediately; this helper does not turn the character.
+- `face(heading)`: turn the character to an absolute heading through the normal keyboard turn and ramp, waiting up to 5 seconds for the admitted movement state to reach it.
+  The turn keys' rate is at most 240 heading units a second after a short ramp, with the existing lower caps for affected races. The helper takes the shorter arc, so a half turn takes over a second. An autorunning character keeps running along the arc meanwhile. `look("world", x, 0, milliseconds)` keeps the ordinary mouse-look policy.
 - A run that fails takes the autorun latch off with the keys it held, so the character stops, even when the player latched autorun themselves before or during the run. A run the player stops, or one that completes, leaves autorun as it is.
 - `move(command, milliseconds)`: hold `forward`, `back`, `camera_forward`,
   `camera_back`, `strafe_left`, `strafe_right`, `turn_left` or `turn_right`,
@@ -168,6 +168,12 @@ Key names are case-insensitive. Combine them with `+`, such as `alt+1`. Supporte
 - `walk_exit(reference, range, milliseconds)`: path to reachable floor inside an authored current-zone line with this reference number.
 - `walk_exit("zone", zone_id, range, milliseconds)`: choose an authored current-zone line embedding this destination zone ID. The embedded arrival coordinates belong to the next zone and are never used as a current-zone goal. Missing or unreachable lines fail. Range is approach tolerance; reaching it does not confirm a server transition. Use `wait_zone` to observe zoning separately.
 - `chase(range, milliseconds)`: follow the target until it dies, leaves or times out.
+
+Walk, approach and chase guidance use the same keyboard turn owner. Forward
+travel follows the facing reached during each turn, including at waypoint
+corners; guidance does not snap the camera to a desired heading. Explicit
+`camera(...)` and camera-only `face()` remain view controls. These script
+helpers are client features, not claims of native slash-command equivalents.
 - `give()`: queue an offer of the cursor item or coins to the current NPC or
   player target. The run stops at this line if the offer cannot be queued,
   including when the cursor is empty, the target is unsuitable, or an exchange
