@@ -137,6 +137,26 @@ impl Control {
         self.admitted
     }
 
+    fn within_walk_budget(&self, at: Instant, origin: Vec3, climb: f32) -> bool {
+        // A delayed receipt does not tell which newer posted observation the
+        // worker has already admitted. Check every possible current basis,
+        // without treating any queued frame as an acceptance or reusing its
+        // interval. This keeps per-sample rise/drop bounds before presentation.
+        self.accepted
+            .into_iter()
+            .chain(self.sent.iter().filter_map(|sent| {
+                (Some(sent.session) == self.session
+                    && self.epoch.is_some_and(|epoch| sent.frame.at >= epoch))
+                .then_some(sent.frame)
+            }))
+            .all(|basis| {
+                let elapsed = at.saturating_duration_since(basis.at).as_secs_f32();
+                let rise = climb_reach(climb, program_steps(elapsed));
+                let delta = origin.y - basis.drawn.translation.y;
+                delta <= rise && -delta <= MAX_GROUNDED_STEP
+            })
+    }
+
     pub fn handback_ready(&self, now: Instant) -> bool {
         // Every native request already queued has a genuine creation stamp
         // no later than last_posted. A normal cold span is therefore safe
@@ -470,12 +490,9 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
     let trial = trial.and_then(|motion| {
         let origin = motion.feet() + Vec3::Y * body.feet_offset;
         let before = Vec3::from_array(eq_client_core::render_position(current.position));
-        let within_height = controls.ground.accepted.is_some_and(|accepted| {
-            let elapsed = now.saturating_duration_since(accepted.at).as_secs_f32();
-            let rise = climb_reach(physics.reach(), program_steps(elapsed));
-            let delta = origin.y - accepted.drawn.translation.y;
-            delta <= rise && -delta <= MAX_GROUNDED_STEP
-        });
+        let within_height = controls
+            .ground
+            .within_walk_budget(now, origin, physics.reach());
         (within_height && stop_at_zone_line(&online.regions, before, origin) == origin)
             .then_some(motion)
     });
@@ -552,4 +569,45 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
     );
     controls.held = Some(Held::Waiting);
     true
+}
+
+#[cfg(test)]
+mod walk_budget_tests {
+    use super::*;
+    fn frame(at: Instant, height: f32) -> Frame {
+        Frame::observed(
+            at,
+            GroundMotion::new(Vec3::Y * height).unwrap(),
+            0.,
+            (0., 0.),
+            true,
+            HeadingUpdate::Rate,
+            false,
+        )
+        .unwrap()
+    }
+    #[test]
+    fn delayed_receipts_do_not_multiply_the_existing_per_sample_height_budget() {
+        let start = Instant::now();
+        let mut control = Control::default();
+        control.start(7, frame(start, 0.));
+        let posted = start + Duration::from_millis(50);
+        control.sent.push_back(Sent {
+            session: 7,
+            frame: frame(posted, 0.),
+        });
+        let now = start + Duration::from_millis(100);
+        assert!(control.within_walk_budget(now, Vec3::Y * 3., 3.));
+        assert!(
+            !control.within_walk_budget(now, Vec3::Y * 6., 3.),
+            "the older receipt alone permits6, but the50ms posted basis permits only3"
+        );
+        assert!(!control.within_walk_budget(now, Vec3::Y * -2.01, 3.));
+        control.retire();
+        control.start(7, frame(now, 100.));
+        assert!(
+            control.within_walk_budget(now + Duration::from_millis(50), Vec3::Y * 101., 3.),
+            "a retained old receipt identity is not a new epoch's movement basis"
+        );
+    }
 }
