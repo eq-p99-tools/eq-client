@@ -160,6 +160,8 @@ pub enum Fix {
     /// view and uses only what it hits: the first spawn, else a door (read
     /// R49-19). Off by default; the reach checks are the same either way.
     UsePicksNearest,
+    /// Shows the local frame-rate meter independently of diagnostic logging.
+    ShowFps,
     /// Makes the local map and known entity positions available on every
     /// server, independently of the original client's map support.
     MapEverywhere,
@@ -198,7 +200,7 @@ pub enum Fix {
 impl Fix {
     /// Every fix: the settings in the order the quality-of-life page lists
     /// them, then the fixes that are always on.
-    pub const ALL: [Self; 38] = [
+    pub const ALL: [Self; 39] = [
         Self::SkipModifiedFood,
         Self::HiddenWindows,
         Self::AskBeforeDeletingSpells,
@@ -228,6 +230,7 @@ impl Fix {
         Self::ZoneAnywhere,
         Self::DuelAnswerCard,
         Self::UsePicksNearest,
+        Self::ShowFps,
         Self::MapEverywhere,
         Self::FrameCap,
         Self::GreyedControls,
@@ -276,6 +279,7 @@ impl Fix {
             Self::DuelAnswerCard => "duel_answer_card",
             Self::UsePicksNearest => "use_picks_nearest",
             Self::FrameCap => "frame_cap",
+            Self::ShowFps => "show_fps",
             Self::GreyedControls => "greyed_controls",
             Self::CampCountdown => "camp_countdown",
             Self::QuietRepeats => "quiet_repeats",
@@ -327,6 +331,7 @@ impl Fix {
             Self::DuelAnswerCard => "Duel Answer Card",
             Self::UsePicksNearest => "Use Picks Nearest",
             Self::FrameCap => "Cap Frames at 60",
+            Self::ShowFps => "Show FPS",
             Self::GreyedControls => "Grey Out What Is Unavailable",
             Self::CampCountdown => "Count Down Camping",
             Self::QuietRepeats => "Say Each Refusal Once",
@@ -435,6 +440,9 @@ impl Fix {
             Self::AnswerListPolls => {
                 "Answer supported P99 list presence polls after a local delay. This does not join a list or answer numeric challenges."
             }
+            Self::ShowFps => {
+                "Show frame rate, mean and worst frame times, and hitch count in the corner of the screen."
+            }
             Self::FrameCap => {
                 "Start the Max FPS slider at 60 frames a second instead of drawing as fast as your monitor allows."
             }
@@ -491,6 +499,7 @@ impl Fix {
             | Self::ReadWhileStanding
             | Self::ShowInvisible
             | Self::FloatingCombatText
+            | Self::ShowFps
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -547,6 +556,7 @@ impl Fix {
             | Self::BetterWater
             | Self::ShowInvisible
             | Self::FloatingCombatText
+            | Self::ShowFps
             | Self::FrameCap
             | Self::GreyedControls
             | Self::CampCountdown
@@ -604,7 +614,8 @@ impl Fix {
             | Self::ZoneAnywhere
             // The program's centre ray unless the player asks (6.609).
             | Self::UsePicksNearest
-            | Self::FloatingCombatText => Availability::Setting { default: false },
+            | Self::FloatingCombatText
+            | Self::ShowFps => Availability::Setting { default: false },
             Self::MapEverywhere
             | Self::FrameCap
             | Self::GreyedControls
@@ -766,6 +777,7 @@ mod tests {
                 Fix::ZoneAnywhere,
                 Fix::DuelAnswerCard,
                 Fix::UsePicksNearest,
+                Fix::ShowFps,
             ]
         );
         // A fix that is always on stays on whatever is asked.
@@ -797,6 +809,7 @@ mod tests {
             Fix::ExitAtOnce,
             Fix::ZoneAnywhere,
             Fix::UsePicksNearest,
+            Fix::ShowFps,
         ] {
             assert!(!settings.on(fix), "{fix:?}");
         }

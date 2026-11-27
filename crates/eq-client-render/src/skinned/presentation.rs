@@ -77,7 +77,10 @@ pub(crate) fn show(
         Res<crate::hud::action_bar::ActionRequests>,
     ),
     mut fills: Query<(&Shows, &mut Node, Option<&Step>), Without<Text>>,
-    mut texts: Query<(&Shows, &mut Text, &mut TextColor)>,
+    (mut texts, mut lines): (
+        Query<(&Shows, &mut Text, &mut TextColor)>,
+        Query<(&super::LinesFillTint, &mut ImageNode)>,
+    ),
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
     let world = online.world();
@@ -89,9 +92,23 @@ pub(crate) fn show(
         (hud.resource_estimate, &requests),
         &breath,
     );
+    for (tint, mut image) in &mut lines {
+        let ratio = filled(world, (hud.resource_estimate, &requests), tint.0);
+        let color = if ratio <= -0.01 {
+            Color::srgb_u8(192, 192, 192)
+        } else {
+            tint.1
+        };
+        if image.color != color {
+            image.color = color;
+        }
+    }
     for (shows, mut text, mut color) in &mut texts {
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
+            Shows::ExperiencePercent => {
+                (experience_percent(world.vitals().experience_ratio()), None)
+            }
             // The spell the player casts.
             Shows::Label(134) => (
                 crate::hud::action_bar::cast_spell(world)
@@ -157,6 +174,7 @@ pub(crate) fn show(
                 Some(crate::give::ink(world, crate::give::Side::Mine)),
             ),
             Shows::Fill(_)
+            | Shows::LinesFill(_)
             | Shows::Attacking
             | Shows::WhilePetSits(_)
             | Shows::PetBuff(_)
@@ -189,16 +207,35 @@ fn fill_gauges(
     breath: &crate::breath::State,
 ) {
     for (shows, mut node, step) in fills {
-        if let Shows::Fill(kind) = *shows {
+        if let Shows::Fill(kind) | Shows::LinesFill(kind) = *shows {
             // Titanium eqgame.exe 0x5598bc, EQType 8, current air over capacity.
             let fraction = if kind == 8 {
                 breath.air().map_or(0.0, eq_client_core::breath::Air::ratio)
             } else {
                 filled(world, estimate_and_requests, kind)
             };
-            fill_to(&mut node, step, fraction.clamp(0.0, 1.0));
+            let fraction = if matches!(shows, Shows::LinesFill(_)) {
+                lines_fraction(fraction)
+            } else {
+                fraction.clamp(0.0, 1.0)
+            };
+            fill_to(&mut node, step, fraction);
         }
     }
+}
+
+/// The native gauge's integer thousandths keep a bubble full at its final
+/// step and reset on the next one. The same rule serves every gauge type.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn lines_fraction(fraction: f32) -> f32 {
+    let value = (fraction.clamp(-0.11, 1.0) * 1000.0) as i32;
+    // The native negative range reverses the bar before taking its fifth.
+    let value = if value <= -10 {
+        1100 + value * 10
+    } else {
+        value
+    };
+    ((value - 1).max(0) % 200) as f32 / 200.0
 }
 
 /// Applies conditional visibility without changing controls or world state.
@@ -310,6 +347,13 @@ fn price_text(
         .map(|(count, line)| messages.said(line, &[count.to_string()]).words.text)
         .collect::<Vec<_>>()
         .join(" ")
+}
+
+/// Format only the server-reported level progress, without deriving hidden XP.
+fn experience_percent(ratio: Option<f64>) -> String {
+    ratio.map_or_else(String::new, |value| {
+        format!("{:.2}%", value.clamp(0.0, 1.0) * 100.0)
+    })
 }
 
 /// How full a gauge is drawn: as `fraction` says, or the spellbook's
@@ -522,4 +566,56 @@ pub(super) fn target_health(world: &eq_client_core::world::ClientWorld) -> Optio
             .filter(|player| player.spawn_id == target)
             .and_then(|player| player.hp_percent)
     })
+}
+
+#[cfg(test)]
+mod experience_percent_tests {
+    use super::experience_percent;
+    use eq_client_core::world::Vitals;
+
+    #[test]
+    fn unknown_progress_is_blank_and_reported_steps_keep_their_precision() {
+        for (raw, expected) in [
+            (None, ""),
+            (Some(0), "0.00%"),
+            (Some(1), "0.30%"),
+            (Some(123), "37.27%"),
+            (Some(329), "99.70%"),
+            (Some(330), "100.00%"),
+        ] {
+            let vitals = Vitals {
+                experience: raw,
+                ..Default::default()
+            };
+            assert_eq!(experience_percent(vitals.experience_ratio()), expected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod lines_fill_tests {
+    use super::lines_fraction;
+
+    #[test]
+    fn negative_values_use_the_native_reversed_bar_and_empty_gap() {
+        for (value, expected) in [(-0.11, 0.0), (-0.1, 0.495), (-0.01, 0.995), (-0.005, 0.0)] {
+            assert!((lines_fraction(value) - expected).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn every_bubble_finishes_before_the_next_value_resets_the_line() {
+        for (value, expected) in [
+            (0u16, 0.0),
+            (1, 0.0),
+            (100, 0.495),
+            (200, 0.995),
+            (201, 0.0),
+            (400, 0.995),
+            (999, 0.99),
+            (1000, 0.995),
+        ] {
+            assert!((lines_fraction(f32::from(value) / 1000.0) - expected).abs() < 0.0001);
+        }
+    }
 }

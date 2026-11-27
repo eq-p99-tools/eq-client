@@ -672,6 +672,8 @@ impl Panels<'_> {
             moved.refused.is_some(),
         );
         if self.motion.moved(admission_id, moved.created) {
+            self.motion
+                .resolve_swim(admission_id, moved.created, moved.refused.is_some());
             self.motion.resolve_surface(
                 admission_id,
                 moved.created,
@@ -1035,6 +1037,19 @@ pub(super) fn receive(
                 }
                 panels.motion.server_chase_placed |=
                     scene.place_server(&mut commands, super::zone::placement(position));
+            }
+            if (changes.entered || changes.placed.is_some())
+                && let (Some(session), Some(player)) =
+                    (state.world.session_id(), state.world.player())
+            {
+                panels.motion.swim_reset_observed(session, player.position);
+            }
+            if let Some((position, created, basis)) = changes.swim
+                && let Some(session) = state.world.session_id()
+            {
+                panels
+                    .motion
+                    .swim_receipt(session, position, created, basis);
             }
             if let Some(pad) = changes.local_pad {
                 info!(entry = ?pad.entry, landing = ?pad.landing, "Crossed a local WLD pad");
@@ -1705,6 +1720,7 @@ pub(crate) mod testing {
             [WorldEvent::CastPending {
                 session_id,
                 spell_id,
+                gem: None,
             }],
         );
     }
@@ -1712,6 +1728,7 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    mod target_end;
     use super::*;
 
     #[test]
@@ -1889,7 +1906,7 @@ mod tests {
     #[test]
     fn a_camp_to_the_desktop_ends_the_program_once_camped_and_a_plain_one_does_not() {
         use eq_client_core::{CampStatus, camp::CampTo};
-        let exits = |to| {
+        let exits = |to, status| {
             let mut state = OnlineState::new(true);
             testing::admit(&mut state, 4, testing::player(12));
             state.camp_to(to);
@@ -1906,14 +1923,20 @@ mod tests {
             app.update();
             let before = app.world().resource::<Messages<AppExit>>().len();
             let mut state = app.world_mut().resource_mut::<OnlineState>();
-            testing::news(&mut state, [WorldEvent::Camp(CampStatus::Camped)]);
+            testing::news(&mut state, [WorldEvent::Camp(status)]);
             app.update();
             app.update();
             (before, app.world().resource::<Messages<AppExit>>().len())
         };
         // Nothing before the camp ends; then one exit, said once.
-        assert_eq!(exits(CampTo::Desktop), (0, 1));
-        assert_eq!(exits(CampTo::CharacterSelect), (0, 0));
+        for status in [
+            CampStatus::Camped,
+            CampStatus::ClosedWithoutReply,
+            CampStatus::ServerClosedWithoutReply,
+        ] {
+            assert_eq!(exits(CampTo::Desktop, status.clone()), (0, 1));
+            assert_eq!(exits(CampTo::CharacterSelect, status), (0, 0));
+        }
     }
 
     #[test]
@@ -3020,12 +3043,14 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: Some(42),
+                gem: None,
             }))
             .unwrap();
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 2,
                 spell_id: None,
+                gem: None,
             }))
             .unwrap();
         app.update();
@@ -3066,6 +3091,7 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: None,
+                gem: None,
             }))
             .unwrap();
         app.update();
@@ -3074,6 +3100,7 @@ mod tests {
             .send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: Some(42),
+                gem: None,
             }))
             .unwrap();
         let mut death = eq_client_core::Death {

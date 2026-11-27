@@ -1096,6 +1096,7 @@ fn request_memorize(
     );
     let receipt = outbox.post_book_edit(online.world(), |stamp| {
         eq_client_core::ClientCommand::MemorizeSpell {
+            preparation: None,
             session_id: stamp.session_id,
             gem,
             spell_id,

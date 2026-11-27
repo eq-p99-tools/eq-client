@@ -106,6 +106,7 @@ fn snapshot(world: &ClientWorld, view: Option<View>, online_enabled: bool) -> St
             "evidence": match completion.outcome {
                 eq_client_core::camp::CampOutcome::LogoutReply => "logout_reply",
                 eq_client_core::camp::CampOutcome::LocalDeadline => "local_deadline_without_reply",
+                eq_client_core::camp::CampOutcome::ServerClosedWithoutReply => "server_closed_without_reply",
             },
         })),
     });
@@ -512,6 +513,10 @@ mod tests {
 
         for (status, evidence) in [
             (CampStatus::Camped, "logout_reply"),
+            (
+                CampStatus::ServerClosedWithoutReply,
+                "server_closed_without_reply",
+            ),
             (
                 CampStatus::ClosedWithoutReply,
                 "local_deadline_without_reply",

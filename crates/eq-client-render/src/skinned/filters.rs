@@ -117,6 +117,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
     let width = template.area.width.max(160.0);
     let label = |text: &str, area: Area, align: Align| {
         let mut label = label_template.clone().unwrap_or(Label {
+            client_value: None,
             area,
             anchors: None,
             eq_type: None,
@@ -129,6 +130,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
         label.area = area;
         label.anchors = None;
         label.eq_type = None;
+        label.client_value = None;
         label.align = align;
         label.wraps = false;
         text.clone_into(&mut label.text);

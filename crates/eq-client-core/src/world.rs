@@ -488,9 +488,10 @@ impl ClientWorld {
                 }],
                 ..Changes::default()
             },
-            WorldUpdate::Chat(_) | WorldUpdate::SpellTable(_) | WorldUpdate::CheckingFiles(_) => {
-                Changes::default()
-            }
+            WorldUpdate::Chat(_)
+            | WorldUpdate::SpellTable(_)
+            | WorldUpdate::CheckingFiles(_)
+            | WorldUpdate::MovementPacketSnapshot(_) => Changes::default(),
         }
     }
 
@@ -933,6 +934,13 @@ impl ClientWorld {
                 position,
                 refused,
             } => self.motion_sent(*session_id, *created, *position, refused.as_ref(), news),
+            WorldEvent::SwimState { session_id, position, created, basis } => {
+                if self.connected && self.session_id == Some(*session_id) && self.death.is_none() {
+                    news.swim = Some((*position, *created, *basis));
+                } else {
+                    news.ignored = true;
+                }
+            }
             WorldEvent::MotionRefused { session_id, created, reason } => {
                 if self.session_id == Some(*session_id) {
                     news.replies.push(Reply::MotionRefused {
@@ -1197,6 +1205,12 @@ impl ClientWorld {
                 self.reconcile_pet_buffs();
             }
             WorldEvent::Despawn(id) => {
+                if self.target.selected == Some(*id) {
+                    // Titanium's DeleteSpawn handler ends attack and clears
+                    // exactly the target being removed (0x4581b7, read6.699).
+                    self.select_target(None);
+                    news.attack_ended = true;
+                }
                 self.clear_inspected_spawn(*id);
                 self.zone.vanish(*id);
                 self.reconcile_pet_buffs();
@@ -1310,7 +1324,14 @@ impl ClientWorld {
             // The Options page shows the character's filters; the session
             // keeping them, or refusing a set this client fitted to the
             // generation first, is not news for the player.
-            WorldEvent::ServerFiltersKept { .. } | WorldEvent::ServerFiltersRefused { .. } => {}
+            // The spell-timing layer owns storing/polling the worker gauge;
+            // this compatibility layer never treats it as server confirmation.
+            WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::MemorizationProgress { .. } => {}
+            // The network posture owner already lies down and holds movement
+            // at zero HP. The unconscious presentation layer owns storing it.
+            WorldEvent::OwnUnconscious { .. } => {}
             // A report to the staff went or was refused (6.511).
             WorldEvent::ReportSent {
                 session_id,
@@ -2068,6 +2089,7 @@ impl ClientWorld {
             WorldEvent::CastPending {
                 session_id,
                 spell_id,
+                ..
             } => self.cast_pending(*session_id, *spell_id, news),
             WorldEvent::CastRequestUnconfirmed {
                 session_id,
@@ -2143,6 +2165,12 @@ impl ClientWorld {
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
     fn died(&mut self, death: &Death, now: Instant) -> Changes {
+        let target_died = self.target.selected.map(u32::from) == Some(death.spawn_id);
+        if target_died {
+            // The received death, not its chat line or later corpse rename,
+            // ends this target's attack (0x4a8cd5, read6.699).
+            self.select_target(None);
+        }
         let killed = u16::try_from(death.spawn_id).ok().filter(|id| {
             self.player
                 .as_ref()
@@ -2204,6 +2232,7 @@ impl ClientWorld {
         };
         changes.notices.splice(0..0, slain);
         changes.kills.extend(killed);
+        changes.attack_ended |= target_died;
         changes
     }
 

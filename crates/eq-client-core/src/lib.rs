@@ -114,9 +114,28 @@ pub use eq_network_game::world::{
     Position as WorldPosition, PostureState, SpawnKind, SpawnState, WorldEvent,
 };
 
+/// A worker's on-demand submitted-position counter, separate from motion admission.
+#[derive(Clone, Copy, Debug)]
+pub struct MovementPacketSnapshot {
+    /// Exact zone admission that answered the read-only request.
+    pub session_id: u64,
+    /// Host correlation identity; not a movement creation stamp.
+    pub request_id: u64,
+    /// Typed worker attempt; counts from different attempts cannot be compared.
+    pub run_id: u64,
+    /// Successful player-position transport submissions, not accepted proposals.
+    pub sent: u64,
+    /// Monotonic worker observation time in this process.
+    pub observed: std::time::Instant,
+    /// Wall-clock log coordinate, not an elapsed-time authority.
+    pub unix_timestamp_ms: i64,
+}
+
 /// Messages crossing the worker/presentation boundary. Queues are bounded by the host.
 #[derive(Clone, Debug)]
 pub enum WorldUpdate {
+    /// Read-only diagnostic boundary; never advances accepted movement.
+    MovementPacketSnapshot(MovementPacketSnapshot),
     /// A producer-bound installed-spell provider fact, independent of admission.
     SpellTable(spell_tables::Envelope),
     /// A typed game-state change.

@@ -1281,4 +1281,19 @@ mod tests {
             Toggle::OFFICIAL.len() + Fix::settings().count()
         );
     }
+
+    #[test]
+    fn fps_visibility_defaults_off_and_round_trips_with_the_other_options() {
+        let defaults = Options::default();
+        assert!(!defaults.qol.on(Fix::ShowFps));
+        assert!(!Options::read("", defaults).qol.on(Fix::ShowFps));
+        let mut saved = defaults;
+        saved.set(Toggle::Qol(Fix::ShowFps), true);
+        let restored = Options::read(&saved.text(), defaults);
+        assert!(restored.qol.on(Fix::ShowFps));
+        saved.set(Toggle::Qol(Fix::ShowFps), false);
+        assert!(!Options::read(&saved.text(), defaults).qol.on(Fix::ShowFps));
+        assert_eq!(Fix::from_key("show_fps"), Some(Fix::ShowFps));
+        assert!(Fix::ShowFps.is_setting());
+    }
 }

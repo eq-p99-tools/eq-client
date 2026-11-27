@@ -109,6 +109,13 @@ pub enum Reply {
     reason = "each flag names one independent thing to redo"
 )]
 pub struct Changes {
+    /// Process-local swim continuity delivered after its reset/local result.
+    /// Position and request stamp must match before the producer adopts it.
+    pub swim: Option<(
+        WorldPosition,
+        Option<std::time::Instant>,
+        Option<crate::movement::SwimBasis>,
+    )>,
     /// The world was reset, and why.
     pub reset: Option<Reset>,
     /// A new admission began: present its zone and player.

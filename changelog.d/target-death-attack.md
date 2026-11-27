@@ -1,0 +1,1 @@
+- Received death or despawn of the current target clears that target and turns auto-attack off quietly through the ordinary bounded command path.

@@ -257,6 +257,7 @@ from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 | Draw Windows the Skin Hides | `hidden_windows` | Off | Supplies a default layout for windows the skin sizes to nothing |
 | Ask Before Deleting Spells | `ask_before_deleting_spells` | On | Confirms deletion where the server offers it |
 | Show Times in Chat | `chat_times` | Off | Shows local arrival times for messages |
+| Show FPS | `show_fps` | Off | Shows frame rate, mean/worst frame time and hitch count |
 | Flash on Tells | `flash_on_tells` | On | Requests attention for a tell while the client is in the background |
 | Corpses Lie Along the Ground | `corpses_along_ground` | On | Tilts bodies to the floor slope |
 | Long Chase Camera | `long_chase_camera` | On | Extends chase zoom beyond the classic 200-unit limit, up to 20,000 |
@@ -272,6 +273,11 @@ from 50 to 200) or `/uiscale` alone for 100% when the slider is hard to reach.
 | Answer List Presence Polls | `answer_list_polls` | Off | Answers supported P99 presence polls after a local delay; does not join a list or answer numeric challenges |
 | Duel Answer Card | `duel_answer_card` | On | Asks Yes or No when another player challenges you to a duel; Yes accepts as `/duel` does and No sends nothing. The original client has no card and takes only `/duel`; turn it off to play that way |
 | Use Picks Nearest | `use_picks_nearest` | Off | Lets the Use key use the nearest door, item on the ground or world container within reach, wherever you face, as this client used to. The original client uses only what lies at the centre of the view: the first character there, else a door (read R49-19) |
+
+For testing, launch with `--force-qol show_fps` to keep Show FPS on over saved
+choices. The persisted option key is `show_fps`. `EQ_FPS` and `EQ_FRAME_LOG`
+remain presence-based overrides: even an empty value or `0` forces the meter
+on, as before. Only `EQ_FRAME_LOG` enables frame diagnostic logging.
 
 These choices take effect in the current session. Controls are unavailable where
 their required session feature is absent. Walk While Winded, Move While
