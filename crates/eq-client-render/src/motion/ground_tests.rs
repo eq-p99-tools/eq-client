@@ -448,10 +448,8 @@ fn matched_carrier_crossing(installed: bool) {
         );
         // Delayed ordinary playback can stall. Retain and report that loss;
         // never pause or accelerate the candidate to fit a delayed control.
-        if delay == 0 {
-            if (distances[1] - distances[0]).abs() / distances[0] > 0.01 {
-                failures.push("matched normal-reply distance exceeds1%");
-            }
+        if delay == 0 && (distances[1] - distances[0]).abs() / distances[0] > 0.01 {
+            failures.push("matched normal-reply distance exceeds1%");
         }
     }
     assert!(failures.is_empty(), "{failures:?}");
