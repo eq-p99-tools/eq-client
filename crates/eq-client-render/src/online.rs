@@ -3113,7 +3113,6 @@ mod tests {
         assert_eq!(world(&app).doors().entries()[&7].action, Some(2));
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
-                gem: None,
                 session_id: 1,
                 spell_id: Some(42),
                 gem: None,
@@ -3121,7 +3120,6 @@ mod tests {
             .unwrap();
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
-                gem: None,
                 session_id: 2,
                 spell_id: None,
                 gem: None,
@@ -3163,7 +3161,6 @@ mod tests {
         assert_eq!(world(&app).casting().pending, Some(42));
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
-                gem: None,
                 session_id: 1,
                 spell_id: None,
                 gem: None,
@@ -3173,7 +3170,6 @@ mod tests {
         assert_eq!(world(&app).casting().pending, None);
         sender
             .send(WorldUpdate::Game(WorldEvent::CastPending {
-                gem: None,
                 session_id: 1,
                 spell_id: Some(42),
                 gem: None,

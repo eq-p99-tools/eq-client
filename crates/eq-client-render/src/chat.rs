@@ -5488,7 +5488,6 @@ mod tests {
             caster_name: None,
         }));
         let answered = WorldUpdate::Game(WorldEvent::CastPending {
-            gem: None,
             session_id: 1,
             spell_id: None,
             gem: None,
@@ -5527,7 +5526,6 @@ mod tests {
             ));
             tx.send(WorldUpdate::Game(WorldEvent::Mana(0))).unwrap();
             tx.send(WorldUpdate::Game(WorldEvent::CastPending {
-                gem: None,
                 session_id: 1,
                 spell_id: Some(73),
                 gem: None,

@@ -241,10 +241,8 @@ impl SessionWorker {
                                 (progress.completed, progress.total, progress.bytes)
                             })))
                         }
-                        // A spell table is taken above. Explicit diagnostic
-                        // snapshots have no presentation consumer here.
-                        ClientEvent::World(WorldEvent::SpellTable(_))
-                        | ClientEvent::MovementPacketSnapshot { .. } => None,
+                        // A spell table is taken above.
+                        ClientEvent::World(WorldEvent::SpellTable(_)) => None,
                         ClientEvent::World(event) => {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
