@@ -224,8 +224,7 @@ impl State {
     }
 }
 
-/// At the resolved candidate, including its step-up floor. Passive carrying
-/// is already part of `feet`; an unchanged own position isn't a room test.
+/// Test helper using the same active query, without the walking caller's lift.
 #[cfg(test)]
 pub(super) fn refused(
     client: InstalledClient,
@@ -266,9 +265,6 @@ pub(super) fn refused_probe(
     (ducking, mounted): (bool, bool),
     (probe, lift): (eq_client_core::movement::HeadroomProbe, f32),
 ) -> Option<Refused> {
-    if candidate.distance_squared(feet) <= 1e-10 {
-        return None;
-    }
     let rule = client.headroom()?;
     let room = rule.room(stand, ducking, mounted);
     let offset = Vec3::Y * (body.feet_offset + lift);
