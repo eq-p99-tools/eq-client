@@ -8,7 +8,7 @@ use bevy::{
 };
 
 #[derive(Default)]
-pub(super) struct Drag {
+pub(crate) struct Drag {
     listed: Option<Listed>,
     held: bool,
 }
@@ -16,7 +16,7 @@ pub(super) struct Drag {
 /// A fresh right press on the preview captures until release or cancellation.
 /// Moving across UI during capture does not transfer the gesture to a control.
 #[allow(clippy::needless_pass_by_value, clippy::too_many_arguments)]
-pub(super) fn orbit_input(
+pub(crate) fn orbit_input(
     mut preview: ResMut<Preview>,
     mut drag: Local<Drag>,
     mut buttons: MessageReader<MouseButtonInput>,
