@@ -8,6 +8,8 @@ mod carrier_walls;
 mod choices;
 mod falls;
 mod flight;
+mod headroom;
+pub use headroom::{HeadroomBounds, HeadroomHit, HeadroomProbe};
 mod instances;
 mod jesus_mode;
 pub use instances::CollisionInstance;

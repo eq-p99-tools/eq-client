@@ -429,6 +429,24 @@ impl Route {
         }
     }
 
+    /// Automatic posture recovery is waiting for its observed Duck. It is
+    /// not steering time and must not spend the route's stalled replan.
+    pub fn pause_steering(&mut self, now: Duration) {
+        self.last_call = Some(now);
+    }
+
+    /// Follow and search with the observed movement posture's collision
+    /// height. Existing waypoints stay usable; a running search for a stale
+    /// height is replaced without spending the unrelated stall recovery.
+    pub fn movement_height(&mut self, height: f32, feet: Vec3, goal: Vec3) {
+        if (self.height - height).abs() > f32::EPSILON {
+            self.height = height;
+            if self.search.is_some() {
+                self.replan(feet, goal);
+            }
+        }
+    }
+
     /// A door the follower could not open: it is a wall from now on, and the
     /// route searches again once from `feet`, sharing the stall's one replan;
     /// with that already spent, the route reports [`RouteStep::Stalled`].

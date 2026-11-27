@@ -8,8 +8,8 @@ use std::time::{Duration, Instant};
 /// One refused own-movement proposal, kept separately from worker receipts.
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Refused {
-    pub floor: f32,
-    pub ceiling: f32,
+    pub floor: Option<f32>,
+    pub ceiling: Option<f32>,
     pub stand: f32,
     pub room: f32,
     pub origin: Vec3,
@@ -37,6 +37,16 @@ struct Automatic {
 }
 
 impl State {
+    pub(super) fn recovering(&self, world: &ClientWorld) -> bool {
+        self.automatic.as_ref().is_some_and(|automatic| {
+            world.session_id() == Some(automatic.session)
+                && world
+                    .player()
+                    .is_some_and(|player| player.spawn_id == automatic.spawn)
+                && world.zone() == automatic.zone
+        })
+    }
+
     pub(super) fn clear(&mut self) {
         self.automatic = None;
     }
@@ -51,9 +61,9 @@ impl State {
         posture: Option<PostureState>,
         allow_auto_stand: bool,
         now: Instant,
-    ) {
+    ) -> bool {
         let Some((session, player)) = world.session_id().zip(world.player()) else {
-            return;
+            return false;
         };
         let ducked = posture == Some(PostureState::Ducking);
         let standing = posture.is_none_or(|posture| posture == PostureState::Standing);
@@ -62,7 +72,7 @@ impl State {
             InstalledClient::Titanium | InstalledClient::Rof2 => standing && allow_auto_stand,
         };
         if !arms {
-            return;
+            return false;
         }
         self.automatic = Some(Automatic {
             session,
@@ -76,6 +86,7 @@ impl State {
                 && world.posture(player.spawn_id) == Some(PostureState::Ducking))
             .then(|| world.player_posture_changes()),
         });
+        standing
     }
 
     /// Before cadence, `candidate` is None: settle observed posture and
@@ -156,6 +167,7 @@ impl State {
             return Ok(false);
         };
         let stand = crate::posture::stand_height(client, world, body);
+        let probe = crate::posture::headroom_probe(client, world, stand);
         let requested = if posture == Some(PostureState::Ducking) {
             automatic.ducked = true;
             let Some(origin) = candidate else {
@@ -171,9 +183,13 @@ impl State {
                     2.0 * stand + eq_client_assets::falls::sphere_radius(stand)
                 }
             };
+            let bounds = collision.probe_headroom(origin, probe);
             if now <= automatic.deadline
-                || !collision.headroom(origin, room)
-                || !collision.posture_clearance(origin, stand, rule.room(stand, false, mounted))
+                || !probe.fits(bounds, room, 0.0)
+                || !probe.fits(bounds, rule.needed(stand, false, mounted), rule.margin)
+                || bounds
+                    .ceiling
+                    .is_some_and(|ceiling| ceiling - origin.y < stand)
                 || !outbox.posture_allowed(world, Posture::Standing)
             {
                 return Ok(false);
@@ -189,8 +205,11 @@ impl State {
                 InstalledClient::Titanium | InstalledClient::Rof2 => true,
             };
             if tests_duck
-                && (!collision.headroom(origin, rule.room(stand, true, mounted))
-                    || !outbox.posture_allowed(world, Posture::Ducking))
+                && (!probe.fits(
+                    collision.probe_headroom(origin, probe),
+                    rule.needed(stand, true, mounted),
+                    rule.margin,
+                ) || !outbox.posture_allowed(world, Posture::Ducking))
             {
                 self.clear();
                 return Ok(false);
@@ -207,6 +226,7 @@ impl State {
 
 /// At the resolved candidate, including its step-up floor. Passive carrying
 /// is already part of `feet`; an unchanged own position isn't a room test.
+#[cfg(test)]
 pub(super) fn refused(
     client: InstalledClient,
     world: &CollisionWorld,
@@ -214,18 +234,57 @@ pub(super) fn refused(
     (feet, candidate): (Vec3, Vec3),
     (ducking, mounted): (bool, bool),
 ) -> Option<Refused> {
+    let mac = client == InstalledClient::EqMac;
+    let probe = eq_client_core::movement::HeadroomProbe {
+        floor_radius: if mac { 0.0 } else { 0.1 * stand },
+        ceiling_radius: if mac {
+            0.5
+        } else {
+            eq_client_assets::falls::sphere_radius(stand)
+        },
+        floor_bias: if mac { 0.0 } else { 0.001 },
+        floor_offset: if mac { -0.5 } else { 0.0 },
+        permits_missing_floor: false,
+        permits_missing_ceiling: !mac,
+    };
+    refused_probe(
+        client,
+        world,
+        (body, stand),
+        (feet, candidate),
+        (ducking, mounted),
+        (probe, 0.0),
+    )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub(super) fn refused_probe(
+    client: InstalledClient,
+    world: &CollisionWorld,
+    (body, stand): (&PlayerBody, f32),
+    (feet, candidate): (Vec3, Vec3),
+    (ducking, mounted): (bool, bool),
+    (probe, lift): (eq_client_core::movement::HeadroomProbe, f32),
+) -> Option<Refused> {
     if candidate.distance_squared(feet) <= 1e-10 {
         return None;
     }
-    let room = client.headroom()?.room(stand, ducking, mounted);
-    let origin = candidate + Vec3::Y * body.feet_offset;
-    let (floor, ceiling) = world.headroom_bounds(origin)?;
-    (floor + room >= ceiling).then_some(Refused {
-        floor,
-        ceiling,
+    let rule = client.headroom()?;
+    let room = rule.room(stand, ducking, mounted);
+    let offset = Vec3::Y * (body.feet_offset + lift);
+    let hit = world.headroom_on_path(
+        feet + offset,
+        candidate + offset,
+        probe,
+        rule.needed(stand, ducking, mounted),
+        rule.margin,
+    )?;
+    Some(Refused {
+        floor: hit.bounds.floor,
+        ceiling: hit.bounds.ceiling,
         stand,
         room,
-        origin,
+        origin: hit.origin,
         candidate,
     })
 }
