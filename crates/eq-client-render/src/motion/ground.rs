@@ -211,7 +211,7 @@ impl Control {
         &mut self,
         world: &ClientWorld,
         outbox: &crate::outbox::Outbox,
-        now: Instant,
+        _now: Instant,
     ) -> Result<Option<Instant>, crate::outbox::Refusal> {
         let Some(frame) = self.current else {
             return Ok(None);
