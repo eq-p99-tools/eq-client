@@ -631,6 +631,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         frame.support = controls
             .ground
             .carrier()
+            .and_then(|riding| riding.carried(online.world().carriers(), now))
             .or(carrier)
             .map(|riding| riding.sample);
         let legal = online
