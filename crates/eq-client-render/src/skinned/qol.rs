@@ -133,30 +133,7 @@ pub(super) fn pages<'a>(
         .map(Control::Checkbox)
         .collect();
     if let Some((slider, value)) = slider.zip(value) {
-        choices.extend([
-            Control::Slider {
-                section: Section::Ordinary,
-                slider,
-                value,
-                ids: (
-                    "EQC_QoL_UiScaleLabel",
-                    controls::UI_SCALE_SLIDER,
-                    controls::UI_SCALE_VALUE,
-                ),
-                text: "Interface scale",
-            },
-            Control::Slider {
-                section: Section::Dangerous,
-                slider,
-                value,
-                ids: (
-                    "EQC_QoL_RunSpeedLabel",
-                    controls::RUN_SPEED_SLIDER,
-                    controls::RUN_SPEED_VALUE,
-                ),
-                text: "Run a Little Faster",
-            },
-        ]);
+        choices.extend(option_sliders(slider, value));
     }
     // Use the height authored for the chosen heading font. Skins without
     // a usable label take both metrics and typography from the checkbox.
@@ -199,6 +176,33 @@ pub(super) fn pages<'a>(
     }
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
+}
+
+fn option_sliders<'a>(slider: &'a Slider, value: &'a Label) -> [Control<'a>; 2] {
+    [
+        Control::Slider {
+            section: Section::Ordinary,
+            slider,
+            value,
+            ids: (
+                "EQC_QoL_UiScaleLabel",
+                controls::UI_SCALE_SLIDER,
+                controls::UI_SCALE_VALUE,
+            ),
+            text: "Interface scale",
+        },
+        Control::Slider {
+            section: Section::Dangerous,
+            slider,
+            value,
+            ids: (
+                "EQC_QoL_RunSpeedLabel",
+                controls::RUN_SPEED_SLIDER,
+                controls::RUN_SPEED_VALUE,
+            ),
+            text: "Run a Little Faster",
+        },
+    ]
 }
 
 fn append_palette(
