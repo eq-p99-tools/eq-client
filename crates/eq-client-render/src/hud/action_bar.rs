@@ -407,7 +407,6 @@ mod tests {
                 receipt,
                 began: false,
             }),
-            ..ActionRequests::default()
         };
         let names = crate::spellbook::SpellNames::default();
         let messages = super::super::messages::Messages::load(

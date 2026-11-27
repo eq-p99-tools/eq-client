@@ -270,6 +270,9 @@ impl SessionWorker {
                             RecordEvent::Chat(event) => chat_update(event),
                             _ => None,
                         },
+                        // An explicit diagnostic snapshot has no presentation
+                        // state. This viewer does not request or replay it.
+                        ClientEvent::MovementPacketSnapshot { .. } => None,
                         // What the session dropped or could not read goes to
                         // the session's gap file.
                         ClientEvent::Gap(gap) => {
