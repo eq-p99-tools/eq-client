@@ -119,15 +119,28 @@ fn turn_only_and_no_input_never_create_horizontal_travel() {
         if turn {
             latency_tests::key(&mut f.app, KeyCode::KeyA, true);
         }
+        let origin = owner.position();
         let mut count = 0;
-        for _ in 0..180 {
+        let mut path_xyz = 0_f64;
+        for _ in 0..600 {
             for command in frame(&mut f) {
+                let before = owner.position();
                 let request = settle(&f, &mut owner, command);
+                path_xyz += f64::from(
+                    (request.position.x - before.x)
+                        .hypot(request.position.y - before.y)
+                        .hypot(request.position.z - before.z),
+                );
                 assert!(request.position.x.hypot(request.position.y) < 0.001);
                 count += 1;
             }
         }
-        assert!(count > 5);
+        assert!(count > 50);
+        let net_xyz = f64::from(owner.position().z - origin.z).abs();
+        assert!(net_xyz <= path_xyz + 0.001);
+        eprintln!(
+            "controlled native turn_only={turn}: accepted={count} refused=0 accepted_path_xy=0 net_xy=0 accepted_path_xyz={path_xyz} net_xyz={net_xyz}"
+        );
         if turn {
             assert!(owner.position().heading != 0.);
         }
