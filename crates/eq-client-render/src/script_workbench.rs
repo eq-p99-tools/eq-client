@@ -5,6 +5,8 @@ mod breakpoints;
 mod document;
 mod editor;
 mod help;
+#[cfg(test)]
+mod hotbar_tests;
 mod icons;
 mod input;
 mod lengths;
@@ -22,6 +24,21 @@ use crate::{
     windows::{Shown, WindowId},
 };
 use document::Document;
+
+/// Loads a hotbutton's saved file with the Scripts library's normal path rules.
+pub(crate) fn hotbutton_program(
+    path: &std::path::Path,
+    root: &std::path::Path,
+) -> Result<crate::script::Program, String> {
+    library::prepare(root, path, false)?;
+    let source = crate::script::read_source(path).map_err(|error| error.to_string())?;
+    let program = crate::script::Program::parse(&source, path.parent().unwrap_or(root))
+        .map_err(|error| error.to_string())?;
+    if program.statement_count() == 0 {
+        return Err("This script has no statements.".into());
+    }
+    Ok(program)
+}
 
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 enum Tab {
@@ -75,6 +92,24 @@ struct Workbench {
 }
 
 impl Workbench {
+    fn hotbutton(
+        &self,
+        bindings: &mut crate::hud::hotbar::Bindings,
+    ) -> Result<crate::hud::hotbar::Action, String> {
+        if self.document.dirty() {
+            return Err("Save your edits before making a script hotbutton.".into());
+        }
+        let path = self
+            .document
+            .path
+            .as_ref()
+            .ok_or("Save this script as an .eqscript file first.")?;
+        if self.library.path(&self.path)? != *path {
+            return Err("Save or reload the named file before making its hotbutton.".into());
+        }
+        bindings.script_binding(path.clone()).map_err(str::to_owned)
+    }
+
     fn busy(&self) -> bool {
         self.job.pending(Some(self.generation))
     }
@@ -318,6 +353,11 @@ fn controls(
     settings: Res<crate::ViewerSettings>,
     online: Res<crate::online::OnlineState>,
     mut focus: ResMut<InputFocus>,
+    (mut bindings, mut carry, profile): (
+        ResMut<crate::hud::hotbar::Bindings>,
+        ResMut<crate::hud::hotbar::carry::Carry>,
+        Res<crate::profile_files::Profile>,
+    ),
 ) {
     // The editor is read-only while a run lasts, so for a run started from
     // it the check describes the source the Execution view shows.
@@ -384,6 +424,20 @@ fn controls(
                 }
             }
             Action::Stop if script.is_some() => control.request(Request::Stop),
+            Action::Hotbutton if script.is_none() && !state.busy() => {
+                if profile.key_ref().is_none() {
+                    state.message = "Enter a character before making a script hotbutton.".into();
+                } else {
+                    match state.hotbutton(&mut bindings) {
+                        Ok(binding) => {
+                            carry.put(binding);
+                            focus.clear();
+                            state.message = "Click a hotbar slot to place this saved script. Press to start, pause or resume; right-click to stop.".into();
+                        }
+                        Err(error) => state.message = error,
+                    }
+                }
+            }
             Action::Cancel => {
                 state.confirm = None;
                 state.message.clear();
@@ -466,6 +520,7 @@ fn controls(
             | Action::StepInto
             | Action::StepOut
             | Action::Stop
+            | Action::Hotbutton
             | Action::Length => (),
         }
     }

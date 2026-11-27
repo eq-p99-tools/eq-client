@@ -1329,7 +1329,10 @@ pub(super) fn drive(
     {
         script.progress.breakpoints = std::sync::Arc::new(lines);
     }
-    if let Some(request) = control.as_mut().and_then(|control| control.take()) {
+    if let Some(request) = control
+        .as_mut()
+        .and_then(|control| control.take_for(script.status().run()))
+    {
         match request {
             Request::Stop => {
                 script.cancel_press(&mut buttons, &mut commands);

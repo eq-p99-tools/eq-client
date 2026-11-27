@@ -1630,6 +1630,7 @@ type Stateful<'w, 's> = Query<
         Option<&'static super::options::OptionCheckbox>,
         (
             Has<Greyed>,
+            Has<crate::hud::hotbar::scripts::Latched>,
             Has<scrollbar::ScrollArrow>,
             Option<&'static crate::character_select::Action>,
             Option<&'static crate::report_windows::ReportButton>,
@@ -1666,7 +1667,7 @@ pub(crate) fn buttons(
         selector,
         attack,
         checkbox,
-        (greyed, arrow, character, report),
+        (greyed, latched, arrow, character, report),
         interaction,
         mut image,
     ) in &mut buttons
@@ -1681,7 +1682,7 @@ pub(crate) fn buttons(
             }
             // A scrollbar's arrow is down while it is held.
             (None, None, _) if arrow => *interaction == Interaction::Pressed,
-            (None, None, _) => attack && combat.auto_attack,
+            (None, None, _) => latched || (attack && combat.auto_attack),
         };
         let hovered = *interaction != Interaction::None;
         let piece = match (greyed, on, hovered) {

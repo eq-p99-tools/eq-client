@@ -41,6 +41,7 @@ pub(super) enum Action {
     Open,
     Reload,
     Save,
+    Hotbutton,
     Run,
     RunToCursor,
     Pause,
@@ -64,7 +65,8 @@ impl Action {
     pub(super) fn usable(self, phase: Phase, busy: bool) -> bool {
         let active = phase.active();
         match self {
-            Self::Run
+            Self::Hotbutton
+            | Self::Run
             | Self::New
             | Self::Open
             | Self::Save
@@ -455,6 +457,7 @@ pub(super) fn spawn(
             ("New", Action::New),
             ("Open", Action::Open),
             ("Save", Action::Save),
+            ("Hotbutton", Action::Hotbutton),
             ("Reload", Action::Reload),
         ],
     );

@@ -14,17 +14,22 @@ mod item_art;
 #[cfg(test)]
 mod item_tests;
 pub(crate) mod page;
+pub(crate) mod scripts;
 pub(crate) use carry::{Pickable, Source};
 
 pub(crate) use eq_client_core::hotbar::Binding as Action;
 pub(crate) use item_art::update as item_artwork;
 
 #[derive(Resource)]
-pub(crate) struct Bindings(pub(crate) [Option<Action>; 10], page::State);
+pub(crate) struct Bindings(pub(crate) [Option<Action>; 10], page::State, scripts::Files);
 
 impl Default for Bindings {
     fn default() -> Self {
-        Self(Hotbar::default().0, page::State::default())
+        Self(
+            Hotbar::default().0,
+            page::State::default(),
+            scripts::Files::default(),
+        )
     }
 }
 
@@ -77,26 +82,30 @@ pub(crate) fn persist(
     };
     let profile = CharacterProfile { world, character };
     let saved = match store.read_result(&crate::profile_files::exact_name("hotbar", &profile)) {
-        Ok(Some(text)) => Some(Pages::read(&text, Pages::default())),
+        Ok(Some(text)) => Some(text),
         Ok(None) => store
             .read(&legacy_file_name(&profile))
-            .map(|text| legacy_pages(&text)),
+            .map(|text| legacy_pages(&text).text()),
         Err(error) => {
             warn!("Could not read the character's hotbar: {error}");
             None
         }
     };
-    let hotbar = saved.unwrap_or_else(|| {
-        settings
-            .0
-            .official_settings()
-            .and_then(|official| {
-                Pages::official(&official.hotbutton_pages(&profile.character, &profile.world))
-            })
-            .unwrap_or_default()
-    });
+    let hotbar = saved.as_ref().map_or_else(
+        || {
+            settings
+                .0
+                .official_settings()
+                .and_then(|official| {
+                    Pages::official(&official.hotbutton_pages(&profile.character, &profile.world))
+                })
+                .unwrap_or_default()
+        },
+        |text| Pages::read(text, Pages::default()),
+    );
     bindings.load(&hotbar);
-    store.loaded_text(hotbar.text());
+    bindings.2 = scripts::Files::read(saved.as_deref().unwrap_or_default());
+    store.loaded_text(bindings.text());
 }
 
 /// Writes the hotbar to the profile's file when it changed since last time.
@@ -105,19 +114,19 @@ fn save(store: &mut Store, bindings: &Bindings) {
         return;
     };
     let name = crate::profile_files::exact_name("hotbar", profile);
-    store.save(name, bindings.snapshot().text(), Instant::now());
+    store.save(name, bindings.text(), Instant::now());
 }
 
 fn legacy_file_name(profile: &CharacterProfile) -> String {
     crate::profile_files::name("hotbar", "hotbar.txt", Some(profile))
 }
 
-/// Preserve older bindings, but a legacy file cannot prove a social's owner.
+/// Preserve older bindings; legacy files cannot prove social/script ownership.
 fn legacy_pages(text: &str) -> Pages {
     let mut pages = Pages::read(text, Pages::default());
     for page in &mut pages.0 {
         for slot in &mut page.0 {
-            if matches!(slot, Some(Action::Social(_))) {
+            if matches!(slot, Some(Action::Social(_) | Action::Script(_))) {
                 *slot = None;
             }
         }
@@ -142,7 +151,8 @@ impl Bindings {
             | Action::Invite
             | Action::Follow
             | Action::Disband
-            | Action::Social(_) => None,
+            | Action::Social(_)
+            | Action::Script(_) => None,
         }
     }
 }
@@ -319,7 +329,8 @@ pub(crate) const fn command(action: Action) -> Option<&'static str> {
         | Action::Ability(_)
         | Action::Discipline(_)
         | Action::Attack
-        | Action::Social(_) => None,
+        | Action::Social(_)
+        | Action::Script(_) => None,
     }
 }
 
@@ -456,15 +467,19 @@ pub(crate) fn presentation(
             (Some(caption), _) => Some(faces(bindings.0[caption.0], online.world(), &names).0),
             (_, Some(words)) => {
                 let action = bindings.0[words.0];
-                Some(if let Some(Action::Social(id)) = action {
-                    socials
-                        .as_deref()
-                        .and_then(|socials| socials.name(id))
-                        .unwrap_or("Social")
-                        .to_owned()
+                if matches!(action, Some(Action::Script(_))) {
+                    None // The runner's presentation owns this label, including idle.
                 } else {
-                    faces(action, online.world(), &names).1
-                })
+                    Some(if let Some(Action::Social(id)) = action {
+                        socials
+                            .as_deref()
+                            .and_then(|socials| socials.name(id))
+                            .unwrap_or("Social")
+                            .to_owned()
+                    } else {
+                        faces(action, online.world(), &names).1
+                    })
+                }
             }
             _ => None,
         };
@@ -540,7 +555,8 @@ fn faces(
             | Action::Invite
             | Action::Follow
             | Action::Disband
-            | Action::Social(_),
+            | Action::Social(_)
+            | Action::Script(_),
         ) => (String::new(), words),
     }
 }
@@ -620,6 +636,7 @@ pub(crate) fn caption_text(
         Some(Action::Follow) => "Follow".into(),
         Some(Action::Disband) => "Disband".into(),
         Some(Action::Social(_)) => "Social".into(),
+        Some(Action::Script(_)) => "Script".into(),
         Some(Action::Gem(_)) | None => "-".into(),
     }
 }
@@ -685,6 +702,7 @@ fn hovered_detail(
         },
         Some(Action::Discipline(spell)) => crate::disciplines::detail(world, names, spell, now),
         Some(Action::Social(_)) => "Social\nRuns the saved command lines".into(),
+        Some(Action::Script(id)) => bindings.script_detail(id),
         Some(Action::Ability(ability)) => match world.ability_wait(ability, now) {
             Some(wait) => format!(
                 "{}\nAvailable in {:.0}s",
@@ -738,7 +756,7 @@ pub(crate) fn need(action: Option<Action>) -> crate::outbox::Needs {
     use crate::outbox::Needs;
     use eq_client_core::Capability;
     match action {
-        None | Some(Action::Social(_)) => Needs::Nothing,
+        None | Some(Action::Social(_) | Action::Script(_)) => Needs::Nothing,
         Some(Action::Sit | Action::Stand) => Needs::Capability(Capability::Posture),
         Some(Action::Ability(ability)) => Needs::Ability(ability),
         Some(Action::KnightAbility(ability)) => Needs::KnightAbility(ability),

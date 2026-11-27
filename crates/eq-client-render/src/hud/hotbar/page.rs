@@ -29,6 +29,7 @@ impl Bindings {
     }
 
     pub(super) fn load(&mut self, pages: &Pages) {
+        self.2 = super::scripts::Files::default();
         // Native binding loading (0x4b0812) replaces the page contents while
         // page selection is separate runtime state. Keep the current view.
         self.0 = pages.0[self.page()].0;

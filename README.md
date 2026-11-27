@@ -168,6 +168,9 @@ else:
 - **Debugging:** click a line number to set a breakpoint. Run to cursor, Step
   over, Step into and Step out work alongside Run, Pause, Resume and Stop, and
   the Execution view follows the current line.
+- **Hotbuttons:** save an `.eqscript`, choose Hotbutton in Scripts, then click
+  a hotbar slot. The slot's mouse click and bound key start, pause and resume
+  that script. Right-click stops it and keeps the binding.
 - **Functions:** `def name(parameter: type):` defines one, with `return`; the
   Execution view lists the calls in progress.
 - **Conditions:** `if`, `elif`, `else`, `for` and bounded `while` loops can read

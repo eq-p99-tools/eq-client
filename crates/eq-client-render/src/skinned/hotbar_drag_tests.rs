@@ -3,6 +3,11 @@ use super::*;
 use crate::hud::hotbar::{carry::pointer_tests, page};
 use eq_client_assets::sidl::{Button, ButtonLook, Element, Label};
 
+#[test]
+fn skinned_script_hotbuttons_control_the_actual_runner() {
+    crate::hud::hotbar::scripts::tests::run_controls(fixture());
+}
+
 fn button(id: String, area: Area) -> Element {
     Element::Button(Button {
         id: Some(id),
