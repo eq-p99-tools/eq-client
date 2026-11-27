@@ -119,7 +119,7 @@ impl GemClocks {
         }
     }
 
-    pub(super) fn mana(&mut self, spell: u32) {
+    pub(super) fn mana(&mut self, spell: u32, now: Instant) {
         let Some(cast) = self
             .cast
             .filter(|cast| cast.requested == spell || cast.actual == Some(spell))
@@ -129,9 +129,13 @@ impl GemClocks {
         let slot = &mut self.gems[usize::from(cast.gem)];
         if matches!(slot, Some(Lock::Until { spell, provisional: true, .. }) if *spell == cast.requested)
         {
-            *slot = None;
+            *slot = Some(Lock::Until {
+                spell: cast.requested,
+                end: now,
+                provisional: false,
+            });
         }
-        self.global = None;
+        self.global = Some(Global::Until(now));
         self.cast = None;
     }
 
@@ -153,7 +157,7 @@ impl GemClocks {
             reuse: Reuse::Refreshed(reduction),
         });
         self.global = if bard {
-            None
+            Some(Global::Until(received))
         } else {
             Some(Global::Timing { spell, received })
         };
@@ -326,8 +330,12 @@ mod tests {
         let now = Instant::now();
         let mut clocks = GemClocks::default();
         clocks.submitted(0, 42, now);
-        clocks.mana(42);
-        assert_eq!(clocks.wait(0, 42, now, true), Some(Duration::ZERO));
+        clocks.mana(42, now);
+        assert!(clocks.wait(0, 42, now, true).unwrap() > Duration::ZERO);
+        assert_eq!(
+            clocks.wait(0, 42, now + Duration::from_nanos(1), true),
+            Some(Duration::ZERO)
+        );
         let received = now + Duration::from_secs(3);
         clocks.refreshed(0, 42, 2000, received, false);
         clocks.resolve(&Catalog);
@@ -341,7 +349,11 @@ mod tests {
         );
         clocks.refreshed(0, 42, u32::MAX, received, true);
         clocks.resolve(&Catalog);
-        assert_eq!(clocks.wait(1, 43, received, true), Some(Duration::ZERO));
+        assert!(clocks.wait(1, 43, received, true).unwrap() > Duration::ZERO);
+        assert_eq!(
+            clocks.wait(1, 43, received + Duration::from_nanos(1), true),
+            Some(Duration::ZERO)
+        );
         assert!(clocks.wait(0, 42, received, true).unwrap() > Duration::ZERO);
         assert_eq!(
             clocks.wait(0, 42, received + Duration::from_millis(1), true),
@@ -356,14 +368,17 @@ mod tests {
         clocks.submitted(0, 42, now);
         assert_eq!(clocks.wait(1, 43, now, true), Some(Duration::from_secs(10)));
         clocks.submitted(1, 43, now);
-        clocks.mana(42);
+        clocks.mana(42, now);
         assert_eq!(clocks.wait(1, 43, now, true), Some(Duration::from_secs(10)));
         clocks.began(44, Some(43));
-        clocks.mana(44);
-        assert_eq!(clocks.wait(1, 43, now, true), Some(Duration::ZERO));
+        clocks.mana(44, now);
+        assert_eq!(
+            clocks.wait(1, 43, now + Duration::from_nanos(1), true),
+            Some(Duration::ZERO)
+        );
         clocks.refreshed(1, 43, 0, now, false);
         clocks.resolve(&Catalog);
-        clocks.mana(43);
+        clocks.mana(43, now);
         assert_eq!(clocks.wait(1, 43, now, true), Some(Duration::from_secs(6)));
     }
 
