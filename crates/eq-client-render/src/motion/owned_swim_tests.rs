@@ -402,3 +402,64 @@ fn repeated_ordinary_backward_control_keeps_the_native_zero_backward_rate() {
     }
     assert!(accepted > 5);
 }
+
+#[test]
+fn discarded_owned_request_restores_native_trial_without_a_position_publication() {
+    let mut f = Native::new(false, -15.);
+    let mut owner = owner(&f);
+    let origin = owner.position();
+    anchor(&f, &owner);
+    crate::keys::testing::bind(
+        &mut f.app,
+        Act::StrafeLeft,
+        crate::keys::Chord::key(KeyCode::KeyZ),
+    );
+    latency_tests::key(&mut f.app, KeyCode::KeyZ, true);
+    let command = loop {
+        if let Some(command) = frame(&mut f, &mut owner).pop() {
+            break command;
+        }
+    };
+    let ClientCommand::SwimFrame { request, .. } = command else {
+        panic!("missing owned trial");
+    };
+    let rest = eq_client_core::movement::water::WetVelocity::default();
+    assert_ne!(f.app.world().resource::<Controls>().wet, rest);
+    news(
+        &f,
+        eq_client_core::WorldEvent::MotionRefused {
+            session_id: 11,
+            created: request.created,
+            reason: "fixture discarded before motion owner".into(),
+        },
+    );
+    assert!(frame(&mut f, &mut owner).is_empty());
+    assert_eq!(f.app.world().resource::<Controls>().wet, rest);
+    assert_eq!(
+        f.app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position,
+        origin
+    );
+    assert_eq!(owner.position(), origin);
+    // This result did not accept the trial or establish a fresh reset marker.
+    news(
+        &f,
+        eq_client_core::WorldEvent::SwimState {
+            session_id: 11,
+            created: Some(request.created),
+            position: origin,
+            basis: owner.swim_basis(),
+        },
+    );
+    let next = loop {
+        if let Some(command) = frame(&mut f, &mut owner).pop() {
+            break command;
+        }
+    };
+    assert!(matches!(next, ClientCommand::Move(_)));
+}

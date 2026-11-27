@@ -1535,6 +1535,7 @@ impl Controls {
 
     pub(super) fn move_refused(&mut self, session_id: Option<u64>, created: Instant, reason: &str) {
         if self.is_pending_move(session_id, created) {
+            self.resolve_swim(session_id, created, true);
             self.surface.refuse(session_id, created);
             self.restore_preview |= self.preview.take().is_some();
             self.resolve_carrier(created, true);
