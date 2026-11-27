@@ -2321,3 +2321,5 @@ fn islands_near_the_main_ones_size_count_as_walked_too() {
     assert!(!walked.contains(&island(Vec3::new(63.0, 20.0, 63.0))));
     assert_eq!(walked.len(), 2);
 }
+
+mod doors;
