@@ -104,7 +104,11 @@ pub(super) fn offer(mut commands: Commands, settings: Res<crate::ViewerSettings>
         config.eq_directory.clone(),
         config.settings_directory.clone(),
     ) {
-        commands.insert_resource(NavmeshPrebuild::installed(installation, directory));
+        commands.insert_resource(NavmeshPrebuild::installed(
+            installation,
+            directory,
+            config.installed_client,
+        ));
     }
 }
 
@@ -118,10 +122,15 @@ pub(super) fn run_batch() -> ScheduleConfigs<ScheduleSystem> {
 impl NavmeshPrebuild {
     /// The batch over the zones in `installation`, kept under
     /// `settings_directory`.
-    pub(crate) fn installed(installation: PathBuf, settings_directory: PathBuf) -> Self {
+    pub(crate) fn installed(
+        installation: PathBuf,
+        settings_directory: PathBuf,
+        client: eq_client_assets::ui::InstalledClient,
+    ) -> Self {
         Self::over(Arc::new(Installed {
             installation,
             directory: settings_directory,
+            client,
         }))
     }
 
@@ -356,12 +365,14 @@ fn poll(mut prebuild: ResMut<NavmeshPrebuild>, (front, online): (Res<FrontEnd>, 
 struct Installed {
     installation: PathBuf,
     directory: PathBuf,
+    /// The installation's generation, whose headroom test the mesh keeps.
+    client: eq_client_assets::ui::InstalledClient,
 }
 
 impl Installed {
     /// The settings zone entry builds with.
-    fn settings() -> Settings {
-        Settings::sized(crate::zone_navmesh::walker_sizes())
+    fn settings(&self) -> Settings {
+        crate::zone_navmesh::settings(self.client, eq_client_assets::scale::ZoneScale::default())
     }
 }
 
@@ -371,7 +382,7 @@ impl Zones for Installed {
     }
 
     fn present(&self, zone: &str) -> bool {
-        cache::present(&self.directory, zone, &Self::settings())
+        cache::present(&self.directory, zone, &self.settings())
     }
 
     fn build(&self, zone: &str, cancel: &AtomicBool) -> Built {
@@ -382,7 +393,7 @@ impl Zones for Installed {
         };
         let triangles = crate::collision_triangles(&asset);
         let world = crate::collision_world(&asset, triangles.clone(), None);
-        let settings = Self::settings();
+        let settings = self.settings();
         let threads = navmesh::build_threads();
         let Some(loaded) = cache::load_or_build(
             Some(&self.directory),

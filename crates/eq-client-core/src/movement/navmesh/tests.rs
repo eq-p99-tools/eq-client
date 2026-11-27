@@ -2202,6 +2202,48 @@ mod headroom {
     }
 
     #[test]
+    fn a_generations_standing_room_takes_floor_the_capsule_alone_keeps() {
+        // Sizes 4, 6 and 9 drawn at S = 0.625 x size need 2 x S standing:
+        // 5, 7.5 and 11.25 (R1d), over their capsules' 4.85, 6.85 and 9.85
+        // (checklist 6.504).
+        let plain = Settings {
+            cell_size: 0.25,
+            tile: 16.0,
+            ..Settings::sized([4.0, HEIGHT, 9.0])
+        };
+        let ruled = plain.with_standing_room(|size| 2.0 * 0.625 * size);
+        assert_eq!(plain.standing_room, [0.0; 3]);
+        for (index, size) in plain.sizes.iter().enumerate() {
+            assert!((plain.clearance(index) - (size + LIFT)).abs() < 1e-6);
+        }
+        assert!((ruled.clearance(0) - 5.0).abs() < 1e-6);
+        assert!((ruled.clearance(1) - 7.5).abs() < 1e-6);
+        assert!((ruled.clearance(2) - 11.25).abs() < 1e-6);
+        let under = Vec3::new(0.0, 0.0, 0.0);
+        let fits = |settings: &Settings, low: f32, height: f32| {
+            NavMesh::build(&under_slab(low), settings, 2, &AtomicBool::new(false))
+                .unwrap()
+                .0
+                .split(settings.sizes)
+                .for_height(height)
+                .unwrap()
+                .locate(under)
+                .is_some()
+        };
+        // A ceiling at 7: the capsule fits under it, the rule doesn't.
+        assert!(fits(&plain, 7.0, HEIGHT));
+        assert!(!fits(&ruled, 7.0, HEIGHT));
+        assert!(fits(&ruled, 7.0, 4.0));
+        assert!(fits(&ruled, 7.6, HEIGHT));
+        // The cache can't serve one build for the other.
+        let triangles = under_slab(7.0);
+        assert_ne!(
+            crate::movement::navmesh::cache::key(&triangles, None, &plain),
+            crate::movement::navmesh::cache::key(&triangles, None, &ruled)
+        );
+    }
+
+    #[test]
     fn each_size_asks_for_its_height_and_the_lift() {
         let sized = Settings {
             cell_size: 0.25,

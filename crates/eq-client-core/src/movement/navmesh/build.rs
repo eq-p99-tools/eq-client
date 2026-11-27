@@ -298,7 +298,7 @@ fn tile_heights<'a>(
         .fold((f32::MAX, f32::MIN), |(low, high), p| {
             (low.min(p[1]), high.max(p[1]))
         });
-    let top = highest + settings.height + settings.lift + 1.0;
+    let top = highest + (settings.height + settings.lift).max(settings.standing_room[0]) + 1.0;
     // Spans count cells in 16 bits; two short of the most keeps a span
     // started at the top inside them after rounding.
     let tallest = f32::from(u16::MAX - 2) * ch;
@@ -388,7 +388,7 @@ pub(super) fn tile_contours(
     .map_err(refused("heightfield"))?;
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
     let (walkable_height, walkable_climb) = (
-        ((settings.height + settings.lift) / ch).ceil() as u16,
+        ((settings.height + settings.lift).max(settings.standing_room[0]) / ch).ceil() as u16,
         (settings.climb / ch).floor() as u16,
     );
     let radius = walkable_radius(settings);
@@ -462,12 +462,13 @@ fn tag_sizes(
     // A span's headroom is kept in a byte of cell heights; open sky and any
     // gap above the byte read as its top.
     let cap = f32::from(u8::MAX) * ch;
-    if settings.sizes[2] + settings.lift >= cap {
+    if settings.clearance(2) >= cap {
         return Err((
             "sizes",
             format!(
-                "the tallest size {} with the lift {} is over the headroom cap {cap}",
-                settings.sizes[2], settings.lift
+                "the tallest size {}'s clearance {} is over the headroom cap {cap}",
+                settings.sizes[2],
+                settings.clearance(2)
             ),
         ));
     }
@@ -477,10 +478,8 @@ fn tag_sizes(
         }
         let headroom = f32::from(span.height()) * ch;
         #[allow(clippy::cast_possible_truncation)] // At most three sizes.
-        let fits = settings
-            .sizes
-            .iter()
-            .filter(|&&size| headroom >= size + settings.lift)
+        let fits = (0..settings.sizes.len())
+            .filter(|&index| headroom >= settings.clearance(index))
             .count() as u8;
         // The build's own height filter leaves only spans the shortest fits.
         *area = AreaType(fits.max(1));

@@ -40,6 +40,49 @@ pub(super) fn stand_height(client: InstalledClient, world: &ClientWorld, body: &
     eq_client_core::drawn_feet_offset(scale)
 }
 
+/// Read probe terms; the Titanium model radius remains the existing estimate.
+/// Its engine's actor radius factor is not yet available to this host.
+pub(super) fn headroom_probe(
+    client: InstalledClient,
+    world: &ClientWorld,
+    stand: f32,
+) -> eq_client_core::movement::HeadroomProbe {
+    let mut probe = headroom_dimensions(client, stand);
+    probe.permits_missing_floor = match client {
+        InstalledClient::EqMac => false,
+        InstalledClient::Titanium | InstalledClient::Rof2 => {
+            matches!(world.zone_number(), Some(0x47 | 0x4b | 0x96))
+        }
+    };
+    probe
+}
+
+pub(super) fn headroom_dimensions(
+    client: InstalledClient,
+    stand: f32,
+) -> eq_client_core::movement::HeadroomProbe {
+    let mac = match client {
+        InstalledClient::EqMac => true,
+        InstalledClient::Titanium | InstalledClient::Rof2 => false,
+    };
+    let radius = if mac { 0.25 * stand } else { 0.1 * stand };
+    eq_client_core::movement::HeadroomProbe {
+        // Both native floor helpers use .1 only for an exactly zero product.
+        floor_radius: if radius == 0.0 { 0.1 } else { radius },
+        ceiling_radius: if mac {
+            0.5
+        } else {
+            eq_client_assets::falls::sphere_radius(stand)
+        },
+        floor_bias: 0.001,
+        // Mac 0x504554's -.5 is cancelled by 0x4b3aa2's +.5.
+        floor_offset: 0.0,
+        retreat: if mac { 0.0 } else { 0.001 },
+        permits_missing_floor: false,
+        permits_missing_ceiling: !mac,
+    }
+}
+
 /// Need and zero ducked lift are read on Titanium and Mac; the capsule
 /// conversion is ours. Its additional native-radius bound uses the standing
 /// sweep's one estimate; on Mac that bound is inferred, not a read actor shape.
@@ -83,11 +126,17 @@ impl Context {
         let Some(player) = world.player() else {
             return true;
         };
-        if world.session_id() != Some(self.admission)
-            || world.posture(player.spawn_id) != Some(PostureState::Ducking)
-        {
+        if world.session_id() != Some(self.admission) {
             return true;
         }
+        let current = world.posture(player.spawn_id);
+        let ducking = match self.client {
+            InstalledClient::EqMac => false,
+            InstalledClient::Titanium | InstalledClient::Rof2 => {
+                current.is_none_or(|posture| posture == PostureState::Standing)
+                    && posture == Posture::Ducking
+            }
+        };
         let tested = match self.client {
             InstalledClient::EqMac => posture == Posture::Standing,
             // RoF2's manual transition follows Titanium provisionally.
@@ -95,18 +144,25 @@ impl Context {
                 matches!(posture, Posture::Standing | Posture::Sitting)
             }
         };
-        if !tested {
+        if !ducking && (current != Some(PostureState::Ducking) || !tested) {
             return true;
         }
         let Some(rule) = self.client.headroom() else {
             return true;
         };
         let stand = stand_height(self.client, world, &self.body);
-        self.collision.posture_clearance(
-            Vec3::from_array(eq_client_core::render_position(player.position)),
-            stand,
-            rule.room(stand, false, self.mounted),
-        )
+        let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+        let probe = headroom_probe(self.client, world, stand);
+        let bounds = self.collision.probe_headroom(origin, probe);
+        if ducking {
+            // Our origin never loses the native standing lift when ducking,
+            // so a rejected transition needs no compensating origin raise.
+            return probe.fits(bounds, rule.needed(stand, true, self.mounted), rule.margin);
+        }
+        probe.fits(bounds, rule.needed(stand, false, self.mounted), rule.margin)
+            && bounds
+                .ceiling
+                .is_none_or(|ceiling| ceiling - origin.y >= stand)
     }
 }
 
@@ -121,14 +177,7 @@ pub(super) fn refresh(
     outbox: Res<Outbox>,
     spells: Option<Res<crate::spellbook::SpellNames>>,
 ) {
-    use eq_client_core::world::SpellCatalog;
-    let mounted = spells.is_some_and(|spells| {
-        online.world().buffs().spells().any(|spell| {
-            spells
-                .effect_ids(spell)
-                .is_some_and(|effects| effects.contains(&113))
-        })
-    });
+    let mounted = on_mount(online.world(), spells.as_deref());
     let context = online
         .world()
         .session_id()
@@ -142,6 +191,19 @@ pub(super) fn refresh(
             mounted,
         });
     outbox.set_posture_context(context);
+}
+
+/// A resolved summon-mount buff stands in for the native actor mount link,
+/// which this client does not hold. Unknown spells do not establish a mount.
+pub(super) fn on_mount(world: &ClientWorld, spells: Option<&crate::spellbook::SpellNames>) -> bool {
+    use eq_client_core::world::SpellCatalog;
+    spells.is_some_and(|spells| {
+        world.buffs().spells().any(|spell| {
+            spells
+                .effect_ids(spell)
+                .is_some_and(|effects| effects.contains(&113))
+        })
+    })
 }
 
 #[cfg(test)]
@@ -199,10 +261,50 @@ mod tests {
             client,
             body: HUMAN,
             mounted: false,
-            collision: eq_client_core::movement::CollisionWorld::new(
-                plane(0.0).into_iter().chain(plane(ceiling)),
-            )
+            collision: eq_client_core::movement::CollisionWorld::new(plane(0.0).into_iter().chain(
+                plane(ceiling).map(|mut face| {
+                    face.swap(1, 2);
+                    face
+                }),
+            ))
             .unwrap(),
+        }
+    }
+
+    #[test]
+    fn standing_to_duck_is_tested_on_titanium_and_silent_for_every_command_source() {
+        for client in [InstalledClient::Titanium, InstalledClient::EqMac] {
+            // These are authored planes, not returned bounds: the floor bias
+            // and Titanium's engine retreat also consume clearance. Exact
+            // compared-value equality is covered by the core headroom tests.
+            for (ceiling, clears) in [(5.25, false), (5.26, true)] {
+                for scripted in [false, true] {
+                    let mut state = admitted(Some(0));
+                    testing::news(
+                        &mut state,
+                        [WorldEvent::Posture {
+                            spawn_id: 7,
+                            posture: PostureState::Standing,
+                        }],
+                    );
+                    let (tx, rx) = mpsc::sync_channel(4);
+                    let outbox = Outbox::new(Some(tx));
+                    outbox.set_posture_context(Some(context(client, ceiling)));
+                    let script = outbox.for_script(Some(11));
+                    let sender = if scripted { &script } else { &outbox };
+                    sender
+                        .post(state.world(), |stamp| ClientCommand::SetPosture {
+                            session_id: stamp.session_id,
+                            spawn_id: 7,
+                            posture: Posture::Ducking,
+                            created: stamp.created,
+                        })
+                        .unwrap();
+                    let sent = rx.try_recv().is_ok();
+                    assert_eq!(sent, client == InstalledClient::EqMac || clears);
+                    assert_eq!(state.world().posture(7), Some(PostureState::Standing));
+                }
+            }
         }
     }
 
@@ -255,7 +357,7 @@ mod tests {
         ] {
             for scripted in [false, true] {
                 for target in [Posture::Standing, Posture::Sitting] {
-                    for ceiling in [6.0, 8.001] {
+                    for (ceiling, clears) in [(6.0, false), (9.0, true)] {
                         let state = admitted(Some(0));
                         let (tx, rx) = mpsc::sync_channel(4);
                         let outbox = Outbox::new(Some(tx));
@@ -272,7 +374,7 @@ mod tests {
                                 })
                                 .is_ok()
                         );
-                        let allowed = ceiling > 8.0
+                        let allowed = clears
                             || client == InstalledClient::EqMac && target == Posture::Sitting;
                         assert_eq!(
                             rx.try_recv().is_ok(),
@@ -306,7 +408,7 @@ mod tests {
         ] {
             for (ceiling, expected) in [
                 (6.0, eq_client_core::JumpPosture::Keep),
-                (8.001, eq_client_core::JumpPosture::StandIfDucked),
+                (9.0, eq_client_core::JumpPosture::StandIfDucked),
             ] {
                 let mut state = admitted(Some(0));
                 testing::generation(&mut state, generation);
