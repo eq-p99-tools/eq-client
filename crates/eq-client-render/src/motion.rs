@@ -2235,6 +2235,7 @@ pub(super) fn input(
             &outbox,
             now,
             None,
+            None,
         ) {
             Ok(true) => {
                 controls.held = Some(Held::Waiting);
@@ -3089,6 +3090,19 @@ pub(super) fn input(
                 &outbox,
                 now,
                 Some(origin),
+                Some(headroom::StandingPath {
+                    displacement: Vec3::ZERO,
+                    seconds: span,
+                    diagonal: false,
+                    lift: headroom::standing_lift(
+                        client,
+                        online.world(),
+                        world,
+                        body,
+                        feet,
+                        linked.is_some(),
+                    ),
+                }),
             ) {
                 Ok(true) => {
                     controls.held = Some(Held::Waiting);
@@ -3512,7 +3526,27 @@ pub(super) fn input(
             .and_then(|hud| hud.resource_estimate)
             .map(|(_, endurance)| jump_endurance(endurance));
     }
-    if refused.is_some() {
+    let tests_duck_step = match client {
+        InstalledClient::EqMac => false,
+        InstalledClient::Titanium | InstalledClient::Rof2 => true,
+    };
+    if refused.is_some()
+        && (jumped
+            || Vec3::new(delta.x, 0.0, delta.z) == Vec3::ZERO
+            || !tests_duck_step
+            || posture == Some(eq_client_core::PostureState::Ducking)
+            || headroom::duck_step_passes(
+                client,
+                online.world(),
+                world,
+                body,
+                feet,
+                delta,
+                span,
+                previous_airborne.as_ref(),
+                crate::posture::on_mount(online.world(), spells.as_deref()),
+            ))
+    {
         let effective_posture = if jump_posture == JumpPosture::StandIfDucked {
             Some(eq_client_core::PostureState::Standing)
         } else {
@@ -3525,6 +3559,27 @@ pub(super) fn input(
             options.options.allow_auto_stand,
             now,
         );
+        if controls.headroom_retry {
+            // The current grant is still standing here. Retain its observed
+            // rate envelope before Duck replaces it with half-walk rates.
+            // This extends posture queries only; the worker remains the sole
+            // authority for every subsequent movement speed and sample.
+            let factor = controls.movement_options.run_speed_multiplier.factor();
+            let grant = online.world().motion().unwrap_or_else(|| controls.speeds());
+            let rate = [
+                grant.units_per_second.map(|rate| rate * factor),
+                grant.walk_units_per_second.map(|rate| rate * factor),
+                grant.backward_units_per_second,
+                grant.strafe_units_per_second,
+                grant.strafe_walk_units_per_second,
+                Some(speed),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|rate| rate.is_finite() && *rate >= 0.0)
+            .fold(0.0_f32, f32::max);
+            controls.headroom.remember_standing_rate(rate);
+        }
     }
     let position = if placement_blocked {
         origin
@@ -3688,6 +3743,19 @@ pub(super) fn input(
             &outbox,
             now,
             Some(position),
+            Some(headroom::StandingPath {
+                displacement: delta,
+                seconds: span,
+                diagonal: matches!(mode, MovementMode::GroundedDiagonal(_)),
+                lift: headroom::standing_lift(
+                    client,
+                    online.world(),
+                    world,
+                    body,
+                    landing,
+                    linked.is_some(),
+                ),
+            }),
         )
     {
         // Keep the submitted move and retry posture on a later candidate.
