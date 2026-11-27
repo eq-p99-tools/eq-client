@@ -1052,6 +1052,85 @@ fn a_slash_departure_takes_the_typed_route_and_never_leaves_sooner() {
 }
 
 #[test]
+fn a_named_or_numbered_skill_reaches_train_after_row_order_changes() {
+    use crate::training::{Chosen, SkillRow, TrainButton};
+    use eq_client_core::training::{
+        TrainingOffer, TrainingRequest, TrainingSubject, TrainingUpdate,
+    };
+    for (source, index, available) in [
+        ("click(\"training_skill\", \"Tracking\")", 0, true),
+        ("click(\"training_skill\", 53)", 17, true),
+        ("click(\"training_skill\", \"Tracking\")", 1, false),
+    ] {
+        let (mut app, rx) = app();
+        app.add_systems(Update, crate::training::buttons.after(super::super::drive));
+        session::news(
+            &mut app.world_mut().resource_mut::<OnlineState>(),
+            [WorldEvent::Training(TrainingUpdate::Offered(
+                TrainingOffer {
+                    trainer: TARGET,
+                    caps: vec![200; 100],
+                    language_caps: vec![],
+                    price_scale: None,
+                },
+            ))],
+        );
+        // Fresh admissions can draw the same subject at a different index.
+        // Throwing deliberately occupies the old Tracking row.
+        app.world_mut().spawn((
+            Button,
+            SkillRow {
+                subject: TrainingSubject::Skill(51),
+                index: 0,
+            },
+            super::laid_out(Vec2::new(240.0, 300.0), 40.0, 1),
+        ));
+        if available {
+            app.world_mut().spawn((
+                Button,
+                SkillRow {
+                    subject: TrainingSubject::Skill(53),
+                    index,
+                },
+                super::laid_out(Vec2::new(240.0, 360.0), 40.0, 1),
+            ));
+        }
+        let train = app.world_mut().spawn((Button, TrainButton)).id();
+        start(&mut app, source);
+        for ms in (0..=1_000).step_by(16) {
+            frame_at(&mut app, ms);
+        }
+        assert!(rx.try_recv().is_err(), "selection alone sends no practice");
+        if available {
+            assert_eq!(
+                app.world().resource::<RunStatus>().phase(),
+                Phase::Completed
+            );
+            assert_eq!(
+                app.world().resource::<Chosen>().0,
+                Some(TrainingSubject::Skill(53))
+            );
+            crate::clicks::testing::click(&mut app, train);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::Training {
+                    request: TrainingRequest::PracticeAt {
+                        trainer: TARGET,
+                        subject: TrainingSubject::Skill(53)
+                    },
+                    ..
+                })
+            ));
+        } else {
+            assert_eq!(app.world().resource::<RunStatus>().phase(), Phase::Failed);
+            assert_eq!(app.world().resource::<Chosen>().0, None);
+            crate::clicks::testing::click(&mut app, train);
+        }
+        assert!(rx.try_recv().is_err());
+    }
+}
+
+#[test]
 fn a_language_script_target_matches_only_the_offered_language_bank() {
     use eq_client_core::training::TrainingSubject;
     let target = crate::script::ClickTarget::Training(crate::script::TrainingClick::Language(5));
