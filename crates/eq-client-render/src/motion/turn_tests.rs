@@ -7,6 +7,9 @@ use std::sync::mpsc;
 #[path = "owned_swim_tests.rs"]
 mod owned_swim_tests;
 
+#[path = "entry_tests.rs"]
+mod entry_tests;
+
 struct Native {
     app: App,
     requests: mpsc::Receiver<ClientCommand>,

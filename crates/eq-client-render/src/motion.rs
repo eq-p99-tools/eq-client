@@ -47,6 +47,11 @@ struct SurfaceRollback {
     water_jump: Option<std::time::Instant>,
 }
 
+struct WaterEntryRollback {
+    airborne: Option<AirborneController>,
+    wet: eq_client_core::movement::water::WetVelocity,
+}
+
 use super::{
     Collision, OrbitCamera, Player, PlayerBody,
     camera::{MouseAim, MouseLook},
@@ -201,8 +206,8 @@ pub(super) struct Controls {
     /// Vertical momentum, present only when the session accepts falls; without it,
     /// stepping off a ledge stops at the edge.
     pub airborne: Option<eq_client_core::movement::AirborneController>,
-    /// Dry-side momentum to keep if the session refuses a proposed water entry.
-    water_entry_rollback: Option<AirborneController>,
+    /// Both sides of the conversion, until the proposed entry is accepted.
+    water_entry_rollback: Option<WaterEntryRollback>,
     shoreline: shoreline::Control,
     surface: surface::Control,
     surface_rollback: Option<SurfaceRollback>,
@@ -1553,13 +1558,14 @@ impl Controls {
         })
     }
 
-    /// A local result either keeps the water entry or restores the dry-side motion.
+    /// A local result keeps the conversion or restores both preceding owners.
     pub(super) fn resolve_water_entry(&mut self, refused: bool) {
         self.shoreline.resolved(refused);
         if let Some(previous) = self.water_entry_rollback.take()
             && refused
         {
-            self.airborne = Some(previous);
+            self.airborne = previous.airborne;
+            self.wet = previous.wet;
         }
     }
 
@@ -3850,7 +3856,10 @@ pub(super) fn input(
     }
     controls.shoreline.sent(mode, shore, created);
     if entering {
-        controls.water_entry_rollback = previous_airborne;
+        controls.water_entry_rollback = Some(WaterEntryRollback {
+            airborne: previous_airborne,
+            wet: surface_before_wet,
+        });
     }
     // The velocity the body enters water with: the fall's own, where it
     // falls, so a wall that stopped the move doesn't stop it (the program
