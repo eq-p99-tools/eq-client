@@ -199,12 +199,12 @@ fn zone_selection_resolves_received_references_and_preserves_absolute_and_explic
     assert!(!matches_exit(
         ExitZone(54),
         ZoneLine::Reference(3),
-        &Default::default()
+        &std::collections::BTreeMap::new()
     ));
     assert!(matches_exit(
         ExitReference(3),
         ZoneLine::Reference(3),
-        &Default::default()
+        &std::collections::BTreeMap::new()
     ));
     assert!(matches_exit(
         ExitZone(54),
@@ -213,7 +213,7 @@ fn zone_selection_resolves_received_references_and_preserves_absolute_and_explic
             position: [700., 800., 900.],
             heading: 999.
         },
-        &Default::default()
+        &std::collections::BTreeMap::new()
     ));
 }
 
@@ -302,7 +302,7 @@ fn a_zone_exit_uses_local_authored_floor_then_replans_on_map_invalidation() {
         &mut app.world_mut().resource_mut::<OnlineState>(),
         [eq_client_core::WorldEvent::ZoneLineZones {
             session_id: 1,
-            zones: Default::default(),
+            zones: std::collections::BTreeMap::new(),
         }],
     );
     finish_lookup(&mut app, true);
