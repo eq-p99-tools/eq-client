@@ -106,7 +106,7 @@ impl Vitals {
         } else {
             i64::from(reported)
                 .saturating_sub(i64::try_from(self.local_hp_damage).unwrap_or(i64::MAX))
-                .max(-32768)
+                .clamp(-32768, 10_000_000)
         }
     }
 
@@ -261,5 +261,24 @@ mod tests {
             Some(HpGauge(0))
         );
         assert_eq!(reported(1, 0, LeftOutOfCurrent).gauge(false), None);
+    }
+
+    #[test]
+    fn local_hp_delta_bounds_apply_to_base_before_equipment() {
+        let vitals = Vitals {
+            item_hp: Some(-20),
+            local_hp_damage: 1,
+            ..reported(10_000_010, 10_000_030, ItemHitPoints::LeftOut)
+        };
+        assert_eq!(
+            vitals.signed_hit_points(false),
+            Some((9_999_980, 10_000_010))
+        );
+        let lower = Vitals {
+            item_hp: Some(-50),
+            local_hp_damage: 100,
+            ..reported(-32760, 100, ItemHitPoints::LeftOut)
+        };
+        assert_eq!(lower.signed_hit_points(false), Some((-32818, 50)));
     }
 }
