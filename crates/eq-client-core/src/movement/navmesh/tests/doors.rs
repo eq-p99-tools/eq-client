@@ -179,3 +179,59 @@ fn ordinary_route_approaches_waits_and_crosses_only_after_the_door_is_passable()
         assert!(arrived, "door route did not arrive");
     }
 }
+
+#[test]
+fn a_door_connection_cannot_fill_missing_ground() {
+    let (_, mesh) = rooms(false);
+    let triangles: Vec<_> = rectangle(-30.0, -0.75)
+        .into_iter()
+        .chain(rectangle(0.75, 30.0))
+        .collect();
+    let mut world = CollisionWorld::new(triangles).unwrap();
+    let door = CollisionMesh::new(block([-0.05, 0.0, 0.5], [0.05, 10.0, 1.5])).unwrap();
+    world.set_door_obstacles(vec![(7, Arc::new(door))]);
+    let (progress, _) = search(
+        &mesh,
+        &world,
+        Vec3::new(-20.0, 0.0, 0.0),
+        Vec3::new(20.0, 0.0, 1.0),
+        vec![7],
+    );
+    assert_eq!(progress, PathProgress::Failed);
+}
+
+#[test]
+fn a_refused_door_loses_its_connection_and_never_crosses_the_closed_leaf() {
+    let (world, mesh) = rooms(false);
+    let (start, goal) = (Vec3::new(-20.0, 0.0, 0.0), Vec3::new(20.0, 0.0, 1.0));
+    let mut route = Route::new(start, goal, 0.5, 6.0)
+        .with_doors(vec![7])
+        .with_navigator(Box::new(mesh));
+    let mut feet = start;
+    let mut refused = false;
+    for tick in 0..1000 {
+        match route.next(&world, feet, goal, 256, Duration::from_millis(tick * 50)) {
+            RouteStep::Searching => (),
+            RouteStep::Toward(to) => {
+                feet = world.step(
+                    feet,
+                    ((to - feet) * Vec3::new(1.0, 0.0, 1.0)).clamp_length_max(0.5),
+                    6.0,
+                );
+                assert!(feet.x < 0.0, "{feet:?}");
+            }
+            RouteStep::OpenDoor(7) => {
+                assert!(!refused, "a refused door was requested again");
+                route.refused(7, feet, goal);
+                refused = true;
+            }
+            RouteStep::Arrived | RouteStep::Unreachable | RouteStep::Stalled => {
+                assert!(refused);
+                assert!(feet.distance(goal) > 10.0);
+                return;
+            }
+            other => panic!("{other:?}"),
+        }
+    }
+    panic!("refused door did not end the route");
+}

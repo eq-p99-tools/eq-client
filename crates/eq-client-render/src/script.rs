@@ -4042,7 +4042,7 @@ fn log_partial_route(online: &super::online::OnlineState, end: Vec3) {
 /// How long a clicked door may take to start opening before the walk treats
 /// it as locked: longer than any server's answer to a click.
 const DOOR_WAIT: Duration = Duration::from_secs(3);
-/// How long an opened door may take to swing open as drawn, and may still
+/// How long an opened passage may take to finish its drawn motion, and may still
 /// block the way after the walk has searched around it once: the swing, a
 /// quarter turn in 0.8 s at the program's rate (read R49-28b), and a second
 /// to spare.
@@ -4372,7 +4372,7 @@ impl Planned {
     }
 }
 
-/// The doors a walk may open on its way, open or shut now: a route consults
+/// The modeled passage doors a walk may open, open or shut now: a route consults
 /// them only where one blocks a step, and the walk clicks only a shut one.
 fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
     online
@@ -4382,7 +4382,7 @@ fn openable_doors(online: &super::online::OnlineState) -> Vec<u8> {
         .values()
         .filter(|door| {
             online.world().doors().supports_use(door.id)
-                && super::doors::swings(door, online.world().generation())
+                && super::doors::route_usable(door, online.world().generation())
         })
         .map(|door| door.id)
         .collect()

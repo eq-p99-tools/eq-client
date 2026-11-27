@@ -10,6 +10,7 @@
 
 mod build;
 pub mod cache;
+mod doors;
 mod drops;
 mod holes;
 mod navigator;
