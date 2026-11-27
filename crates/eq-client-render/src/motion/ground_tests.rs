@@ -401,6 +401,7 @@ struct MeasuredRun {
     horizontal: f64,
     stopped: u32,
     packet_times: Vec<u128>,
+    samples: Vec<eq_network_game::movement::PositionPacket>,
     max_time_budget_excess: f64,
     max_session_lead: f64,
     max_pre_owner_lead: f64,
@@ -485,6 +486,10 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
         .iter()
         .map(|submitted| submitted.at.duration_since(start_at).as_nanos())
         .collect();
+    let samples = scene.submissions[before..]
+        .iter()
+        .map(|submitted| submitted.sample)
+        .collect();
     println!(
         "GATE326-RUN {}",
         serde_json::json!({
@@ -511,6 +516,7 @@ fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool
         horizontal,
         stopped,
         packet_times,
+        samples,
         max_time_budget_excess,
         max_session_lead,
         max_pre_owner_lead,
@@ -542,8 +548,16 @@ fn gate326(installed: bool, frames: u32) {
                 if run.stopped != 0 {
                     failures.push((delay, "stopped frame during qualified crossing/run"));
                 }
-                if delay == 6 && run.max_session_lead > run.roundoff {
-                    failures.push((delay, "rendered pose ahead of actual session acceptance"));
+                if run.max_session_lead > f64::from(CARRIER_SPEED) * 0.1 + run.roundoff {
+                    failures.push((delay, "actual owner lead exceeds two admission intervals"));
+                }
+                if run.max_pre_owner_lead
+                    > f64::from(CARRIER_SPEED) * (0.1 + 1. / 60.) + run.roundoff
+                {
+                    failures.push((
+                        delay,
+                        "pre-owner lead exceeds admission intervals plus frame",
+                    ));
                 }
                 if run.max_accepted_budget_excess > run.roundoff {
                     failures.push((delay, "accepted elapsed budget exceeded"));
@@ -562,8 +576,36 @@ fn gate326(installed: bool, frames: u32) {
                 "candidate_packet_times": runs[1].packet_times,
             })
         );
-        if runs[0].packet_times != runs[1].packet_times {
+        let same_count = runs[0].packet_times.len() == runs[1].packet_times.len();
+        let within_frame = runs[0]
+            .packet_times
+            .iter()
+            .zip(&runs[1].packet_times)
+            .all(|(main, candidate)| main.abs_diff(*candidate) <= 16_666_667);
+        if !same_count || !within_frame {
             failures.push((delay, "actual packet count/timing differs"));
+        }
+        // Mail327 allows one frame of phase difference only if actual
+        // submitted positions and reporting semantics match. Retain this
+        // gate: projected endpoints are not completed native observations.
+        let coordinate_noise = runs[0].roundoff.max(runs[1].roundoff);
+        for (main, candidate) in runs[0].samples.iter().zip(&runs[1].samples) {
+            let position = |sample: &eq_network_game::movement::PositionPacket| {
+                Vec3::from_array(eq_client_core::render_position(sample.position)).as_dvec3()
+            };
+            if position(main).distance(position(candidate)) > coordinate_noise {
+                failures.push((delay, "actual submitted position differs"));
+                break;
+            }
+            if main.animation != candidate.animation
+                || main.delta_heading != candidate.delta_heading
+                || main.sequence != candidate.sequence
+                || Vec3::from(main.delta).distance(Vec3::from(candidate.delta))
+                    > coordinate_noise as f32
+            {
+                failures.push((delay, "actual packet body semantics differ"));
+                break;
+            }
         }
         if frames == 600 && relative > 0.04 {
             failures.push((delay, "matched ten-second travel differs by over4%"));
@@ -591,24 +633,31 @@ fn native_ground_ten_second_matched_carrier_run() {
 #[test]
 fn supported_carrier_handover_does_not_add_receipt_delay_to_observation_spacing() {
     for delay in [0, 6] {
-        let mut scene = matched_carrier(false, true, delay, Instant::now(), MATCHED_APPROACH_X);
-        let run = measure_carrier(&mut scene, 60, false, true);
-        // The first ordinary observation waits at most one50ms interval
-        // after the last native observation, which itself may be less than
-        // one native interval beyond admission. Afterwards ordinary requests
-        // keep50ms spacing regardless of when their receipts arrive. This
-        // bound is actual owner state, never a claim that pending means sent.
-        let admitted_bound = f64::from(CARRIER_SPEED) * 0.1;
-        let before_owner_bound = f64::from(CARRIER_SPEED) * (0.1 + 1. / 60.);
-        assert!(run.max_session_lead <= admitted_bound + run.roundoff);
-        assert!(run.max_pre_owner_lead <= before_owner_bound + run.roundoff);
-        assert_eq!(run.stopped, 0);
-        assert!(run.max_time_budget_excess <= run.roundoff);
-        assert_eq!(run.packet_times, vec![466_666_676]);
-        println!(
-            "BRIDGE327 delay={delay} post_owner={} pre_owner={} post_bound={admitted_bound} pre_bound={before_owner_bound}",
-            run.max_session_lead, run.max_pre_owner_lead
-        );
+        for shift in [-CARRIER_SPEED / 60., 0., CARRIER_SPEED / 60.] {
+            let mut scene = matched_carrier(
+                false,
+                true,
+                delay,
+                Instant::now(),
+                MATCHED_APPROACH_X + shift,
+            );
+            let run = measure_carrier(&mut scene, 60, false, true);
+            // A first ordinary observation waits at most one50ms interval
+            // after a native observation less than one interval beyond
+            // admission. Later spacing is50ms regardless of receipt delay.
+            // Pending is never called acceptance; actual owner is observed.
+            let admitted_bound = f64::from(CARRIER_SPEED) * 0.1;
+            let before_owner_bound = f64::from(CARRIER_SPEED) * (0.1 + 1. / 60.);
+            assert!(run.max_session_lead <= admitted_bound + run.roundoff);
+            assert!(run.max_pre_owner_lead <= before_owner_bound + run.roundoff);
+            assert_eq!(run.stopped, 0);
+            assert!(run.max_time_budget_excess <= run.roundoff);
+            assert_eq!(run.packet_times, vec![466_666_676]);
+            println!(
+                "BRIDGE327 delay={delay} shift={shift} post_owner={} pre_owner={} post_bound={admitted_bound} pre_bound={before_owner_bound}",
+                run.max_session_lead, run.max_pre_owner_lead
+            );
+        }
     }
 }
 
