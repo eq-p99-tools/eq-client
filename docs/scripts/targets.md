@@ -101,6 +101,14 @@ merchant action.
   picker is open, its rows.
 - `training row`: a training row counted from 1; ordinary skills and languages
   share the installed trainer list.
+- `training_skill id` or `training_skill "name"`: the currently offered ordinary
+  skill by its zero-based ID (0..99) or canonical skill name, ignoring ASCII
+  case. For example, `click("training_skill", 53)` and
+  `click("training_skill", "Tracking")` select the same skill even if row order
+  changes after re-login; `click("training_skill", "1H Blunt")` selects skill 0.
+  This selects a visible row through its normal interaction and sends no practice
+  request. An unavailable skill is refused. Unknown names and out-of-range IDs
+  are parse errors. Index-based selection and `training_language` remain available.
 - `training_language id`: the currently offered language row by its zero-based
   language ID (0..25). This selects a visible ordinary row; it sends no training
   request. An unavailable row is refused. `report` includes `training_languages`

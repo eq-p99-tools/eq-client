@@ -473,6 +473,8 @@ pub enum TrainingClick {
     Row(usize),
     /// The offered row for this language ID (not its sorted row number).
     Language(u8),
+    /// The offered ordinary skill, independent of sorted row order.
+    Skill(u32),
     /// Train.
     Train,
     /// Done.
@@ -1143,6 +1145,21 @@ fn book_edit(word: &str) -> Result<BookEdit, String> {
 fn training_click(words: &[&str]) -> Result<Option<TrainingClick>, String> {
     Ok(Some(match words {
         ["training", row] => TrainingClick::Row(ordinal(row, "a row")?),
+        ["training_skill", skill] => {
+            let id = skill
+                .parse::<u32>()
+                .ok()
+                .filter(|id| *id < eq_client_core::training::SKILLS)
+                .or_else(|| {
+                    (0..eq_client_core::training::SKILLS).find(|id| {
+                        eq_client_core::skills::name(*id)
+                            .is_some_and(|name| name.eq_ignore_ascii_case(skill))
+                    })
+                });
+            TrainingClick::Skill(
+                id.ok_or("expected an ordinary skill ID (0..99) or canonical skill name")?,
+            )
+        }
         ["training_language", id] => {
             let id: u8 = id.parse().map_err(|_| "expected a language ID (0..25)")?;
             if id >= eq_client_core::training::LANGUAGES {
@@ -1750,6 +1767,34 @@ mod tests {
             let source = format!("report(\"before\")\n{bad}\nreport(\"after\")\n");
             let error = super::super::Program::parse(&source, base).unwrap_err();
             assert_eq!(error.line, Some(2), "{bad}");
+        }
+    }
+
+    #[test]
+    fn trainer_skills_parse_by_id_or_name_without_depending_on_row_order() {
+        let base = Path::new("private");
+        for (source, id) in [
+            ("click(\"training_skill\", 53)", 53),
+            ("click(\"training_skill\", \"Tracking\")", 53),
+            ("click(\"training_skill\", \"tRaCkInG\")", 53),
+            ("click(\"training_skill\", \"1H Blunt\")", 0),
+        ] {
+            assert_eq!(
+                parse(source, base).unwrap(),
+                [Step::Click(ClickTarget::Training(TrainingClick::Skill(id)))]
+            );
+        }
+        for bad in [
+            "click(\"training_skill\")",
+            "click(\"training_skill\", 100)",
+            "click(\"training_skill\", -1)",
+            "click(\"training_skill\", 1.5)",
+            "click(\"training_skill\", \"not a skill\")",
+            "click(\"training_skill\", \"\")",
+            "click(\"slot\", \"2 3\")",
+            "click(\"training_skill\", 53, 1)",
+        ] {
+            assert!(parse(bad, base).is_err(), "{bad}");
         }
     }
 

@@ -127,10 +127,14 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
 pub(crate) enum Shows {
     /// A gauge's fill, as wide as its fraction.
     Fill(u32),
+    /// A gauge's progress within the current fifth.
+    LinesFill(u32),
     /// A gauge's text.
     GaugeText(u32),
     /// A label's text.
     Label(u32),
+    /// The custom skin's reported experience percentage.
+    ExperiencePercent,
     /// The box that shows the player is attacking.
     Attacking,
     /// The coins of one kind in a place: the purse, the bank or the give
@@ -2009,7 +2013,7 @@ fn bar_parts(gauge: &Gauge) -> BarParts {
     };
     let left = look.cap_left.as_ref().map(|cap| sized(cap, x));
     let start = x + left.map_or(0.0, |cap| cap.width);
-    let pieces = [&look.background, &look.fill, &look.lines];
+    let pieces = [&look.background, &look.fill, &look.lines, &look.lines_fill];
     let mut middle = pieces.iter().copied().flatten();
     let bar = Area {
         x: start,
@@ -2121,6 +2125,50 @@ enum Layer {
     Over,
 }
 
+/// Retains the skin tint while native negative gauge values use a grey line.
+#[derive(Component)]
+pub(crate) struct LinesFillTint(u32, Color);
+
+/// Both fill layers clip their natural artwork to the live value.
+fn gauge_fill(
+    bar: &mut ChildSpawnerCommands,
+    art: &mut crate::sheets::Art,
+    gauge: &Gauge,
+    piece: &Piece,
+    (shows, tint, step): (Shows, Option<[u8; 3]>, Option<Step>),
+) {
+    let mut node = bar.spawn((
+        shows,
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0),
+            top: px(0),
+            width: percent(0),
+            height: px(piece.height),
+            overflow: Overflow::clip(),
+            ..default()
+        },
+    ));
+    if let Some(step) = step {
+        node.insert(step);
+    }
+    node.with_children(|fill| {
+        if let Some(mut image) = art.cut(piece) {
+            image.color = tint.map_or(Color::WHITE, rgb);
+            let mut image = fill.spawn((
+                image,
+                at(0.0, 0.0, to_f32(piece.width), to_f32(piece.height)),
+            ));
+            if let Shows::LinesFill(kind) = shows {
+                image.insert(LinesFillTint(kind, tint.map_or(Color::WHITE, rgb)));
+            }
+            if shows == Shows::Fill(8) && gauge.area.width > 0.0 && gauge.area.height > 0.0 {
+                image.insert(crate::breath::NativeGauge);
+            }
+        }
+    });
+}
+
 /// Puts down a gauge's pieces of this layer, each where the skin starts it.
 fn gauge_layer(
     parent: &mut ChildSpawnerCommands,
@@ -2168,34 +2216,33 @@ fn gauge_layer(
             picture(bar, art, piece, natural(piece));
         }
         if let (Some(step), Some(piece)) = (fill, &look.fill) {
-            let mut node = bar.spawn((
-                gauge.eq_type.map_or(Shows::Fill(0), Shows::Fill),
-                Node {
-                    position_type: PositionType::Absolute,
-                    left: px(0),
-                    top: px(0),
-                    width: percent(0),
-                    height: px(piece.height),
-                    overflow: Overflow::clip(),
-                    ..default()
-                },
-            ));
-            if let Some(step) = step {
-                node.insert(step);
-            }
-            node.with_children(|fill| {
-                if let Some(mut image) = art.cut(piece) {
-                    image.color = gauge.fill_tint.map_or(Color::WHITE, rgb);
-                    let mut image = fill.spawn((image, natural(piece)));
-                    if gauge.eq_type == Some(8) && gauge.area.width > 0.0 && gauge.area.height > 0.0
-                    {
-                        image.insert(crate::breath::NativeGauge);
-                    }
-                }
-            });
+            gauge_fill(
+                bar,
+                art,
+                gauge,
+                piece,
+                (
+                    gauge.eq_type.map_or(Shows::Fill(0), Shows::Fill),
+                    gauge.fill_tint,
+                    step,
+                ),
+            );
         }
         if over && let Some(piece) = &look.lines {
             picture(bar, art, piece, natural(piece));
+        }
+        if over
+            && gauge.draw_lines_fill
+            && let Some(piece) = &look.lines_fill
+            && let Some(kind) = gauge.eq_type
+        {
+            gauge_fill(
+                bar,
+                art,
+                gauge,
+                piece,
+                (Shows::LinesFill(kind), gauge.lines_fill_tint, None),
+            );
         }
     });
     if over {
@@ -2271,6 +2318,27 @@ fn label(
     inside: &Area,
     owner: WindowId,
 ) {
+    if label.client_value == Some(eq_client_assets::sidl::LabelValue::ExperiencePercent) {
+        aligned_in(
+            window,
+            label_node(label, inside),
+            label.align,
+            (
+                Shows::ExperiencePercent,
+                theme::text(
+                    "",
+                    font(label.font),
+                    label.color.map_or(theme::INK_BRIGHT, rgb),
+                ),
+            ),
+            owner
+                .is_chat()
+                .then(|| label.anchors.map(reflow::Geometry))
+                .flatten(),
+        );
+        return;
+    }
+
     let bag = match owner {
         WindowId::Bag(bag) if name == "Container_Label" => {
             Some(items::BagPart::Name(InventorySlot(bag)))
@@ -3302,6 +3370,7 @@ mod tests {
     #[test]
     fn a_containers_augment_labels_go_with_its_buttons() {
         let label = Element::Label(eq_client_assets::sidl::Label {
+            client_value: None,
             area: Area {
                 x: 0.0,
                 y: 0.0,
@@ -3700,6 +3769,7 @@ mod tests {
                         window,
                         &name,
                         &Label {
+                            client_value: None,
                             area: Area {
                                 x,
                                 y,
@@ -3722,6 +3792,7 @@ mod tests {
                     window,
                     "CSPW_Spell0_Name",
                     &Label {
+                        client_value: None,
                         area: Area {
                             x: 25.0,
                             y: 15.0,
@@ -4577,6 +4648,7 @@ mod tests {
                 commands.spawn(Node::default()).with_children(|window| {
                     for kind in &kinds {
                         let words = Label {
+                            client_value: None,
                             area: Area {
                                 x: 25.0,
                                 y: 15.0,
@@ -4675,6 +4747,7 @@ mod tests {
             .run_system_once(move |mut commands: Commands| {
                 commands.spawn(Node::default()).with_children(|window| {
                     let words = Label {
+                        client_value: None,
                         area: Area {
                             x: 0.0,
                             y: 0.0,
@@ -4918,6 +4991,8 @@ mod tests {
             eq_type: Some(1),
             look,
             fill_tint: None,
+            draw_lines_fill: false,
+            lines_fill_tint: None,
             text_color: None,
             text_offset: (0.0, 0.0),
             bar_offset,
@@ -4940,6 +5015,7 @@ mod tests {
             background: Some(gauge_piece(60, 8)),
             fill: Some(gauge_piece(60, 8)),
             lines: Some(gauge_piece(60, 8)),
+            lines_fill: None,
             cap_left: Some(gauge_piece(3, 8)),
             cap_right: Some(gauge_piece(3, 8)),
         };
@@ -5069,6 +5145,35 @@ mod tests {
     }
 
     #[test]
+    fn the_lines_fill_layer_is_created_only_when_the_skin_enables_it() {
+        let mut app = crate::testing::app();
+        let mut enabled = test_gauge(
+            eq_client_assets::sidl::GaugeLook {
+                fill: Some(gauge_piece(90, 8)),
+                lines_fill: Some(gauge_piece(90, 3)),
+                ..default()
+            },
+            0.0,
+            0.0,
+        );
+        enabled.eq_type = Some(4);
+        enabled.draw_lines_fill = true;
+        let mut disabled = enabled.clone();
+        disabled.draw_lines_fill = false;
+        draw_gauges(&mut app, vec![enabled, disabled]);
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query::<&Shows>()
+                .iter(world)
+                .filter(|shows| **shows == Shows::LinesFill(4))
+                .count(),
+            1
+        );
+        assert_eq!(gauge_fills(world).len(), 2);
+    }
+
+    #[test]
     fn a_target_gauge_name_parked_outside_its_box_stays_hidden() {
         let mut app = crate::testing::app();
         draw_gauges(
@@ -5157,6 +5262,7 @@ mod tests {
                     background: Some(gauge_piece(120, 8)),
                     fill: Some(gauge_piece(120, 8)),
                     lines: Some(gauge_piece(120, 8)),
+                    lines_fill: None,
                     cap_left: Some(gauge_piece(3, 8)),
                     cap_right: Some(gauge_piece(3, 8)),
                 },

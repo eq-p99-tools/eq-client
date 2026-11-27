@@ -52,6 +52,7 @@ pub(in crate::skinned) fn source() -> Page {
             (
                 "ExampleValueLabel".into(),
                 Element::Label(Label {
+                    client_value: None,
                     area: area(160.0, 700.0, 40.0, 14.0),
                     anchors,
                     eq_type: None,

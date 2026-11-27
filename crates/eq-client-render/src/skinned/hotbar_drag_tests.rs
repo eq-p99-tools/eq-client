@@ -55,6 +55,7 @@ fn fixture() -> pointer_tests::Fixture {
     pieces.push((
         "HB_CurrentPageLabel".into(),
         Element::Label(Label {
+            client_value: None,
             area: Area {
                 x: 110.0,
                 y: 108.0,
