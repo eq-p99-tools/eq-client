@@ -1221,6 +1221,70 @@ fn native_ground_known_dry_headroom_refusal_reaches_the_ordinary_posture_control
 }
 
 #[test]
+fn native_ground_hands_a_blocked_candidate_back_before_drawing_it() {
+    let mut scene = Scene::new(0, true);
+    let triangles = vec![
+        [[-20., 0., -20.], [-20., 0., 20.], [20., 0., -20.]],
+        [[20., 0., -20.], [-20., 0., 20.], [20., 0., 20.]],
+        [[10., 6.3, -20.], [20., 6.3, -20.], [10., 6.3, 20.]],
+        [[20., 6.3, -20.], [20., 6.3, 20.], [10., 6.3, 20.]],
+    ];
+    let collision = CollisionWorld::new(triangles).unwrap().with_liquids(Dry);
+    let (body, stand) = {
+        let world = scene.app.world_mut();
+        let body = *world
+            .query_filtered::<&PlayerBody, With<Player>>()
+            .single(world)
+            .unwrap();
+        let online = world.resource::<online::OnlineState>();
+        (
+            body,
+            crate::posture::stand_height(InstalledClient::Titanium, online.world(), &body),
+        )
+    };
+    let clear = |world: &CollisionWorld, feet| {
+        headroom::refused(
+            InstalledClient::Titanium,
+            world,
+            (&body, stand),
+            (feet, feet),
+            (false, false),
+        )
+        .is_none()
+    };
+    assert!(clear(&collision, Vec3::ZERO));
+    assert!(!clear(&collision, Vec3::X * 12.));
+    scene.app.insert_resource(Collision(Some(collision)));
+    let mut handed_back = false;
+    let mut moved = false;
+    for _ in 0..180 {
+        let row = scene.step(true);
+        moved |= row.shown.x > 1.;
+        let world = scene.app.world();
+        assert!(
+            clear(
+                world.resource::<Collision>().0.as_ref().unwrap(),
+                row.shown - Vec3::Y * body.feet_offset
+            ),
+            "a refused candidate must never become the current drawn frame"
+        );
+        if world.resource::<Controls>().headroom_refused {
+            handed_back = true;
+            break;
+        }
+    }
+    assert!(moved, "the approach must exercise held native movement");
+    assert!(
+        handed_back,
+        "ordinary headroom receives the held-input refusal"
+    );
+    assert_eq!(
+        scene.refusals, 0,
+        "unchanged movement guard still accepts every posted observation"
+    );
+}
+
+#[test]
 fn native_ground_static_riser_uses_the_same_titanium_body_reach_without_a_handback() {
     for delay in [0, 6] {
         let mut scene = Scene::with_speed(delay, true, 29.866_667);

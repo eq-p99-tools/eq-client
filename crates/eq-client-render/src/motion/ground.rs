@@ -1,10 +1,11 @@
 //! Completed native dry frames; prediction and local admission remain separate.
 use super::{
     Controls, Held, LiquidBasis, MOVE_RESULT_WAIT, MotionInput, OrbitCamera, Player, PlayerBody,
-    START_CYCLE_DURATION, TURN_RATE, TURN_STEPS_PER_SECOND, TapBuffer, arc, boats, online, pose,
-    ramped_turn, stop_at_zone_line, turn_cap, turn_toward,
+    START_CYCLE_DURATION, TURN_RATE, TURN_STEPS_PER_SECOND, TapBuffer, arc, boats, headroom,
+    online, pose, ramped_turn, stop_at_zone_line, turn_cap, turn_toward,
 };
 use bevy::prelude::{Entity, Has, Quat, Query, Transform, Vec2, Vec3, With};
+use eq_client_assets::ui::InstalledClient;
 use eq_client_core::{
     ClientCommand, GroundState, HeadingUpdate, MovementMode, MovementRequest, WorldPosition,
     movement::{
@@ -342,7 +343,53 @@ impl Control {
 }
 
 #[derive(Clone, Copy)]
+pub(super) struct Headroom {
+    stand: f32,
+    mounted: bool,
+    probe: eq_client_core::movement::HeadroomProbe,
+    lift: f32,
+}
+
+impl Headroom {
+    pub(super) fn new(
+        client: InstalledClient,
+        world: &ClientWorld,
+        body: &PlayerBody,
+        mounted: bool,
+        raised: bool,
+    ) -> Self {
+        let stand = crate::posture::stand_height(client, world, body);
+        Self {
+            stand,
+            mounted,
+            probe: crate::posture::headroom_probe(client, world, stand),
+            lift: headroom::walking_lift(client, world, body, raised),
+        }
+    }
+
+    fn allows(
+        self,
+        client: InstalledClient,
+        world: &CollisionWorld,
+        body: &PlayerBody,
+        points: (Vec3, Vec3),
+        (seconds, linked): (f32, bool),
+    ) -> bool {
+        headroom::refused_probe(
+            client,
+            world,
+            (body, self.stand),
+            points,
+            (false, self.mounted),
+            (self.probe, if linked { 0. } else { self.lift }, seconds),
+        )
+        .is_none()
+    }
+}
+
+#[derive(Clone, Copy)]
 pub(super) struct Context<'a> {
+    pub client: InstalledClient,
     pub online: &'a online::OnlineState,
     pub world: &'a CollisionWorld,
     pub body: &'a PlayerBody,
@@ -353,6 +400,7 @@ pub(super) struct Context<'a> {
     pub physics: VerticalPhysics,
     pub eligible: bool,
     pub mouse_heading: Option<f32>,
+    pub headroom: Headroom,
 }
 
 pub(super) fn present(
@@ -391,6 +439,7 @@ pub(super) fn present(
 )]
 pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: MotionInput) -> bool {
     let Context {
+        client,
         online,
         world,
         body,
@@ -401,6 +450,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         physics,
         eligible,
         mouse_heading,
+        headroom,
     } = context;
     if controls.ground.blocked {
         controls.ground.blocked = false;
@@ -436,6 +486,12 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
             return false;
         };
         let origin = Vec3::from_array(eq_client_core::render_position(player.position));
+        let feet = origin - Vec3::Y * body.feet_offset;
+        // An invalid starting room belongs to the existing posture controller,
+        // even when known dry geometry would otherwise qualify native input.
+        if !headroom.allows(client, world, body, (feet, feet), (0., false)) {
+            return false;
+        }
         let shown = controls.restored_translation.unwrap_or(drawn.translation);
         if shown.distance_squared(origin) > 0.000_001 {
             return false;
@@ -603,8 +659,16 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         let within_height = controls
             .ground
             .within_walk_budget(now, origin, physics.reach());
-        (within_height && stop_at_zone_line(&online.regions, before, origin) == origin)
-            .then_some(motion)
+        (within_height
+            && stop_at_zone_line(&online.regions, before, origin) == origin
+            && headroom.allows(
+                client,
+                world,
+                body,
+                (current.motion.feet(), motion.feet()),
+                (seconds.as_secs_f32(), current.carrier.is_some()),
+            ))
+        .then_some(motion)
     });
     if let Some(trial) = trial.filter(|_| !controls.ground.timed_out(now)) {
         let Some(mut frame) = Frame::observed(

@@ -2643,17 +2643,19 @@ pub(super) fn input(
             .map_or(drawn.translation - Vec3::Y * body.feet_offset, |frame| {
                 frame.motion.feet()
             });
+        let raised = raised_walk(world, feet, body.height, posture);
         let physics = walking(
             physics(client, online.world().zone_gravity()),
             client,
             body,
             player.race,
-            (raised_walk(world, feet, body.height, posture), false),
+            (raised, false),
         );
         let walking_world = carrier_walking_world(world, client, body.feet_offset, false, false);
         if ground::input(
             &mut controls,
             ground::Context {
+                client,
                 online: &online,
                 world: walking_world.as_ref().unwrap_or(world),
                 body,
@@ -2664,6 +2666,13 @@ pub(super) fn input(
                 physics,
                 eligible,
                 mouse_heading,
+                headroom: ground::Headroom::new(
+                    client,
+                    online.world(),
+                    body,
+                    crate::posture::on_mount(online.world(), spells.as_deref()),
+                    raised,
+                ),
             },
             intent,
         ) {
@@ -3661,20 +3670,14 @@ pub(super) fn input(
                 ),
                 {
                     let stand = crate::posture::stand_height(client, online.world(), body);
-                    let lift =
-                        client
-                            .falls()
-                            .and_then(|falls| falls.edge_lift)
-                            .map_or(0.0, |rule| {
-                                rule.lift(eq_client_assets::falls::EdgeBody {
-                                    race: online.world().player().map_or(0, |player| player.race),
-                                    stand_height: stand,
-                                    size: body.size,
-                                    // Native 0x489a32 also leaves the linked
-                                    // boat's probe at the ordinary origin.
-                                    lifted: raised && linked.is_none(),
-                                })
-                            });
+                    // Native 0x489a32 leaves a linked boat's probe at the
+                    // ordinary origin. Native frames share these exact terms.
+                    let lift = headroom::walking_lift(
+                        client,
+                        online.world(),
+                        body,
+                        raised && linked.is_none(),
+                    );
                     (
                         crate::posture::headroom_probe(client, online.world(), stand),
                         lift,

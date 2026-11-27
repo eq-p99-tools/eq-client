@@ -76,6 +76,12 @@ Strafe. No new lateral normalization or rate is introduced. Uncertain or moving
 support still uses the admitted-prefix handback above; a static riser replay
 does not establish a moving-carrier transfer.
 
+Native dry frames retain the ordinary headroom rule. A starting origin or
+candidate refused by the existing probe hands back to the ordinary posture
+controller before that candidate is drawn or submitted. The standing scale,
+mount terms, zone exceptions, probe lift and linked-carrier suppression are
+shared with the ordinary path; this adds no new ceiling margin or duck rule.
+
 [R] Key-command handler `0x4619cd` writes the forward state; input `0x4a1d74`
 reads it once per frame, before `0x445243` calls `0x4bfe0f` and `0x48ba76`.
 A held state observed in several frames can therefore move before a 100 ms

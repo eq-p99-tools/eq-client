@@ -260,6 +260,26 @@ impl State {
     }
 }
 
+/// Shared ordinary-walk probe lift; linked callers pass `raised = false`.
+pub(super) fn walking_lift(
+    client: InstalledClient,
+    world: &ClientWorld,
+    body: &PlayerBody,
+    raised: bool,
+) -> f32 {
+    client
+        .falls()
+        .and_then(|falls| falls.edge_lift)
+        .map_or(0.0, |rule| {
+            rule.lift(eq_client_assets::falls::EdgeBody {
+                race: world.player().map_or(0, |player| player.race),
+                stand_height: crate::posture::stand_height(client, world, body),
+                size: body.size,
+                lifted: raised,
+            })
+        })
+}
+
 /// Test helper using the same active query, without the walking caller's lift.
 #[cfg(test)]
 pub(super) fn refused(
