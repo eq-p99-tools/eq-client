@@ -1387,9 +1387,10 @@ fn a_song_stop_for_this_admission_resets_the_gems_with_no_recast() {
 }
 
 #[test]
-fn only_a_bard_where_the_session_offers_it_refreshes_with_no_recovery() {
-    let refreshed = |class, capabilities: Vec<crate::Capability>| {
+fn titanium_bards_use_native_recovery_while_other_dialects_keep_capability_policy() {
+    let refreshed = |dialect, class, capabilities: Vec<crate::Capability>| {
         let mut world = ClientWorld::default();
+        world.carry_as(dialect);
         let mut caster = player(9);
         caster.class = Some(class);
         caster.memorized_spells[0] = Some(42);
@@ -1424,9 +1425,20 @@ fn only_a_bard_where_the_session_offers_it_refreshes_with_no_recovery() {
     };
     let offered = vec![crate::Capability::BardRefreshTimers];
     let recovery = std::time::Duration::from_millis(1500);
-    assert!(refreshed(8, offered.clone()).is_zero());
-    assert_eq!(refreshed(2, offered), recovery);
-    assert_eq!(refreshed(8, Vec::new()), recovery);
+    for dialect in [
+        crate::GameDialect::Titanium,
+        crate::GameDialect::EqMac,
+        crate::GameDialect::Rof2,
+    ] {
+        assert!(refreshed(dialect, 8, offered.clone()).is_zero());
+        assert_eq!(refreshed(dialect, 2, offered.clone()), recovery);
+        let expected = if dialect == crate::GameDialect::Titanium {
+            std::time::Duration::ZERO
+        } else {
+            recovery
+        };
+        assert_eq!(refreshed(dialect, 8, Vec::new()), expected);
+    }
 }
 
 #[test]
