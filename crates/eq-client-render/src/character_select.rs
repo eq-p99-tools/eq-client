@@ -16,6 +16,8 @@ pub(super) struct Selection {
     submitted: bool,
     message: String,
     creation: Option<eq_client_core::creation::Rules>,
+    /// Last creation answer consumed by a list, so later lists do not replay it.
+    creation_count: Option<u64>,
 }
 
 impl Selection {
@@ -32,12 +34,45 @@ impl Selection {
             submitted: false,
             message: String::new(),
             creation: None,
+            creation_count: None,
         }
     }
 
     /// Identity the server list was published with.
     pub(super) const fn id(&self) -> u64 {
         self.id
+    }
+
+    /// The shared receiver's refreshed list, including creation outside the
+    /// editor. A fresh success selects by name, never by returned row order.
+    pub(super) fn from_list(
+        list: &eq_client_core::world::CharacterList,
+        previous: Option<&Self>,
+        answer: Option<&eq_client_core::world::Creation>,
+    ) -> Self {
+        let mut selection = Self::new(list.selection_id, list.characters.clone())
+            .with_creation(list.creation)
+            .with_deletion(list.scope(), list.deletion);
+        selection.creation_count = answer.map(|answer| answer.count);
+        if let Some(answer) = answer.filter(|answer| {
+            answer.outcome == eq_client_core::creation::CreationOutcome::Created
+                && previous.is_some_and(|previous| {
+                    previous.connection_id == list.connection_id
+                        && previous.id != list.selection_id
+                        && !previous.entering()
+                        && previous.creation_count != Some(answer.count)
+                })
+        }) {
+            let matches = list
+                .characters
+                .iter()
+                .filter(|entry| entry.name.eq_ignore_ascii_case(&answer.name))
+                .count();
+            if matches == 1 {
+                selection.created(&answer.name);
+            }
+        }
+        selection
     }
 
     pub(super) fn with_creation(
@@ -772,6 +807,103 @@ fn button(parent: &mut ChildSpawnerCommands, action: Action, text: &str, selecte
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    fn creation_list(
+        id: u64,
+        characters: Vec<CharacterChoice>,
+    ) -> eq_client_core::world::CharacterList {
+        eq_client_core::world::CharacterList {
+            connection_id: 3,
+            selection_id: id,
+            characters,
+            creation: Some(eq_client_core::creation::Rules::Titanium),
+            deletion: None,
+        }
+    }
+
+    #[test]
+    fn shared_creation_success_selects_the_new_name_in_any_returned_order_without_entering() {
+        let old = creation_list(7, vec![listed(0, "Existing", None)]);
+        let previous = Selection::from_list(&old, None, None);
+        let answer = eq_client_core::world::Creation {
+            count: 1,
+            name: "Newhero".into(),
+            outcome: eq_client_core::creation::CreationOutcome::Created,
+        };
+        for characters in [
+            vec![listed(5, "Newhero", None), listed(0, "Existing", None)],
+            vec![listed(0, "Existing", None), listed(5, "NEWhero", None)],
+        ] {
+            let list = creation_list(8, characters);
+            let selection = Selection::from_list(&list, Some(&previous), Some(&answer));
+            assert_eq!(selection.chosen(), Some(5));
+            assert!(!selection.entering());
+            assert_eq!(selection.id(), 8);
+        }
+    }
+
+    #[test]
+    fn creation_refusal_missing_or_ambiguous_name_and_other_connections_keep_default_selection() {
+        use eq_client_core::creation::CreationOutcome;
+        let old = creation_list(7, vec![listed(0, "Existing", None)]);
+        let previous = Selection::from_list(&old, None, None);
+        for (outcome, characters, connection) in [
+            (
+                CreationOutcome::NameRefused,
+                vec![listed(0, "Existing", None), listed(5, "Newhero", None)],
+                3,
+            ),
+            (
+                CreationOutcome::Created,
+                vec![listed(0, "Existing", None)],
+                3,
+            ),
+            (
+                CreationOutcome::Created,
+                vec![
+                    listed(0, "Existing", None),
+                    listed(4, "Newhero", None),
+                    listed(5, "NEWHERO", None),
+                ],
+                3,
+            ),
+            (
+                CreationOutcome::Created,
+                vec![listed(0, "Existing", None), listed(5, "Newhero", None)],
+                4,
+            ),
+        ] {
+            let mut list = creation_list(8, characters);
+            list.connection_id = connection;
+            let answer = eq_client_core::world::Creation {
+                count: 1,
+                name: "Newhero".into(),
+                outcome,
+            };
+            let selection = Selection::from_list(&list, Some(&previous), Some(&answer));
+            assert_eq!(selection.chosen(), Some(0));
+            assert!(!selection.entering());
+        }
+    }
+
+    #[test]
+    fn a_creation_answer_is_not_replayed_on_later_lists_or_initial_connection() {
+        let answer = eq_client_core::world::Creation {
+            count: 1,
+            name: "Newhero".into(),
+            outcome: eq_client_core::creation::CreationOutcome::Created,
+        };
+        let list = creation_list(
+            8,
+            vec![listed(0, "Existing", None), listed(5, "Newhero", None)],
+        );
+        let first = Selection::from_list(&list, None, Some(&answer));
+        assert_eq!(first.chosen(), Some(0));
+        let later = creation_list(9, list.characters);
+        let selection = Selection::from_list(&later, Some(&first), Some(&answer));
+        assert_eq!(selection.chosen(), Some(0));
+        assert!(!selection.entering());
+    }
     use bevy::window::PrimaryWindow;
 
     fn listed(slot: u8, name: &str, zone_id: Option<u32>) -> CharacterChoice {
