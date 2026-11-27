@@ -475,3 +475,72 @@ fn discarded_owned_request_restores_native_trial_without_a_position_publication(
     };
     assert!(matches!(next, ClientCommand::Move(_)));
 }
+
+#[test]
+#[allow(
+    clippy::too_many_lines,
+    reason = "one matched native mouse input/control sweep"
+)]
+fn held_mouse_strafe_and_turn_use_actual_slow_and_fast_inputs_in_both_views() {
+    for first_person in [false, true] {
+        for side in [Some(Act::StrafeLeft), Some(Act::StrafeRight), None] {
+            for mouse in [-40_f32, -7.5, 7.5, 40.] {
+                let mut f = Native::new(first_person, -15.);
+                let mut owner = owner(&f);
+                anchor(&f, &owner);
+                crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
+                if let Some(side) = side {
+                    // Native turn bindings become sidesteps while right
+                    // look is held: exercise the real A/D+mouse path.
+                    let key = if side == Act::StrafeLeft {
+                        KeyCode::KeyA
+                    } else {
+                        KeyCode::KeyD
+                    };
+                    latency_tests::key(&mut f.app, key, true);
+                }
+                let origin = owner.position();
+                let mut path_xy = 0_f64;
+                let mut path_xyz = 0_f64;
+                let mut accepted = 0_u16;
+                let mut snapshots = 0_u16;
+                for _ in 0..600 {
+                    // Actual owned mouse events continue while a worker result
+                    // is pending. Only the input really consumed by each
+                    // physical slice is captured; no interpolated arc is used.
+                    f.app
+                        .world_mut()
+                        .write_message(bevy::input::mouse::MouseMotion {
+                            delta: Vec2::new(mouse, 0.),
+                        });
+                    for command in frame(&mut f, &mut owner) {
+                        let before = owner.position();
+                        let request = settle(&f, &mut owner, command);
+                        snapshots += u16::from(request.heading == HeadingUpdate::Snapshot);
+                        let delta = [
+                            request.position.x - before.x,
+                            request.position.y - before.y,
+                            request.position.z - before.z,
+                        ];
+                        path_xy += f64::from(delta[0].hypot(delta[1]));
+                        path_xyz += f64::from(delta[0].hypot(delta[1]).hypot(delta[2]));
+                        accepted += 1;
+                    }
+                }
+                let end = owner.position();
+                let net_xy = f64::from((end.x - origin.x).hypot(end.y - origin.y));
+                let net_xyz = net_xy.hypot(f64::from(end.z - origin.z));
+                assert!(accepted > 50 && snapshots > 0);
+                assert!(net_xy <= path_xy + 0.001 && net_xyz <= path_xyz + 0.001);
+                if side.is_some() {
+                    assert!(path_xy > 1.);
+                } else {
+                    assert!(path_xy < 0.001 && net_xy < 0.001);
+                }
+                eprintln!(
+                    "controlled native mouse first_person={first_person} side={side:?} dx_per_render_frame={mouse}: accepted={accepted} refused=0 accepted_path_xy={path_xy} net_xy={net_xy} accepted_path_xyz={path_xyz} net_xyz={net_xyz}"
+                );
+            }
+        }
+    }
+}
