@@ -4,6 +4,9 @@ use eq_client_assets::regions::{RegionKind, ZoneRegions};
 use eq_network_game::movement::{SpeedState, titanium_speeds};
 use std::sync::mpsc;
 
+#[path = "owned_swim_tests.rs"]
+mod owned_swim_tests;
+
 struct Native {
     app: App,
     requests: mpsc::Receiver<ClientCommand>,

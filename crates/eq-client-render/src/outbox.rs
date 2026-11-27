@@ -144,6 +144,7 @@ fn interrupts_apply(command: &ClientCommand) -> bool {
     matches!(
         command,
         ClientCommand::Move(_)
+            | ClientCommand::SwimFrame { .. }
             | ClientCommand::Jump { .. }
             | ClientCommand::SetPosture { .. }
             | ClientCommand::CastSpell { .. }

@@ -226,6 +226,28 @@ impl SessionWorker {
                         sender.send(&worker_cancel, WorldUpdate::SpellTable(fact))?;
                     }
                     let update = match event {
+                        // The base frontend issues no snapshot requests. Keep
+                        // the new network diagnostic separate from world state;
+                        // its dedicated frontend consumer is independently owned.
+                        ClientEvent::MovementPacketSnapshot {
+                            session_id,
+                            request_id,
+                            run_id,
+                            sent,
+                            observed,
+                            unix_timestamp_ms,
+                        } => {
+                            tracing::trace!(
+                                session_id,
+                                request_id,
+                                run_id,
+                                sent,
+                                ?observed,
+                                unix_timestamp_ms,
+                                "Movement transport submission snapshot"
+                            );
+                            None
+                        }
                         ClientEvent::FilesChecking(progress) => {
                             if let Some(progress) = progress {
                                 tracing::debug!(
