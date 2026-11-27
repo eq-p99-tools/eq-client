@@ -1,4 +1,4 @@
-use super::{Changes, ClientWorld, Notice};
+use super::{Changes, ClientWorld, Notice, OwnConsciousness};
 use crate::control::StunState;
 
 impl ClientWorld {
@@ -18,16 +18,22 @@ impl ClientWorld {
             || basis
                 .current()
                 .is_none_or(|current| (current < 1) != unconscious)
-            || self.own_unconscious.is_some_and(|(previous, state, _)| {
-                revision < previous || revision == previous && state != unconscious
+            || self.own_unconscious.is_some_and(|control| {
+                revision < control.revision
+                    || revision == control.revision && control.unconscious != unconscious
             })
         {
             news.ignored = true;
             return;
         }
-        let previous = self.own_unconscious.is_some_and(|(_, state, _)| state);
-        self.own_unconscious = Some((revision, unconscious, basis));
-        self.own_hp_count_current = true;
+        let previous = self
+            .own_unconscious
+            .is_some_and(|control| control.unconscious);
+        self.own_unconscious = Some(OwnConsciousness {
+            revision,
+            unconscious,
+            basis: Some(basis),
+        });
         if previous != unconscious {
             news.notices.push(Notice::ServerString {
                 id: if unconscious { 12877 } else { 12876 },
