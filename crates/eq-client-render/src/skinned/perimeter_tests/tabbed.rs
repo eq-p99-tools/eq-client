@@ -223,6 +223,15 @@ fn two_row_options() -> eq_client_assets::sidl::TabBox {
 
 #[test]
 fn default_size_wrapped_qol_shows_the_heading_and_scrolls_to_the_speed_control() {
+    default_size_wrapped_qol_reaches_speed(None);
+}
+
+#[test]
+fn default_size_wrapped_qol_shows_the_heading_and_four_lines_down_the_speed_control() {
+    default_size_wrapped_qol_reaches_speed(Some(4.0));
+}
+
+fn default_size_wrapped_qol_reaches_speed(wheel_lines: Option<f32>) {
     use crate::windows::pointer::{LINE_PIXELS, Wheel};
     use eq_client_core::options::Level;
 
@@ -293,10 +302,13 @@ fn default_size_wrapped_qol_shows_the_heading_and_scrolls_to_the_speed_control()
         };
         let max_scroll = (content + insets.top + insets.bottom - view.height()).max(0.0);
         // Added choices can add rows. The opening view still includes the
-        // heading, and ordinary wheel lines must reach Run Speed below the
-        // Dangerous checkboxes without clipping it at the content's bottom.
+        // heading, and ordinary wheel lines must reach Run Speed in the
+        // Dangerous section without clipping it at the content's bottom.
         assert_visible(app.world(), &[heading]);
-        let wheel_pixels = (max_scroll / LINE_PIXELS).ceil() * LINE_PIXELS;
+        let wheel_pixels = wheel_lines.map_or_else(
+            || (max_scroll / LINE_PIXELS).ceil() * LINE_PIXELS,
+            |lines| lines * LINE_PIXELS,
+        );
         *app.world_mut().resource_mut::<Wheel>() = Wheel {
             surface: Some(page),
             pixels: -wheel_pixels,
@@ -307,7 +319,7 @@ fn default_size_wrapped_qol_shows_the_heading_and_scrolls_to_the_speed_control()
         app.update();
         assert_visible(app.world(), &[speed]);
         let scroll = app.world().get::<ScrollPosition>(page).unwrap().y;
-        assert!((scroll - max_scroll).abs() < 0.01);
+        assert!((scroll - max_scroll.min(wheel_pixels)).abs() < 0.01);
     }
 }
 
@@ -393,7 +405,13 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
             for (level, text) in [
                 (Level::UiScale, "Interface scale"),
                 (Level::RunSpeed, "Run a Little Faster"),
-            ] {
+            ]
+            .into_iter()
+            .chain(
+                controls::COMBAT_TEXT_COLORS
+                    .into_iter()
+                    .map(|(_, _, _, text, level)| (level, text)),
+            ) {
                 let slider = sliders
                     .iter(app.world())
                     .find(|(_, slider)| slider.sets == Sets::Level(level))
@@ -417,17 +435,13 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                     assert!(rect.min.x >= viewport.min.x && rect.max.x <= viewport.max.x);
                 }
 
-                // Reach Interface scale within its section, then exercise
-                // the end of the page's scroll extent for the run speed slider.
-                let pixels = if level == Level::UiScale {
-                    let bottom_edge = controls
-                        .into_iter()
-                        .map(|control| bounds(app.world(), control).max.y)
-                        .fold(viewport.max.y, f32::max);
-                    (viewport.max.y - bottom_edge) / scale - 2.0
-                } else {
-                    -100_000.0
-                };
+                // Scroll each complete control into view, including the new
+                // palette below Run Speed; the page owns the sole scroll range.
+                let bottom_edge = controls
+                    .into_iter()
+                    .map(|control| bounds(app.world(), control).max.y)
+                    .fold(viewport.max.y, f32::max);
+                let pixels = (viewport.max.y - bottom_edge) / scale - 2.0;
                 *app.world_mut().resource_mut::<Wheel>() = Wheel {
                     surface: Some(page),
                     pixels,

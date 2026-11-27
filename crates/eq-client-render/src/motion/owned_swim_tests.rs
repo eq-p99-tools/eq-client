@@ -2,6 +2,9 @@
 use super::*;
 use eq_network_game::movement::MotionSession;
 
+#[path = "delayed_reset_tests.rs"]
+mod delayed_reset_tests;
+
 fn calibration() -> eq_network_game::movement::MotionCalibration {
     titanium_speeds(&SpeedState {
         run: 0.7,
@@ -108,7 +111,7 @@ fn settle(f: &Native, owner: &mut MotionSession, command: ClientCommand) -> Move
     news(
         f,
         eq_client_core::WorldEvent::MotionSent {
-            session_id: 11,
+            session_id: request.session_id,
             created: request.created,
             position: owner.position(),
             refused: None,
@@ -117,7 +120,7 @@ fn settle(f: &Native, owner: &mut MotionSession, command: ClientCommand) -> Move
     news(
         f,
         eq_client_core::WorldEvent::SwimState {
-            session_id: 11,
+            session_id: request.session_id,
             created: Some(request.created),
             position: owner.position(),
             basis: owner.swim_basis(),
@@ -360,6 +363,11 @@ fn reset_receipt_requires_the_actual_uninterrupted_matching_reset() {
     );
     local.reset_observed(11, position);
     local.physical_frame(true);
+    wet.advance(
+        eq_client_core::movement::water::LIQUID_5,
+        eq_client_core::movement::water::WetInput::default(),
+        eq_client_core::movement::water::WET_FRAME_SECONDS,
+    );
     local.receipt(11, position, None, Some(basis), &mut wet);
     assert!(
         local
@@ -370,6 +378,7 @@ fn reset_receipt_requires_the_actual_uninterrupted_matching_reset() {
             )
             .is_none()
     );
+    wet = eq_client_core::movement::water::WetVelocity::default();
     local.reset_observed(11, position);
     local.receipt(11, position, None, Some(basis), &mut wet);
     assert!(

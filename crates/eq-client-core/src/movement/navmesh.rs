@@ -10,6 +10,7 @@
 
 mod build;
 pub mod cache;
+mod doors;
 mod drops;
 mod holes;
 mod navigator;
@@ -228,6 +229,8 @@ fn off_boundary(vertices: &[Vec3], p: Vec3) -> (f32, f32) {
 #[derive(Debug)]
 pub struct NavMesh {
     polygons: Vec<Polygon>,
+    /// The build refused some coverage. Kept across cache reads and size splits.
+    incomplete: bool,
     /// Each polygon's island: the set of polygons joined to it.
     island: Vec<u32>,
     islands: usize,
@@ -317,7 +320,11 @@ impl NavMesh {
         report.refused_stretches = refused;
         report.drop_elapsed = started.elapsed();
         report.elapsed += report.drop_elapsed;
-        Some((mesh.with_drops(links), report))
+        let mut mesh = mesh.with_drops(links);
+        mesh.incomplete = !report.refused.is_empty()
+            || report.refused_stretches > 0
+            || report.failed_hole_merges > 0;
+        Some((mesh, report))
     }
 
     fn from_parts(polygons: Vec<Polygon>, drops: Vec<DropLink>) -> Self {
@@ -326,6 +333,7 @@ impl NavMesh {
         let (outline, walls) = walls(&polygons);
         Self {
             polygons,
+            incomplete: false,
             island,
             islands,
             index,
@@ -364,6 +372,12 @@ impl NavMesh {
     #[must_use]
     pub fn polygon_count(&self) -> usize {
         self.polygons.len()
+    }
+
+    /// Whether refused tiles, holes or ledge probes left coverage incomplete.
+    #[must_use]
+    pub const fn incomplete(&self) -> bool {
+        self.incomplete
     }
 
     /// Islands: sets of polygons joined to each other and to nothing else.
@@ -666,7 +680,9 @@ impl NavMesh {
                 (from != GONE && to != GONE).then_some(DropLink { from, to, ..*link })
             })
             .collect();
-        Self::from_parts(polygons, drops)
+        let mut sized = Self::from_parts(polygons, drops);
+        sized.incomplete = self.incomplete;
+        sized
     }
 
     /// The mesh split for the build's three walker `sizes` (heights, shortest

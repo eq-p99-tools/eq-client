@@ -20,13 +20,20 @@ pub struct MerchantPrices {
     /// The refusal of a buy the coins on the player don't cover: of one,
     /// and of more.
     pub short: [u32; 2],
+    /// The received list price already includes the merchant rate.
+    pub listed_buy: bool,
+    /// Separator between the installed coin fragments.
+    pub coin_separator: &'static str,
+    /// Native received-sale wording is read for this generation.
+    pub says_sale: bool,
 }
 
 /// From this sale total up, the program rounds it to the nearest 100.
 const ROUNDED_SALE: u64 = 10_000_000;
 
 impl MerchantPrices {
-    /// What `quantity` of a ware with this list price cost, in copper, at
+    /// What `quantity` of a ware with this list price cost, in copper.
+    /// Titanium uses its already-rated listed price; the Mac-era path uses
     /// the rate the merchant opened with: trunc(quantity × price × rate +
     /// 0.5), rounded once after the quantity. A negative or zero price costs
     /// nothing. The program multiplies by an item field (+0x120) where it
@@ -34,6 +41,9 @@ impl MerchantPrices {
     /// field, so it counts as absent (unsure).
     #[must_use]
     pub fn buy_total(&self, price: u32, rate: f32, quantity: u32) -> u64 {
+        if self.listed_buy {
+            return u64::from(price) * u64::from(quantity);
+        }
         if price == 0 || !rate.is_finite() || rate <= 0.0 {
             return 0;
         }
@@ -49,9 +59,12 @@ impl MerchantPrices {
     /// quantity, and from 10,000,000 rounded to the nearest 100.
     #[must_use]
     pub fn sale_total(&self, price: u32, rate: f32, quantity: u32) -> u64 {
-        let total = self.sale_unit(price, rate) * u64::from(quantity);
+        let total = self
+            .sale_unit(price, rate)
+            .saturating_mul(u64::from(quantity));
         if total >= ROUNDED_SALE {
-            total + 50 - (total + 50) % 100
+            let rounded = total.saturating_add(50);
+            rounded - rounded % 100
         } else {
             total
         }
@@ -88,11 +101,39 @@ pub const EQMAC: MerchantPrices = MerchantPrices {
     no_price: 2413,
     no_value: 2408,
     short: [12060, 12061],
+    listed_buy: false,
+    coin_separator: " ",
+    says_sale: false,
+};
+
+/// Titanium: sale quote 0x5e1690 (each price / f32 rate + 0.5,
+/// truncated, then quantity and large-total rounding), price text 0x46daaf.
+/// Buy text 0x4b1d79 uses the listed instance price without the rate again.
+pub const TITANIUM: MerchantPrices = MerchantPrices {
+    coins: [0x969, 0x96a, 0x96b, 0x96c],
+    no_price: 0x96d,
+    no_value: 0x968,
+    short: [12060, 12061],
+    listed_buy: true,
+    coin_separator: "",
+    says_sale: true,
 };
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn titanium_uses_the_retained_sale_quote_without_repricing_listed_buys() {
+        // Retained 6.704 witness: Bat Fur base15, accepted window rate,
+        // then received sale quantity1/price14. It is not a quote response.
+        let rate = f32::from_bits(0x3f86_bca2);
+        assert_eq!(TITANIUM.sale_total(15, rate, 1), 14);
+        assert_eq!(TITANIUM.sale_total(15, rate, 2), 28);
+        assert_eq!(TITANIUM.buy_total(15, rate, 2), 30);
+        assert_eq!(TITANIUM.sale_total(10_000_050, 1.0, 1), 10_000_100);
+        assert_eq!(TITANIUM.sale_total(0, rate, 1), 0);
+    }
 
     #[test]
     fn a_buy_rounds_once_after_the_quantity() {

@@ -96,8 +96,28 @@ mod tests {
     use eq_client_core::{SpellUpdate, WorldEvent};
     use std::sync::mpsc::Receiver;
 
-    /// A Bard with songs 73, 74 and 75 in gems 1 to 3, admitted in session
-    /// 7 where the server type offers `/melody` or not.
+    /// Explicit synthetic song timing, through the installed-table parser.
+    fn songs(recast_ms: u32) -> crate::spellbook::SpellNames {
+        let recast = recast_ms.to_string();
+        let text = (73..=75)
+            .map(|spell| {
+                let id = spell.to_string();
+                let mut fields = vec!["0"; 120];
+                fields[0] = &id;
+                fields[1] = "Synthetic song";
+                fields[14] = "1500";
+                fields[15] = &recast;
+                fields[104..120].fill("255");
+                fields[111] = "1"; // Bard's class-level column.
+                fields.join("^")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+        crate::spellbook::SpellNames::parse(&text)
+    }
+
+    /// A Bard with synthetic zero-recast songs 73, 74 and 75 in gems 1 to 3,
+    /// admitted in session 7 where the server type offers `/melody` or not.
     fn bard_app(class: u32, offered: bool) -> (App, Receiver<ClientCommand>) {
         let mut player = crate::hud::tests::caster();
         player.class = Some(class);
@@ -115,10 +135,12 @@ mod tests {
         app.insert_resource(online)
             .insert_resource(crate::outbox::Outbox::new(Some(tx)))
             .init_resource::<crate::chat::ChatState>()
-            .init_resource::<crate::spellbook::SpellNames>()
+            .insert_resource(songs(0))
             .init_resource::<crate::ViewerSettings>()
             .init_resource::<super::super::messages::Messages>()
-            .add_systems(Update, melody);
+            // As production does, resolve received clocks from installed
+            // timing before a melody press meets ordinary gem admission.
+            .add_systems(Update, (crate::online::tick, melody).chain());
         (app, rx)
     }
 
@@ -130,7 +152,14 @@ mod tests {
     }
 
     fn news(app: &mut App, event: WorldEvent) {
-        testing::news(&mut app.world_mut().resource_mut::<OnlineState>(), [event]);
+        app.world_mut()
+            .resource_scope(|world, mut online: Mut<OnlineState>| {
+                testing::news_with(
+                    &mut online,
+                    [event],
+                    world.resource::<crate::spellbook::SpellNames>(),
+                );
+            });
     }
 
     fn refreshed(app: &mut App, gem: u32, spell_id: u32) {
@@ -222,6 +251,51 @@ mod tests {
         typed(&mut app, "");
         assert_eq!(sent(&rx), "");
         assert_eq!(gems(&app), Vec::<u8>::new());
+    }
+
+    #[test]
+    fn missing_song_timing_keeps_a_refreshed_gem_unavailable_to_melody() {
+        let (mut app, rx) = bard_app(BARD, true);
+        app.insert_resource(crate::spellbook::SpellNames::default());
+        typed(&mut app, "1 3 2");
+        assert_eq!(sent(&rx), "1");
+        refreshed(&mut app, 0, 73);
+        assert_eq!(sent(&rx), "s 3");
+        refreshed(&mut app, 2, 75);
+        assert_eq!(sent(&rx), "s 2");
+        refreshed(&mut app, 1, 74);
+        assert_eq!(sent(&rx), "s");
+        assert!(
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .newest()
+                .contains("Spell timing is unavailable")
+        );
+        app.update();
+        assert_eq!(sent(&rx), "");
+        assert_eq!(gems(&app), [0, 2, 1]);
+    }
+
+    #[test]
+    fn a_song_with_recast_keeps_its_own_wait_when_melody_cycles_back() {
+        let (mut app, rx) = bard_app(BARD, true);
+        app.insert_resource(songs(60_000));
+        typed(&mut app, "1 3 2");
+        assert_eq!(sent(&rx), "1");
+        refreshed(&mut app, 0, 73);
+        assert_eq!(sent(&rx), "s 3");
+        refreshed(&mut app, 2, 75);
+        assert_eq!(sent(&rx), "s 2");
+        refreshed(&mut app, 1, 74);
+        assert_eq!(sent(&rx), "s");
+        assert!(
+            app.world()
+                .resource::<crate::chat::ChatState>()
+                .newest()
+                .contains("Spell available in")
+        );
+        app.update();
+        assert_eq!(sent(&rx), "");
     }
 
     #[test]

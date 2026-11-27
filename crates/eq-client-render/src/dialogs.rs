@@ -16,6 +16,8 @@ use eq_client_core::{
 };
 use std::time::Instant;
 
+mod stml;
+
 #[derive(Clone, Copy, Component)]
 pub(super) struct DialogButton {
     admission: u64,
@@ -323,11 +325,8 @@ fn dialog(commands: &mut Commands, offer: &PopupOffer) -> Entity {
             &popup.title
         };
         body.spawn(theme::text(title, Size::Heading, theme::INK_WARM));
-        body.spawn(scroller()).with_child(theme::text(
-            stml_text(&popup.text),
-            Size::Body,
-            theme::INK_BRIGHT,
-        ));
+        body.spawn(scroller())
+            .with_children(|body| stml::Document::parse(&popup.text).spawn(body));
         body.spawn(Node {
             column_gap: px(8),
             justify_content: JustifyContent::End,
@@ -455,57 +454,6 @@ pub(super) fn scroll(
         && let Ok((node, mut position)) = bodies.get_mut(entity)
     {
         windows::scroll_by(&mut position, node, wheel.pixels);
-    }
-}
-
-/// Renders a conservative STML subset as inert text. Unknown tags remain
-/// literal. Recognized anchors keep their labels and never become controls.
-fn stml_text(markup: &str) -> String {
-    let mut text = String::new();
-    let mut rest = markup;
-    while !rest.is_empty() {
-        if let Some((tag, next)) = rest.strip_prefix('<').and_then(|tail| tail.split_once('>'))
-            && let Some(value) = tag_text(tag)
-        {
-            text.push_str(value);
-            rest = next;
-        } else if let Some((entity, next)) =
-            rest.strip_prefix('&').and_then(|tail| tail.split_once(';'))
-            && let Some(value) = entity_text(entity)
-        {
-            text.push(value);
-            rest = next;
-        } else {
-            let ch = rest.chars().next().expect("nonempty STML");
-            if !ch.is_control() || matches!(ch, '\n' | '\t') {
-                text.push(ch);
-            }
-            rest = &rest[ch.len_utf8()..];
-        }
-    }
-    text.trim().to_owned()
-}
-
-fn tag_text(tag: &str) -> Option<&'static str> {
-    let name = tag.trim().trim_end_matches('/').split_whitespace().next()?;
-    match name.to_ascii_lowercase().as_str() {
-        "br" | "/p" | "/tr" | "/table" | "hr" => Some("\n"),
-        "/td" | "/th" => Some("   "),
-        "p" | "table" | "tr" | "td" | "th" | "c" | "/c" | "b" | "/b" | "i" | "/i" | "u" | "/u"
-        | "a" | "/a" | "font" | "/font" | "center" | "/center" => Some(""),
-        _ => None,
-    }
-}
-
-fn entity_text(entity: &str) -> Option<char> {
-    match entity {
-        "amp" => Some('&'),
-        "lt" => Some('<'),
-        "gt" => Some('>'),
-        "quot" => Some('"'),
-        "apos" => Some('\''),
-        "nbsp" => Some(' '),
-        _ => None,
     }
 }
 
@@ -763,13 +711,86 @@ mod tests {
     }
 
     #[test]
-    fn stml_layout_keeps_words_and_never_activates_markup() {
-        assert_eq!(
-            stml_text(
-                "<p>Hello<br/> <c \"#FF0000\">traveler</c></p><a href=\"game:do\">Visit</a> &lt;br&gt;<script>text</script>"
-            ),
-            "Hello\n traveler\nVisit <br><script>text</script>"
+    fn a_received_popup_presents_colored_grid_cells_and_scoped_controls() {
+        use eq_client_core::popups::Popup;
+        let mut app = crate::testing::app();
+        app.add_systems(Update, present);
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        crate::online::testing::admit(&mut online, 5, crate::online::testing::player(7));
+        crate::online::testing::news(
+            &mut online,
+            [eq_client_core::WorldEvent::PopupOpened(PopupOffer {
+                session_id: 5,
+                serial: 9,
+                expires_at: None,
+                popup: Popup {
+                    title: "Entity Info".into(),
+                    text: "<c \"#FFFF66\">Stats</c><br><table><tbody><tr><td>Name</td><td>A test NPC</td></tr></tbody></table>".into(),
+                    buttons: 1,
+                    duration: None,
+                    popup_id: 10,
+                    negative_id: 0,
+                },
+            })],
         );
-        assert_eq!(stml_text("2 < 3 & unknown; <c"), "2 < 3 & unknown; <c");
+        app.update();
+        let world = app.world_mut();
+        let body = world
+            .query_filtered::<Entity, With<ScrollBody>>()
+            .single(world)
+            .unwrap();
+        assert_eq!(
+            world.get::<Node>(body).unwrap().overflow,
+            Overflow::scroll_y()
+        );
+        assert!(world.get::<windows::pointer::TakesWheel>(body).is_some());
+        let panel = world.get::<ChildOf>(body).unwrap().parent();
+        assert_eq!(world.get::<WindowId>(panel), Some(&WindowId::ServerDialog));
+        let grids = world
+            .query::<(Entity, &Node)>()
+            .iter(world)
+            .filter(|(_, node)| node.display == Display::Grid)
+            .map(|(entity, node)| (entity, node.grid_template_columns.len()))
+            .collect::<Vec<_>>();
+        assert_eq!(grids.len(), 1);
+        assert_eq!(grids[0].1, 2);
+        assert_eq!(world.get::<ChildOf>(grids[0].0).unwrap().parent(), body);
+        let spans = world
+            .query::<(&TextSpan, &TextColor)>()
+            .iter(world)
+            .map(|(text, color)| (text.0.clone(), color.0))
+            .collect::<Vec<_>>();
+        assert!(spans.contains(&("Stats".into(), Color::srgb_u8(255, 255, 102))));
+        assert!(spans.contains(&("A test NPC".into(), Color::srgb_u8(255, 255, 255))));
+        assert!(spans.iter().all(|(text, _)| !text.contains("tbody")));
+        for parent in world
+            .query_filtered::<&ChildOf, With<TextSpan>>()
+            .iter(world)
+        {
+            let node = world.get::<Node>(parent.parent()).unwrap();
+            assert_eq!((node.width, node.min_width), (percent(100), px(0)));
+            assert_eq!(
+                world.get::<TextLayout>(parent.parent()).unwrap().linebreak,
+                LineBreak::WordOrCharacter
+            );
+        }
+        assert_eq!(world.query::<&DialogButton>().iter(world).count(), 3);
+        assert!(
+            world
+                .query::<&DialogButton>()
+                .iter(world)
+                .all(|button| (button.admission, button.serial) == (5, 9))
+        );
+        // Presenting the same offer again must retain its body and controls.
+        app.update();
+        let world = app.world_mut();
+        assert_eq!(
+            world
+                .query_filtered::<Entity, With<ScrollBody>>()
+                .single(world)
+                .unwrap(),
+            body
+        );
+        assert_eq!(world.query::<&DialogButton>().iter(world).count(), 3);
     }
 }

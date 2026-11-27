@@ -23,6 +23,13 @@ control transition can be counted; a raw negative report can still describe a
 living player wearing HP gear. Positive 1 HP can round down to 0% without being
 unconscious.
 
+Script reports distinguish `hp_control_basis`, computed from the host's current
+facts, from `hp_accepted_basis`, echoed by the session's posture owner. A fresh
+HP receipt clears the accepted basis even when the numbers repeat. The
+`unconscious` input hold can begin before the first acceptance and remains
+through a positive HP refresh until the worker's wake arrives. These values
+establish no server death or damage acknowledgment.
+
 The control basis reconstructs the received packet's current HP using its
 declared item-bonus convention. It uses the received maximum, rather than
 replacing it with a class or stamina estimate. This does not model the native
@@ -77,6 +84,14 @@ units, under every standing body's climb; a small body ducking, or with its
 origin in water, climbs less than that, so a route may lead it to an edge
 its walk refuses until it stands or leaves the water.
 
+Scripted walks can connect mesh islands beside a modeled usable door. Each
+connection must pass the ordinary collision walk with only that door removed;
+static walls, missing ground and other closed doors still block it. Following
+approaches the door, uses the existing interaction, then waits until its actual
+collider allows passage. A rejected or nonopening door is excluded from the
+replanned route. Ordinary hinges and Titanium type-15 slides are supported;
+lifts and unsupported mechanisms remain obstacles. A door request is not
+confirmation that the server unlocked or opened it.
 Ducking lowers the movement collision top to the program's ducked room:
 S + 1.5 on Titanium, S + 0.5 on Mac, where S is the model's stand height
 including the zone's classic scale. The existing capsule radius and base
@@ -241,6 +256,14 @@ program's frames in each 50 ms step (inferred, checklists 6.416 and 6.419):
 its falls and jumps go as the original's at 60, the same for every player,
 and never gentler than the original running faster. Project 1999 and Titanium EQEmu sessions
 offer bounded swimming in classic water marked by the installed zone.
+Titanium keyboard facing is observed every rendered frame with that same
+turn ramp (0x4a1d74; the 60 Hz mapping remains inferred). Releasing a turn key
+consumes no extra turn frame and stops the drawn character and chase yaw,
+including on a supported boat. Ordinary paced samples report the facing
+already reached; queued position playback does not play that turn again.
+Forward/backward translation keeps its existing controller. Natural carrier
+yaw and genuine server corrections can still change the world-space facing.
+Mouse look and deliberate camera orbit keep their existing ownership.
 Wet movement starts when the character's body origin enters that region.
 On Titanium, water moves the body as the original client's own water step
 does: velocity carries from frame to frame, the water damps it, and gravity
@@ -1060,6 +1083,13 @@ closing the merchant or changing its catalog, inventory or admission discards
 the selection. Only one merchant action can be pending. An unanswered action
 shows an unknown outcome and is never retried automatically; received items
 and coin updates remain the session's responsibility.
+
+Selecting a carried item for a merchant keeps its inventory square highlighted
+when the pointer leaves. Titanium shows its local sale quote before submission;
+its listed buy prices are already rated. A matching received sale produces the
+native sale line after the result arrives, even if the item has already left the
+inventory display. The line does not spend or credit coins itself. Missing base
+metadata or unretained augment prices remain unknown.
 
 On Titanium EQEmu and P99, supported resurrection and translocate offers open
 a Yes or No dialog.

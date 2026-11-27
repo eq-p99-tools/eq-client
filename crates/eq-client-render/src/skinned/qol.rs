@@ -133,30 +133,7 @@ pub(super) fn pages<'a>(
         .map(Control::Checkbox)
         .collect();
     if let Some((slider, value)) = slider.zip(value) {
-        choices.extend([
-            Control::Slider {
-                section: Section::Ordinary,
-                slider,
-                value,
-                ids: (
-                    "EQC_QoL_UiScaleLabel",
-                    controls::UI_SCALE_SLIDER,
-                    controls::UI_SCALE_VALUE,
-                ),
-                text: "Interface scale",
-            },
-            Control::Slider {
-                section: Section::Dangerous,
-                slider,
-                value,
-                ids: (
-                    "EQC_QoL_RunSpeedLabel",
-                    controls::RUN_SPEED_SLIDER,
-                    controls::RUN_SPEED_VALUE,
-                ),
-                text: "Run a Little Faster",
-            },
-        ]);
+        choices.extend(option_sliders(slider, value));
     }
     // Use the height authored for the chosen heading font. Skins without
     // a usable label take both metrics and typography from the checkbox.
@@ -180,15 +157,85 @@ pub(super) fn pages<'a>(
             .copied()
             .filter(|choice| choice.section() == section)
             .collect();
-        y = layout.append_controls(
+        y = layout.append_section(
             &mut pieces,
             &section_choices,
             checkbox,
             y + heading_height + GAP,
         ) + SECTION_GAP;
     }
+    // Append the palette after existing controls, preserving their column/row positions.
+    if let Some((slider, value)) = slider.zip(value) {
+        append_palette(
+            &mut pieces,
+            &layout,
+            (checkbox, caption),
+            (slider, value),
+            y,
+        );
+    }
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
+}
+
+fn option_sliders<'a>(slider: &'a Slider, value: &'a Label) -> [Control<'a>; 2] {
+    [
+        Control::Slider {
+            section: Section::Ordinary,
+            slider,
+            value,
+            ids: (
+                "EQC_QoL_UiScaleLabel",
+                controls::UI_SCALE_SLIDER,
+                controls::UI_SCALE_VALUE,
+            ),
+            text: "Interface scale",
+        },
+        Control::Slider {
+            section: Section::Dangerous,
+            slider,
+            value,
+            ids: (
+                "EQC_QoL_RunSpeedLabel",
+                controls::RUN_SPEED_SLIDER,
+                controls::RUN_SPEED_VALUE,
+            ),
+            text: "Run a Little Faster",
+        },
+    ]
+}
+
+fn append_palette(
+    pieces: &mut Vec<(String, Element)>,
+    layout: &Layout,
+    (checkbox, caption): (&Button, Option<&Label>),
+    (slider, value): (&Slider, &Label),
+    y: f32,
+) {
+    let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
+    pieces.push(Section::CombatText.heading(
+        checkbox,
+        caption,
+        Area {
+            x: layout.margin,
+            y,
+            width: layout.available,
+            height: heading_height,
+        },
+    ));
+    let colors: Vec<_> = controls::COMBAT_TEXT_COLORS
+        .into_iter()
+        .map(
+            |(caption_id, slider_id, value_id, text, _)| Control::Slider {
+                section: Section::CombatText,
+                slider,
+                value,
+                ids: (caption_id, slider_id, value_id),
+                text,
+            },
+        )
+        .collect();
+    layout.append_controls(pieces, &colors, checkbox, y + heading_height + GAP);
 }
 
 /// Cuts a caption, slider and value label from the skin and returns their bottom edge.
@@ -266,6 +313,7 @@ fn qol_slider(
 enum Section {
     Ordinary,
     Dangerous,
+    CombatText,
 }
 
 impl Section {
@@ -273,6 +321,7 @@ impl Section {
         let (id, text) = match self {
             Self::Ordinary => ("EQC_QoL_SettingsCaption", "Quality of Life"),
             Self::Dangerous => ("EQC_QoL_UnsafeCaption", "Dangerous"),
+            Self::CombatText => ("EQC_QoL_CombatTextCaption", "Combat text colors"),
         };
         (
             id.to_owned(),
@@ -350,6 +399,32 @@ struct Layout {
 }
 
 impl Layout {
+    /// Give the dangerous slider its own leading row. New checkboxes must
+    /// not push Run Speed into a half-width trailing cell and wrap its
+    /// track below its caption, beyond the default viewport's four lines.
+    fn append_section(
+        &self,
+        pieces: &mut Vec<(String, Element)>,
+        choices: &[Control<'_>],
+        checkbox: &Button,
+        y: f32,
+    ) -> f32 {
+        let (leading, rest): (Vec<_>, Vec<_>) = choices.iter().copied().partition(|control| {
+            matches!(
+                control,
+                Control::Slider {
+                    section: Section::Dangerous,
+                    ..
+                }
+            )
+        });
+        if leading.is_empty() {
+            return self.append_controls(pieces, choices, checkbox, y);
+        }
+        let bottom = self.append_controls(pieces, &leading, checkbox, y);
+        self.append_controls(pieces, &rest, checkbox, bottom + GAP)
+    }
+
     #[allow(
         clippy::cast_possible_truncation,
         clippy::cast_sign_loss,

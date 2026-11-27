@@ -261,6 +261,18 @@ pub enum Level {
     /// client's key, scale and default are pending read R49-7 c (recording
     /// checklist 6.503); this client's own starts at 100.
     MusicVolume,
+    /// Floating damage outgoing colour channel, in percent.
+    CombatTextOutgoingRed,
+    /// Floating damage outgoing colour channel, in percent.
+    CombatTextOutgoingGreen,
+    /// Floating damage outgoing colour channel, in percent.
+    CombatTextOutgoingBlue,
+    /// Floating damage incoming colour channel, in percent.
+    CombatTextIncomingRed,
+    /// Floating damage incoming colour channel, in percent.
+    CombatTextIncomingGreen,
+    /// Floating damage incoming colour channel, in percent.
+    CombatTextIncomingBlue,
 }
 
 /// The fewest frames a second the Max FPS slider offers.
@@ -280,7 +292,7 @@ const MAX_RUN_SPEED: u16 = RunSpeedMultiplier::MAX.percent();
 
 impl Level {
     /// Every level, in the order a file lists them.
-    pub const ALL: [Self; 7] = [
+    pub const ALL: [Self; 13] = [
         Self::ClipPlane,
         Self::MaxFps,
         Self::MouseSensitivity,
@@ -288,6 +300,12 @@ impl Level {
         Self::RunSpeed,
         Self::SoundVolume,
         Self::MusicVolume,
+        Self::CombatTextOutgoingRed,
+        Self::CombatTextOutgoingGreen,
+        Self::CombatTextOutgoingBlue,
+        Self::CombatTextIncomingRed,
+        Self::CombatTextIncomingGreen,
+        Self::CombatTextIncomingBlue,
     ];
 
     /// The name a file keeps it under.
@@ -301,6 +319,12 @@ impl Level {
             Self::RunSpeed => "run_boost",
             Self::SoundVolume => "sound_volume",
             Self::MusicVolume => "music_volume",
+            Self::CombatTextOutgoingRed => "combat_text_outgoing_red",
+            Self::CombatTextOutgoingGreen => "combat_text_outgoing_green",
+            Self::CombatTextOutgoingBlue => "combat_text_outgoing_blue",
+            Self::CombatTextIncomingRed => "combat_text_incoming_red",
+            Self::CombatTextIncomingGreen => "combat_text_incoming_green",
+            Self::CombatTextIncomingBlue => "combat_text_incoming_blue",
         }
     }
 
@@ -325,9 +349,16 @@ impl Level {
     /// The values its slider stops at, from its left.
     fn stops(self) -> Vec<u16> {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume | Self::MusicVolume => {
-                (0..=100).collect()
-            }
+            Self::ClipPlane
+            | Self::MouseSensitivity
+            | Self::SoundVolume
+            | Self::MusicVolume
+            | Self::CombatTextOutgoingRed
+            | Self::CombatTextOutgoingGreen
+            | Self::CombatTextOutgoingBlue
+            | Self::CombatTextIncomingRed
+            | Self::CombatTextIncomingGreen
+            | Self::CombatTextIncomingBlue => (0..=100).collect(),
             Self::MaxFps => (MIN_FPS..=MAX_FPS)
                 .step_by(FPS_STEP)
                 .chain(std::iter::once(0))
@@ -344,9 +375,16 @@ impl Level {
     #[must_use]
     pub fn fraction(self, value: u16) -> f32 {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume | Self::MusicVolume => {
-                f32::from(value.min(100)) / 100.0
-            }
+            Self::ClipPlane
+            | Self::MouseSensitivity
+            | Self::SoundVolume
+            | Self::MusicVolume
+            | Self::CombatTextOutgoingRed
+            | Self::CombatTextOutgoingGreen
+            | Self::CombatTextOutgoingBlue
+            | Self::CombatTextIncomingRed
+            | Self::CombatTextIncomingGreen
+            | Self::CombatTextIncomingBlue => f32::from(value.min(100)) / 100.0,
             Self::MaxFps if value == 0 => 1.0,
             Self::MaxFps => {
                 let span = f32::from(MAX_FPS - MIN_FPS);
@@ -389,7 +427,16 @@ impl Level {
     pub fn words(self, value: u16) -> String {
         match self {
             Self::MouseSensitivity => mouse_step(value).to_string(),
-            Self::ClipPlane | Self::UiScale | Self::SoundVolume | Self::MusicVolume => {
+            Self::ClipPlane
+            | Self::UiScale
+            | Self::SoundVolume
+            | Self::MusicVolume
+            | Self::CombatTextOutgoingRed
+            | Self::CombatTextOutgoingGreen
+            | Self::CombatTextOutgoingBlue
+            | Self::CombatTextIncomingRed
+            | Self::CombatTextIncomingGreen
+            | Self::CombatTextIncomingBlue => {
                 format!("{value} %")
             }
             Self::MaxFps if value == 0 => "Display".to_owned(),
@@ -401,9 +448,16 @@ impl Level {
     /// Whether a file's value is one the option takes.
     fn takes(self, value: u16) -> bool {
         match self {
-            Self::ClipPlane | Self::MouseSensitivity | Self::SoundVolume | Self::MusicVolume => {
-                value <= 100
-            }
+            Self::ClipPlane
+            | Self::MouseSensitivity
+            | Self::SoundVolume
+            | Self::MusicVolume
+            | Self::CombatTextOutgoingRed
+            | Self::CombatTextOutgoingGreen
+            | Self::CombatTextOutgoingBlue
+            | Self::CombatTextIncomingRed
+            | Self::CombatTextIncomingGreen
+            | Self::CombatTextIncomingBlue => value <= 100,
             Self::MaxFps => value == 0 || (1..=1000).contains(&value),
             Self::UiScale => (MIN_UI_SCALE..=MAX_UI_SCALE).contains(&value),
             Self::RunSpeed => RunSpeedMultiplier::from_percent(value).is_some(),
@@ -560,6 +614,10 @@ pub struct Options {
     pub user_colors: [Option<[u8; 3]>; USER_COLOR_KINDS],
     /// See [`Level::MusicVolume`].
     pub music_volume: u16,
+    /// RGB percentages for damage to other known targets.
+    pub combat_text_outgoing: [u16; 3],
+    /// RGB percentages for damage to this player.
+    pub combat_text_incoming: [u16; 3],
     /// The Luclin model keys per race and gender, and the all-off key, as
     /// the official client keeps them in `eqclient.ini` (read R49-44 a):
     /// every key unset by default, so the server's mask decides
@@ -628,6 +686,8 @@ impl Default for Options {
             mouse_pointer_speed: None,
             user_colors: [None; USER_COLOR_KINDS],
             music_volume: 100,
+            combat_text_outgoing: [100, 90, 30],
+            combat_text_incoming: [100, 30, 25],
             luclin_models: LuclinModels::NONE,
             chat_filters: crate::chat_filters::ChatFilters::default(),
         }
@@ -709,6 +769,12 @@ impl Options {
             Level::RunSpeed => self.qol.run_speed_multiplier.percent(),
             Level::SoundVolume => self.sound_volume,
             Level::MusicVolume => self.music_volume,
+            Level::CombatTextOutgoingRed => self.combat_text_outgoing[0],
+            Level::CombatTextOutgoingGreen => self.combat_text_outgoing[1],
+            Level::CombatTextOutgoingBlue => self.combat_text_outgoing[2],
+            Level::CombatTextIncomingRed => self.combat_text_incoming[0],
+            Level::CombatTextIncomingGreen => self.combat_text_incoming[1],
+            Level::CombatTextIncomingBlue => self.combat_text_incoming[2],
         }
     }
 
@@ -727,6 +793,12 @@ impl Options {
             }
             Level::SoundVolume => &mut self.sound_volume,
             Level::MusicVolume => &mut self.music_volume,
+            Level::CombatTextOutgoingRed => &mut self.combat_text_outgoing[0],
+            Level::CombatTextOutgoingGreen => &mut self.combat_text_outgoing[1],
+            Level::CombatTextOutgoingBlue => &mut self.combat_text_outgoing[2],
+            Level::CombatTextIncomingRed => &mut self.combat_text_incoming[0],
+            Level::CombatTextIncomingGreen => &mut self.combat_text_incoming[1],
+            Level::CombatTextIncomingBlue => &mut self.combat_text_incoming[2],
         };
         *option = value;
     }
@@ -1292,6 +1364,34 @@ mod tests {
             Toggle::all().count(),
             Toggle::OFFICIAL.len() + Fix::settings().count()
         );
+    }
+
+    #[test]
+    fn combat_text_colors_keep_the_original_defaults_and_round_trip() {
+        let defaults = Options::default();
+        assert_eq!(defaults.combat_text_outgoing, [100, 90, 30]);
+        assert_eq!(defaults.combat_text_incoming, [100, 30, 25]);
+        assert!(!defaults.qol.on(Fix::FloatingCombatText));
+        let levels = [
+            Level::CombatTextOutgoingRed,
+            Level::CombatTextOutgoingGreen,
+            Level::CombatTextOutgoingBlue,
+            Level::CombatTextIncomingRed,
+            Level::CombatTextIncomingGreen,
+            Level::CombatTextIncomingBlue,
+        ];
+        let mut changed = defaults;
+        for (index, level) in levels.into_iter().enumerate() {
+            let value = u16::try_from(index * 17).unwrap();
+            changed.set_level(level, value);
+            assert_eq!(level.at(level.fraction(value)), value);
+            assert_eq!(level.words(value), format!("{value} %"));
+            assert_eq!(
+                Options::read(&format!("{} = 101", level.key()), defaults),
+                defaults
+            );
+        }
+        assert_eq!(Options::read(&changed.text(), defaults), changed);
     }
 
     #[test]

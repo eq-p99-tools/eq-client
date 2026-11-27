@@ -4,7 +4,7 @@ if exists('b:current_syntax')
 endif
 
 syntax case match
-syntax match eqscriptCommand /^\s*\zs\%(login\|wait_servers\|server\|wait_select\|select\|delete\|create\|create_refused\|wait_online\|wait_zone\|wait_relocation\|wait_dead\|slash\|boat\|train_aa\|activate_aa\|aa_split\|social\|gm\|chat\|drag\|press\|hold\|key_down\|key_up\|wheel\|look\|wait\|camera\|trace\|face\|move\|approach\|chase\|walk\|give\|interact\|popup\|inspect_player\|inspect_link\|compose_link\|compose_owned_link\|click\|right_click\|click_with\|right_click_with\|hover\|hold_click\|report\|sound\|screenshot\|quit\)\>\ze\s*(/
+syntax match eqscriptCommand /^\s*\zs\%(login\|wait_servers\|server\|wait_select\|select\|delete\|create\|create_refused\|wait_online\|wait_zone\|wait_relocation\|wait_dead\|slash\|boat\|train_aa\|activate_aa\|aa_split\|social\|gm\|chat\|drag\|press\|hold\|key_down\|key_up\|wheel\|look\|wait\|camera\|trace\|face\|move\|approach\|chase\|walk\|walk_to\|walk_exit\|give\|interact\|popup\|inspect_player\|inspect_link\|compose_link\|compose_owned_link\|click\|right_click\|click_with\|right_click_with\|hover\|hold_click\|report\|sound\|screenshot\|quit\)\>\ze\s*(/
 syntax keyword eqscriptKeyword if elif else for in while break continue pass and or not def return
 " The name a def line gives its function.
 syntax match eqscriptDefinition /\%(^def\s\+\)\@<=\h\w*/

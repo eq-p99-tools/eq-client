@@ -1,0 +1,1 @@
+- On Titanium, stop keyboard turning when the turn key is released, including on boats, while retaining forward and backward travel and ordinary movement reporting.

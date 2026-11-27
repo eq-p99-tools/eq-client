@@ -395,7 +395,12 @@ impl super::ClientWorld {
         // The native reporter sends first and subtracts locally afterward
         // (0x41c905). A transport submission is not a server HP receipt;
         // retain that report unchanged, and let the next report replace this.
-        if !self.is_dead() && self.pending_transfer.is_none() {
+        if amount != 0 && !self.is_dead() && self.pending_transfer.is_none() {
+            self.vitals.local_hp_base = self
+                .vitals
+                .local_hp_base
+                .or_else(|| self.vitals.reported_hp.map(|report| report.current))
+                .map(|base| crate::control::subtract_local_hit_points(base, amount));
             self.vitals.local_hp_damage = self
                 .vitals
                 .local_hp_damage

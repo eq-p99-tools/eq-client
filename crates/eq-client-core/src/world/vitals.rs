@@ -61,6 +61,9 @@ pub struct Vitals {
     /// Successfully submitted Titanium environmental damage since the last
     /// own-HP report. This local counter is separate from received HP facts.
     pub local_hp_damage: u64,
+    /// Stored base after each submitted local damage delta. None before any
+    /// local damage; the raw server report remains unchanged.
+    pub local_hp_base: Option<i32>,
 }
 
 impl Vitals {
@@ -94,19 +97,17 @@ impl Vitals {
         let current = if dead {
             0
         } else {
-            self.local_current(report.current) + to_current
+            self.local_current(report.current)? + to_current
         };
         let maximum = i64::from(report.maximum) + to_maximum;
         Some((current, maximum))
     }
 
-    fn local_current(&self, reported: i32) -> i64 {
+    fn local_current(&self, reported: i32) -> Option<i64> {
         if self.local_hp_damage == 0 {
-            i64::from(reported)
+            Some(i64::from(reported))
         } else {
-            i64::from(reported)
-                .saturating_sub(i64::try_from(self.local_hp_damage).unwrap_or(i64::MAX))
-                .clamp(-32768, 10_000_000)
+            self.local_hp_base.map(i64::from)
         }
     }
 
@@ -268,6 +269,7 @@ mod tests {
         let vitals = Vitals {
             item_hp: Some(-20),
             local_hp_damage: 1,
+            local_hp_base: Some(crate::control::subtract_local_hit_points(10_000_010, 1)),
             ..reported(10_000_010, 10_000_020, ItemHitPoints::LeftOut)
         };
         assert_eq!(
@@ -277,6 +279,7 @@ mod tests {
         let lower = Vitals {
             item_hp: Some(-50),
             local_hp_damage: 100,
+            local_hp_base: Some(crate::control::subtract_local_hit_points(-32760, 100)),
             ..reported(-32760, 100, ItemHitPoints::LeftOut)
         };
         assert_eq!(lower.signed_hit_points(false), Some((-32818, 50)));

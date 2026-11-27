@@ -822,8 +822,9 @@ impl InstalledClient {
     #[must_use]
     pub const fn merchant_prices(self) -> Option<crate::merchants::MerchantPrices> {
         match self {
-            // Not read for either.
-            Self::Titanium | Self::Rof2 => None,
+            Self::Titanium => Some(crate::merchants::TITANIUM),
+            // RoF2 has not been read.
+            Self::Rof2 => None,
             Self::EqMac => Some(crate::merchants::EQMAC),
         }
     }
