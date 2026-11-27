@@ -541,15 +541,13 @@ pub(crate) fn apply(
         if *id == WindowId::Guild && !crate::guild::roster::adapt(&mut effective) {
             continue;
         }
-        // This first retained reflow contract belongs to chat. Other authored
-        // sizable screens are preserved by the parser without assuming that
-        // their widgets share chat's sizing policy.
+        // Chat and map retain authored widget relationships during resizing.
         let sizing = reflow::eligible_scope(&from, *id, screen);
         state.sizing(
             sizing,
             Vec2::new(effective.area.width, effective.area.height),
         );
-        if let Some(size) = state.preferred_size() {
+        if let Some(size) = state.preferred_size().filter(|_| *id != WindowId::Map) {
             effective.area.width = size.x;
             effective.area.height = size.y;
         }
@@ -558,6 +556,14 @@ pub(crate) fn apply(
         art.draw_in((from != skin.0).then(|| from.clone()));
         skinned.0.insert(*id);
         reshape(&mut node, screen, state.placed(), (*id, arranged));
+        if *id == WindowId::Map {
+            node.min_width = px(400);
+            node.min_height = px(340);
+            if let Some(size) = state.preferred_size() {
+                node.width = px(size.x);
+                node.height = px(size.y);
+            }
+        }
         super::windows::drag_anywhere(&mut commands, frame, *id);
         background.0 = Color::NONE;
         *border = BorderColor::all(Color::NONE);
@@ -576,6 +582,9 @@ pub(crate) fn apply(
                 tab_frame: screen.tab_frame.as_deref(),
             };
             title_bottom = draw(window, screen, &mut art, &context);
+            if *id == WindowId::Map && sizing.is_some() {
+                super::windows::resize_border(window, frame);
+            }
             if *id == WindowId::Guild {
                 crate::guild::roster::labels(window, screen.area.width, screen.area.height);
             }
@@ -1050,7 +1059,7 @@ fn button(
         }
         None => window.spawn(node),
     };
-    if owner.is_chat()
+    if (owner.is_chat() || owner == WindowId::Map)
         && let Some(anchors) = button.anchors
     {
         drawn.insert(reflow::Geometry(anchors));

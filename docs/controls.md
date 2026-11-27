@@ -171,6 +171,11 @@ unless changed in saved bindings. EqMac uses these as a Titanium-aligned fallbac
 It uses the
 installed map window when usable and a movable, minimizable fallback otherwise.
 Local map files add lines and labels; entity positions work without them.
+Drag a map edge or corner to resize it. The border takes the drag before map
+panning, while the interior keeps its usual pan, zoom and marker controls.
+The plain fallback and installed map skins remember their
+size with the character's window placements. Lock prevents movement and resizing.
+The map's minimum is 400 by 340 logical pixels to leave room for its controls.
 The initial view covers a 1,200-unit neighborhood around your character, so a
 distant invisible server helper cannot squeeze the playable area into a corner.
 **Nearby** recenters that view. **Fit all** deliberately includes every reported

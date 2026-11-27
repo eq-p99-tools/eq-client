@@ -132,6 +132,33 @@ pub(crate) fn resizable_frame(
     entity
 }
 
+/// Border controls sit above the map canvas and markers, so edge presses
+/// reach window input before interior navigation.
+pub(crate) fn resize_border(parent: &mut ChildSpawnerCommands, frame: Entity) {
+    for (left, top, right, bottom, width, height) in [
+        (px(0), px(0), Val::Auto, px(0), px(6), Val::Auto),
+        (Val::Auto, px(0), px(0), px(0), px(6), Val::Auto),
+        (px(6), px(0), px(6), Val::Auto, Val::Auto, px(6)),
+        (px(6), Val::Auto, px(6), px(0), Val::Auto, px(6)),
+    ] {
+        parent.spawn((
+            Button,
+            DragHandle(frame),
+            ZIndex(100),
+            Node {
+                position_type: PositionType::Absolute,
+                left,
+                top,
+                right,
+                bottom,
+                width,
+                height,
+                ..default()
+            },
+        ));
+    }
+}
+
 /// Visible windows and standalone controls consume pointer input before the world.
 pub(super) type PointerSurface = Or<(With<Frame>, With<Button>)>;
 
