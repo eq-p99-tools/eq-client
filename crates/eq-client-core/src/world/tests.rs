@@ -3,6 +3,7 @@ mod boats;
 mod buff_cancellation;
 mod carriers;
 mod casting;
+mod gem_readiness;
 mod guild_roster;
 mod guild_status;
 mod levels;
@@ -1168,6 +1169,7 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
         game(
             &mut world,
             WorldEvent::CastPending {
+                gem: None,
                 session_id: 1,
                 spell_id: Some(42),
                 gem: None,
@@ -1177,6 +1179,7 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
             game(
                 &mut world,
                 WorldEvent::CastPending {
+                    gem: None,
                     session_id: 1,
                     spell_id: None,
                     gem: None,
@@ -1257,6 +1260,7 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
     game(
         &mut world,
         WorldEvent::CastPending {
+            gem: None,
             session_id: 1,
             spell_id: Some(77),
             gem: None,
@@ -1266,6 +1270,7 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
     game(
         &mut world,
         WorldEvent::CastPending {
+            gem: None,
             session_id: 1,
             spell_id: None,
             gem: None,
@@ -1430,6 +1435,7 @@ fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
     game(
         &mut world,
         WorldEvent::CastPending {
+            gem: None,
             session_id: 1,
             spell_id: Some(42),
             gem: None,

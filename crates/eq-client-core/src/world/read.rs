@@ -1003,6 +1003,28 @@ impl ClientWorld {
         self.book_action.as_ref()
     }
 
+    /// A book request already sent whose matching result has not arrived.
+    /// Preparing a spell is interruptible and has not sent that request yet.
+    #[must_use]
+    pub const fn book_request_pending(&self) -> bool {
+        matches!(
+            self.book_action.as_ref(),
+            Some(
+                BookActionStatus::Submitted
+                    | BookActionStatus::AwaitingReply
+                    | BookActionStatus::Unconfirmed
+            )
+        )
+    }
+
+    /// The worker's actual memorization gauge, not an elapsed-time prediction.
+    #[must_use]
+    pub const fn memorization_progress(
+        &self,
+    ) -> Option<&eq_network_game::spells::MemorizationProgress> {
+        self.memorization.as_ref()
+    }
+
     /// Counts the session's spellbook replies, so that two alike still differ.
     #[must_use]
     pub const fn book_action_revision(&self) -> u64 {

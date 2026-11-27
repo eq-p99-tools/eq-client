@@ -400,7 +400,8 @@ pub(crate) fn presentation(
         .find(|(_, interaction, ..)| **interaction != Interaction::None)
         .map(|(_, _, slot, ..)| slot.0);
     for (entity, interaction, slot, color, (skinned, greyed), tooltip) in &mut slots {
-        let spell = bindings.gem(slot.0).and_then(|gem| online.world().gem(gem));
+        let gem = bindings.gem(slot.0).and_then(|gem| u8::try_from(gem).ok());
+        let spell = gem.and_then(|gem| online.world().gem(usize::from(gem)));
         let missing_item = match bindings.0[slot.0] {
             Some(Action::Item { slot, id }) => bound_item(inventory, (slot, id), qol).is_none(),
             _ => false,
@@ -429,14 +430,15 @@ pub(crate) fn presentation(
             _ => false,
         };
         let waiting = ability_waits
-            || spell.is_some_and(|id| {
+            || gem.zip(spell).is_some_and(|(gem, id)| {
                 online.world().casting().pending.is_some()
                     || online.world().casting().cast.is_some()
+                    || online.world().book_request_pending()
                     || !online
                         .world()
                         .casting()
-                        .spell_wait(id, names.linked_timer(id), now)
-                        .is_zero()
+                        .gem_wait(gem, id, names.linked_timer(id), now)
+                        .is_some_and(|wait| wait.is_zero())
             });
         if skinned {
             let detail = (*interaction != Interaction::None).then(|| {
@@ -642,11 +644,11 @@ fn hovered_detail(
                     let remaining =
                         world
                             .casting()
-                            .spell_wait(spell, names.linked_timer(spell), now);
-                    if remaining.is_zero() {
-                        "Uses current target".into()
-                    } else {
-                        format!("Available in {:.1}s", remaining.as_secs_f32())
+                            .gem_wait(gem, spell, names.linked_timer(spell), now);
+                    match remaining {
+                        Some(wait) if wait.is_zero() => "Uses current target".into(),
+                        Some(wait) => format!("Available in {:.1}s", wait.as_secs_f32()),
+                        None => "Awaiting spell timing data".into(),
                     }
                 };
                 format!("{}\n{}\n{status}", names.label(spell), names.details(spell))

@@ -14,6 +14,7 @@ mod casting;
 mod changes;
 mod character;
 mod control;
+mod gem_timing;
 mod group;
 mod guild;
 mod held_models;
@@ -441,6 +442,7 @@ pub struct ClientWorld {
     spell_book: Option<SpellBook>,
     /// The spellbook change's latest worker status, until a reset.
     book_action: Option<BookActionStatus>,
+    memorization: Option<eq_network_game::spells::MemorizationProgress>,
     /// When each ability timer the session started runs out; servers keep
     /// them across zones.
     ability_timers: std::collections::BTreeMap<crate::abilities::Recovery, Instant>,
@@ -502,6 +504,9 @@ impl ClientWorld {
         self.zone.doors.close_due(now);
         self.zone.pet_buffs.expire_early(now);
         self.casting.cooldowns.resolve(spells, now);
+        if let Some(clocks) = &mut self.casting.gem_clocks {
+            clocks.resolve(spells);
+        }
         self.expire_casts(now);
     }
 
@@ -801,6 +806,9 @@ impl ClientWorld {
                         self.casting
                             .cooldowns
                             .song_stopped(&player.memorized_spells);
+                        if let Some(clocks) = &mut self.casting.gem_clocks {
+                            clocks.song_stopped(spells);
+                        }
                     }
                     news.notices.push(Notice::SongStopped {
                         spell_id: *spell_id,
@@ -2089,8 +2097,8 @@ impl ClientWorld {
             WorldEvent::CastPending {
                 session_id,
                 spell_id,
-                ..
-            } => self.cast_pending(*session_id, *spell_id, news),
+                gem,
+            } => self.cast_pending(*session_id, *spell_id, *gem, now, news),
             WorldEvent::CastRequestUnconfirmed {
                 session_id,
                 spell_id,
@@ -2158,6 +2166,11 @@ impl ClientWorld {
             WorldEvent::SpellEffect(effect) => self.spell_effect(effect, (now, spells), news),
             WorldEvent::SpellBook(book) => self.spell_book = Some(book.clone()),
             WorldEvent::BookAction(status) => self.book_action_news(status),
+            WorldEvent::MemorizationProgress { session_id, progress } => {
+                if self.accepts_reply(*session_id) {
+                    self.memorization = *progress;
+                } else { news.ignored = true; }
+            }
         }
         changes
     }
@@ -2502,6 +2515,7 @@ impl ClientWorld {
                 self.inventory = Inventory::default();
                 self.spell_book = None;
                 self.book_action = None;
+                self.memorization = None;
                 self.buffs.clear();
                 self.casting = Casting::default();
             }
@@ -2510,6 +2524,7 @@ impl ClientWorld {
                 // its reply/deadline evidence is retained separately.
                 self.forget_admission();
                 self.book_action = None;
+                self.memorization = None;
                 self.casting = Casting::default();
                 self.vitals = Vitals::default();
                 self.inventory = Inventory::default();
@@ -2581,6 +2596,7 @@ impl ClientWorld {
         self.casting.interrupted = None;
         self.casting.reset_cooldowns();
         self.book_action = None;
+        self.memorization = None;
     }
 
     /// Drops the actions in flight: a cast, its request and interruption, and
@@ -2589,6 +2605,7 @@ impl ClientWorld {
         self.buffs.clear_cancellation();
         self.casting.drop_actions();
         self.book_action = None;
+        self.memorization = None;
     }
 
     /// Forgets the admission and its zone.

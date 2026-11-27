@@ -679,6 +679,7 @@ pub(crate) fn memorize(
         Some(outbox),
         (Some(held.spell), Some(held.slot)),
         gem,
+        names,
     )
     .ok()?;
     note(

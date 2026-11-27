@@ -112,10 +112,13 @@ pub(super) fn check(
     // request is pending, even mid-cast; while one is, it does nothing and
     // says nothing (0x4eccc6, read R49-34 d).
     if forgetting {
-        if world.casting().pending.is_some() {
+        if world.casting().pending.is_some() || world.book_request_pending() {
             return Err(None);
         }
         return Ok(pass(spell_id));
+    }
+    if world.casting().pending.is_some() || world.book_request_pending() {
+        return Err(None);
     }
     // While a Bard sings and no other cast is under way, a gem press stops
     // the song whatever its timers, and casts nothing (0x4ecb56, read
@@ -125,27 +128,26 @@ pub(super) fn check(
         return Ok(pass(spell_id));
     }
     // The gem click (0x4ecb56, read R49-34 h): while a cast is under way or
-    // the gem's refresh runs, its line and nothing sent; the global recast
-    // it also tests (actor +0x110) isn't kept here. Ours words, where the
-    // installation lacks the line, say which wait it is.
-    let remaining = world.casting().spell_wait(spell_id, linked_timer, now);
-    if world.casting().cast.is_some() || !remaining.is_zero() {
+    // the gem's refresh or shared recovery runs, its line and nothing sent.
+    // Ours words, where the installation lacks the line, say which wait it is.
+    let remaining = world
+        .casting()
+        .gem_cast_wait(gem, spell_id, linked_timer, now);
+    if world.casting().cast.is_some() || remaining.is_none_or(|remaining| !remaining.is_zero()) {
         let ours = if world.casting().cast.is_some() {
             format!(
                 "Already casting: {} to interrupt",
                 map.named(crate::keys::Act::Duck, "duck")
             )
         } else {
-            format!("Spell available in {:.1}s", remaining.as_secs_f32())
+            remaining.map_or_else(
+                || "Spell timing is unavailable".into(),
+                |remaining| format!("Spell available in {:.1}s", remaining.as_secs_f32()),
+            )
         };
         return Err(Some(
             messages.said_text(GEM_WAIT, &ours).typed(GEM_WAIT_COLOUR),
         ));
-    }
-    // A request the server hasn't answered: the click does nothing and
-    // says nothing.
-    if world.casting().pending.is_some() {
-        return Err(None);
     }
     // The program's cast start, in its order (0x411f3d, read R49-34 e).
     // 4: a sitting player stands first with Allow Auto Stand; lying is the
