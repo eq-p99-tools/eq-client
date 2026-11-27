@@ -1029,8 +1029,8 @@ fn headroom_pending_duck_is_withdrawn_before_water_input() {
 }
 
 #[test]
-fn headroom_server_placement_withdraws_pending_and_ducked_cycles_even_at_same_xyz() {
-    for ducked in [false, true] {
+fn headroom_server_placement_withdraws_unobserved_pending_cycles_even_at_same_xyz() {
+    {
         let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
         app.update();
         assert!(
@@ -1041,9 +1041,6 @@ fn headroom_server_placement_withdraws_pending_and_ducked_cycles_even_at_same_xy
                 .is_some()
         );
         accepted_commands(&mut app, &receiver);
-        if ducked {
-            posture(&mut app, PostureState::Ducking);
-        }
         let position = app
             .world()
             .resource::<online::OnlineState>()
@@ -1062,8 +1059,145 @@ fn headroom_server_placement_withdraws_pending_and_ducked_cycles_even_at_same_xy
             Vec::<Posture>::new()
         );
         let controls = app.world().resource::<Controls>();
-        assert!(controls.headroom.automatic.is_none(), "ducked={ducked}");
+        assert!(controls.headroom.automatic.is_none());
         assert!(!controls.headroom_retry);
+    }
+}
+
+fn observed_automatic_duck(app: &mut App, receiver: &mpsc::Receiver<ClientCommand>, now: Instant) {
+    app.world_mut().resource_mut::<Controls>().test_now = Some(now);
+    app.update();
+    assert!(
+        app.world()
+            .resource::<Controls>()
+            .headroom
+            .automatic
+            .is_some()
+    );
+    accepted_commands(app, receiver);
+    app.update();
+    assert_eq!(accepted_commands(app, receiver), vec![Posture::Ducking]);
+    posture(app, PostureState::Ducking);
+}
+
+#[test]
+fn headroom_observed_automatic_duck_survives_placement_and_motion_reset() {
+    for settle_before_placement in [false, true] {
+        let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
+        let now = Instant::now();
+        observed_automatic_duck(&mut app, &receiver, now);
+        if settle_before_placement {
+            app.update();
+            assert_eq!(
+                accepted_commands(&mut app, &receiver),
+                Vec::<Posture>::new()
+            );
+        }
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            world_position([2.0, 3.75, 0.0], 0.0),
+        );
+        app.insert_resource(Collision(Some(room(30.0))));
+        app.world_mut().resource_mut::<Controls>().reset(Some(6.0));
+        for millis in [500, 1_999, 2_000] {
+            app.world_mut().resource_mut::<Controls>().test_now =
+                Some(now + Duration::from_millis(millis));
+            app.update();
+            assert_eq!(
+                accepted_commands(&mut app, &receiver),
+                Vec::<Posture>::new()
+            );
+        }
+        app.world_mut().resource_mut::<Controls>().test_now =
+            Some(now + Duration::from_millis(2_001));
+        app.update();
+        assert_eq!(
+            accepted_commands(&mut app, &receiver),
+            vec![Posture::Standing],
+            "settled={settle_before_placement}"
+        );
+    }
+}
+
+#[test]
+fn headroom_automatic_duck_in_water_keeps_the_delay_then_returns_idle_or_held() {
+    for held in [false, true] {
+        let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
+        let now = Instant::now();
+        observed_automatic_duck(&mut app, &receiver, now);
+        if !held {
+            app.world_mut()
+                .resource_mut::<ButtonInput<KeyCode>>()
+                .reset_all();
+        }
+        testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            world_position([2.0, 3.75, 0.0], 0.0),
+        );
+        app.insert_resource(Collision(Some(room(30.0).with_liquids(Submerged))));
+        app.world_mut().resource_mut::<Controls>().reset(Some(6.0));
+        for millis in [500, 1_999, 2_000] {
+            app.world_mut().resource_mut::<Controls>().test_now =
+                Some(now + Duration::from_millis(millis));
+            app.update();
+            assert_eq!(
+                accepted_commands(&mut app, &receiver),
+                Vec::<Posture>::new()
+            );
+        }
+        app.world_mut().resource_mut::<Controls>().test_now =
+            Some(now + Duration::from_millis(2_001));
+        app.update();
+        assert_eq!(
+            accepted_commands(&mut app, &receiver),
+            vec![Posture::Standing],
+            "held={held}"
+        );
+    }
+}
+
+#[test]
+fn headroom_manual_duck_survives_land_and_water_placement_without_a_return_cycle() {
+    for water in [false, true] {
+        let (mut app, receiver) = app(InstalledClient::Titanium, 30.0);
+        posture(&mut app, PostureState::Ducking);
+        app.world_mut()
+            .resource_mut::<ButtonInput<KeyCode>>()
+            .reset_all();
+        app.update();
+        accepted_commands(&mut app, &receiver);
+        testing::place(
+            &mut app.world_mut().resource_mut::<online::OnlineState>(),
+            world_position([2.0, 3.75, 0.0], 0.0),
+        );
+        if water {
+            app.insert_resource(Collision(Some(room(30.0).with_liquids(Submerged))));
+        }
+        app.world_mut().resource_mut::<Controls>().reset(Some(6.0));
+        app.world_mut().resource_mut::<Controls>().test_now =
+            Some(Instant::now() + Duration::from_secs(5));
+        app.update();
+        assert_eq!(
+            accepted_commands(&mut app, &receiver),
+            Vec::<Posture>::new()
+        );
+        assert!(
+            app.world()
+                .resource::<Controls>()
+                .headroom
+                .automatic
+                .is_none()
+        );
+        assert_eq!(
+            app.world()
+                .resource::<online::OnlineState>()
+                .world()
+                .posture(7),
+            Some(PostureState::Ducking)
+        );
     }
 }
 
