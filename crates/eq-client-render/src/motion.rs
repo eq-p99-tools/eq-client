@@ -4380,6 +4380,7 @@ pub(super) fn input(
             proposed = ?position_sent, dt = span, ?mode, input_ledger = ?swim_controls,
             raw_renderer_delta = ?delta, resolved_renderer_delta = ?(position - origin),
             native_renderer_input = ?native_wet_input, control_eq_heading = shown,
+            physical_sample_time = ?now,
             body_look_pitch = camera.look_pitch(),
             verdict = "proposed", "Ordinary swim proposal before local worker validation");
     }

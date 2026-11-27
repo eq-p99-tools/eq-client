@@ -158,6 +158,7 @@ impl Owner {
             let pending = self.pending.take().expect("matching pending swim");
             trace!(target: "eq_client_render::motion::swim", basis = ?pending.basis,
                 proposed = ?pending.request.position, dt = pending.seconds, mode = ?pending.request.mode,
+                created = ?pending.request.created,
                 verdict = if refused { "local_refused" } else { "local_accepted" },
                 "Ordinary swim local result; neither packet submission nor server acknowledgment");
             if refused {
