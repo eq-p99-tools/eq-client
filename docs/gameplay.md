@@ -104,6 +104,11 @@ the candidate's return clearance plus its ordinary stand test. The host also
 checks the lifted standing probe at that position and along the continuation
 of the current input. This extra consistency check is a host choice: the native
 return branch at 0x48be15 tests the current candidate, not a future frame.
+The probe retains observed standing rates from before the automatic duck,
+so its horizon does not shrink with the slower ducked grant. It follows the
+current input direction and stays at the same position when input is released.
+These queries grant no movement: new obstructions and later speed changes
+still pass the ordinary collision and worker checks on the actual next step.
 Holding forward
 under a gallery that still fails those tests keeps the body ducked. A scripted
 route can continue through this recovery, using the observed ducked height;

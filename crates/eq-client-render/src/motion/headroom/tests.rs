@@ -624,6 +624,193 @@ fn automatic_return_checks_the_next_standing_step_along_held_input() {
     assert!(!app.world().resource::<Controls>().headroom_refused);
 }
 
+fn slower_duck_return(suppress_rate: bool) -> (App, mpsc::Receiver<ClientCommand>, Instant) {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
+    let begin = Instant::now();
+    {
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.test_now = Some(begin);
+        controls.test_span = Some(0.1);
+        controls.speed = Some(14.0);
+        controls.walk_speed = Some(8.0);
+        controls.backward_speed = Some(8.0);
+        controls.strafe_speed = Some(7.0);
+        controls.strafe_walk_speed = Some(4.0);
+        controls.headroom.suppress_standing_rate = suppress_rate;
+    }
+    app.update();
+    assert!(accepted_commands(&mut app, &receiver).is_empty());
+    assert!(
+        app.world()
+            .resource::<Controls>()
+            .headroom
+            .automatic
+            .as_ref()
+            .unwrap()
+            .standing_rate
+            >= 14.0
+    );
+    app.update();
+    assert_eq!(
+        accepted_commands(&mut app, &receiver),
+        vec![Posture::Ducking]
+    );
+    posture(&mut app, PostureState::Ducking);
+    let mut faces = plane(0.0, true);
+    faces.extend([
+        [[-20.0, 7.9, 0.0], [20.0, 7.9, 0.0], [20.0, 7.9, 3.0]],
+        [[-20.0, 7.9, 0.0], [20.0, 7.9, 3.0], [-20.0, 7.9, 3.0]],
+    ]);
+    app.insert_resource(Collision(Some(CollisionWorld::new(faces).unwrap())));
+    testing::place(
+        &mut app.world_mut().resource_mut::<online::OnlineState>(),
+        world_position(
+            [0.0, HUMAN.feet_offset, -1.2],
+            eq_client_core::world_heading(0.0),
+        ),
+    );
+    {
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.test_now = Some(begin + Duration::from_millis(2_001));
+        controls.speed = Some(3.0);
+        controls.backward_speed = Some(3.0);
+    }
+    (app, receiver, begin)
+}
+
+#[test]
+fn automatic_return_uses_observed_standing_rates_not_the_slower_ducked_grant() {
+    for suppress in [true, false] {
+        let (mut app, receiver, begin) = slower_duck_return(suppress);
+        app.update();
+        let postures = accepted_commands(&mut app, &receiver);
+        assert_eq!(
+            postures,
+            if suppress {
+                vec![Posture::Standing]
+            } else {
+                vec![]
+            }
+        );
+        assert!(!app.world().resource::<Controls>().headroom_refused);
+        if suppress {
+            // Same warmed fixture, only the test-only rate horizon suppressed:
+            // returning on the ducked distance immediately refuses the next
+            // real standing step when its normal faster rate is restored.
+            posture(&mut app, PostureState::Standing);
+            let before = app
+                .world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position;
+            {
+                let mut controls = app.world_mut().resource_mut::<Controls>();
+                controls.test_now = Some(begin + Duration::from_millis(2_101));
+                controls.speed = Some(14.0);
+            }
+            app.update();
+            assert!(app.world().resource::<Controls>().headroom_refused);
+            let _ = accepted_commands(&mut app, &receiver);
+            let after = app
+                .world()
+                .resource::<online::OnlineState>()
+                .world()
+                .player()
+                .unwrap()
+                .position;
+            assert_eq!([before.x, before.y, before.z], [after.x, after.y, after.z]);
+        }
+    }
+}
+
+#[test]
+fn automatic_return_rate_horizon_uses_current_direction_and_release_stays_still() {
+    for release in [false, true] {
+        let (mut app, receiver, _) = slower_duck_return(false);
+        let before = app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        {
+            let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+            keys.reset_all();
+            if !release {
+                keys.press(KeyCode::KeyS);
+            }
+        }
+        app.update();
+        let sent: Vec<_> = receiver.try_iter().collect();
+        assert!(
+            sent.iter().any(|command| matches!(
+                command,
+                ClientCommand::SetPosture {
+                    posture: Posture::Standing,
+                    ..
+                }
+            )),
+            "release={release}: {sent:?}"
+        );
+        for command in sent {
+            if let ClientCommand::Move(request) = command {
+                if release {
+                    assert_eq!(
+                        [request.position.x, request.position.y, request.position.z],
+                        [before.x, before.y, before.z]
+                    );
+                } else {
+                    assert!(
+                        eq_client_core::render_position(request.position)[2] < -1.2,
+                        "current backward input must probe/move away from the opening"
+                    );
+                }
+            }
+        }
+    }
+}
+
+#[test]
+fn automatic_return_does_not_authorize_a_step_through_a_later_obstruction() {
+    let (mut app, receiver, begin) = slower_duck_return(false);
+    app.insert_resource(Collision(Some(room(100.0))));
+    app.update();
+    assert_eq!(
+        accepted_commands(&mut app, &receiver),
+        vec![Posture::Standing]
+    );
+    posture(&mut app, PostureState::Standing);
+    let before = app
+        .world()
+        .resource::<online::OnlineState>()
+        .world()
+        .player()
+        .unwrap()
+        .position;
+    // A new underside appears after Stand was queued/observed. Its actual
+    // movement still uses ordinary collision; the earlier query grants none.
+    app.insert_resource(Collision(Some(room(7.9))));
+    {
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.test_now = Some(begin + Duration::from_millis(2_101));
+        controls.speed = Some(14.0);
+    }
+    app.update();
+    assert!(app.world().resource::<Controls>().headroom_refused);
+    let _ = accepted_commands(&mut app, &receiver);
+    let after = app
+        .world()
+        .resource::<online::OnlineState>()
+        .world()
+        .player()
+        .unwrap()
+        .position;
+    assert_eq!([before.x, before.y, before.z], [after.x, after.y, after.z]);
+}
+
 #[test]
 fn headroom_single_marginal_opening_ducks_and_stands_at_most_once() {
     for millis in [50_u16, 100, 150] {

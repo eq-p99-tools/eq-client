@@ -22,6 +22,7 @@ pub(super) struct StandingPath {
     pub displacement: Vec3,
     pub seconds: f32,
     pub lift: f32,
+    pub diagonal: bool,
 }
 
 /// The scope and observed posture belong to the current admission. Queuing
@@ -31,6 +32,8 @@ pub(super) struct State {
     automatic: Option<Automatic>,
     placement_revision: Option<u64>,
     swimming: bool,
+    #[cfg(test)]
+    suppress_standing_rate: bool,
 }
 
 struct Automatic {
@@ -44,6 +47,9 @@ struct Automatic {
     /// A launch requested Standing, but its ordinary worker report has not
     /// reached the host yet. The pre-launch Duck is not an automatic Duck.
     launch_stand: Option<u32>,
+    /// Observed standing rates before the automatic Duck, used only for
+    /// disposable return queries. Never a movement grant or submission.
+    standing_rate: f32,
 }
 
 impl State {
@@ -95,6 +101,15 @@ impl State {
         self.automatic = None;
     }
 
+    pub(super) fn remember_standing_rate(&mut self, rate: f32) {
+        if let Some(automatic) = self.automatic.as_mut()
+            && rate.is_finite()
+            && rate >= 0.0
+        {
+            automatic.standing_rate = rate;
+        }
+    }
+
     /// Titanium arms only on a standing refusal with `AllowAutoStand` on.
     /// Mac arms on every headroom refusal, ignoring that option (0x50453a).
     /// `RoF2` provisionally follows Titanium.
@@ -129,6 +144,7 @@ impl State {
             launch_stand: (posture == Some(PostureState::Standing)
                 && world.posture(player.spawn_id) == Some(PostureState::Ducking))
             .then(|| world.player_posture_changes()),
+            standing_rate: 0.0,
         });
         standing
     }
@@ -241,6 +257,22 @@ impl State {
             }
             if let Some(path) = standing_path {
                 let feet = origin - Vec3::Y * body.feet_offset;
+                let horizontal = Vec3::new(path.displacement.x, 0.0, path.displacement.z);
+                let rate = automatic.standing_rate
+                    * if path.diagonal {
+                        std::f32::consts::SQRT_2
+                    } else {
+                        1.0
+                    };
+                #[cfg(test)]
+                let rate = if self.suppress_standing_rate {
+                    0.0
+                } else {
+                    rate
+                };
+                let ahead =
+                    horizontal.normalize_or_zero() * horizontal.length().max(rate * path.seconds);
+                let displacement = ahead + Vec3::Y * path.displacement.y;
                 // Return's native unlifted probe alone can pass where the
                 // following lifted standing move fails. Check the present
                 // standing position AND the continuation of held input with
@@ -258,7 +290,7 @@ impl State {
                         client,
                         collision,
                         (body, stand),
-                        (feet, feet + path.displacement),
+                        (feet, feet + displacement),
                         (false, mounted),
                         (probe, path.lift, path.seconds),
                     )

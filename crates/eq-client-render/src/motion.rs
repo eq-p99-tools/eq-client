@@ -3093,6 +3093,7 @@ pub(super) fn input(
                 Some(headroom::StandingPath {
                     displacement: Vec3::ZERO,
                     seconds: span,
+                    diagonal: false,
                     lift: headroom::standing_lift(
                         client,
                         online.world(),
@@ -3558,6 +3559,27 @@ pub(super) fn input(
             options.options.allow_auto_stand,
             now,
         );
+        if controls.headroom_retry {
+            // The current grant is still standing here. Retain its observed
+            // rate envelope before Duck replaces it with half-walk rates.
+            // This extends posture queries only; the worker remains the sole
+            // authority for every subsequent movement speed and sample.
+            let factor = controls.movement_options.run_speed_multiplier.factor();
+            let grant = online.world().motion().unwrap_or_else(|| controls.speeds());
+            let rate = [
+                grant.units_per_second.map(|rate| rate * factor),
+                grant.walk_units_per_second.map(|rate| rate * factor),
+                grant.backward_units_per_second,
+                grant.strafe_units_per_second,
+                grant.strafe_walk_units_per_second,
+                Some(speed),
+            ]
+            .into_iter()
+            .flatten()
+            .filter(|rate| rate.is_finite() && *rate >= 0.0)
+            .fold(0.0_f32, f32::max);
+            controls.headroom.remember_standing_rate(rate);
+        }
     }
     let position = if placement_blocked {
         origin
@@ -3724,6 +3746,7 @@ pub(super) fn input(
             Some(headroom::StandingPath {
                 displacement: delta,
                 seconds: span,
+                diagonal: matches!(mode, MovementMode::GroundedDiagonal(_)),
                 lift: headroom::standing_lift(
                     client,
                     online.world(),
