@@ -7,9 +7,9 @@ use eq_client_core::{ClientCommand, Death};
 fn target_death_and_despawn_send_one_quiet_off_and_do_not_resume_idle_swings() {
     for despawn in [false, true] {
         for full in [false, true] {
-            let (sender, receiver) = std::sync::mpsc::channel();
-            let (commands, received) = std::sync::mpsc::sync_channel(1);
-            let mut app = loading_app(receiver);
+            let (updates, news) = std::sync::mpsc::channel();
+            let (commands, requests) = std::sync::mpsc::sync_channel(1);
+            let mut app = loading_app(news);
             app.insert_resource(Outbox::new(Some(commands.clone())))
                 .add_systems(
                     Update,
@@ -46,20 +46,20 @@ fn target_death_and_despawn_send_one_quiet_off_and_do_not_resume_idle_swings() {
                     corpse_name: None,
                 })
             };
-            sender.send(WorldUpdate::Game(event)).unwrap();
+            updates.send(WorldUpdate::Game(event)).unwrap();
             app.update();
             assert!(!app.world().resource::<CombatState>().auto_attack);
             assert_eq!(world(&app).target().selected, None);
             if full {
                 assert!(matches!(
-                    received.try_recv().unwrap(),
+                    requests.try_recv().unwrap(),
                     ClientCommand::AutoAttack { enabled: true, .. }
                 ));
-                assert!(received.try_recv().is_err());
+                assert!(requests.try_recv().is_err());
                 app.update(); // Only the unsent off retries after queue space.
             }
             assert!(matches!(
-                received.try_recv().unwrap(),
+                requests.try_recv().unwrap(),
                 ClientCommand::AutoAttack {
                     enabled: false,
                     session_id: 1,
@@ -76,7 +76,7 @@ fn target_death_and_despawn_send_one_quiet_off_and_do_not_resume_idle_swings() {
                 .advance_by(std::time::Duration::from_secs(10));
             app.update();
             app.update();
-            assert!(received.try_recv().is_err());
+            assert!(requests.try_recv().is_err());
             assert_eq!(
                 app.world()
                     .resource::<crate::chat::ChatState>()
