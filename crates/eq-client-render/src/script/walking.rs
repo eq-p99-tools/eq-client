@@ -114,7 +114,7 @@ pub(super) fn prepare(
         return Err("walk cancelled by a zone or admission change".into());
     }
     script.walk_scope = Some(scope.clone());
-    let generation = Some(Generation {
+    let generation = Generation {
         mesh: meshes.map(ZoneNavMesh::generation),
         exit_zones: matches!(
             step,
@@ -124,7 +124,11 @@ pub(super) fn prepare(
             }
         )
         .then(|| online.world().zone_line_zones_revision()),
-    });
+    };
+    // With neither a mesh nor an exit map there is nothing to invalidate a
+    // route against, as before the exit map joined this key.
+    let generation =
+        (generation.mesh.is_some() || generation.exit_zones.is_some()).then_some(generation);
     if script.walk_generation != generation {
         script.route = None;
         script.place_lookup = None;
