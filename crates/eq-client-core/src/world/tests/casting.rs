@@ -4,6 +4,7 @@ fn pending(session_id: u64, spell_id: Option<u32>) -> WorldEvent {
     WorldEvent::CastPending {
         session_id,
         spell_id,
+        gem: None,
     }
 }
 
