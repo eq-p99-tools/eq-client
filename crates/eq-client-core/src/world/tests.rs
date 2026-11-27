@@ -2737,7 +2737,7 @@ fn a_local_target_receipt_cannot_bind_a_spawn_replaced_while_the_choice_waited()
 }
 
 #[test]
-fn a_target_goes_stale_when_its_spawn_leaves_changes_or_hides() {
+fn a_target_goes_stale_on_hide_or_replacement_and_clears_on_despawn() {
     let mut world = admitted();
     world.select_target(Some(9));
     assert!(!world.target_stale(), "the player choosing themselves");
@@ -2757,7 +2757,8 @@ fn a_target_goes_stale_when_its_spawn_leaves_changes_or_hides() {
     world.select_target(Some(5));
     assert!(!world.target_stale());
     game(&mut world, WorldEvent::Despawn(5));
-    assert!(world.target_stale());
+    assert_eq!(world.target().selected, None);
+    assert!(!world.target_stale());
 }
 
 #[test]
