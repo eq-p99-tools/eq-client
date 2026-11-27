@@ -36,7 +36,7 @@ pub(super) fn cursor_empty(world: &ClientWorld) -> bool {
 
 /// Reads the same hit-tested controls for ordinary and skinned loot windows.
 #[derive(SystemParam)]
-pub(super) struct Buttons<'w, 's> {
+pub(crate) struct Buttons<'w, 's> {
     mouse: Option<Res<'w, ButtonInput<MouseButton>>>,
     controls: Query<
         'w,

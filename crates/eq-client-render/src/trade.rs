@@ -1456,8 +1456,7 @@ mod tests {
         assert!(!trade.loot.as_ref().unwrap().loot_all);
     }
 
-    #[test]
-    fn eqmac_loot_all_and_armed_auto_loop_send_nothing_but_manual_take_sends() {
+    fn eqmac_loot_world() -> super::super::online::OnlineState {
         use eq_client_core::{WorldEvent, WorldUpdate, world::NoSpells};
         let mut online = super::super::online::OnlineState::new(false);
         super::super::online::testing::admit(
@@ -1480,6 +1479,12 @@ mod tests {
                 &NoSpells,
             );
         }
+        online
+    }
+
+    #[test]
+    fn eqmac_loot_all_and_armed_auto_loop_send_nothing_but_manual_take_sends() {
+        let online = eqmac_loot_world();
         let (sender, receiver) = std::sync::mpsc::sync_channel(8);
         let mut app = App::new();
         app.insert_resource(TradeState {
