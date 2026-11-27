@@ -8,6 +8,8 @@ mod carrier_walls;
 mod choices;
 mod falls;
 mod flight;
+mod headroom;
+pub use headroom::{HeadroomBounds, HeadroomHit, HeadroomProbe};
 mod instances;
 mod jesus_mode;
 pub use instances::CollisionInstance;
@@ -749,24 +751,56 @@ impl CollisionWorld {
         nearest
     }
 
-    /// Clearance for a manual duck-to-stand transition (Titanium 0x483556,
-    /// Mac 0x50be3c): the new posture's strict room test, then ceiling minus
-    /// origin at least S. These rays approximate the programs' probe shapes;
-    /// this helper does not install a headroom gate on movement.
+    /// Legacy point-ray geometric diagnostic, not the active movement or
+    /// posture policy (see [`Self::probe_headroom`]). Support has the ordinary
+    /// floor rules; the upward ray takes
+    /// authored ceiling fronts, including carriers (Titanium 0x43a0a0).
+    /// Rays approximate the native floor and model-radius sphere probes.
+    /// Missing and unusable surfaces collapse to unknown in this diagnostic.
+    #[must_use]
+    pub fn headroom_bounds(&self, origin: Vec3) -> Option<(f32, f32)> {
+        const REACH: f32 = 32_767.0;
+        if !origin.is_finite() {
+            return None;
+        }
+        let floor = self.solid_ground(origin, 0.0, REACH)?;
+        let ceiling = self.ceiling(origin)?;
+        (ceiling > floor).then_some((floor, ceiling))
+    }
+
+    /// Shared by movement and ordinary posture, including the latter's
+    /// extra ceiling-minus-origin test. Titanium 0x43a0a0 keeps carrier
+    /// fronts and excludes doors; the same eligibility on Mac is inferred.
+    fn ceiling(&self, origin: Vec3) -> Option<f32> {
+        const REACH: f32 = 32_767.0;
+        let up = Ray::new(Vector::from_array(origin.to_array()), Vector::Y);
+        self.labelled_wall_meshes()
+            .filter(|(obstacle, _)| !matches!(obstacle, Obstacle::Door(_)))
+            .filter_map(|(_, mesh)| mesh.cast_ceiling(&up, REACH))
+            .min_by(f32::total_cmp)
+            .map(|distance| origin.y + distance)
+    }
+
+    /// Strict point-ray room diagnostic. Missing or unusable bounds pass
+    /// here; active headroom uses [`HeadroomProbe::fits`] to distinguish them.
+    #[must_use]
+    pub fn headroom(&self, origin: Vec3, room: f32) -> bool {
+        !room.is_finite()
+            || self
+                .headroom_bounds(origin)
+                .is_none_or(|(floor, ceiling)| floor + room < ceiling)
+    }
+
+    /// Legacy point-ray posture-clearance diagnostic: strict room, then
+    /// ceiling minus origin at least S. The active transition policy uses
+    /// [`Self::probe_headroom`] and the generation's distinct missing rules.
     #[must_use]
     pub fn posture_clearance(&self, origin: Vec3, stand_height: f32, room: f32) -> bool {
         const REACH: f32 = 32_767.0;
         if !origin.is_finite() || !stand_height.is_finite() || !room.is_finite() {
             return false;
         }
-        let up = Ray::new(Vector::from_array(origin.to_array()), Vector::Y);
-        let ceiling = self
-            .labelled_wall_meshes()
-            .filter(|(obstacle, _)| !matches!(obstacle, Obstacle::Carrier(_)))
-            .filter_map(|(_, mesh)| mesh.cast_ray(&up, REACH, false))
-            .min_by(f32::total_cmp)
-            .map(|distance| origin.y + distance);
-        let Some(ceiling) = ceiling else {
+        let Some(ceiling) = self.ceiling(origin) else {
             return true;
         };
         let fits = self
@@ -1336,8 +1370,15 @@ mod tests {
 
     #[test]
     fn manual_posture_clearance_is_strict_and_also_checks_room_above_the_origin() {
-        let make =
-            |ceiling| CollisionWorld::new(floor(0.0).into_iter().chain(floor(ceiling))).unwrap();
+        let make = |ceiling| {
+            CollisionWorld::new(floor(0.0).into_iter().chain(floor(ceiling).into_iter().map(
+                |mut face| {
+                    face.swap(1, 2);
+                    face
+                },
+            )))
+            .unwrap()
+        };
         assert!(!make(8.0).posture_clearance(Vec3::Y * 3.75, 3.75, 8.0));
         assert!(make(8.001).posture_clearance(Vec3::Y * 3.75, 3.75, 8.0));
         // The total gap passes, but less than S remains above this origin.
