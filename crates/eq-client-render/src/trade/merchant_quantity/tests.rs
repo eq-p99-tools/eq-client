@@ -656,22 +656,40 @@ fn titanium_sale_words_wait_for_a_matched_result_after_the_item_has_left() {
 #[test]
 fn failed_send_refusal_close_and_other_generations_never_say_native_sale_success() {
     for outcome in [0, 1, 2, 3] {
-        let (online, mut trade, outbox, _rx) = fixture();
+        let (online, mut trade, outbox, rx) = fixture();
         trade.prices = Some(if outcome == 3 {
             eq_client_assets::merchants::EQMAC
         } else {
             eq_client_assets::merchants::TITANIUM
         });
         let selection = choose(&mut trade, online.world(), Chosen::Carried(23));
-        let failed = Outbox::new(None);
-        submit(
-            &mut trade,
-            &online,
-            if outcome == 0 { &failed } else { &outbox },
-            selection,
-            1,
-        )
-        .unwrap();
+        if outcome == 0 {
+            // The admitted selection is stamped before the worker disconnects.
+            // Keep the sender so this exercises send, rather than missing-queue setup.
+            let (tx, disconnected) = mpsc::sync_channel(1);
+            let failed = Outbox::new(Some(tx));
+            let stamp = failed.peek(online.world()).unwrap();
+            drop(disconnected);
+            assert_eq!(
+                trade.submit_quantity(online.world(), &failed, stamp, selection, 1),
+                Ok(())
+            );
+            assert_eq!(failed.take_refused(), [crate::outbox::Refusal::Ended]);
+            assert!(trade.merchant_pending.is_none());
+            assert!(trade.merchant_sale.is_none());
+            assert!(rx.try_recv().is_err(), "failed send queues no sale");
+        } else {
+            submit(&mut trade, &online, &outbox, selection, 1).unwrap();
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(ClientCommand::Sell {
+                    slot: 23,
+                    quantity: 1,
+                    ..
+                })
+            ));
+            assert!(rx.try_recv().is_err(), "one successful submission only");
+        }
         let update = match outcome {
             1 => MerchantUpdate::Sold {
                 slot: 23,
