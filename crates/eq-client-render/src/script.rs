@@ -5223,11 +5223,11 @@ mod tests {
             height: 6.677_319_5,
             size: 6.0,
         };
-        let from = Vec3::new(0.0, 4.0, -5.0);
+        let from = Vec3::new(0.0, 2.0, -5.0);
         let goal = Vec3::new(0.0, 4.0, 8.0);
         let mut faces = vec![
-            [[-20.0, 4.0, -20.0], [-20.0, 4.0, 20.0], [20.0, 4.0, 20.0]],
-            [[-20.0, 4.0, -20.0], [20.0, 4.0, 20.0], [20.0, 4.0, -20.0]],
+            [[-20.0, 2.0, -20.0], [-20.0, 2.0, 20.0], [20.0, 2.0, 20.0]],
+            [[-20.0, 2.0, -20.0], [20.0, 2.0, 20.0], [20.0, 2.0, -20.0]],
         ];
         let mut roof = faces.clone();
         for face in &mut roof {
@@ -5237,6 +5237,14 @@ mod tests {
             face.swap(1, 2);
         }
         faces.extend(roof);
+        // Last two-unit bank step onto floor4 under underside12. The
+        // approach fits standing; the top requires the permitted Duck.
+        faces.extend([
+            [[-20.0, 4.0, 0.0], [-20.0, 4.0, 20.0], [20.0, 4.0, 20.0]],
+            [[-20.0, 4.0, 0.0], [20.0, 4.0, 20.0], [20.0, 4.0, 0.0]],
+            [[-20.0, 2.0, 0.0], [-20.0, 4.0, 0.0], [20.0, 4.0, 0.0]],
+            [[-20.0, 2.0, 0.0], [20.0, 4.0, 0.0], [20.0, 2.0, 0.0]],
+        ]);
         app.insert_resource(crate::Collision(Some(CollisionWorld::new(faces).unwrap())));
         app.world_mut().spawn((
             crate::Player,
