@@ -1,6 +1,11 @@
 //! Actual applied ordinary water calls, sealed before the final pose is sent.
-use super::*;
-use eq_client_core::movement::{SwimBasis, SwimControl, SwimControls, SwimInput, water::*};
+use super::{
+    Duration, Instant, MovementMode, MovementRequest, Pace, StrafeSide, Vec2, Vec3, trace,
+};
+use eq_client_core::movement::{
+    SwimBasis, SwimControl, SwimControls, SwimInput,
+    water::{WetKind, WetVelocity},
+};
 
 #[derive(Default)]
 pub(super) struct Owner {
