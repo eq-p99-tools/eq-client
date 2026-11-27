@@ -811,6 +811,17 @@ impl ClientWorld {
         self.vitals.hit_points(self.death.is_some())
     }
 
+    /// The last signed HP report with equipped item HP counted from the
+    /// current worker inventory. None means the report, player or equipment
+    /// facts needed for that count are missing. This retains negative values
+    /// and is independent of the display clamp and established death state;
+    /// it does not by itself establish unconsciousness or death.
+    #[must_use]
+    pub fn counted_hit_points(&self) -> Option<i64> {
+        self.vitals
+            .counted_hp(self.player.as_ref()?, &self.inventory)
+    }
+
     /// The player's inventory, bank and cursor as the server reported them,
     /// with the ordered local projection of successfully queued moves.
     #[must_use]
