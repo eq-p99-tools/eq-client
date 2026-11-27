@@ -285,13 +285,18 @@ pub(super) fn update(
     ambient.brightness = lit.ambient.0;
     ambient.color = color(lit.ambient.1);
     if let Some(mut clear) = clear {
-        // Without a sky, Titanium clears to the current fog colour. Masked
+        // Without a sky, Titanium clears to the current fog colour
+        // (EQGraphicsDX9.dll 0x1007f0d6). Masked
         // leaves and other uncovered pixels must reveal that background,
         // while a zone with a sky keeps its own day/night colour.
-        let background = if settings.0.installed_client
-            == eq_client_assets::ui::InstalledClient::Titanium
-            && sky.sky == 0
-        {
+        let fog_background = match settings.0.installed_client {
+            eq_client_assets::ui::InstalledClient::Titanium => sky.sky == 0,
+            // The Mac engine's no-sky clear is unread; retain its prior background.
+            eq_client_assets::ui::InstalledClient::EqMac => false,
+            // RoF2's no-sky clear is unread too; do not infer Titanium's rule.
+            eq_client_assets::ui::InstalledClient::Rof2 => false,
+        };
+        let background = if fog_background {
             lit.fog.map_or(lit.sky, |(tint, _, _)| tint)
         } else {
             lit.sky
@@ -366,11 +371,7 @@ mod tests {
             }; 4],
             ..zone(0, [230, 255, 200])
         };
-        for installed in [
-            eq_client_assets::ui::InstalledClient::Titanium,
-            eq_client_assets::ui::InstalledClient::EqMac,
-            eq_client_assets::ui::InstalledClient::Rof2,
-        ] {
+        for installed in eq_client_assets::ui::InstalledClient::ALL {
             app.world_mut()
                 .resource_mut::<crate::ViewerSettings>()
                 .0
