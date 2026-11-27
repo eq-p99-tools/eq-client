@@ -1896,6 +1896,7 @@ type InputExtras<'w, 's> = (
     Option<Res<'w, crate::doors::LiftReach>>,
     Option<Res<'w, crate::combat::CombatState>>,
     Option<Res<'w, crate::confirm::Asked>>,
+    Local<'s, melee::InputTrace>,
 );
 
 /// A script run that fails can no longer steer, so the autorun latch goes
@@ -1945,7 +1946,7 @@ pub(super) fn input(
     collision: Res<Collision>,
     outbox: Res<crate::outbox::Outbox>,
     options: Res<crate::options::OptionsState>,
-    (movement_sync, mut told_wait, lifts, combat, asked): InputExtras,
+    (movement_sync, mut told_wait, lifts, combat, asked, mut input_trace): InputExtras,
     mut controls: ResMut<Controls>,
     players: Query<(&PlayerBody, &Transform), With<Player>>,
     cameras: Query<(&OrbitCamera, Has<crate::camera::FreeCamera>)>,
@@ -1957,8 +1958,17 @@ pub(super) fn input(
     ),
     (look, aim, spells): Pointing,
 ) {
-    let client = settings.0.installed_client;
     let trace_melee = options.options.qol.on(Fix::MeleePositioning);
+    input_trace.entered(
+        controls.now(),
+        trace_melee,
+        combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(online.world().session_id())),
+        keys.focused(),
+        controls.pending.is_some(),
+    );
+    let client = settings.0.installed_client;
     // The program's speed-modifier routine ends following once a root
     // stops the player (R6, 0x411076); a server's move does not.
     if let Some(following) = controls.following.as_ref()

@@ -312,7 +312,10 @@ identify absent region metadata or unloaded carrier geometry.
 For stalled starts, opt in to `RUST_LOG=eq_client_render::motion::melee=trace`.
 This trace is off at ordinary log levels. It records the input owner, target,
 context, collision or timing gate holding the approach, and the selected speed
-and sample interval for a proposal. Compare displacement with the request's
+and sample interval for a proposal. An input-entry sequence and monotonic gap
+are recorded before movement gates, even when the option or attack is off;
+this distinguishes an unscheduled input frame from an explicitly held step.
+Compare displacement with the request's
 sample interval; the gaps between local worker results can vary with delivery
 latency and do not measure the movement budget or server acknowledgment.
 

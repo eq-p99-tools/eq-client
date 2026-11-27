@@ -9,6 +9,37 @@ use std::time::{Duration, Instant};
 const MAX_DISTANCE: f32 = 200.;
 const MANUAL_PAUSE: Duration = Duration::from_millis(500);
 
+/// Records scheduling before any movement, ownership or admission gate runs.
+/// This is local diagnostic time, not a received/server movement timestamp.
+#[derive(Default)]
+pub(super) struct InputTrace {
+    started: Option<Instant>,
+    previous: Option<Instant>,
+    sequence: u64,
+}
+
+impl InputTrace {
+    pub fn entered(
+        &mut self,
+        now: Instant,
+        enabled: bool,
+        attack: bool,
+        owned: bool,
+        pending: bool,
+    ) {
+        self.sequence = self.sequence.saturating_add(1);
+        let elapsed = now.saturating_duration_since(*self.started.get_or_insert(now));
+        let gap = self
+            .previous
+            .map(|previous| now.saturating_duration_since(previous));
+        self.previous = Some(now);
+        trace!(target: "eq_client_render::motion::melee", input_sequence = self.sequence,
+            input_elapsed_seconds = elapsed.as_secs_f64(), input_gap_seconds = ?gap.map(|gap| gap.as_secs_f64()),
+            option_enabled = enabled, attack_requested = attack, input_owned = owned, pending_sample = pending,
+            "Melee positioning input entry");
+    }
+}
+
 /// Opt in with `eq_client_render::motion::melee=trace`; ordinary logging is quiet.
 pub(super) fn held(reason: &'static str) {
     trace!(target: "eq_client_render::motion::melee", reason, forward = false, "Melee positioning held");
