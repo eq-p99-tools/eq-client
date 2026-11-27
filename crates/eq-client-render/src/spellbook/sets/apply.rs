@@ -57,6 +57,7 @@ impl Step {
                 created,
             },
             Self::Memorize(gem, spell_id) => ClientCommand::MemorizeSpell {
+                preparation: None,
                 session_id,
                 gem,
                 spell_id,
