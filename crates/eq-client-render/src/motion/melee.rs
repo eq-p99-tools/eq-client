@@ -81,6 +81,10 @@ impl Assist {
         };
     }
 
+    pub fn ready(&self, now: Instant) -> bool {
+        self.paused_until.is_none_or(|until| now >= until)
+    }
+
     /// The caller supplies focus, attack, option, ownership and movement gates.
     /// Target authority and geometry are checked anew for every actual sample.
     pub fn step(
@@ -91,7 +95,7 @@ impl Assist {
         body: &Body,
         now: Instant,
     ) -> Option<follow::Step> {
-        if self.paused_until.is_some_and(|until| now < until) {
+        if !self.ready(now) {
             held("manual_release_pause");
             return None;
         }

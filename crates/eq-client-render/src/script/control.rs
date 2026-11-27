@@ -168,6 +168,15 @@ pub(crate) struct Bridge {
 }
 
 impl Bridge {
+    /// An idle controller with the same receiver, without filesystem polling/UI.
+    #[cfg(test)]
+    pub(crate) fn install_idle_test_receiver(app: &mut App) {
+        app.insert_resource(Self::new("synthetic-control".into(), "idle-test".into()))
+            .init_resource::<RunStatus>()
+            .init_resource::<RunControl>()
+            .add_systems(PreUpdate, (receive, observe).chain());
+    }
+
     fn new(root: PathBuf, instance: String) -> Self {
         let writer = files::Writer::new(&root);
         Self {
