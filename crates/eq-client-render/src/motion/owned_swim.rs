@@ -169,11 +169,15 @@ pub(super) fn observed(
     direction: Vec3,
     facing: f32,
 ) -> Option<(SwimInput, f32)> {
+    // A genuine backward control remains backward even when its native B is
+    // zero. Do not mislabel that observed input as a release.
+    if mode == MovementMode::Backward {
+        return Some((SwimInput::Backward, facing));
+    }
     if Vec2::new(direction.x, direction.z) == Vec2::ZERO {
         return Some((SwimInput::Idle, facing));
     }
     match mode {
-        MovementMode::Backward => Some((SwimInput::Backward, facing)),
         MovementMode::Strafe(pace) => {
             let radians = eq_client_core::render_heading(facing);
             let left = Vec3::new(radians.cos(), 0., -radians.sin());

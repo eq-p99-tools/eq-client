@@ -353,6 +353,10 @@ fn repeated_ordinary_backward_control_keeps_the_native_zero_backward_rate() {
     );
     latency_tests::key(&mut f.app, KeyCode::KeyZ, true);
     assert_eq!(calibration().swim.unwrap().backward, 0.);
+    assert_eq!(
+        owned_swim::observed(MovementMode::Backward, Vec3::ZERO, 0.),
+        Some((eq_client_core::movement::SwimInput::Backward, 0.))
+    );
     let mut accepted = 0;
     for _ in 0..120 {
         for command in frame(&mut f) {
