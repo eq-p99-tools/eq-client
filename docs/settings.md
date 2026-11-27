@@ -292,7 +292,7 @@ The **Dangerous** section sits below the ordinary settings and includes the
 | Walk While Winded | `walk_while_winded` | Off | Allows horizontal movement while stunned; other stun restrictions remain |
 | Move While Feigned | `move_while_feigned` | Off | Feign Death without lying down: the press sends only the feign, and a Feign Death spell landing on you sends nothing, so you stay standing, other players see you standing, and you move normally while the server keeps the feign. Your next stand ends it, as a duck or a sit does, and so does your first step if you pressed it sitting. A jump keeps it: it sends no duck or stand of its own. The original client lies you down |
 | Stand When Hit | `stand_when_hit` | On | A hit stands you up from sitting or kneeling to loot, as the original client does; a lying player is never stood. Turning it off is the departure: you stay seated |
-| Stay in Melee Range | `melee_positioning` | Off | While you request auto-attack, face the current valid target and approach estimated melee reach on clear ground. Manual movement, mouse look, scripts and /follow take priority. Stops at obstacles, never chooses a target or enables attack. Uses the existing generation-specific reach estimate, omits the fleeing bonus and adds a conservative height check; the server still decides every swing |
+| Stay in Melee Range | `melee_positioning` | Off | Off by default; while you request auto-attack, it turns and moves your character without held movement input to face the current valid target and approach estimated melee reach on clear ground. Manual movement, mouse look, scripts and /follow take priority. Stops at obstacles, never chooses a target or enables attack. Uses the existing generation-specific reach estimate, omits the fleeing bonus and adds a conservative height check; the server still decides every swing |
 | Memorize Without Sitting | `memorize_while_standing` | Off | Memorizes without automatic sitting or the client preparation pause; scribing keeps its normal rules |
 | Take Environmental Damage | `take_environmental_damage` | On | Reports supported falls, drowning and lava heat. Air continues running with reports off |
 | Gills for Days | `gills_for_days` | Off | Disables the local air calculation and hides Air Remaining on Titanium sessions that offer gameplay departures |
@@ -301,6 +301,12 @@ The **Dangerous** section sits below the ordinary settings and includes the
 | Exit at Once | `exit_at_once` | Off | Requests logout without automatic sitting or camp preparation; waits for the server outcome |
 | Zone Anywhere | `zone_anywhere` | Off | Crosses any zone line whatever level the zone asks for. That the official client turns players away below a zone's level is inferred; this client blocks no crossing today, so the setting changes nothing yet |
 | Run a Little Faster | `run_boost` | 1.00x | Slider from 1.00x to 1.40x in 0.01x steps. Scales calibrated forward running and the forward component of diagonals |
+
+Stay in Melee Range stops on target death or loss, while a new target choice is
+pending, beyond 200 horizontal units, and after a zone/session change. It can
+resume for a newly confirmed current target or one that returns within range.
+It does not prevent approaching a zone line or boarding a boat. Stopping at
+water and pausing on a known ride are separate safeguards.
 
 The run speed slider saves the multiplier in hundredths, such as
 `run_boost = 120` for 1.20x. A saved checkbox value of `true` loads as 1.10x,

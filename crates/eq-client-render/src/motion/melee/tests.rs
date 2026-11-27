@@ -185,6 +185,75 @@ fn melee_identity_loss_corpse_and_pending_selection_never_drive() {
 }
 
 #[test]
+fn melee_target_change_pauses_until_the_new_current_target_is_authoritative() {
+    let mut online = world(30.);
+    let body = body(&online);
+    let floor = plane();
+    let now = Instant::now();
+    let mut assist = Assist::default();
+    assert!(
+        assist
+            .step(online.world(), &floor, &body, now)
+            .unwrap()
+            .forward
+    );
+
+    let mut next = spawn(0.);
+    next.position.x = 30.;
+    testing::spawn_entry(&mut online, 6, next);
+    online.select_target(Some(6));
+    assert!(assist.step(online.world(), &floor, &body, now).is_none());
+    assert!(!assist.driving());
+    let request_id = online.world().next_target_request() - 1;
+    testing::news(
+        &mut online,
+        [WorldEvent::TargetChanged {
+            session_id: 11,
+            request_id,
+            state: eq_network_game::targets::TargetState {
+                revision: 2,
+                spawn_id: Some(6),
+                available: true,
+            },
+        }],
+    );
+    let turning = assist.step(online.world(), &floor, &body, now).unwrap();
+    assert_eq!(assist.scope.unwrap().target_id, 6);
+    assert!(
+        !turning.forward,
+        "turn toward the new target before approaching"
+    );
+    assert!(motion::arc(body.position.heading, turning.heading).abs() > 0.);
+    online.select_target(None);
+    assert!(assist.step(online.world(), &floor, &body, now).is_none());
+}
+
+#[test]
+fn melee_distance_limit_stops_above_200_and_can_resume_within_range() {
+    let mut online = world(200.);
+    let body = body(&online);
+    let floor = plane();
+    let now = Instant::now();
+    let mut assist = Assist::default();
+    assert!(
+        assist
+            .step(online.world(), &floor, &body, now)
+            .unwrap()
+            .forward
+    );
+    move_target(&mut online, 200.01);
+    assert!(assist.step(online.world(), &floor, &body, now).is_none());
+    assert!(!assist.driving());
+    move_target(&mut online, 190.);
+    assert!(
+        assist
+            .step(online.world(), &floor, &body, now)
+            .unwrap()
+            .forward
+    );
+}
+
+#[test]
 fn melee_obstruction_stops_and_manual_input_keeps_the_release_gap() {
     let online = world(30.);
     let body = body(&online);
@@ -402,9 +471,9 @@ fn melee_manual_movement_rmb_scripts_and_capability_loss_keep_normal_input() {
     clippy::too_many_lines,
     reason = "one Receive/Input/Present lifecycle matrix"
 )]
-fn melee_received_target_loss_attack_off_death_zone_and_option_off_stop_new_samples() {
+fn melee_received_target_loss_both_deaths_zone_and_off_stop_new_samples() {
     use crate::motion::latency_tests;
-    for reason in 0..5 {
+    for reason in 0..6 {
         let (mut app, rx, news) = latency_tests::timing_app();
         app.insert_resource(world(30.))
             .init_resource::<crate::combat::CombatState>()
@@ -505,12 +574,23 @@ fn melee_received_target_loss_attack_off_death_zone_and_option_off_stop_new_samp
                 }))
                 .unwrap();
             }
-            _ => app
+            4 => app
                 .world_mut()
                 .resource_mut::<crate::options::OptionsState>()
                 .options
                 .qol
                 .set(Fix::MeleePositioning, false),
+            _ => news
+                .send(eq_client_core::WorldUpdate::Game(WorldEvent::Death(
+                    eq_client_core::Death {
+                        spawn_id: 5,
+                        killer_id: 7,
+                        corpse_id: 5,
+                        bind_zone_id: 0,
+                        corpse_name: None,
+                    },
+                )))
+                .unwrap(),
         }
         for _ in 0..3 {
             now += Duration::from_millis(100);
