@@ -80,11 +80,13 @@ impl ClientWorld {
     /// News of the corpse being looted.
     pub(super) fn loot_news(&mut self, update: &LootUpdate, changes: &mut Changes) {
         if self.zone.trade.loot(update) {
-            if self.generation == crate::GameDialect::Titanium
-                && matches!(update, LootUpdate::Closed)
-            {
-                // The native server-reply handler clears the loot target,
-                // never the earlier local request (0x52b026, read6.698).
+            // The native server-reply handler clears the loot target,
+            // never the earlier local request (0x52b026, read6.698).
+            let clears_target = match self.generation {
+                crate::GameDialect::Titanium => true,
+                crate::GameDialect::EqMac | crate::GameDialect::Rof2 => false,
+            };
+            if clears_target && matches!(update, LootUpdate::Closed) {
                 self.select_target(None);
             }
             changes.trade = true;
