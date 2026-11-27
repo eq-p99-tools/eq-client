@@ -993,3 +993,66 @@ fn underwater_forward_and_retreat_keep_the_existing_kedge_exemption() {
         );
     }
 }
+
+#[test]
+fn headroom_pending_duck_is_withdrawn_before_water_input() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
+    app.update();
+    assert!(app.world().resource::<Controls>().headroom.automatic.is_some());
+    accepted_commands(&mut app, &receiver);
+    app.insert_resource(Collision(Some(room(7.9).with_liquids(Submerged))));
+    app.update();
+    assert_eq!(accepted_commands(&mut app, &receiver), Vec::<Posture>::new());
+    let controls = app.world().resource::<Controls>();
+    assert!(controls.headroom.automatic.is_none());
+    assert!(!controls.headroom_retry);
+    assert!(!controls.headroom_refused);
+}
+
+#[test]
+fn headroom_server_placement_withdraws_pending_and_ducked_cycles_even_at_same_xyz() {
+    for ducked in [false, true] {
+        let (mut app, receiver) = app(InstalledClient::Titanium, 7.9);
+        app.update();
+        assert!(app.world().resource::<Controls>().headroom.automatic.is_some());
+        accepted_commands(&mut app, &receiver);
+        if ducked { posture(&mut app, PostureState::Ducking); }
+        let position = app.world().resource::<online::OnlineState>().world().player().unwrap().position;
+        testing::place(&mut app.world_mut().resource_mut::<online::OnlineState>(), position);
+        app.insert_resource(Collision(Some(room(30.0))));
+        app.update();
+        assert_eq!(accepted_commands(&mut app, &receiver), Vec::<Posture>::new());
+        let controls = app.world().resource::<Controls>();
+        assert!(controls.headroom.automatic.is_none(), "ducked={ducked}");
+        assert!(!controls.headroom_retry);
+    }
+}
+
+#[test]
+fn headroom_ordinary_ledge_above_a_distant_floor_still_falls() {
+    let (mut app, receiver) = app(InstalledClient::Titanium, 30.0);
+    let ledge = [
+        [[-20.0, 0.0, -20.0], [-20.0, 0.0, 0.0], [20.0, 0.0, 0.0]],
+        [[-20.0, 0.0, -20.0], [20.0, 0.0, 0.0], [20.0, 0.0, -20.0]],
+    ];
+    app.insert_resource(Collision(Some(CollisionWorld::new(
+        ledge.into_iter().chain(plane(-1000.0, true)),
+    ).unwrap())));
+    testing::place(&mut app.world_mut().resource_mut::<online::OnlineState>(),
+        world_position([0.0, 3.75, -1.0], 0.0));
+    app.world_mut().query::<&mut crate::OrbitCamera>().single_mut(app.world_mut()).unwrap().yaw = std::f32::consts::PI;
+    {
+        let mut controls = app.world_mut().resource_mut::<Controls>();
+        controls.test_span = Some(0.05);
+        controls.speed = Some(60.0);
+        controls.airborne = Some(AirborneController::default());
+    }
+    for _ in 0..8 {
+        app.update();
+        assert_eq!(accepted_commands(&mut app, &receiver), Vec::<Posture>::new());
+        assert!(!app.world().resource::<Controls>().headroom_refused);
+    }
+    let at = app.world().resource::<online::OnlineState>().world().player().unwrap().position;
+    assert!(at.z < 3.75, "{at:?}");
+    assert!(eq_client_core::render_position(at)[2] > 0.0, "{at:?}");
+}

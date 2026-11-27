@@ -508,4 +508,67 @@ mod tests {
         assert_eq!(bounds.ceiling, Some(4.25));
         assert!(!mac.fits(bounds, 3.75, 0.5), "{bounds:?}");
     }
+
+    fn riser(top: f32) -> Vec<[[f32; 3]; 3]> {
+        vec![
+            [[0.0, 0.0, -20.0], [0.0, top, -20.0], [0.0, top, 20.0]],
+            [[0.0, 0.0, -20.0], [0.0, top, 20.0], [0.0, 0.0, 20.0]],
+        ]
+    }
+
+    #[test]
+    fn headroom_wall_graze_under_open_sky_is_neither_floor_nor_ceiling() {
+        let world = CollisionWorld::new(plane(0.0, true).into_iter().chain(riser(30.0)))
+            .unwrap();
+        for x in [-0.2, 0.2] {
+            let bounds = world.probe_headroom(Vec3::new(x, 3.75, 0.0), probe());
+            assert!(bounds.floor.unwrap().abs() < 0.01, "{bounds:?}");
+            assert!(bounds.ceiling.unwrap() > 1000.0, "{bounds:?}");
+            assert!(probe().fits(bounds, 7.5, 0.5));
+        }
+    }
+
+    #[test]
+    fn headroom_ducked_riser_keeps_the_real_underside_and_local_floor() {
+        let upper = [
+            [[0.0, 4.0, -20.0], [0.0, 4.0, 20.0], [20.0, 4.0, 20.0]],
+            [[0.0, 4.0, -20.0], [20.0, 4.0, 20.0], [20.0, 4.0, -20.0]],
+        ];
+        let world = CollisionWorld::new(
+            plane(0.0, true).into_iter().chain(upper).chain(riser(4.0))
+                .chain(plane(12.0, false)),
+        ).unwrap();
+        for origin in [Vec3::new(-0.2, 3.75, 0.0), Vec3::new(0.2, 7.75, 0.0)] {
+            let bounds = world.probe_headroom(origin, probe());
+            assert!(bounds.ceiling.unwrap() > 11.9, "{origin:?}: {bounds:?}");
+            assert!(probe().fits(bounds, 4.75, 0.5), "{origin:?}: {bounds:?}");
+        }
+    }
+
+    #[test]
+    fn headroom_initial_contact_with_a_real_underside_still_refuses() {
+        let world = CollisionWorld::new(
+            plane(0.0, true).into_iter().chain(plane(4.0, false)),
+        ).unwrap();
+        let bounds = world.probe_headroom(Vec3::new(1.0, 3.75, 0.0), probe());
+        assert!(bounds.ceiling.unwrap() < 5.0, "{bounds:?}");
+        assert!(!probe().fits(bounds, 7.5, 0.5));
+    }
+
+    #[test]
+    fn headroom_one_native_frame_does_not_fill_between_endpoint_spheres() {
+        // At 60 units/s these centres are consecutive 60 Hz samples. The
+        // narrow corner lies in the old capsule's extra crescent, outside
+        // either actual candidate sphere. No larger radius is warranted.
+        let corner = [
+            [[-0.05, 6.0, 0.62], [0.05, 6.0, 0.7], [-0.05, 6.0, 0.7]],
+            [[-0.05, 6.0, 0.62], [0.05, 6.0, 0.62], [0.05, 6.0, 0.7]],
+        ];
+        let world = CollisionWorld::new(plane(0.0, true).into_iter().chain(corner)).unwrap();
+        let from = Vec3::new(-0.5, 3.75, 0.0);
+        let to = Vec3::new(0.5, 3.75, 0.0);
+        assert!(probe().fits(world.probe_headroom(from, probe()), 7.5, 0.5));
+        assert!(probe().fits(world.probe_headroom(to, probe()), 7.5, 0.5));
+        assert!(world.headroom_on_path(from, to, probe(), 7.5, 0.5).is_none());
+    }
 }
