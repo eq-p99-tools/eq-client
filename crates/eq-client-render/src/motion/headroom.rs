@@ -361,7 +361,7 @@ pub(super) fn duck_step_passes(
             state.player().map_or(0, |player| player.race),
             (false, false),
         );
-        super::fall_step(
+        super::fall_step_with_water(
             &mut trial,
             &ducked,
             physics,
@@ -370,6 +370,7 @@ pub(super) fn duck_step_passes(
             delta,
             seconds,
             body.height,
+            false,
             false,
         )
     } else {

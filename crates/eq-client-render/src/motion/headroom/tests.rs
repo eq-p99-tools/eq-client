@@ -707,7 +707,7 @@ fn installed_felwithe_side_wall_does_not_cycle_posture() {
                 eq_client_core::WorldPosition {
                     x: -2369.4993,
                     y: -2012.1583,
-                    z: 28.256168,
+                    z: 28.256_168,
                     heading: 397.0,
                 },
             );
