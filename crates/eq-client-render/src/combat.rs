@@ -457,9 +457,8 @@ fn set_attack(
         chat.refuse(messages.said(id, &[]));
         return;
     }
-    let stamp = match stamp.map_or_else(|| outbox.stamp(world), Ok) {
-        Ok(stamp) => stamp,
-        Err(_) => return,
+    let Ok(stamp) = stamp.map_or_else(|| outbox.stamp(world), Ok) else {
+        return;
     };
     if outbox
         .send(
@@ -1061,7 +1060,7 @@ mod tests {
         app.update();
         assert!(full.try_recv().is_err());
         assert!(!app.world().resource::<CombatState>().auto_attack);
-        assert!(lines(&app).is_empty());
+        assert_eq!(lines(&app), [] as [(String, Option<u32>); 0]);
     }
 
     #[test]
