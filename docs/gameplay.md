@@ -1040,13 +1040,18 @@ P99 follows Titanium's racial level table and
 class exceptions. Native race/class/level rules do not restrict EQEmu's separate
 server policy. Unknown proficiency stays blank and cannot be practiced.
 
-On P99, select a skill or language from the received Training list and press Train once. The listed price
-estimates the cost in copper denominations. The skill value follows server
-updates. The point count goes blank as soon as the request is sent. A skill
-increase leaves the practice outcome unknown. Paid practice leaves the
-purse unknown until a new balance arrives. Re-enter the zone before
-practicing again or asking the same guildmaster again. Done closes the
-trainer. This path awaits an attended P99 check.
+On P99, select a skill or language from the received Training list and press
+Train. Following Titanium, an accepted local submission spends one practice
+point and its local price immediately. An ordinary skill already above zero
+increments locally; first skills and languages wait for received values.
+Native press-time and received skill-up lines remain distinct. Received
+updates replace local values and never spend again; absolute point/coin news
+or a new profile replaces projected balances. These projections are not server
+receipts. Further practice and reopening the same guildmaster work without
+zoning while normal eligibility, points and coins permit. Done closes the
+window; a fresh offer reopens it, including between-frame close/reopen. Skin
+reloads rebuild the view from the same model rather than refunding or spending
+points. Gameplay validation of this change remains separate from unit/CI checks.
 
 EQEmu retains its existing point and purse projection after a matching received
 skill or language increase. The update contains no point or cost receipt;
