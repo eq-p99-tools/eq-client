@@ -864,7 +864,7 @@ mod tests {
         session::news_at(
             &mut online,
             [confirmation()],
-            now - std::time::Duration::from_secs(8),
+            now.checked_sub(std::time::Duration::from_secs(8)).unwrap(),
         );
         online.tick(now, &Catalog);
         assert_eq!(read(&online, "gem1.ready"), Value::Bool(true));
