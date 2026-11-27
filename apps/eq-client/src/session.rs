@@ -247,6 +247,23 @@ impl SessionWorker {
                             observe_world(&event, settings.as_deref());
                             Some(WorldUpdate::Game(event))
                         }
+                        ClientEvent::MovementPacketSnapshot {
+                            session_id,
+                            request_id,
+                            run_id,
+                            sent,
+                            observed,
+                            unix_timestamp_ms,
+                        } => Some(WorldUpdate::MovementPacketSnapshot(
+                            eq_client_core::MovementPacketSnapshot {
+                                session_id,
+                                request_id,
+                                run_id,
+                                sent,
+                                observed,
+                                unix_timestamp_ms,
+                            },
+                        )),
                         ClientEvent::Status(status) => status_update(status.state),
                         ClientEvent::Progress(stage) => Some(progress_update(stage)),
                         ClientEvent::Record(record) => match record.event {

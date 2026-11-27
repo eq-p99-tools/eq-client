@@ -2802,7 +2802,7 @@ pub(super) fn drive(
             );
             report::movement_state(
                 label,
-                &online,
+                &mut online,
                 players.single().ok(),
                 bodies.single().ok(),
                 collision.as_deref().and_then(|world| world.0.as_ref()),

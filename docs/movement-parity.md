@@ -91,6 +91,26 @@ glide after release; an instant stop is not the selected behavior. The local
 look remains required before merge, and the first public-server movement
 check is attended.
 
+### Movement report boundaries
+
+Each script `report` captures its scene state, then queues one read-only
+`MovementPacketSnapshot` command for the same admission. Its movement report
+is logged when that worker answer arrives, joining the original scene to
+`movement_packets.sent`, the count of successful player-position application
+packet submissions to transport in that worker attempt. An accepted local
+proposal or `MotionSent` receipt is not a packet count; socket delivery and
+server acceptance are not established by this counter.
+
+The report carries the typed `run_id`, admission, request identity, worker
+wall-clock coordinate and monotonic scene-to-worker interval. The scene and
+worker observations are separate boundaries; input may run between them.
+Compare two counts only within the same run and admission, using the two
+worker boundaries for elapsed time. No periodic polling, movement send,
+timer reset or forced final update is introduced. Unavailable/full/ended
+requests report a null count, never a guessed zero. Pending reports are
+bounded and discarded as unavailable on an admission reset; late or duplicate
+answers cannot relabel a new report.
+
 ## 6.660 — ship rigging, sail and rail as walking walls
 
 [R] Titanium's ordinary walking move (`eqgame.exe` `0x48acef`) uses object
