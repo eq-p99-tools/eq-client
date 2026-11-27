@@ -556,6 +556,31 @@ impl BoundaryTracker {
     }
 }
 impl Controls {
+    pub(crate) fn melee_camera_locked(&self, world: &ClientWorld) -> bool {
+        self.melee.camera_locked(world, self.now())
+    }
+
+    pub(crate) fn melee_status(&self) -> (&'static str, &'static str, Option<u16>) {
+        let (state, reason) = self.melee.status();
+        (state, reason, self.melee.target_id())
+    }
+
+    pub(crate) fn melee_report(&self) -> serde_json::Value {
+        let (state, reason, target) = self.melee_status();
+        serde_json::json!({"state":state,"reason":reason,"target_id":target,
+            "admission_id":self.melee.admission_id(), "motion_proposed":self.melee.proposed(),
+            "radius":self.melee.radius(),"facing_owner":self.melee.owns_facing_name()})
+    }
+
+    pub(crate) fn melee_admission(&self) -> Option<u64> {
+        self.melee.admission_id()
+    }
+    pub(crate) fn melee_proposed(&self) -> bool {
+        self.melee.proposed()
+    }
+    pub(crate) fn melee_facing_owner(&self) -> &'static str {
+        self.melee.owns_facing_name()
+    }
     #[cfg_attr(
         not(test),
         allow(
@@ -2218,6 +2243,7 @@ pub(super) fn input(
     (look, aim, spells): Pointing,
 ) {
     let trace_melee = options.options.qol.on(Fix::MeleePositioning);
+    controls.melee.begin_frame();
     let (sequence, elapsed, gap) = input_trace.entered(controls.now());
     trace!(target: "eq_client_render::motion::melee", input_sequence = sequence,
         input_elapsed_seconds = elapsed, input_gap_seconds = ?gap,
@@ -2378,6 +2404,18 @@ pub(super) fn input(
         && controls.speed.is_some();
     let melee_available =
         keys.automatic_input_available() && !detached && !stunned && controls.speed.is_some();
+    let melee_requested = trace_melee
+        && combat
+            .as_deref()
+            .is_some_and(|combat| combat.requested_in(session_id));
+    let melee_enabled = melee_requested
+        && [
+            Capability::GameplayDepartures,
+            Capability::Moving,
+            Capability::Combat,
+        ]
+        .into_iter()
+        .all(|capability| online.world().can(capability));
     // Where the program holds a lying player still (read R19 c), the keys
     // neither move nor turn them, nor jump; mouse look turns them in the
     // chase views only.
@@ -2486,6 +2524,20 @@ pub(super) fn input(
     let now = controls.now();
     controls.restore_surface_trial();
     controls.settle(now);
+    controls.melee.observe(
+        online.world(),
+        trace_melee,
+        combat
+            .as_deref()
+            .filter(|combat| combat.requested_in(session_id))
+            .map(crate::combat::CombatState::positioning_intent),
+        now,
+    );
+    let locked_camera = controls.melee.camera_locked(online.world(), now);
+    if locked_camera && !look.as_ref().is_some_and(|look| look.held && look.left) {
+        controls.mouse_heading = None;
+        controls.mouse_turn = 0.;
+    }
     let water_enabled = match client {
         InstalledClient::Titanium => true,
         // RoF2's water is not read yet.
@@ -2629,7 +2681,7 @@ pub(super) fn input(
     }
     // The turn keys ramp up from the frame one is first held, and start
     // over when the way changes or both are let go.
-    let turning = if focused && look.as_deref().is_none_or(|look| !look.held) {
+    let turning = if focused && (locked_camera || look.as_deref().is_none_or(|look| !look.held)) {
         let held = |act| scripted.contains(&act) || map.held(&keyboard, act);
         f32::from(held(Act::TurnLeft)) - f32::from(held(Act::TurnRight))
     } else {
@@ -2640,10 +2692,118 @@ pub(super) fn input(
         turning,
         now,
         cap,
-        focused && !lying && look.as_deref().is_none_or(|look| !look.held),
+        focused && !lying && (locked_camera || look.as_deref().is_none_or(|look| !look.held)),
     );
     // Poll actual held input before the worker/sample gates. Position remains
     // on its ordinary path; facing consumes only frames with a held turn.
+    let mut movement_keys = map.movement_keys();
+    if flying {
+        movement_keys.extend(
+            [Act::Jump, Act::Duck]
+                .into_iter()
+                .flat_map(|act| map.keys(act)),
+        );
+    }
+    controls
+        .taps
+        .observe(&keyboard, &movement_keys, focused, now);
+    // Decide ownership before native ground can retain an idle frame. Observe
+    // buffered taps without consuming them or giving them a physical duration.
+    let ownership_keys = controls.taps.sample(&keyboard);
+    let orbit_side = if focused {
+        melee::side(map, &ownership_keys, scripted)
+    } else {
+        0.
+    };
+    let break_lock = controls.autorun
+        || (focused
+            && (melee::breaks(map, &ownership_keys, scripted)
+                || look.as_ref().is_some_and(|look| look.held && look.left)));
+    if break_lock {
+        controls.melee.release("forward_or_back");
+    }
+    let orbit_active = controls.melee.active();
+    let manual = break_lock
+        || keys.script_active() && !(orbit_active && keys.script_orbit_keys())
+        || (focused
+            && ((!orbit_active
+                && crate::keys::movement::requested(
+                    map,
+                    &ownership_keys,
+                    scripted,
+                    !locked_camera && look.as_ref().is_some_and(|look| look.held),
+                ))
+                || [Act::Jump, Act::Duck]
+                    .into_iter()
+                    .any(|act| map.holding(&ownership_keys, scripted).held(act))
+                || !locked_camera
+                    && (look.as_ref().is_some_and(|look| look.held)
+                        || mouse_aim.is_some_and(|yaw| yaw != 0.)
+                        || controls.mouse_turn != 0.
+                        || controls.mouse_heading.is_some_and(|heading| {
+                            online
+                                .world()
+                                .player()
+                                .is_some_and(|player| arc(player.position.heading, heading) != 0.)
+                        }))
+                || !orbit_active && controls.released_turn != 0.
+                || keys.pressed(Act::Walk)
+                || scripted_facing.is_some()));
+    let context_holds = !melee_enabled
+        || controls.speed == Some(0.)
+        || !standing
+        || stunned
+        || flying
+        || swimming
+        || online.world().camp().is_some()
+        || online.world().casting().holds_actions()
+        || asked
+            .as_deref()
+            .is_some_and(|asked| asked.question().is_some() || asked.has_pending_answer())
+        || controls.jump.is_some()
+        || controls.crouch.is_some()
+        || controls.riding.is_some()
+        || controls.boat.is_some()
+        || controls.visual_boat.is_some()
+        || controls
+            .airborne
+            .as_ref()
+            .is_some_and(|airborne| airborne.velocity() != 0. || airborne.peak().is_some());
+    if manual || !melee_available || controls.following.is_some() {
+        controls.melee.yield_input(now);
+        controls.melee.suspend("input_owner");
+    } else if context_holds {
+        controls.melee.suspend("context");
+    } else {
+        controls.melee.resume(now);
+    }
+    let orbit_eligible = orbit_active
+        && melee_available
+        && !manual
+        && !context_holds
+        && controls.following.is_none()
+        && controls.melee.ready(now);
+    let observed_side = if focused {
+        melee::side(map, &keyboard, scripted)
+    } else {
+        0.
+    };
+    controls
+        .melee
+        .observe_orbit(observed_side, now, orbit_eligible);
+    let melee_waiting = orbit_active
+        && !context_holds
+        && melee_available
+        && !manual
+        && controls.following.is_none()
+        && controls.melee.ready(now)
+        && !controls.melee.native_idle(online.world(), orbit_side, now);
+
+    if controls.melee.owns_facing()
+        && let Ok((_, drawn)) = players.single()
+    {
+        controls.yield_key_facing(*drawn);
+    }
     let frame_turns = match online.world().generation() {
         eq_client_core::GameDialect::Titanium => time.is_some(),
         eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
@@ -2671,6 +2831,7 @@ pub(super) fn input(
             && !controls.stun_active
             && moving_world.is_some()
             && controls.following.is_none()
+            && !controls.melee.owns_facing()
             && scripted_facing.is_none()
             && controls.mouse_heading.is_none()
             && (intent.preserve_facing || intent.direction == Vec3::ZERO);
@@ -2843,59 +3004,6 @@ pub(super) fn input(
     if !water_enabled || !focused || !standing || controls.stun_active || !surface_input {
         controls.surface.pause();
     }
-    let mut movement_keys = map.movement_keys();
-    if flying {
-        movement_keys.extend(
-            [Act::Jump, Act::Duck]
-                .into_iter()
-                .flat_map(|act| map.keys(act)),
-        );
-    }
-    controls
-        .taps
-        .observe(&keyboard, &movement_keys, focused, now);
-    let melee_enabled = trace_melee
-        && combat
-            .as_deref()
-            .is_some_and(|combat| combat.requested_in(session_id))
-        && [
-            Capability::GameplayDepartures,
-            Capability::Moving,
-            Capability::Combat,
-        ]
-        .into_iter()
-        .all(|capability| online.world().can(capability));
-    // Decide ownership before native ground can retain an idle frame. Observe
-    // buffered taps without consuming them or giving them a physical duration.
-    let ownership_keys = controls.taps.sample(&keyboard);
-    let manual = controls.autorun
-        || keys.script_active()
-        || (focused
-            && (crate::keys::movement::requested(
-                map,
-                &ownership_keys,
-                scripted,
-                look.as_ref().is_some_and(|look| look.held),
-            ) || mouse_aim.is_some_and(|yaw| yaw != 0.)
-                || controls.mouse_turn != 0.
-                || controls.mouse_heading.is_some_and(|heading| {
-                    online
-                        .world()
-                        .player()
-                        .is_some_and(|player| arc(player.position.heading, heading) != 0.)
-                })
-                || controls.released_turn != 0.
-                || scripted_facing.is_some()));
-    if !melee_enabled {
-        controls.melee.clear();
-    } else if manual || !melee_available || controls.following.is_some() {
-        controls.melee.yield_input(now);
-    }
-    let melee_waiting = melee_enabled
-        && melee_available
-        && !manual
-        && controls.following.is_none()
-        && controls.melee.ready(now);
     // A completed-frame producer runs before the legacy future-endpoint gates.
     // Its input sample deliberately excludes the tap buffer and press-only
     // edges: no duration is invented for a tap absent from an observed frame.
@@ -3293,14 +3401,13 @@ pub(super) fn input(
     } else {
         None
     };
-    let melee_step = if !melee_enabled {
+    let steering = if !melee_enabled || !controls.melee.active() {
         if trace_melee {
             trace!(target: "eq_client_render::motion::melee", reason = "attack_or_provider_unavailable", forward = false,
                 attack_requested = combat.as_deref().is_some_and(|combat| combat.requested_in(session_id)),
                 moving = online.world().can(Capability::Moving), combat = online.world().can(Capability::Combat),
                 departures = online.world().can(Capability::GameplayDepartures), "Melee positioning held");
         }
-        controls.melee.clear();
         None
     } else if manual || !melee_available || controls.following.is_some() {
         trace!(target: "eq_client_render::motion::melee", reason = "input_owner", forward = false,
@@ -3343,7 +3450,7 @@ pub(super) fn input(
             airborne_velocity = ?controls.airborne.as_ref().map(AirborneController::velocity),
             airborne_peak = ?controls.airborne.as_ref().and_then(AirborneController::peak),
             "Melee positioning held");
-        controls.melee.clear();
+        controls.melee.suspend("context");
         None
     } else {
         let body = melee::Body {
@@ -3361,10 +3468,50 @@ pub(super) fn input(
         {
             controls.test_melee.decisions += 1;
         }
-        controls
-            .melee
-            .step(online.world(), world, &online.regions, &body, now)
+        let orbit_input = melee::OrbitInput {
+            observed_seconds: Some(controls.melee.orbit_seconds(now, span)),
+            side: orbit_side,
+            strafe: if controls.walking {
+                controls.strafe_walk_speed.or(controls.strafe_speed)
+            } else {
+                controls.strafe_speed
+            }
+            .unwrap_or(0.)
+            .min(controls.speed.unwrap_or(0.).max(0.)),
+            walking: controls.walking,
+            turn_budget: Some(
+                if [
+                    Act::StrafeLeft,
+                    Act::StrafeRight,
+                    Act::CameraLeft,
+                    Act::CameraRight,
+                ]
+                .into_iter()
+                .any(|act| map.holding(&ownership_keys, scripted).held(act))
+                {
+                    TURN_RATE.min(cap * TURN_STEP) * span
+                } else {
+                    controls.turn_held.map_or(0., |(_, since)| {
+                        let held = now.saturating_duration_since(since).as_secs_f32()
+                            + 1. / TURN_STEPS_PER_SECOND;
+                        ramped_turn(held - span, held, cap).min(TURN_RATE * span)
+                    })
+                },
+            ),
+        };
+        controls.melee.steer(
+            online.world(),
+            world,
+            &online.regions,
+            &body,
+            orbit_input,
+            now,
+        )
     };
+    let melee_orbit = steering
+        .as_ref()
+        .and_then(|steering| steering.orbit.as_ref());
+    let melee_step = steering.as_ref().map(|steering| steering.follow);
     if let Some(step) = melee_step {
         let radians = eq_client_core::render_heading(step.heading);
         intent = MotionInput {
@@ -3391,6 +3538,16 @@ pub(super) fn input(
         if heading_snapshots {
             heading_update = HeadingUpdate::Snapshot;
         }
+    }
+    if let Some(orbit) = melee_orbit {
+        intent = MotionInput {
+            mode: orbit.motion.mode,
+            speed: orbit.motion.speed,
+            direction: orbit.motion.direction,
+            turn: 0.,
+            preserve_facing: true,
+            diagonal: None,
+        };
     }
     let follow_step = follow_step.or(melee_step);
     let follow_heading = follow_step.map(|step| step.heading);
@@ -3707,7 +3864,7 @@ pub(super) fn input(
     } else {
         controls.water_jump = None;
     }
-    if let Some(step) = follow_step.filter(|_| wet_travel.is_none()) {
+    if let Some(step) = follow_step.filter(|_| wet_travel.is_none() && melee_orbit.is_none()) {
         // Stop within one frame of reach at the selected movement rate.
         // Water selects its ordinary swim rate above, so it shares this
         // limit rather than replacing an already limited land speed.
@@ -4363,7 +4520,7 @@ pub(super) fn input(
         // This disposable assist proposal sent nothing. Keep ordinary manual
         // crossing, boarding and authoritative corrections on their own path.
         controls.airborne = previous_airborne;
-        controls.melee.clear();
+        controls.melee.suspend(reason);
         melee::held(reason);
         controls.held = Some(Held::NoSpeed);
         return;
@@ -4492,6 +4649,9 @@ pub(super) fn input(
         controls.send_failed(reason);
         controls.held = Some(Held::Refused);
         return;
+    }
+    if melee_step.is_some() {
+        controls.melee.submitted();
     }
     #[cfg(test)]
     {
@@ -5546,6 +5706,7 @@ pub(super) fn interpolate(
         &mut players,
         &mut cameras,
         &mut displayed_mouse,
+        online.world(),
     ) {
         return;
     }
@@ -5621,7 +5782,7 @@ pub(super) fn interpolate(
     for (mut camera, free) in &mut cameras {
         camera.focus = transform.translation;
         let follow = key_follow.unwrap_or(follow_heading || preview.is_some() || had_preview);
-        if follow && !free {
+        if follow && !free && !controls.melee_camera_locked(online.world()) {
             crate::camera::start_behind(&mut camera, &transform);
         }
     }

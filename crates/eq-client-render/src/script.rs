@@ -510,6 +510,41 @@ impl Script {
         self.route.is_some()
     }
 
+    /// Only explicit held-key actions may share the opt-in orbit controller.
+    pub(crate) fn orbit_keys(&self, map: &crate::keys::KeyMap) -> bool {
+        let mut keys = ButtonInput::default();
+        for key in self.held.iter().chain(&self.latched) {
+            keys.press(*key);
+        }
+        let held = map.holding(&keys, &self.acts);
+        matches!(self.progress.phase, Phase::Running | Phase::Following)
+            && self.route.is_none()
+            && self.facing.is_none()
+            && self.following.is_none()
+            && self.follow.is_none()
+            && self.world_gesture.is_none()
+            && self.current.as_ref().is_none_or(|(step, _)| {
+                matches!(
+                    step,
+                    Step::Hold(..)
+                        | Step::KeyDown(..)
+                        | Step::KeyUp(..)
+                        | Step::Wait(..)
+                        | Step::Move(..)
+                )
+            })
+            && [
+                Act::StrafeLeft,
+                Act::StrafeRight,
+                Act::CameraLeft,
+                Act::CameraRight,
+                Act::TurnLeft,
+                Act::TurnRight,
+            ]
+            .into_iter()
+            .any(|act| held.held(act))
+    }
+
     /// The heading a `face` step turns the player to.
     pub(crate) const fn facing(&self) -> Option<f32> {
         self.facing
@@ -521,6 +556,14 @@ impl Script {
     pub(crate) fn holding_for_test(mut self, acts: Vec<Act>, facing: Option<f32>) -> Self {
         self.acts = acts;
         self.facing = facing;
+        self
+    }
+
+    /// Declared key-down ownership for matched authored/native orbit fixtures.
+    #[cfg(test)]
+    pub(crate) fn latched_for_test(mut self, keys: Vec<KeyCode>) -> Self {
+        self.progress.phase = Phase::Running;
+        self.latched = keys;
         self
     }
 
@@ -2431,6 +2474,7 @@ pub(super) fn drive(
         return;
     }
     let sight = language::Sight {
+        motion: Some(&observed.4),
         world: online.world(),
         spells: observed.8.as_deref(),
         clock: client.clock(),

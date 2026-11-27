@@ -31,7 +31,7 @@ fn melee_refuses_a_thin_mapped_zone_trigger_but_keeps_clear_ground() {
     assert!(clear.forward);
 }
 
-fn deck(carrier: bool) -> CollisionWorld {
+pub(super) fn deck(carrier: bool) -> CollisionWorld {
     let base = [
         [[-300., 0., -300.], [300., 0., 300.], [300., 0., -300.]],
         [[-300., 0., -300.], [-300., 0., 300.], [300., 0., 300.]],

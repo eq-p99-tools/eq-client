@@ -767,6 +767,12 @@ impl Keys<'_, '_> {
             .is_some_and(|script| script.status().phase().active())
     }
 
+    pub(crate) fn script_orbit_keys(&self) -> bool {
+        self.script
+            .as_ref()
+            .is_some_and(|script| script.orbit_keys(&self.map))
+    }
+
     /// The heading a running script's `face` step turns the player to.
     pub(crate) fn scripted_facing(&self) -> Option<f32> {
         self.script.as_ref().and_then(|script| script.facing())

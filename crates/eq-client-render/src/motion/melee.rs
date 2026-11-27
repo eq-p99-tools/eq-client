@@ -5,6 +5,44 @@ use bevy::prelude::*;
 use eq_client_core::{GameDialect, SpawnKind, WorldPosition, abilities, world::ClientWorld};
 use std::time::{Duration, Instant};
 
+mod control;
+mod orbit;
+pub(super) use orbit::Input as OrbitInput;
+
+pub(super) fn side(
+    map: &crate::keys::KeyMap,
+    keys: &ButtonInput<KeyCode>,
+    scripted: &[crate::keys::Act],
+) -> f32 {
+    use crate::keys::Act;
+    let held = map.holding(keys, scripted);
+    let left = [Act::StrafeLeft, Act::CameraLeft, Act::TurnLeft]
+        .into_iter()
+        .any(|act| held.held(act));
+    let right = [Act::StrafeRight, Act::CameraRight, Act::TurnRight]
+        .into_iter()
+        .any(|act| held.held(act));
+    f32::from(right) - f32::from(left)
+}
+
+pub(super) fn breaks(
+    map: &crate::keys::KeyMap,
+    keys: &ButtonInput<KeyCode>,
+    scripted: &[crate::keys::Act],
+) -> bool {
+    use crate::keys::Act;
+    let held = map.holding(keys, scripted);
+    [
+        Act::Forward,
+        Act::Back,
+        Act::CameraForward,
+        Act::CameraBack,
+        Act::Autorun,
+    ]
+    .into_iter()
+    .any(|act| held.held(act))
+}
+
 /// A distant or unreachable target is not a request to roam the zone.
 const MAX_DISTANCE: f32 = 200.;
 const MANUAL_PAUSE: Duration = Duration::from_millis(500);
@@ -65,6 +103,11 @@ pub(super) struct Assist {
     paused_until: Option<Instant>,
     driving: bool,
     target_sample: Option<TargetSample>,
+    lock: orbit::Lock,
+    safe_stop: Option<f32>,
+    decision_reason: &'static str,
+    proposed: bool,
+    orbit_hold: orbit::Held,
 }
 
 /// Already granted ordinary movement and the current collision body.
@@ -87,8 +130,12 @@ impl Assist {
 
     /// Manual input keeps its direction and view, including a brief release gap.
     pub fn yield_input(&mut self, now: Instant) {
+        let (lock, scope, approaching) = (self.lock, self.scope, self.approaching);
         *self = Self {
             paused_until: Some(now + MANUAL_PAUSE),
+            lock,
+            scope,
+            approaching,
             ..Self::default()
         };
     }
@@ -143,6 +190,7 @@ impl Assist {
         let reach = (radius * radius - dz * dz).sqrt();
         let stand_off = self.stand_off(scope, to, reach, body, now);
         let stop = stand_off.stop;
+        self.safe_stop = Some(stop);
         let desired = if distance > 1e-5 {
             eq_client_core::world_heading(flat.x.atan2(flat.y))
         } else {
@@ -179,6 +227,7 @@ impl Assist {
             )
         };
         let forward = reason == "forward";
+        self.decision_reason = reason;
         trace!(target: "eq_client_render::motion::melee", reason, forward, sample_seconds = body.seconds,
             selected_speed = speed, distance, beyond, heading_error, reach, stop,
             resume = stand_off.resume, receding_speed = stand_off.receding_speed, in_range,

@@ -84,3 +84,23 @@ No unavailable value is converted to Air. Admission changes discard the old
 counter scope; placement changes break timing continuity without refilling
 spent air. Reporting does not alter breath ticks, drowning/lava reports,
 movement eligibility or native input cancellation.
+
+## Melee positioning controller
+
+`melee.state` reads `disabled`, `approaching`, `locked`, `suspended`, `released`
+or `invalidated`. `melee.reason` distinguishes the local cause; deliberate
+release differs from temporary input/context suspension and invalid-target
+teardown. `melee.target_id` and `melee.admission_id` are known only while a scoped
+identity is retained. The admission is a decimal text token, preserving its
+full 64-bit identity. `melee.facing_owner` is `melee` or `ordinary`.
+`melee.motion_proposed` says whether the last Input frame queued an ordinary
+movement request for this controller. It does not establish transport, server
+movement admission, reach or a successful swing.
+
+These fields read the same controller for native and script-authored actions.
+The script driver runs before the next Input frame, so its observation describes
+the preceding Input frame. `report` includes the companion `melee_positioning`
+object with the local radius and these identity/state fields. State/reason are
+readable outside an admitted world when the local controller exists; absent
+controller/identity stays unknown or stale. No script command acquires a privileged
+orbit speed, selects a target or enables attack on behalf of this option.

@@ -209,6 +209,12 @@ fn pursuit_6716_manual_movement_yields_and_focus_loss_keeps_pursuing() {
                 .proposals,
             before
         );
+        let (_, proposals, _) = observe(&mut scene, 90);
+        assert_eq!(
+            proposals, 0,
+            "deliberate forward release must remain released"
+        );
+        scene.attack_on();
         let (_, proposals, travel) = observe(&mut scene, 90);
         assert!(proposals > 0 && travel > 1.);
         let world = scene.app.world_mut();
@@ -272,6 +278,12 @@ fn pursuit_6716_manual_native_ground_keeps_its_owner_until_release() {
             .proposals,
         before
     );
+    let (_, proposals, _) = observe(&mut scene, 90);
+    assert_eq!(
+        proposals, 0,
+        "deliberate forward release must remain released"
+    );
+    scene.attack_on();
     let (_, proposals, travel) = observe(&mut scene, 90);
     assert!(proposals > 0 && travel > 1.);
 }

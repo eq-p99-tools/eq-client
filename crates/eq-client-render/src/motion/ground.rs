@@ -408,6 +408,7 @@ pub(super) fn present(
     players: &mut Query<(Entity, &mut Transform), With<Player>>,
     cameras: &mut Query<(&mut OrbitCamera, Has<crate::camera::FreeCamera>)>,
     displayed_mouse: &mut Option<Entity>,
+    world: &ClientWorld,
 ) -> bool {
     let Some(frame) = controls.ground.current else {
         return false;
@@ -423,7 +424,10 @@ pub(super) fn present(
         controls.drawn_pose = Some(frame.pose);
         for (mut camera, free) in cameras {
             camera.focus = transform.translation;
-            if (frame.follows || preview.is_some()) && !free {
+            // A retained ground follow flag shares the legacy presenter's
+            // camera ownership; it cannot override a target lock's view.
+            if (frame.follows || preview.is_some()) && !free && !controls.melee_camera_locked(world)
+            {
                 crate::camera::start_behind(&mut camera, &transform);
             }
         }

@@ -23,10 +23,18 @@ pub(in crate::script) struct Sight<'a> {
     pub chat: Option<&'a crate::chat::ChatState>,
     /// The Options window's Filters page, for the mode each row shows.
     pub filters: Option<&'a eq_client_core::chat_filters::ChatFilters>,
+    /// Local controller status from its last input frame, never server outcomes.
+    pub motion: Option<&'a crate::motion::Controls>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(super) enum Field {
+    MeleeState,
+    MeleeReason,
+    MeleeTarget,
+    MeleeAdmission,
+    MeleeProposed,
+    MeleeFacing,
     Ready,
     Zone,
     Level,
@@ -97,6 +105,12 @@ pub(super) enum Coin {
 impl Field {
     pub(super) fn parse(name: &str) -> Option<Self> {
         match name {
+            "melee.state" => Some(Self::MeleeState),
+            "melee.reason" => Some(Self::MeleeReason),
+            "melee.target_id" => Some(Self::MeleeTarget),
+            "melee.admission_id" => Some(Self::MeleeAdmission),
+            "melee.motion_proposed" => Some(Self::MeleeProposed),
+            "melee.facing_owner" => Some(Self::MeleeFacing),
             "client.ready" => Some(Self::Ready),
             "zone.name" => Some(Self::Zone),
             "player.level" => Some(Self::Level),
@@ -189,13 +203,18 @@ impl Field {
     pub(super) const fn kind(self) -> Kind {
         match self {
             Self::Ready
+            | Self::MeleeProposed
             | Self::TargetSelected
             | Self::Casting
             | Self::Stunned
             | Self::PetPresent
             | Self::GemReady(_)
             | Self::GroupPresent => Kind::Bool,
-            Self::Zone
+            Self::MeleeState
+            | Self::MeleeReason
+            | Self::MeleeFacing
+            | Self::MeleeAdmission
+            | Self::Zone
             | Self::TargetName
             | Self::Posture
             | Self::TargetCon
@@ -207,7 +226,8 @@ impl Field {
             | Self::LastTell
             | Self::LastTellFrom
             | Self::Filter(_) => Kind::Text,
-            Self::Level
+            Self::MeleeTarget
+            | Self::Level
             | Self::ReportedHp
             | Self::ReportedHpMax
             | Self::Mana
@@ -229,7 +249,15 @@ impl Field {
 
     pub(super) fn read(self, sight: &Sight) -> Value {
         let world = sight.world;
-        if self != Self::Ready && !world.in_world() {
+        if !matches!(
+            self,
+            Self::Ready
+                | Self::MeleeState
+                | Self::MeleeReason
+                | Self::MeleeFacing
+                | Self::MeleeProposed
+        ) && !world.in_world()
+        {
             return if world.session_id().is_some() {
                 Value::Stale
             } else {
@@ -239,6 +267,28 @@ impl Field {
         let number = |value: Option<i64>| value.map_or(Value::Unknown, Value::Int);
         let vitals = world.vitals();
         match self {
+            Self::MeleeState => sight.motion.map_or(Value::Unknown, |motion| {
+                Value::Text(motion.melee_status().0.into())
+            }),
+            Self::MeleeReason => sight.motion.map_or(Value::Unknown, |motion| {
+                Value::Text(motion.melee_status().1.into())
+            }),
+            Self::MeleeFacing => sight.motion.map_or(Value::Unknown, |motion| {
+                Value::Text(motion.melee_facing_owner().into())
+            }),
+            Self::MeleeProposed => sight.motion.map_or(Value::Unknown, |motion| {
+                Value::Bool(motion.melee_proposed())
+            }),
+            Self::MeleeAdmission => sight
+                .motion
+                .and_then(crate::motion::Controls::melee_admission)
+                .map_or(Value::Unknown, |id| Value::Text(id.to_string().into())),
+            Self::MeleeTarget => number(
+                sight
+                    .motion
+                    .and_then(|motion| motion.melee_status().2)
+                    .map(i64::from),
+            ),
             Self::Ready => Value::Bool(world.in_world()),
             Self::Zone if world.zone().is_empty() => Value::Unknown,
             Self::Zone => Value::Text(world.zone().into()),
@@ -591,6 +641,7 @@ mod tests {
         Field::parse(name)
             .unwrap_or_else(|| panic!("{name} is a field"))
             .read(&Sight {
+                motion: None,
                 world: online.world(),
                 spells,
                 clock,
@@ -604,6 +655,7 @@ mod tests {
         Field::parse(name)
             .unwrap_or_else(|| panic!("{name} is a field"))
             .read(&Sight {
+                motion: None,
                 world: online.world(),
                 spells: None,
                 clock: TITANIUM,
@@ -618,6 +670,44 @@ mod tests {
     }
 
     #[test]
+    fn melee_queries_are_typed_local_state_and_do_not_invent_an_admission_or_target() {
+        let online = OnlineState::new(true);
+        let controls = crate::motion::Controls::default();
+        let sight = Sight {
+            motion: Some(&controls),
+            world: online.world(),
+            spells: None,
+            clock: TITANIUM,
+            now: std::time::Instant::now(),
+            chat: None,
+            filters: None,
+        };
+        for (name, expected) in [
+            ("melee.state", text("disabled")),
+            ("melee.reason", text("inactive")),
+            ("melee.facing_owner", text("ordinary")),
+            ("melee.motion_proposed", Value::Bool(false)),
+            ("melee.target_id", Value::Unknown),
+            ("melee.admission_id", Value::Unknown),
+        ] {
+            let field = Field::parse(name).expect("structured controller field");
+            assert_eq!(field.read(&sight), expected);
+        }
+        assert_eq!(
+            Field::parse("melee.admission_id").unwrap().kind(),
+            super::super::Kind::Text
+        );
+        let absent = Sight {
+            motion: None,
+            ..sight
+        };
+        assert_eq!(
+            Field::parse("melee.state").unwrap().read(&absent),
+            Value::Unknown
+        );
+    }
+
+    #[test]
     fn filter_fields_read_what_the_filters_page_shows() {
         use eq_client_core::filters::{FilterCategory, FilterMode};
         let mut online = OnlineState::new(true);
@@ -629,6 +719,7 @@ mod tests {
             Field::parse(name)
                 .unwrap_or_else(|| panic!("{name} is a field"))
                 .read(&Sight {
+                    motion: None,
                     world: online.world(),
                     spells: None,
                     clock: TITANIUM,

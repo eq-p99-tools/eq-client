@@ -6,6 +6,7 @@ use crate::{
 use eq_client_core::{ClientCommand, SpawnState, WorldEvent, qol::Fix};
 
 mod cadence;
+mod lock;
 mod stand_off;
 mod transitions;
 

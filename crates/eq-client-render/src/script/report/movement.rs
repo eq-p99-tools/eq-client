@@ -72,6 +72,7 @@ pub(in crate::script) fn report(
             .filter(|pad| Some(pad.session_id) == admission)
     );
     movement_state["surface_clock"] = observed.4.surface_report();
+    movement_state["melee_positioning"] = observed.4.melee_report();
     movement_state["navigation_mesh"] = observed.7.as_ref().map_or(
         json!({"zone":world.zone(),"phase":"missing","ready":false}),
         |mesh| {
