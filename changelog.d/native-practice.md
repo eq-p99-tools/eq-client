@@ -1,0 +1,1 @@
+- Show native trainer practice balances and context-specific practice/skill lines, without invented unknown-outcome chat. Closing or reloading Training preserves local balances until authoritative replacement.
