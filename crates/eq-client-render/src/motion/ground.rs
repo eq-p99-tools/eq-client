@@ -589,11 +589,12 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
                 // the narrow down-sweep links the feet to it. Positive
                 // ordinary-reach geometry can select the ordinary owner;
                 // only the actual down-sweep above supplies wire support.
-                let approaching = world
-                    .ground_spawn(motion.feet(), physics.reach(), MAX_GROUNDED_STEP)
-                    .is_some_and(|id| online.world().carriers().latest(id).is_some());
-                (controls.ground.ordinary || carrier.is_some() || approaching)
-                    .then_some((motion, carrier))
+                (controls.ground.ordinary
+                    || carrier.is_some()
+                    || world
+                        .ground_frame_carrier(motion.feet(), physics.reach())
+                        .is_some_and(|id| online.world().carriers().latest(id).is_some()))
+                .then_some((motion, carrier))
             })
     } else {
         None

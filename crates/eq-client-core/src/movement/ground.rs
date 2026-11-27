@@ -152,7 +152,7 @@ impl GroundMotion {
             || !direction.is_finite()
             || !height.is_finite()
             || height < 1.0
-            || static_ground && world.support(feet).is_none()
+            || world.support(feet).is_none()
             || world.liquid_support
             || !matches!(world.liquid_contact(feet, height), LiquidContact::Unmarked)
             || static_ground && !world.plain_ground(feet, height, climb)
@@ -235,6 +235,24 @@ impl GroundMotion {
 }
 
 impl CollisionWorld {
+    /// A received carrier floor met by the native frame's conservative
+    /// static-ground lookahead, using the exact same geometry and footprint.
+    /// This can select ordinary physics before the feet stand over the deck;
+    /// it is not a standing link or permission to name carrier wire support.
+    #[must_use]
+    pub fn ground_frame_carrier(&self, feet: Vec3, climb: f32) -> Option<u16> {
+        if !climb.is_finite() || climb <= 0. {
+            return None;
+        }
+        SUPPORT_OFFSETS.into_iter().find_map(|(x, z)| {
+            self.ground_spawn(
+                feet + Vec3::new(x, 0., z),
+                climb,
+                climb.max(MAX_GROUNDED_STEP),
+            )
+        })
+    }
+
     /// Positive footprint evidence from this same geometry; virtual liquid
     /// floors and transient door/carrier coordinates never qualify it.
     fn plain_ground(&self, feet: Vec3, height: f32, climb: f32) -> bool {

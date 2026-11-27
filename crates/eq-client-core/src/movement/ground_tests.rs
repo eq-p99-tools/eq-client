@@ -46,7 +46,7 @@ fn ordinary_carrier_handover_uses_the_existing_raised_floor_once() {
     };
     let frame = Duration::from_nanos(16_666_667);
     let motion = GroundMotion::new(Vec3::ZERO).unwrap();
-    assert!(world.support(motion.feet()).is_none());
+    assert_eq!(world.support(motion.feet()), Some(0.));
     assert!(
         motion
             .frame_with_physics(&world, 6., Vec3::X, 6., true, frame, physics)
@@ -64,6 +64,47 @@ fn ordinary_carrier_handover_uses_the_existing_raised_floor_once() {
             .ordinary_frame_with_physics(&world, 6., Vec3::X, 6., true, frame, physics,)
             .is_none()
     );
+}
+
+#[test]
+fn ordinary_carrier_handover_can_begin_at_the_native_lookahead_boundary() {
+    use crate::movement::{CollisionMesh, PROVISIONAL_PHYSICS};
+    use std::sync::Arc;
+    let mut world = world().with_titanium_walking(3.75);
+    let deck = [
+        [[43.5, 2.25, -10.], [43.5, 2.25, 10.], [70., 2.25, -10.]],
+        [[70., 2.25, -10.], [43.5, 2.25, 10.], [70., 2.25, 10.]],
+    ];
+    world.set_spawn_obstacles(vec![(172, Arc::new(CollisionMesh::new(deck).unwrap()))]);
+    let physics = VerticalPhysics {
+        climb: 3.75,
+        edge_climb: Some(5.),
+        ..PROVISIONAL_PHYSICS
+    };
+    let frame = Duration::from_nanos(16_666_667);
+    let mut motion = GroundMotion::new(Vec3::ZERO).unwrap();
+    for _ in 0..100 {
+        if let Some(next) =
+            motion.frame_with_physics(&world, 6., Vec3::X, 29.866_667, true, frame, physics)
+        {
+            motion = next;
+        } else {
+            let ordinary = motion
+                .ordinary_frame_with_physics(&world, 6., Vec3::X, 29.866_667, true, frame, physics)
+                .expect("ordinary physics retains the genuinely unconsumed frame");
+            assert!(ordinary.feet().x > motion.feet().x);
+            assert_eq!(
+                world.ground_spawn(ordinary.feet(), physics.reach(), MAX_GROUNDED_STEP),
+                None
+            );
+            assert_eq!(
+                world.ground_frame_carrier(ordinary.feet(), physics.reach()),
+                Some(172)
+            );
+            return;
+        }
+    }
+    panic!("fixture never reached the carrier boundary");
 }
 
 fn rolling_world() -> CollisionWorld {
