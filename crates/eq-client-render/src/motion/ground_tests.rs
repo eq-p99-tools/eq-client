@@ -44,6 +44,12 @@ struct Submission {
     body: [u8; 36],
 }
 
+#[derive(Clone, Copy)]
+struct Admission {
+    created: Instant,
+    position: eq_client_core::WorldPosition,
+}
+
 fn submit(
     packets: &mut Vec<(Instant, eq_client_core::WorldPosition, i16)>,
     submissions: &mut Vec<Submission>,
@@ -71,6 +77,7 @@ struct Scene {
     replies: VecDeque<ResultNews>,
     packets: Vec<(Instant, eq_client_core::WorldPosition, i16)>,
     submissions: Vec<Submission>,
+    last_admission: Admission,
     observations: usize,
     admissions: usize,
     refusals: usize,
@@ -305,9 +312,15 @@ fn warm_carrier(fixture: CarrierFixture, delay: u32) -> (Scene, Vec<f32>) {
     (scene, speeds)
 }
 
-fn matched_carrier(installed: bool, native: bool, delay: u32, clock: Instant) -> Scene {
+fn matched_carrier(
+    installed: bool,
+    native: bool,
+    delay: u32,
+    clock: Instant,
+    approach_x: f32,
+) -> Scene {
     let target = eq_client_core::WorldPosition {
-        x: MATCHED_APPROACH_X,
+        x: approach_x,
         y: 10.,
         z: 3.75,
         heading: 128.,
@@ -381,75 +394,168 @@ fn matched_carrier(installed: bool, native: bool, delay: u32, clock: Instant) ->
     scene
 }
 
-fn matched_carrier_crossing(installed: bool) {
+struct MeasuredRun {
+    horizontal: f64,
+    stopped: u32,
+    packet_times: Vec<u128>,
+    max_time_budget_excess: f64,
+    max_session_lead: f64,
+    max_accepted_budget_excess: f64,
+    roundoff: f64,
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "one observed frame trace keeps actor, actual admission and delayed receipt separate"
+)]
+fn measure_carrier(scene: &mut Scene, frames: u32, installed: bool, native: bool) -> MeasuredRun {
+    let start_at = scene.now();
+    let before = scene.submissions.len();
+    let mut previous = latency_tests::shown(&mut scene.app).0;
+    let start = previous;
+    let start_admission = scene.owner.position();
+    let mut horizontal = 0_f64;
+    let mut spatial = 0_f64;
+    let mut stopped = 0;
+    let mut max_time_budget_excess = 0_f64;
+    let mut max_session_lead = 0_f64;
+    let mut max_accepted_budget_excess = 0_f64;
+    let mut rows = Vec::new();
+    let mut roundoff = 4. * f64::from(f32::EPSILON) * f64::from(start.abs().max_element().max(1.));
+    for _ in 0..frames {
+        let row = scene.step(true);
+        let elapsed = scene.now().duration_since(start_at);
+        let delta = (row.shown - previous).as_dvec3();
+        horizontal += delta.with_y(0.).length();
+        spatial += delta.length();
+        stopped += u32::from(delta.with_y(0.).length() < 0.000_01);
+        assert_eq!(row.shown, row.focus);
+        assert_eq!(row.accepted, scene.last_admission.position);
+        let shown = world_position(row.shown.to_array(), 128.);
+        let received = scene
+            .app
+            .world()
+            .resource::<online::OnlineState>()
+            .world()
+            .player()
+            .unwrap()
+            .position;
+        let age = scene.now().duration_since(scene.last_admission.created);
+        let lead = f64::from(shown.x) - f64::from(row.accepted.x);
+        let accepted_allowance =
+            f64::from(CARRIER_SPEED) * age.min(MAX_CYCLE_DURATION).as_secs_f64();
+        max_time_budget_excess = max_time_budget_excess
+            .max(horizontal - f64::from(CARRIER_SPEED) * elapsed.as_secs_f64());
+        max_session_lead = max_session_lead.max(lead);
+        max_accepted_budget_excess = max_accepted_budget_excess.max(lead - accepted_allowance);
+        roundoff = roundoff
+            .max(4. * f64::from(f32::EPSILON) * f64::from(row.shown.abs().max_element().max(1.)));
+        rows.push(serde_json::json!({
+            "frame": scene.frame, "elapsed_ns": elapsed.as_nanos(), "shown": shown,
+            "session_accepted": row.accepted,
+            "session_accepted_created_ns": scene.last_admission.created.duration_since(scene.base).as_nanos(),
+            "client_received": received, "session_lead": lead,
+            "received_lead": f64::from(shown.x) - f64::from(received.x),
+            "accepted_elapsed_allowance": accepted_allowance,
+            "rendered_travel": horizontal,
+            "session_travel": f64::from(row.accepted.x) - f64::from(start_admission.x),
+            "calibrated_elapsed_budget": f64::from(CARRIER_SPEED) * elapsed.as_secs_f64(),
+            "owned_velocity": row.owned.to_array(), "pending_replies": scene.replies.len(),
+        }));
+        previous = row.shown;
+    }
+    let packets: Vec<_> = scene.submissions[before..].iter().map(|submitted| {
+        serde_json::json!({
+            "elapsed_ns": submitted.at.duration_since(start_at).as_nanos(),
+            "position": submitted.sample.position, "sequence": submitted.sample.sequence,
+            "delta": submitted.sample.delta, "animation": submitted.sample.animation,
+            "delta_heading": submitted.sample.delta_heading, "titanium_body": submitted.body.to_vec(),
+        })
+    }).collect();
+    let packet_times = scene.submissions[before..]
+        .iter()
+        .map(|submitted| submitted.at.duration_since(start_at).as_nanos())
+        .collect();
+    println!(
+        "GATE326-RUN {}",
+        serde_json::json!({
+            "installed": installed, "native": native, "delay_frames": scene.delay, "frames": frames,
+            "elapsed_ns": scene.now().duration_since(start_at).as_nanos(),
+            "start": world_position(start.to_array(),128.), "end": world_position(previous.to_array(),128.),
+            "start_session_accepted": start_admission, "horizontal_path": horizontal,
+            "spatial_path": spatial, "stopped_frames": stopped,
+            "max_calibrated_time_excess": max_time_budget_excess, "roundoff_bound": roundoff,
+            "max_literal_session_lead": max_session_lead,
+            "max_accepted_elapsed_budget_excess": max_accepted_budget_excess,
+            "actual_submissions": packets, "session_acceptance_frames": rows,
+        })
+    );
+    assert_eq!(scene.refusals, 0);
+    assert!(scene.ordinary_supports.iter().any(|support| {
+        matches!(support, Some(Support::Spawn(sample)) if sample.spawn_id == 172)
+    }));
+    for pair in scene.packets.windows(2) {
+        assert!(pair[1].0.duration_since(pair[0].0) > TITANIUM_FLAGS.spacing);
+    }
+    MeasuredRun {
+        horizontal,
+        stopped,
+        packet_times,
+        max_time_budget_excess,
+        max_session_lead,
+        max_accepted_budget_excess,
+        roundoff,
+    }
+}
+
+fn gate326(installed: bool, frames: u32) {
     let mut failures = Vec::new();
+    // Ten seconds uses the same straight calibrated run with a nine-second
+    // antecedent. Its final second reaches the unchanged230 approach point;
+    // no fake floor, shorter duration or slower speed makes the route fit.
+    let approach = if frames == 600 {
+        MATCHED_APPROACH_X - CARRIER_SPEED * 9.
+    } else {
+        MATCHED_APPROACH_X
+    };
     for delay in [0, 6] {
         let clock = Instant::now();
-        let mut distances = Vec::new();
+        let mut runs = Vec::new();
         for native in [false, true] {
-            let mut scene = matched_carrier(installed, native, delay, clock);
-            let start_at = scene.now();
-            let before = scene.submissions.len();
-            let mut previous = latency_tests::shown(&mut scene.app).0;
-            let start = previous;
-            let mut horizontal = 0.;
-            let mut spatial = 0.;
-            let mut stopped = 0;
-            for _ in 0..60 {
-                let row = scene.step(true);
-                let delta = row.shown - previous;
-                horizontal += delta.with_y(0.).length();
-                spatial += delta.length();
-                stopped += usize::from(delta.with_y(0.).length() < 0.000_01);
-                assert_eq!(row.shown, row.focus);
-                previous = row.shown;
-            }
-            let packets: Vec<_> = scene.submissions[before..].iter().map(|submitted| {
-                serde_json::json!({
-                    "elapsed_ns": submitted.at.duration_since(start_at).as_nanos(),
-                    "position": submitted.sample.position, "sequence": submitted.sample.sequence,
-                    "delta": submitted.sample.delta, "animation": submitted.sample.animation,
-                    "delta_heading": submitted.sample.delta_heading, "titanium_body": submitted.body.to_vec(),
-                })
-            }).collect();
-            println!(
-                "MATCHED-CROSSING {}",
-                serde_json::json!({
-                    "installed": installed, "native": native, "delay_frames": delay,
-                    "elapsed_ns": scene.now().duration_since(start_at).as_nanos(),
-                    "start": world_position(start.to_array(),128.), "end": world_position(previous.to_array(),128.),
-                    "horizontal_path": horizontal, "spatial_path": spatial, "stopped_frames": stopped,
-                    "actual_submissions": packets, "all_submissions": scene.submissions.len(),
-                    "ordinary_requests": scene.ordinary_modes.len(), "native_observations": scene.observations,
-                })
-            );
-            assert_eq!(scene.refusals, 0);
-            assert!(scene.ordinary_supports.iter().any(|support| {
-                matches!(support, Some(Support::Spawn(sample)) if sample.spawn_id == 172)
-            }));
+            let mut scene = matched_carrier(installed, native, delay, clock, approach);
+            let run = measure_carrier(&mut scene, frames, installed, native);
             if native {
-                assert_eq!(stopped, 0);
-                assert!(
-                    horizontal <= CARRIER_SPEED + 0.001,
-                    "exceeded actual held time"
-                );
+                if run.max_time_budget_excess > run.roundoff {
+                    failures.push((delay, "calibrated elapsed-time excess"));
+                }
+                if run.stopped != 0 {
+                    failures.push((delay, "stopped frame during qualified crossing/run"));
+                }
+                if delay == 6 && run.max_session_lead > run.roundoff {
+                    failures.push((delay, "rendered pose ahead of actual session acceptance"));
+                }
+                if run.max_accepted_budget_excess > run.roundoff {
+                    failures.push((delay, "accepted elapsed budget exceeded"));
+                }
             }
-            for pair in scene.packets.windows(2) {
-                assert!(pair[1].0.duration_since(pair[0].0) > TITANIUM_FLAGS.spacing);
-            }
-            distances.push(horizontal);
+            runs.push(run);
         }
+        let relative = (runs[1].horizontal / runs[0].horizontal - 1.).abs();
         println!(
-            "MATCHED-DELTA {}",
+            "GATE326-COMPARE {}",
             serde_json::json!({
-                "installed": installed, "delay_frames": delay,
-                "relative_percent": (distances[1]/distances[0]-1.)*100.,
+                "installed": installed, "frames": frames, "delay_frames": delay,
+                "relative_percent": relative * 100., "ordinary_held_frames": runs[0].stopped,
+                "candidate_stopped_frames": runs[1].stopped,
+                "ordinary_packet_times": runs[0].packet_times,
+                "candidate_packet_times": runs[1].packet_times,
             })
         );
-        // Delayed ordinary playback can stall. Retain and report that loss;
-        // never pause or accelerate the candidate to fit a delayed control.
-        if delay == 0 && (distances[1] - distances[0]).abs() / distances[0] > 0.01 {
-            failures.push("matched normal-reply distance exceeds1%");
+        if runs[0].packet_times != runs[1].packet_times {
+            failures.push((delay, "actual packet count/timing differs"));
+        }
+        if frames == 600 && relative > 0.04 {
+            failures.push((delay, "matched ten-second travel differs by over4%"));
         }
     }
     assert!(failures.is_empty(), "{failures:?}");
@@ -457,22 +563,34 @@ fn matched_carrier_crossing(installed: bool) {
 
 #[test]
 fn native_ground_matched_supported_carrier_crossing() {
-    matched_carrier_crossing(false);
+    gate326(false, 60);
 }
 
 #[test]
 #[ignore = "requires authorized installed Titanium assets; offline CPU collision only"]
 fn installed_qeynos_matched_supported_carrier_crossing() {
-    matched_carrier_crossing(true);
+    gate326(true, 60);
 }
 
 #[test]
+fn native_ground_ten_second_matched_carrier_run() {
+    gate326(false, 600);
+}
+
+#[test]
+#[ignore = "requires authorized installed Titanium assets; full normal input and collision route qualification"]
+fn installed_qeynos_ten_second_matched_carrier_run() {
+    gate326(true, 600);
+}
+
+#[test]
+#[ignore = "pre326 raw-display1% comparison retained as a diagnostic, not the approved gate"]
 fn native_ground_transfers_once_to_supported_carrier_without_a_zero_sample() {
     carrier_crossing(false);
 }
 
 #[test]
-#[ignore = "requires authorized installed Titanium assets; offline CPU collision only"]
+#[ignore = "pre326 raw-display1% diagnostic, requiring authorized installed Titanium assets"]
 fn installed_qeynos_pre_carrier172_crossing_matches_main() {
     carrier_crossing(true);
 }
@@ -982,6 +1100,10 @@ impl Scene {
             replies: VecDeque::new(),
             packets: Vec::new(),
             submissions: Vec::new(),
+            last_admission: Admission {
+                created: start,
+                position: origin,
+            },
             observations: 0,
             admissions: 0,
             refusals: 0,
@@ -999,6 +1121,12 @@ impl Scene {
     }
 
     fn reply(&mut self, created: Instant, refused: Option<String>) {
+        if refused.is_none() {
+            self.last_admission = Admission {
+                created,
+                position: self.owner.position(),
+            };
+        }
         self.replies.push_back(ResultNews {
             due: self.frame + self.delay + 1,
             created,
