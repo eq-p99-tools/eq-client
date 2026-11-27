@@ -73,7 +73,12 @@ fn scene(slope: bool, pitch: f32) -> (Native, MotionSession) {
     (f, session)
 }
 
-fn answer(f: &Native, session: &mut MotionSession, command: ClientCommand, out: &mut Outcome) {
+fn answer(
+    f: &Native,
+    session: &mut MotionSession,
+    command: ClientCommand,
+    out: &mut Outcome,
+) -> [eq_client_core::WorldEvent; 2] {
     let before = session.position();
     // The worker handles even a fallback stamped at dispatch, after the
     // physical caller slice. No extra consumption is inserted into the tape.
@@ -103,36 +108,61 @@ fn answer(f: &Native, session: &mut MotionSession, command: ClientCommand, out: 
         let after = session.position();
         out.path_xy += f64::from((after.x - before.x).hypot(after.y - before.y));
     }
-    news(
-        f,
+    [
         eq_client_core::WorldEvent::MotionSent {
             session_id: request.session_id,
             created: request.created,
             position: session.position(),
             refused,
         },
-    );
-    news(
-        f,
         eq_client_core::WorldEvent::SwimState {
             session_id: request.session_id,
             created: Some(request.created),
             position: session.position(),
             basis: session.swim_basis(),
         },
-    );
+    ]
+}
+
+type Replies = std::collections::VecDeque<(usize, [eq_client_core::WorldEvent; 2])>;
+
+fn drive(
+    f: &mut Native,
+    session: &mut MotionSession,
+    out: &mut Outcome,
+    replies: &mut Replies,
+    tick: usize,
+    turn: f32,
+) {
+    while replies.front().is_some_and(|(due, _)| *due <= tick) {
+        for event in replies.pop_front().unwrap().1 {
+            news(f, event);
+        }
+    }
+    if turn != 0. {
+        f.app
+            .world_mut()
+            .write_message(bevy::input::mouse::MouseMotion {
+                delta: Vec2::new(turn, 0.),
+            });
+    }
+    for command in frame(f, session) {
+        let events = answer(f, session, command, out);
+        // Three real rendered frames separate publication and delivery.
+        // This yields the ordinary ~150ms sample cadence in retained rows.
+        replies.push_back((tick + 3, events));
+    }
 }
 
 fn run(slope: bool, pitch: f32, side: Option<KeyCode>, turn: f32) -> Outcome {
     let (mut f, mut session) = scene(slope, pitch);
+    let mut replies = Replies::new();
     if slope {
         // Earn the actual falling wet state before meeting the floor. A
         // supported zero-displacement start is not a witnessed native fall.
         let mut settling = Outcome::default();
-        for _ in 0..180 {
-            for command in frame(&mut f, &mut session) {
-                answer(&f, &mut session, command, &mut settling);
-            }
+        for tick in 0..180 {
+            drive(&mut f, &mut session, &mut settling, &mut replies, tick, 0.);
         }
     }
     let origin = session.position();
@@ -158,17 +188,8 @@ fn run(slope: bool, pitch: f32, side: Option<KeyCode>, turn: f32) -> Outcome {
         }
         latency_tests::key(&mut f.app, key, true);
     }
-    for _ in 0..600 {
-        if turn != 0. {
-            f.app
-                .world_mut()
-                .write_message(bevy::input::mouse::MouseMotion {
-                    delta: Vec2::new(turn, 0.),
-                });
-        }
-        for command in frame(&mut f, &mut session) {
-            answer(&f, &mut session, command, &mut out);
-        }
+    for tick in 180..780 {
+        drive(&mut f, &mut session, &mut out, &mut replies, tick, turn);
     }
     let end = session.position();
     out.net_xy = (end.x - origin.x).hypot(end.y - origin.y);
@@ -182,7 +203,7 @@ fn clear_water_both_strafe_turn_signs_preserve_pitch_independent_depth() {
     for pitch in [-0.45, 0., 0.45] {
         let idle = run(false, pitch, None, 0.);
         for side in [KeyCode::KeyA, KeyCode::KeyD] {
-            for turn in [-40., 0., 40.] {
+            for turn in [-40., -7.5, 0., 7.5, 40.] {
                 let row = run(false, pitch, Some(side), turn);
                 assert_eq!(
                     row.refused, 0,
@@ -223,6 +244,16 @@ fn unverified_floor_clipping_cannot_silently_gain_owned_replay_credit() {
             let row = run(true, 0., Some(side), turn);
             eprintln!("synthetic floor side={side:?} turn={turn}: {row:?}");
             refused += row.backing_refusals;
+            let opposed =
+                (side == KeyCode::KeyA && turn > 0.) || (side == KeyCode::KeyD && turn < 0.);
+            if opposed {
+                assert!(
+                    row.replay_mismatches > 0 && row.backing_refusals > 0,
+                    "both opposed signs must exercise the fallback: {row:?}"
+                );
+            } else {
+                assert_eq!(row.refused, 0, "co-direction control: {row:?}");
+            }
             assert!(f64::from(row.net_xy) <= row.path_xy + 0.001);
         }
     }
