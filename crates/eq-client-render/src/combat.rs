@@ -271,7 +271,8 @@ pub(super) fn input(
     // auto attack off on its own ([`CombatState::end_quietly`]). The
     // Mac-era client's program is unread, so it keeps the earlier rule and
     // stops attacking when the player stops standing (checklist 6.455).
-    // Both keep on whatever becomes of the target.
+    // Received target death/despawn ends attack through the world's change
+    // notification. Plain target changes have a separate native tick rule.
     let live = world.connected() && !world.is_dead();
     let posture_ends = world.generation().posture_ends_attack() && posture.is_some();
     if combat.auto_attack && (!live || posture_ends) {

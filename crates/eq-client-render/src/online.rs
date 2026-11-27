@@ -1728,6 +1728,7 @@ pub(crate) mod testing {
 
 #[cfg(test)]
 mod tests {
+    mod target_end;
     use super::*;
 
     #[test]

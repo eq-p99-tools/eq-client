@@ -1205,6 +1205,12 @@ impl ClientWorld {
                 self.reconcile_pet_buffs();
             }
             WorldEvent::Despawn(id) => {
+                if self.target.selected == Some(*id) {
+                    // Titanium's DeleteSpawn handler ends attack and clears
+                    // exactly the target being removed (0x4581b7, read6.699).
+                    self.select_target(None);
+                    news.attack_ended = true;
+                }
                 self.clear_inspected_spawn(*id);
                 self.zone.vanish(*id);
                 self.reconcile_pet_buffs();
@@ -2159,6 +2165,12 @@ impl ClientWorld {
     /// A death: a spawn becomes a corpse, and the player's own death holds
     /// them until the server offers to return them home.
     fn died(&mut self, death: &Death, now: Instant) -> Changes {
+        let target_died = self.target.selected.map(u32::from) == Some(death.spawn_id);
+        if target_died {
+            // The received death, not its chat line or later corpse rename,
+            // ends this target's attack (0x4a8cd5, read6.699).
+            self.select_target(None);
+        }
         let killed = u16::try_from(death.spawn_id).ok().filter(|id| {
             self.player
                 .as_ref()
@@ -2220,6 +2232,7 @@ impl ClientWorld {
         };
         changes.notices.splice(0..0, slain);
         changes.kills.extend(killed);
+        changes.attack_ended |= target_died;
         changes
     }
 

@@ -10,6 +10,7 @@ mod loot_requests;
 mod own_stun;
 mod pet_buffs;
 mod qol;
+mod target_end;
 mod wear;
 mod weather;
 
