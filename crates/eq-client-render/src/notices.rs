@@ -1538,7 +1538,10 @@ mod tests {
                     Said::official("LocalSubject localhit a rat amount33")
                 )]
             );
-            assert!(wording(&melee_notice(generation, 8, 9), Some(&messages)).is_empty());
+            assert_eq!(
+                wording(&melee_notice(generation, 8, 9), Some(&messages)),
+                [] as [(Place, Said); 0]
+            );
         }
     }
 
