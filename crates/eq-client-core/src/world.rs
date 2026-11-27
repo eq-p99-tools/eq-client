@@ -1311,7 +1311,11 @@ impl ClientWorld {
             // The Options page shows the character's filters; the session
             // keeping them, or refusing a set this client fitted to the
             // generation first, is not news for the player.
-            WorldEvent::ServerFiltersKept { .. } | WorldEvent::ServerFiltersRefused { .. } => {}
+            // The spell-timing layer owns storing/polling the worker gauge;
+            // this compatibility layer never treats it as server confirmation.
+            WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::MemorizationProgress { .. } => {}
             // A report to the staff went or was refused (6.511).
             WorldEvent::ReportSent {
                 session_id,
@@ -2065,9 +2069,6 @@ impl ClientWorld {
             }
 
             // The player's spells.
-            // Compatibility only: the spell-timing feature owns storing and
-            // polling this worker gauge. It is never server confirmation.
-            WorldEvent::MemorizationProgress { .. } => {},
             WorldEvent::Spell(update) => self.spell(update, now, news),
             WorldEvent::CastPending {
                 session_id,
