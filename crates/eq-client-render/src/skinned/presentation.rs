@@ -77,7 +77,10 @@ pub(crate) fn show(
         Res<crate::hud::action_bar::ActionRequests>,
     ),
     mut fills: Query<(&Shows, &mut Node, Option<&Step>), Without<Text>>,
-    mut texts: Query<(&Shows, &mut Text, &mut TextColor)>,
+    (mut texts, mut lines): (
+        Query<(&Shows, &mut Text, &mut TextColor)>,
+        Query<(&super::LinesFillTint, &mut ImageNode)>,
+    ),
     mut boxes: Query<(&Shows, &mut Visibility)>,
 ) {
     let world = online.world();
@@ -89,6 +92,17 @@ pub(crate) fn show(
         (hud.resource_estimate, &requests),
         &breath,
     );
+    for (tint, mut image) in &mut lines {
+        let ratio = filled(world, (hud.resource_estimate, &requests), tint.0);
+        let color = if ratio <= -0.01 {
+            Color::srgb_u8(192, 192, 192)
+        } else {
+            tint.1
+        };
+        if image.color != color {
+            image.color = color;
+        }
+    }
     for (shows, mut text, mut color) in &mut texts {
         let (wanted, tint) = match *shows {
             Shows::GaugeText(kind) => gauge_text(world, kind),
@@ -160,6 +174,7 @@ pub(crate) fn show(
                 Some(crate::give::ink(world, crate::give::Side::Mine)),
             ),
             Shows::Fill(_)
+            | Shows::LinesFill(_)
             | Shows::Attacking
             | Shows::WhilePetSits(_)
             | Shows::PetBuff(_)
@@ -192,16 +207,35 @@ fn fill_gauges(
     breath: &crate::breath::State,
 ) {
     for (shows, mut node, step) in fills {
-        if let Shows::Fill(kind) = *shows {
+        if let Shows::Fill(kind) | Shows::LinesFill(kind) = *shows {
             // Titanium eqgame.exe 0x5598bc, EQType 8, current air over capacity.
             let fraction = if kind == 8 {
                 breath.air().map_or(0.0, eq_client_core::breath::Air::ratio)
             } else {
                 filled(world, estimate_and_requests, kind)
             };
-            fill_to(&mut node, step, fraction.clamp(0.0, 1.0));
+            let fraction = if matches!(shows, Shows::LinesFill(_)) {
+                lines_fraction(fraction)
+            } else {
+                fraction.clamp(0.0, 1.0)
+            };
+            fill_to(&mut node, step, fraction);
         }
     }
+}
+
+/// The native gauge's integer thousandths keep a bubble full at its final
+/// step and reset on the next one. The same rule serves every gauge type.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn lines_fraction(fraction: f32) -> f32 {
+    let value = (fraction.clamp(-0.11, 1.0) * 1000.0) as i32;
+    // The native negative range reverses the bar before taking its fifth.
+    let value = if value <= -10 {
+        1100 + value * 10
+    } else {
+        value
+    };
+    ((value - 1).max(0) % 200) as f32 / 200.0
 }
 
 /// Applies conditional visibility without changing controls or world state.
@@ -554,6 +588,34 @@ mod experience_percent_tests {
                 ..Default::default()
             };
             assert_eq!(experience_percent(vitals.experience_ratio()), expected);
+        }
+    }
+}
+
+#[cfg(test)]
+mod lines_fill_tests {
+    use super::lines_fraction;
+
+    #[test]
+    fn negative_values_use_the_native_reversed_bar_and_empty_gap() {
+        for (value, expected) in [(-0.11, 0.0), (-0.1, 0.495), (-0.01, 0.995), (-0.005, 0.0)] {
+            assert!((lines_fraction(value) - expected).abs() < 0.0001);
+        }
+    }
+
+    #[test]
+    fn every_bubble_finishes_before_the_next_value_resets_the_line() {
+        for (value, expected) in [
+            (0u16, 0.0),
+            (1, 0.0),
+            (100, 0.495),
+            (200, 0.995),
+            (201, 0.0),
+            (400, 0.995),
+            (999, 0.99),
+            (1000, 0.995),
+        ] {
+            assert!((lines_fraction(f32::from(value) / 1000.0) - expected).abs() < 0.0001);
         }
     }
 }
