@@ -3715,7 +3715,10 @@ pub(super) fn input(
         match swim_controls {
             Some(controls) => {
                 owned_request = Some(request.clone());
-                ClientCommand::SwimFrame { request, controls }
+                ClientCommand::SwimFrame {
+                    request,
+                    controls: Box::new(controls),
+                }
             }
             None => ClientCommand::Move(request),
         }
