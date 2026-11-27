@@ -1790,6 +1790,8 @@ mod tests {
             "click(\"training_skill\", -1)",
             "click(\"training_skill\", 1.5)",
             "click(\"training_skill\", \"not a skill\")",
+            "click(\"training_skill\", \"\")",
+            "click(\"slot\", \"2 3\")",
             "click(\"training_skill\", 53, 1)",
         ] {
             assert!(parse(bad, base).is_err(), "{bad}");

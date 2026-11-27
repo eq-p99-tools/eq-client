@@ -1259,7 +1259,14 @@ fn arguments(command: &str, call: &str) -> Result<(Vec<String>, Range<usize>), F
                     start..start + 1 + width,
                 ));
             }
-            if !free && (text.is_empty() || text.chars().any(char::is_whitespace)) {
+            // A canonical skill name can contain spaces (such as 1H Blunt).
+            // Only this target's second argument takes that literal as a name.
+            let skill_name = command == "click"
+                && words.len() == 1
+                && words
+                    .first()
+                    .is_some_and(|word: &String| word == "training_skill");
+            if !free && !skill_name && (text.is_empty() || text.chars().any(char::is_whitespace)) {
                 return Err(Fault::at(
                     format!("each argument of {command} is one word; split it into arguments"),
                     start..start + 1 + width,
