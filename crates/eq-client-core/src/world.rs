@@ -488,9 +488,10 @@ impl ClientWorld {
                 }],
                 ..Changes::default()
             },
-            WorldUpdate::Chat(_) | WorldUpdate::SpellTable(_) | WorldUpdate::CheckingFiles(_) => {
-                Changes::default()
-            }
+            WorldUpdate::Chat(_)
+            | WorldUpdate::SpellTable(_)
+            | WorldUpdate::CheckingFiles(_)
+            | WorldUpdate::MovementPacketSnapshot(_) => Changes::default(),
         }
     }
 
@@ -1310,7 +1311,11 @@ impl ClientWorld {
             // The Options page shows the character's filters; the session
             // keeping them, or refusing a set this client fitted to the
             // generation first, is not news for the player.
-            WorldEvent::ServerFiltersKept { .. } | WorldEvent::ServerFiltersRefused { .. } => {}
+            // The spell-timing layer owns storing/polling the worker gauge;
+            // this compatibility layer never treats it as server confirmation.
+            WorldEvent::ServerFiltersKept { .. }
+            | WorldEvent::ServerFiltersRefused { .. }
+            | WorldEvent::MemorizationProgress { .. } => {}
             // A report to the staff went or was refused (6.511).
             WorldEvent::ReportSent {
                 session_id,
@@ -2068,6 +2073,7 @@ impl ClientWorld {
             WorldEvent::CastPending {
                 session_id,
                 spell_id,
+                ..
             } => self.cast_pending(*session_id, *spell_id, news),
             WorldEvent::CastRequestUnconfirmed {
                 session_id,

@@ -5490,6 +5490,7 @@ mod tests {
         let answered = WorldUpdate::Game(WorldEvent::CastPending {
             session_id: 1,
             spell_id: None,
+            gem: None,
         });
         let answers = [
             (
@@ -5527,6 +5528,7 @@ mod tests {
             tx.send(WorldUpdate::Game(WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: Some(73),
+                gem: None,
             }))
             .unwrap();
             app.update();

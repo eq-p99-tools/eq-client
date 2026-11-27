@@ -1169,6 +1169,7 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
             WorldEvent::CastPending {
                 session_id: 1,
                 spell_id: Some(42),
+                gem: None,
             },
         );
         if began {
@@ -1177,6 +1178,7 @@ fn a_silent_song_stop_releases_only_its_local_cast_hold() {
                 WorldEvent::CastPending {
                     session_id: 1,
                     spell_id: None,
+                    gem: None,
                 },
             );
             game(
@@ -1256,6 +1258,7 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
         WorldEvent::CastPending {
             session_id: 1,
             spell_id: Some(77),
+            gem: None,
         },
     );
     assert!(world.casting().holds_actions());
@@ -1264,6 +1267,7 @@ fn the_song_a_bard_sings_holds_nothing_back_but_another_cast_does() {
         WorldEvent::CastPending {
             session_id: 1,
             spell_id: None,
+            gem: None,
         },
     );
     game(&mut world, begin(77));
@@ -1427,6 +1431,7 @@ fn an_idle_song_stop_or_an_old_admission_cannot_release_a_new_cast() {
         WorldEvent::CastPending {
             session_id: 1,
             spell_id: Some(42),
+            gem: None,
         },
     );
     game(&mut world, entered(2));
@@ -1490,6 +1495,7 @@ fn a_superseded_song_cannot_end_the_different_cast_that_started() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
 
     for old_began in [false, true] {
@@ -1525,6 +1531,7 @@ fn superseding_an_old_cast_releases_it_before_the_new_pending_spell_begins() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
     let begin = |spell_id| {
         WorldEvent::Spell(SpellUpdate::Began {
@@ -3918,7 +3925,7 @@ fn a_desktop_camp_leaves_the_program_once_camped_and_a_plain_one_does_not() {
         world.camp().map(|camp| camp.to),
         Some(CampTo::CharacterSelect)
     );
-    let changes = camp(&mut world, CampStatus::Camped);
+    let changes = camp(&mut world, CampStatus::ServerClosedWithoutReply);
     assert_eq!(changes.reset, Some(Reset::Camped));
     assert!(!world.leaving());
 
@@ -3930,7 +3937,7 @@ fn a_desktop_camp_leaves_the_program_once_camped_and_a_plain_one_does_not() {
         CampStatus::Rejected("Enter the world first".into()),
     );
     camp(&mut world, CampStatus::Preparing);
-    camp(&mut world, CampStatus::Camped);
+    camp(&mut world, CampStatus::ServerClosedWithoutReply);
     assert!(!world.leaving());
 }
 
@@ -3942,6 +3949,10 @@ fn a_local_camp_deadline_keeps_its_destination_and_unconfirmed_evidence() {
         for (status, outcome) in [
             (CampStatus::Camped, CampOutcome::LogoutReply),
             (CampStatus::ClosedWithoutReply, CampOutcome::LocalDeadline),
+            (
+                CampStatus::ServerClosedWithoutReply,
+                CampOutcome::ServerClosedWithoutReply,
+            ),
         ] {
             let mut world = admitted();
             let admission_id = world.session_id();
@@ -4717,6 +4728,79 @@ fn trainee_with_skills_and_languages() -> ClientWorld {
     );
     connection(&mut world, true, false);
     world
+}
+
+#[test]
+fn titanium_practice_press_is_local_and_skill_news_never_spends_twice() {
+    use crate::training::{PracticePoints, TrainingSubject, TrainingUpdate};
+    let mut world = trainee_with_skills_and_languages();
+    game(&mut world, WorldEvent::PracticePoints(3));
+    game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 12,
+        },
+    );
+    let press = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Practiced {
+            subject: TrainingSubject::Skill(30),
+            from: 12,
+            cost: 0,
+        }),
+    );
+    assert_eq!(press.notices, Vec::<Notice>::new());
+    assert_eq!(world.player().unwrap().skills.as_ref().unwrap()[30], 13);
+    game(&mut world, WorldEvent::PracticePoints(2));
+    let received = game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 13,
+        },
+    );
+    assert_eq!(
+        received.notices,
+        [Notice::SkillUp {
+            skill: 30,
+            value: 13
+        }]
+    );
+    assert_eq!(world.training_points(), PracticePoints::Balance(2));
+    let corrected = game(
+        &mut world,
+        WorldEvent::Skill {
+            skill_id: 30,
+            value: 10,
+        },
+    );
+    assert_eq!(
+        corrected.notices,
+        [Notice::SkillUp {
+            skill: 30,
+            value: 10
+        }]
+    );
+    assert_eq!(world.player().unwrap().skills.as_ref().unwrap()[30], 10);
+    assert_eq!(world.training_points(), PracticePoints::Balance(2));
+    game(&mut world, WorldEvent::Training(TrainingUpdate::Ended));
+    assert_eq!(world.training_points(), PracticePoints::Balance(2));
+    game(&mut world, WorldEvent::PracticePoints(7));
+    assert_eq!(world.training_points(), PracticePoints::Balance(7));
+    let first = game(
+        &mut world,
+        WorldEvent::Training(TrainingUpdate::Practiced {
+            subject: TrainingSubject::Skill(0),
+            from: 0,
+            cost: 0,
+        }),
+    );
+    assert!(matches!(
+        first.notices.as_slice(),
+        [Notice::SkillPracticed { skill: 0, .. }]
+    ));
+    assert_eq!(world.player().unwrap().skills.as_ref().unwrap()[0], 0);
 }
 
 #[test]
@@ -8176,6 +8260,7 @@ fn a_local_cast_clear_drops_the_cast_bar_with_no_line() {
     let pending = |spell_id| WorldEvent::CastPending {
         session_id: 1,
         spell_id,
+        gem: None,
     };
     let begin = |spell_id| {
         WorldEvent::Spell(SpellUpdate::Began {
@@ -8365,4 +8450,50 @@ fn a_duplicate_pad_at_the_same_origin_does_not_restart_its_probe() {
         )
         .ignored
     );
+}
+
+#[test]
+fn a_forwarded_movement_counter_never_changes_world_admission_or_position() {
+    let mut world = admitted();
+    let before = world.player().unwrap().position;
+    let admission = world.session_id();
+    let now = Instant::now();
+    let changes = world.apply(
+        &WorldUpdate::MovementPacketSnapshot(crate::MovementPacketSnapshot {
+            session_id: 999,
+            request_id: 10,
+            run_id: 20,
+            sent: 500,
+            observed: now,
+            unix_timestamp_ms: 0,
+        }),
+        now,
+        &NoSpells,
+    );
+    assert!(changes.reset.is_none());
+    assert_eq!(world.session_id(), admission);
+    assert_eq!(world.player().unwrap().position, before);
+}
+
+#[test]
+fn memorization_progress_does_not_confirm_a_pending_cast() {
+    let mut world = admitted();
+    let session_id = world.session_id().unwrap();
+    game(
+        &mut world,
+        WorldEvent::CastPending {
+            session_id,
+            spell_id: Some(42),
+            gem: None,
+        },
+    );
+    let changes = game(
+        &mut world,
+        WorldEvent::MemorizationProgress {
+            session_id,
+            progress: None,
+        },
+    );
+    assert!(changes.reset.is_none());
+    assert_eq!(world.casting().pending, Some(42));
 }
