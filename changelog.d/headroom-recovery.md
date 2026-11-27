@@ -1,0 +1,1 @@
+- Avoid repeated automatic duck/stand changes against walls: only try an automatic duck when its movement path clears, and check the standing probe before returning to standing.

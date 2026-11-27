@@ -96,9 +96,15 @@ at the call into 0x43a0a0 would settle the estimate. Those values are not yet
 available to this host.
 
 A refused standing move arms automatic duck on Titanium when Allow Auto-Stand
-is enabled; Mac arms on every headroom refusal. Queued posture is not treated
+is enabled and the same input has a passable ducked continuation. A wall that
+also blocks the ducked body does not trigger an automatic posture change.
+Mac retains its existing rule, arming on every headroom refusal. Queued posture is not treated
 as observed posture. Automatic standing waits past two seconds and requires
-the candidate's return clearance plus its ordinary stand test. Holding forward
+the candidate's return clearance plus its ordinary stand test. The host also
+checks the lifted standing probe at that position and along the continuation
+of the current input. This extra consistency check is a host choice: the native
+return branch at 0x48be15 tests the current candidate, not a future frame.
+Holding forward
 under a gallery that still fails those tests keeps the body ducked. A scripted
 route can continue through this recovery, using the observed ducked height;
 an unarmed or ducked refusal stops it. Swimmers retain the existing exemption.

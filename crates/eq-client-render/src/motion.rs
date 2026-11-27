@@ -2235,6 +2235,7 @@ pub(super) fn input(
             &outbox,
             now,
             None,
+            None,
         ) {
             Ok(true) => {
                 controls.held = Some(Held::Waiting);
@@ -3089,6 +3090,18 @@ pub(super) fn input(
                 &outbox,
                 now,
                 Some(origin),
+                Some(headroom::StandingPath {
+                    displacement: Vec3::ZERO,
+                    seconds: span,
+                    lift: headroom::standing_lift(
+                        client,
+                        online.world(),
+                        world,
+                        body,
+                        feet,
+                        linked.is_some(),
+                    ),
+                }),
             ) {
                 Ok(true) => {
                     controls.held = Some(Held::Waiting);
@@ -3512,7 +3525,23 @@ pub(super) fn input(
             .and_then(|hud| hud.resource_estimate)
             .map(|(_, endurance)| jump_endurance(endurance));
     }
-    if refused.is_some() {
+    if refused.is_some()
+        && (jumped
+            || Vec3::new(delta.x, 0.0, delta.z) == Vec3::ZERO
+            || client == InstalledClient::EqMac
+            || posture == Some(eq_client_core::PostureState::Ducking)
+            || headroom::duck_step_passes(
+                client,
+                online.world(),
+                world,
+                body,
+                feet,
+                delta,
+                span,
+                previous_airborne.as_ref(),
+                crate::posture::on_mount(online.world(), spells.as_deref()),
+            ))
+    {
         let effective_posture = if jump_posture == JumpPosture::StandIfDucked {
             Some(eq_client_core::PostureState::Standing)
         } else {
@@ -3688,6 +3717,18 @@ pub(super) fn input(
             &outbox,
             now,
             Some(position),
+            Some(headroom::StandingPath {
+                displacement: delta,
+                seconds: span,
+                lift: headroom::standing_lift(
+                    client,
+                    online.world(),
+                    world,
+                    body,
+                    landing,
+                    linked.is_some(),
+                ),
+            }),
         )
     {
         // Keep the submitted move and retry posture on a later candidate.

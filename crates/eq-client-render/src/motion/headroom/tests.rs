@@ -479,6 +479,7 @@ fn automatic_return_tests_the_manual_origin_bound_at_the_candidate_too() {
                             world.resource::<Outbox>(),
                             now,
                             Some(Vec3::new(0.0, height, 1.0)),
+                            None,
                         )
                         .unwrap(),
                     expected

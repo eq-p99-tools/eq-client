@@ -16,6 +16,14 @@ pub(super) struct Refused {
     pub candidate: Vec3,
 }
 
+/// Standing probes after a successful ducked candidate. These are disposable
+/// geometry queries, never movement proposals or inferred worker acceptance.
+pub(super) struct StandingPath {
+    pub displacement: Vec3,
+    pub seconds: f32,
+    pub lift: f32,
+}
+
 /// The scope and observed posture belong to the current admission. Queuing
 /// Duck/Stand is never treated as observing that posture.
 #[derive(Default)]
@@ -145,6 +153,7 @@ impl State {
         outbox: &crate::outbox::Outbox,
         now: Instant,
         candidate: Option<Vec3>,
+        standing_path: Option<StandingPath>,
     ) -> Result<bool, crate::outbox::Refusal> {
         let Some(automatic) = self.automatic.as_mut() else {
             return Ok(false);
@@ -230,6 +239,34 @@ impl State {
             {
                 return Ok(false);
             }
+            if let Some(path) = standing_path {
+                let feet = origin - Vec3::Y * body.feet_offset;
+                // Return's native unlifted probe alone can pass where the
+                // following lifted standing move fails. Check the present
+                // standing position AND the continuation of held input with
+                // the ordinary standing helper, without changing its bounds.
+                if refused_probe(
+                    client,
+                    collision,
+                    (body, stand),
+                    (feet, feet),
+                    (false, mounted),
+                    (probe, path.lift, path.seconds),
+                )
+                .is_some()
+                    || refused_probe(
+                        client,
+                        collision,
+                        (body, stand),
+                        (feet, feet + path.displacement),
+                        (false, mounted),
+                        (probe, path.lift, path.seconds),
+                    )
+                    .is_some()
+                {
+                    return Ok(false);
+                }
+            }
             Posture::Standing
         } else {
             let origin = Vec3::from_array(eq_client_core::render_position(player.position));
@@ -258,6 +295,100 @@ impl State {
         automatic.requested = Some((requested, world.player_posture_changes()));
         Ok(true)
     }
+}
+
+/// The normal standing sweep lift, retaining a linked carrier's zero lift.
+pub(super) fn standing_lift(
+    client: InstalledClient,
+    world: &ClientWorld,
+    collision: &CollisionWorld,
+    body: &PlayerBody,
+    feet: Vec3,
+    linked: bool,
+) -> f32 {
+    client
+        .falls()
+        .and_then(|falls| falls.edge_lift)
+        .map_or(0.0, |rule| {
+            rule.lift(eq_client_assets::falls::EdgeBody {
+                race: world.player().map_or(0, |player| player.race),
+                stand_height: crate::posture::stand_height(client, world, body),
+                size: body.size,
+                lifted: !linked
+                    && super::raised_walk(
+                        collision,
+                        feet,
+                        body.height,
+                        Some(PostureState::Standing),
+                    ),
+            })
+        })
+}
+
+/// A pointless duck at a wall must not arm an automatic posture cycle. Use
+/// the same intended displacement and a disposable ordinary ducked step;
+/// neither its position nor its vertical state is submitted or installed.
+#[allow(clippy::too_many_arguments)]
+pub(super) fn duck_step_passes(
+    client: InstalledClient,
+    state: &ClientWorld,
+    world: &CollisionWorld,
+    body: &PlayerBody,
+    feet: Vec3,
+    delta: Vec3,
+    seconds: f32,
+    airborne: Option<&eq_client_core::movement::AirborneController>,
+    mounted: bool,
+) -> bool {
+    if Vec3::new(delta.x, 0.0, delta.z) == Vec3::ZERO {
+        return false;
+    }
+    let stand = crate::posture::stand_height(client, state, body);
+    let ducked = world
+        .clone()
+        .with_collision_height(crate::posture::movement_height(
+            client,
+            state,
+            body,
+            Some(PostureState::Ducking),
+        ));
+    let candidate = if let Some(airborne) = airborne {
+        let mut trial = airborne.clone();
+        let physics = super::walking(
+            super::physics(client, state.zone_gravity()),
+            client,
+            body,
+            state.player().map_or(0, |player| player.race),
+            (false, false),
+        );
+        super::fall_step(
+            &mut trial,
+            &ducked,
+            physics,
+            client.falls().map(|_| physics.reach()),
+            feet,
+            delta,
+            seconds,
+            body.height,
+            false,
+        )
+    } else {
+        ducked.step(feet, delta, body.height)
+    };
+    (candidate - feet).dot(Vec3::new(delta.x, 0.0, delta.z)) > 0.0
+        && refused_probe(
+            client,
+            &ducked,
+            (body, stand),
+            (feet, candidate),
+            (true, mounted),
+            (
+                crate::posture::headroom_probe(client, state, stand),
+                0.0,
+                seconds,
+            ),
+        )
+        .is_none()
 }
 
 /// Test helper using the same active query, without the walking caller's lift.
