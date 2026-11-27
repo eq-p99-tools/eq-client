@@ -19,7 +19,7 @@ use tree::{augment_section, text_box};
 mod presentation;
 /// The skin's normal HP fill tint, restored after a negative-HP branch.
 #[derive(Component)]
-struct HpFillTint(Color);
+pub(crate) struct HpFillTint(Color);
 pub(crate) use presentation::show;
 #[cfg(test)]
 use presentation::{fraction, gauge_text, label_text, raid_text, shown_now};
