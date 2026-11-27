@@ -17,6 +17,9 @@ const LISTED_REFUSALS: usize = 10;
 #[cfg(test)]
 mod lifecycle;
 
+#[cfg(test)]
+mod profiles;
+
 /// Starts the shown zone's mesh, empty; its poll runs each frame. With the
 /// switch off, startup says so, since every scripted walk then plans on the
 /// grid.
@@ -112,6 +115,20 @@ struct Making {
 }
 
 impl ZoneNavMesh {
+    /// Use the build's actual clearance guarantees, while retaining the drawn
+    /// size and native standing-room limits independently of collision height.
+    pub(super) fn walker_size(
+        &self,
+        body: crate::PlayerBody,
+        client: eq_client_assets::ui::InstalledClient,
+    ) -> f32 {
+        self.source.as_ref().map_or_else(
+            || body.mesh_size(),
+            |source| {
+                profile_size(body, &source.settings, client.headroom()).unwrap_or(f32::INFINITY)
+            },
+        )
+    }
     #[cfg(test)]
     pub(super) fn set_test_settings(&mut self, settings: Settings) {
         self.source.as_mut().unwrap().settings = settings;
@@ -310,6 +327,24 @@ impl ZoneNavMesh {
             "walker_ready":walker.as_ref().map(Result::is_ok),"walker_error":walker.and_then(Result::err),
             "elapsed_ms":current.then(|| self.making.as_ref().map(|m|m.started.elapsed().as_millis())).flatten()})
     }
+}
+
+fn profile_size(
+    body: crate::PlayerBody,
+    settings: &Settings,
+    headroom: Option<eq_client_assets::falls::Headroom>,
+) -> Option<f32> {
+    let native = headroom.map_or(0.0, |rule| rule.room(body.feet_offset, false, false));
+    // The same voxel guard used when native standing room tags the build.
+    // No profile may offer less than this body's capsule or standing need.
+    let required = (body.height + settings.lift).max(native) + settings.cell_height;
+    settings
+        .sizes
+        .iter()
+        .enumerate()
+        .find_map(|(index, &size)| {
+            (size >= body.size && settings.clearance(index) >= required).then_some(size)
+        })
 }
 
 /// Unknown headers use the unreduced, conservative settings. A later

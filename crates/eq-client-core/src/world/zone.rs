@@ -34,6 +34,10 @@ pub(super) struct Zone {
     /// as the session last said; a new admission starts with none.
     pub(super) feign_held: bool,
     pub(super) doors: DoorTable,
+    /// Received destination zones by authored boundary reference, replaced whole.
+    pub(super) line_zones: BTreeMap<u32, u16>,
+    pub(super) line_zones_revision: u64,
+    pub(super) line_zones_staged: bool,
     pub(super) objects: Objects,
     /// The corpse and the merchant are the zone's.
     pub(super) trade: Trade,

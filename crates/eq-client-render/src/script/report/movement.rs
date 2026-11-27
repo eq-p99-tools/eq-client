@@ -15,9 +15,14 @@ use super::Observed;
 
 /// A bounded observation of stored session position, separate rendered motion
 /// and the controller's last floor sweep after carrying or resolving movement.
+#[allow(
+    clippy::too_many_arguments,
+    reason = "one current movement and navigation snapshot"
+)]
 pub(in crate::script) fn report(
     label: &str,
     online: &mut OnlineState,
+    client: eq_client_assets::ui::InstalledClient,
     transform: Option<&Transform>,
     body: Option<&PlayerBody>,
     collision: Option<&CollisionWorld>,
@@ -69,7 +74,12 @@ pub(in crate::script) fn report(
     movement_state["surface_clock"] = observed.4.surface_report();
     movement_state["navigation_mesh"] = observed.7.as_ref().map_or(
         json!({"zone":world.zone(),"phase":"missing","ready":false}),
-        |mesh| mesh.status(world.zone(), body.map(PlayerBody::mesh_size)),
+        |mesh| {
+            mesh.status(
+                world.zone(),
+                body.map(|body| mesh.walker_size(*body, client)),
+            )
+        },
     );
     movement_state["settings"] = json!(observed.14.as_ref().zip(observed.9.as_ref()).map(
         |(sync, state)| {

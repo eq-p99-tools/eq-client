@@ -189,3 +189,130 @@ fn exit_selection_skips_an_unreachable_nearby_floor() {
         .is_err()
     );
 }
+
+#[test]
+fn zone_selection_resolves_received_references_and_preserves_absolute_and_explicit_exits() {
+    use PlaceDestination::{ExitReference, ExitZone};
+    let zones = [(3, 54), (54, 61)].into_iter().collect();
+    assert!(matches_exit(ExitZone(54), ZoneLine::Reference(3), &zones));
+    assert!(!matches_exit(ExitZone(54), ZoneLine::Reference(54), &zones));
+    assert!(!matches_exit(
+        ExitZone(54),
+        ZoneLine::Reference(3),
+        &Default::default()
+    ));
+    assert!(matches_exit(
+        ExitReference(3),
+        ZoneLine::Reference(3),
+        &Default::default()
+    ));
+    assert!(matches_exit(
+        ExitZone(54),
+        ZoneLine::Absolute {
+            zone_id: 54,
+            position: [700., 800., 900.],
+            heading: 999.
+        },
+        &Default::default()
+    ));
+}
+
+fn exit_app(destination: PlaceDestination, mapped: bool) -> App {
+    let mut app = pending_walk();
+    {
+        let mut online = app.world_mut().resource_mut::<OnlineState>();
+        online.regions = eq_client_assets::regions::ZoneRegions::test_zone_line_slab(
+            8.0,
+            12.0,
+            ZoneLine::Reference(3),
+        );
+        if mapped {
+            testing::news(
+                &mut online,
+                [eq_client_core::WorldEvent::ZoneLineZones {
+                    session_id: 1,
+                    zones: [(3, 54)].into_iter().collect(),
+                }],
+            );
+        }
+    }
+    app.insert_resource(
+        Script::new(vec![Step::WalkPlace {
+            destination,
+            range: 1.,
+            duration: Duration::from_secs(20),
+        }])
+        .offline_preview(true)
+        .input_mode(InputMode::Background),
+    );
+    let mesh = NavMesh::build(
+        &floor(),
+        &eq_client_core::movement::navmesh::Settings::walker(6.0),
+        1,
+        &AtomicBool::new(false),
+    )
+    .unwrap()
+    .0;
+    app.world_mut()
+        .resource_mut::<ZoneNavMesh>()
+        .complete_for_test(Some(mesh));
+    app
+}
+
+fn finish_lookup(app: &mut App, failed: bool) {
+    let start = Instant::now();
+    let first =
+        u64::try_from(app.world().resource::<Time<Real>>().elapsed().as_millis()).unwrap() + 1;
+    for ms in first.. {
+        frame_at(app, ms);
+        let script = app.world().resource::<Script>();
+        if failed {
+            if script.status().phase() == Phase::Failed {
+                assert!(!script.acts.contains(&FORWARD));
+                assert!(script.place.is_none());
+                return;
+            }
+        } else {
+            assert_eq!(script.status().phase(), Phase::Running);
+            if let Some(place) = &script.place {
+                assert!((8.0..=12.0).contains(&place.feet.x));
+                assert!(place.feet.y.abs() < 0.01);
+                assert!(script.route.is_some());
+                assert!(
+                    app.world()
+                        .resource::<OnlineState>()
+                        .world()
+                        .target()
+                        .selected
+                        .is_none()
+                );
+                return;
+            }
+        }
+        assert!(start.elapsed() < Duration::from_secs(30));
+        std::thread::yield_now();
+    }
+}
+
+#[test]
+fn a_zone_exit_uses_local_authored_floor_then_replans_on_map_invalidation() {
+    let mut app = exit_app(PlaceDestination::ExitZone(54), true);
+    finish_lookup(&mut app, false);
+    testing::news(
+        &mut app.world_mut().resource_mut::<OnlineState>(),
+        [eq_client_core::WorldEvent::ZoneLineZones {
+            session_id: 1,
+            zones: Default::default(),
+        }],
+    );
+    finish_lookup(&mut app, true);
+}
+
+#[test]
+fn a_missing_exit_zone_map_does_not_move_but_explicit_reference_still_works() {
+    finish_lookup(&mut exit_app(PlaceDestination::ExitZone(54), false), true);
+    finish_lookup(
+        &mut exit_app(PlaceDestination::ExitReference(3), false),
+        false,
+    );
+}
