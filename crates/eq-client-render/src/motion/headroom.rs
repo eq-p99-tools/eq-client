@@ -272,13 +272,21 @@ pub(super) fn refused_probe(
     let rule = client.headroom()?;
     let room = rule.room(stand, ducking, mounted);
     let offset = Vec3::Y * (body.feet_offset + lift);
-    let hit = world.headroom_on_path(
-        feet + offset,
-        candidate + offset,
-        probe,
-        rule.needed(stand, ducking, mounted),
-        rule.margin,
-    )?;
+    let need = rule.needed(stand, ducking, mounted);
+    let hit = world.headroom_on_path(feet + offset, candidate + offset, probe, need, rule.margin);
+    if bevy::log::tracing::enabled!(bevy::log::Level::TRACE) {
+        let bounds = world.probe_headroom(candidate + offset, probe);
+        bevy::log::trace!(
+            ?client, ducking, mounted, ?feet, ?candidate,
+            probe_from = ?(feet + offset), probe_to = ?(candidate + offset),
+            floor = ?bounds.floor, ceiling = ?bounds.ceiling,
+            need, margin = rule.margin, stand, lift, ?probe,
+            endpoint_fits = probe.fits(bounds, need, rule.margin),
+            refused = hit.is_some(), blocked_origin = ?hit.map(|hit| hit.origin),
+            "Movement headroom probe"
+        );
+    }
+    let hit = hit?;
     Some(Refused {
         floor: hit.bounds.floor,
         ceiling: hit.bounds.ceiling,
