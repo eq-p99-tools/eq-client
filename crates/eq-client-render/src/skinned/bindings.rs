@@ -112,6 +112,7 @@ pub(super) enum Does {
     /// The Map preference for outlining tracked names.
     OutlineTracked,
     ResetColors,
+    ChangeColor,
     ReloadKeys,
     ScreenMode(bool),
     /// Steps the mode of one kind of server filter, on this client's
@@ -303,7 +304,7 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
         };
     }
     if owner == WindowId::Options {
-        return options_button(id);
+        return Some(options_button(id));
     }
     Some(match id {
         "CSPW_SpellBook" => Does::Toggles(WindowId::Spellbook),
@@ -405,21 +406,21 @@ pub(super) fn character_button(id: &str) -> Does {
     }
 }
 
-fn options_button(id: &str) -> Option<Does> {
+fn options_button(id: &str) -> Does {
     match id {
-        // The skin overlaps its two mode buttons; the keyboard action switches modes.
-        "ODP_SetWindowedButton" => Some(Does::ScreenMode(false)),
-        "ODP_SetFullscreenButton" => Some(Does::ScreenMode(true)),
-        "OKP_DefaultKeysButton" => Some(Does::ReloadKeys),
-        "OGP_LootAutosplitCheckbox" => Some(Does::Slash("/autosplit")),
-        "OGP_AnonymousCheckbox" => Some(Does::Slash("/anonymous")),
-        "OGP_RoleplayingCheckbox" => Some(Does::Slash("/roleplay")),
-        "OCP_UserColorDefault" => Some(Does::ResetColors),
-        super::qol::OUTLINE_TRACKED => Some(Does::OutlineTracked),
-        _ => Some(super::filters::filter_button(id).map_or_else(
+        "ODP_SetWindowedButton" => Does::ScreenMode(false),
+        "ODP_SetFullscreenButton" => Does::ScreenMode(true),
+        "OKP_DefaultKeysButton" => Does::ReloadKeys,
+        "OGP_LootAutosplitCheckbox" => Does::Slash("/autosplit"),
+        "OGP_AnonymousCheckbox" => Does::Slash("/anonymous"),
+        "OGP_RoleplayingCheckbox" => Does::Slash("/roleplay"),
+        "OCP_UserColorDefault" | "UserColorDefault" => Does::ResetColors,
+        "OCP_UserColorChange" | "UserColorChange" => Does::ChangeColor,
+        super::qol::OUTLINE_TRACKED => Does::OutlineTracked,
+        _ => super::filters::filter_button(id).map_or_else(
             || option_checkbox(id).map_or(Does::Nothing, Does::Option),
             Does::Filter,
-        )),
+        ),
     }
 }
 

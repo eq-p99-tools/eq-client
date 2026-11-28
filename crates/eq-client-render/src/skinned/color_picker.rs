@@ -36,7 +36,7 @@ pub(super) const COMBAT_COLORS: [(&str, &str, [Level; 3]); 2] = [
 ];
 
 mod popup;
-pub(crate) use popup::{ResetColors, draw_swatch};
+pub(crate) use popup::{ResetColors, Swatch, draw_swatch};
 pub(crate) use popup::{manage, show_swatches};
 
 #[derive(Clone, Copy, PartialEq, Eq)]

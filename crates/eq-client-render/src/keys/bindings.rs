@@ -24,6 +24,7 @@ pub(crate) struct Bindings {
 #[derive(Component)]
 pub(crate) struct ReloadDefaults;
 
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(crate) fn reload(
     clicks: crate::clicks::Clicks<ReloadDefaults>,
     mut bindings: ResMut<Bindings>,
