@@ -73,6 +73,8 @@ pub(crate) enum WindowId {
     /// The skin's Options window: the options the player sets, on its pages,
     /// and a page of the options only this client has.
     Options,
+    /// The installed skin selection dialog opened from Options.
+    LoadSkin,
     /// The skin's Training window: the skills a guildmaster teaches, open
     /// while the player trains.
     Training,
@@ -383,7 +385,7 @@ impl WindowId {
     /// Every singleton window, in the order the selector lists the toggled ones.
     /// Bags are left out: there is one for each slot that can hold a bag
     /// (see [`WindowId::bags`]), and none of them is toggled.
-    pub(crate) const ALL: [Self; 43] = [
+    pub(crate) const ALL: [Self; 44] = [
         Self::Status,
         Self::Target,
         Self::Player,
@@ -409,6 +411,7 @@ impl WindowId {
         Self::Raid,
         Self::Guild,
         Self::Options,
+        Self::LoadSkin,
         Self::Training,
         Self::Tracking,
         Self::SkillSelect,
@@ -468,6 +471,7 @@ impl WindowId {
             Self::Training => Some("TrainWindow"),
             Self::Tracking => Some("TrackingWnd"),
             Self::SkillSelect => Some("SkillsSelectWindow"),
+            Self::LoadSkin => Some("LoadskinWnd"),
             Self::Skills => Some("SkillsWindow"),
             Self::Confirmation => Some("ConfirmationDialogBox"),
             Self::Note => Some("NoteWindow"),
@@ -544,6 +548,7 @@ impl WindowId {
             Self::Training => "training",
             Self::Tracking => "tracking",
             Self::SkillSelect => "skill-select",
+            Self::LoadSkin => "load_skin",
             Self::Skills => "skills",
             Self::CombatAbilities => "combat-abilities",
             Self::Confirmation => "confirmation",
@@ -749,6 +754,7 @@ impl WindowId {
                 false,
                 &[],
             ),
+            Self::LoadSkin => floating("Load a skin", Placement::TopLeft(196.0, 50.0), false, &[]),
             // Where the skin places it, over the chat; the inventory's
             // Skills button opens it too.
             Self::Skills => floating("SKILLS", Placement::TopLeft(120.0, 445.0), true, &[]),

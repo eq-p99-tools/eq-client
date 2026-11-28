@@ -978,6 +978,7 @@ pub(crate) fn show_choices(
 pub(crate) enum Listing {
     FilterCategories,
     ChatColors,
+    InstalledSkins,
     /// The client's key assignments, as the key filter chooses.
     Keys,
     /// The skills a guildmaster teaches.
@@ -1021,6 +1022,7 @@ fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
         (WindowId::Training, Some("SkillList")) => Some(Listing::Training),
         (WindowId::Tracking, Some("TRW_TrackingList")) => Some(Listing::Tracking),
         (WindowId::SkillSelect, Some("SKSW_SkillSelectorList")) => Some(Listing::SkillSelect),
+        (WindowId::LoadSkin, Some("SkinList")) => Some(Listing::InstalledSkins),
         (WindowId::Skills, Some("SkillList")) => Some(Listing::Skills),
         (WindowId::Guild, Some("MemberList")) => Some(Listing::Guild),
         (WindowId::Merchant, Some("ItemList")) => Some(Listing::Merchant),
@@ -1163,6 +1165,7 @@ fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
         Listing::SkillSelect => {
             rows.insert((crate::abilities::picker::PickRows::new(columns), wheel))
         }
+        Listing::InstalledSkins => rows.insert((crate::skin::browser::List, wheel)),
         Listing::Skills => rows.insert((crate::skills::SkillsList::new(columns), wheel)),
         Listing::Merchant => rows.insert((crate::trade::MerchantRows::new(columns), wheel)),
         Listing::Raid(list) => rows.insert((crate::raid::RaidRows::new(list, columns), wheel)),
@@ -1245,6 +1248,7 @@ pub(crate) fn fill_lists(
             | Listing::Tracking
             | Listing::SkillSelect
             | Listing::Skills
+            | Listing::InstalledSkins
             | Listing::Merchant
             | Listing::Guild
             | Listing::Raid(_) => continue,

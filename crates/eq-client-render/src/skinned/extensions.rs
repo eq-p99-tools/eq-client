@@ -82,14 +82,14 @@ pub(super) fn mark(page: &mut Page, id: &str, risk: bool, x: f32, y: f32, font: 
     ));
 }
 
-fn page_is(p: &Page, title: &str) -> bool {
+pub(super) fn page_is(p: &Page, title: &str) -> bool {
     p.title
         .as_deref()
         .is_some_and(|s| s.eq_ignore_ascii_case(title))
         || p.name.eq_ignore_ascii_case(&format!("Options{title}Page"))
 }
 
-fn destination(f: Fix) -> Option<&'static str> {
+pub(super) fn destination(f: Fix) -> Option<&'static str> {
     match f {
         Fix::AskBeforeDeletingSpells | Fix::ShowTimesInChat | Fix::FlashOnTells => Some("General"),
         Fix::CorpsesAlongGround
