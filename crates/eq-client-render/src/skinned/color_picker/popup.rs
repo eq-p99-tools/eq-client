@@ -20,6 +20,20 @@ pub(crate) struct Swatch {
     owner: WindowId,
 }
 
+impl Swatch {
+    pub(crate) const fn selected() -> Self {
+        Self {
+            binding: Binding::Chat(1),
+            font: theme::Size::Small,
+            owner: WindowId::Options,
+        }
+    }
+
+    pub(crate) fn select(&mut self, binding: Binding) {
+        self.binding = binding;
+    }
+}
+
 pub(crate) fn draw_swatch(
     ui: &mut ChildSpawnerCommands,
     owner: WindowId,

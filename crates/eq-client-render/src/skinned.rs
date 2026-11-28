@@ -4,9 +4,12 @@
 //! frame and pieces, and what each gauge and label shows follows the
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
+mod extensions;
 mod filters;
 #[cfg(test)]
 mod hotbar_drag_tests;
+pub(crate) mod option_lists;
+#[cfg(test)]
 mod particles;
 mod qol;
 mod tree;
@@ -1245,6 +1248,12 @@ fn behave(
         Does::Filter(category) => {
             drawn.insert((Button, super::options::FilterButton(category), skin()))
         }
+        Does::ChangeColor => drawn.insert((
+            Button,
+            option_lists::ChangeColor,
+            color_picker::Swatch::selected(),
+            skin(),
+        )),
         Does::ReloadKeys => drawn.insert((Button, crate::keys::bindings::ReloadDefaults, skin())),
         Does::ScreenMode(full) => {
             drawn.insert((Button, crate::window_mode::SetFullscreen(full), skin()))
@@ -1539,6 +1548,7 @@ fn caption(
         | Does::Raid(_)
         | Does::RaidAction(_)
         | Does::Unoffered(_)
+        | Does::ChangeColor
         | Does::ReloadKeys
         | Does::ScreenMode(_)
         | Does::ResetColors

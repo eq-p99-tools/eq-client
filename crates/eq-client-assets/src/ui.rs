@@ -1714,7 +1714,8 @@ impl WindowLook {
     /// second. The delay and duration are what it wrote for every window in
     /// the 284 UI files on the PC this was written on (counted); the rest
     /// is what it wrote for nearly all of them.
-    fn new(window: &str) -> Self {
+    #[must_use]
+    pub fn new(window: &str) -> Self {
         Self {
             window: window.to_owned(),
             alpha: u8::MAX,

@@ -19,6 +19,7 @@ pub(crate) struct Windowed(Option<Placement>);
 #[derive(Component)]
 pub(crate) struct SetFullscreen(pub(crate) bool);
 
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(crate) fn buttons(
     clicks: crate::clicks::Clicks<SetFullscreen>,
     mut windows: Query<&mut Window, With<PrimaryWindow>>,

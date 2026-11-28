@@ -244,6 +244,15 @@ impl Toggle {
 /// An option the player sets along one of the Options window's sliders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Level {
+    /// Global window background override for fade delay ms.
+    FadeDelay,
+    /// Global window background override for fade duration ms.
+    FadeDuration,
+    /// Global window background override for window alpha.
+    WindowAlpha,
+    /// Global window background override for fade to alpha.
+    FadeToAlpha,
+
     /// How far away spawns are drawn, as a percentage of the farthest the
     /// zone and the client allow (the Display page's Far Clip Plane).
     ClipPlane,
@@ -302,7 +311,11 @@ const MAX_RUN_SPEED: u16 = RunSpeedMultiplier::MAX.percent();
 
 impl Level {
     /// Every level, in the order a file lists them.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 17] = [
+        Self::FadeDelay,
+        Self::FadeDuration,
+        Self::WindowAlpha,
+        Self::FadeToAlpha,
         Self::ClipPlane,
         Self::MaxFps,
         Self::MouseSensitivity,
@@ -322,6 +335,10 @@ impl Level {
     #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
+            Self::FadeDelay => "fade_delay_ms",
+            Self::FadeDuration => "fade_duration_ms",
+            Self::WindowAlpha => "window_alpha",
+            Self::FadeToAlpha => "fade_to_alpha",
             Self::ClipPlane => "clip_plane",
             Self::MaxFps => "max_fps",
             Self::MouseSensitivity => "mouse_sensitivity",
@@ -359,6 +376,8 @@ impl Level {
     /// The values its slider stops at, from its left.
     fn stops(self) -> Vec<u16> {
         match self {
+            Self::FadeDelay | Self::FadeDuration => (0..=10000).step_by(100).collect(),
+            Self::WindowAlpha | Self::FadeToAlpha => (0..=255).collect(),
             Self::ClipPlane
             | Self::MouseSensitivity
             | Self::SoundVolume
@@ -385,6 +404,8 @@ impl Level {
     #[must_use]
     pub fn fraction(self, value: u16) -> f32 {
         match self {
+            Self::FadeDelay | Self::FadeDuration => f32::from(value.min(10000)) / 10000.0,
+            Self::WindowAlpha | Self::FadeToAlpha => f32::from(value.min(255)) / 255.0,
             Self::ClipPlane
             | Self::MouseSensitivity
             | Self::SoundVolume
@@ -436,6 +457,8 @@ impl Level {
     #[must_use]
     pub fn words(self, value: u16) -> String {
         match self {
+            Self::FadeDelay | Self::FadeDuration => format!("{value} ms"),
+            Self::WindowAlpha | Self::FadeToAlpha => value.to_string(),
             Self::MouseSensitivity => mouse_step(value).to_string(),
             Self::ClipPlane
             | Self::UiScale
@@ -458,6 +481,8 @@ impl Level {
     /// Whether a file's value is one the option takes.
     fn takes(self, value: u16) -> bool {
         match self {
+            Self::FadeDelay | Self::FadeDuration => value <= 10000,
+            Self::WindowAlpha | Self::FadeToAlpha => value <= 255,
             Self::ClipPlane
             | Self::MouseSensitivity
             | Self::SoundVolume
@@ -528,6 +553,15 @@ impl AutoJoin {
     reason = "each is one of the Options window's checkboxes"
 )]
 pub struct Options {
+    /// Override of imported fade delay ms where explicitly set.
+    pub fade_delay_ms: Option<u16>,
+    /// Override of imported fade duration ms where explicitly set.
+    pub fade_duration_ms: Option<u16>,
+    /// Override of imported window alpha where explicitly set.
+    pub window_alpha: Option<u16>,
+    /// Override of imported fade to alpha where explicitly set.
+    pub fade_to_alpha: Option<u16>,
+
     /// See [`Toggle::PetWindowPopup`].
     pub pet_window_popup: bool,
     /// See [`Toggle::AutoStand`].
@@ -697,6 +731,10 @@ impl Default for Options {
             // The program's default sensitivity, 4 (R49-24 d).
             mouse_sensitivity: 43,
             ui_scale: 100,
+            fade_delay_ms: None,
+            fade_duration_ms: None,
+            window_alpha: None,
+            fade_to_alpha: None,
             sound_volume: 100,
             chat_font_size: None,
             mouse_pointer_speed: None,
@@ -787,6 +825,22 @@ impl Options {
             Level::MouseSensitivity => self.mouse_sensitivity,
             Level::UiScale => self.ui_scale,
             Level::RunSpeed => self.qol.run_speed_multiplier.percent(),
+            Level::FadeDelay => match self.fade_delay_ms {
+                Some(n) => n,
+                None => 2000,
+            },
+            Level::FadeDuration => match self.fade_duration_ms {
+                Some(n) => n,
+                None => 500,
+            },
+            Level::WindowAlpha => match self.window_alpha {
+                Some(n) => n,
+                None => 255,
+            },
+            Level::FadeToAlpha => match self.fade_to_alpha {
+                Some(n) => n,
+                None => 255,
+            },
             Level::SoundVolume => self.sound_volume,
             Level::MusicVolume => self.music_volume,
             Level::CombatTextOutgoingRed => self.combat_text_outgoing[0],
@@ -811,6 +865,10 @@ impl Options {
                 }
                 return;
             }
+            Level::FadeDelay => self.fade_delay_ms.insert(value),
+            Level::FadeDuration => self.fade_duration_ms.insert(value),
+            Level::WindowAlpha => self.window_alpha.insert(value),
+            Level::FadeToAlpha => self.fade_to_alpha.insert(value),
             Level::SoundVolume => &mut self.sound_volume,
             Level::MusicVolume => &mut self.music_volume,
             Level::CombatTextOutgoingRed => &mut self.combat_text_outgoing[0],
@@ -1062,6 +1120,13 @@ impl Options {
             }
         }
         for level in Level::ALL {
+            if matches!(level, Level::FadeDelay if self.fade_delay_ms.is_none())
+                || matches!(level, Level::FadeDuration if self.fade_duration_ms.is_none())
+                || matches!(level, Level::WindowAlpha if self.window_alpha.is_none())
+                || matches!(level, Level::FadeToAlpha if self.fade_to_alpha.is_none())
+            {
+                continue;
+            }
             for part in [level.key(), " = ", &self.level(level).to_string(), "\n"] {
                 text.push_str(part);
             }

@@ -93,6 +93,9 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
     if pages.is_empty() {
         return Cow::Borrowed(pages);
     }
+    if pages.iter().any(|p| p.pieces.iter().any(|(_,e)| matches!(e, Element::Listbox(l) if matches!(l.id.as_deref(), Some("FilterList" | "OFP_FilterList"))))) {
+        return Cow::Borrowed(pages);
+    }
     let pieces = || pages.iter().flat_map(|page| &page.pieces);
     // A plain button where the skin has one, else its checkbox.
     let template = pieces()

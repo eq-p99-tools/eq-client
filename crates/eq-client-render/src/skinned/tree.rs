@@ -699,15 +699,21 @@ pub(super) fn tabbed(
     inside: &Area,
     context: &Context,
 ) {
-    let particle_pages = super::particles::pages(&tabs.pages, context.id);
-    let filter_pages = super::filters::pages(&particle_pages, context.id, inside.width);
-    let colors = super::colors::pages(&filter_pages, context.id, inside.width);
-    let pages = super::qol::pages(
-        &colors,
-        context.id,
-        Vec2::new(inside.width, inside.height),
-        tabs.page_frame.as_ref(),
-    );
+    let pages = if context.id == WindowId::Options && context.depth == 0 {
+        let filter_pages = super::filters::pages(&tabs.pages, context.id, inside.width);
+        let colors = super::colors::pages(&filter_pages, context.id, inside.width);
+        let generated = super::qol::pages(
+            &colors,
+            context.id,
+            Vec2::new(inside.width, inside.height),
+            tabs.page_frame.as_ref(),
+        );
+        let mut pages = generated.into_owned();
+        super::extensions::relocate(&mut pages, inside.width);
+        std::borrow::Cow::Owned(pages)
+    } else {
+        std::borrow::Cow::Borrowed(tabs.pages.as_slice())
+    };
     let pages = pages.as_ref();
     if context.id == WindowId::Options {
         // Added client pages can exceed the skin's single row. As with chat's
@@ -813,7 +819,7 @@ fn tabbed_pages(
                 ..node
             },
         ));
-        if page.name == super::filters::PAGE {
+        if page.name == super::filters::PAGE || page.pieces.iter().any(|(_,e)| matches!(e, Element::Listbox(l) if matches!(l.id.as_deref(),Some("FilterList" | "OFP_FilterList")))) {
             viewport.insert(super::filters::FiltersPage);
         }
         if wrapping {

@@ -47,31 +47,38 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, width: f32) -> Cow<'_, [Pag
     let mut page = Page {
         name: PAGE.into(),
         title: Some("Colors".into()),
-        pieces: Vec::new(),
+        pieces: if index.is_some() {
+            template.pieces.clone()
+        } else {
+            Vec::new()
+        },
         ..template.clone()
     };
     let width = (width - 28.0).max(18.0);
+    let has_list = page.pieces.iter().any(|(_,e)| matches!(e,Element::Listbox(l) if matches!(l.id.as_deref(),Some("ColorChooseList" | "OCP_ColorChooseList"))));
+    let has_reset=page.pieces.iter().any(|(_,e)| matches!(e,Element::Button(b) if matches!(b.id.as_deref(),Some("OCP_UserColorDefault" | "UserColorDefault"))));
+    let start = super::extensions::bottom(&page);
     let mut row = Rows {
         page: &mut page,
         button,
-        y: 6.0,
+        y: start + 6.0,
         width,
     };
-    row.label("EQC_FloatingColors", "Floating combat text", false);
     for (id, name, _) in COMBAT_COLORS {
-        row.swatch(id, name);
+        if !super::extensions::contains(pages, id) {
+            row.swatch(id, name);
+        }
     }
-    row.reset();
-    row.label("EQC_ChatColors", "Chat colors", false);
-    for kind in 1..eq_client_core::options::USER_COLOR_KINDS {
-        let fallback = format!("Chat color {kind}");
-        let name = crate::local_settings::KIND_NAMES
-            .get(kind - 1)
-            .copied()
-            .or_else(|| EXTRA_NAMES.get(kind.checked_sub(70)?).copied())
-            .unwrap_or(&fallback);
-        if name != "Unused" {
-            row.swatch(&format!("EQC_ChatColor_{kind}"), name);
+    if !has_reset {
+        row.reset();
+    }
+    if !has_list {
+        row.label("EQC_ChatColors", "Chat colors", false);
+        for (kind, name) in chat_names() {
+            let id = format!("EQC_ChatColor_{kind}");
+            if !super::extensions::contains(pages, &id) {
+                row.swatch(&id, &name);
+            }
         }
     }
     let mut result = pages.to_vec();
@@ -81,6 +88,21 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, width: f32) -> Cow<'_, [Pag
         result.push(page);
     }
     Cow::Owned(result)
+}
+
+pub(super) fn chat_names() -> impl Iterator<Item = (u8, String)> {
+    (1..eq_client_core::options::USER_COLOR_KINDS).filter_map(|kind| {
+        let name = crate::local_settings::KIND_NAMES
+            .get(kind - 1)
+            .copied()
+            .or_else(|| EXTRA_NAMES.get(kind.checked_sub(70)?).copied());
+        (name != Some("Unused")).then(|| {
+            (
+                u8::try_from(kind).expect("user color table fits a byte"),
+                name.map_or_else(|| format!("Chat color {kind}"), str::to_owned),
+            )
+        })
+    })
 }
 
 // User kinds 70–85 correspond to chat types 325–340. The installed table has an
@@ -144,6 +166,12 @@ impl Rows<'_> {
         field.area.height = 18.0;
         field.area.width = 18.0;
         self.page.pieces.push((id.into(), Element::Label(field)));
+        if COMBAT_COLORS.iter().any(|(key, ..)| *key == id) {
+            if let Some((_, Element::Label(caption))) = self.page.pieces.iter_mut().rev().nth(1) {
+                caption.area.x += 10.0;
+            }
+            super::extensions::mark(self.page, id, false, 25.0, self.y - 23.0, self.button.font);
+        }
     }
 
     fn reset(&mut self) {

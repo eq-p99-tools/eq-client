@@ -39,22 +39,38 @@ fn look_spring(pages: &mut [eq_client_assets::sidl::Page]) -> Option<Choice> {
 /// Adds a Look Spring checkbox, cut from the skin's Invert Y Axis one, below
 /// the lowest control of the page that holds it; false where no page does.
 fn add_look_spring(pages: &mut [eq_client_assets::sidl::Page]) -> bool {
+    let template = pages
+        .iter()
+        .flat_map(|p| &p.pieces)
+        .find_map(|(_, e)| match e {
+            Element::Button(b) if b.checkbox => Some(b.clone()),
+            _ => None,
+        });
     let invert = |name: &String| name == "OMP_InvertYAxisCheckbox";
-    let Some(page) = pages
-        .iter_mut()
-        .find(|page| page.pieces.iter().any(|(name, _)| invert(name)))
-    else {
+    let Some(page) = pages.iter_mut().find(|page| {
+        page.title
+            .as_deref()
+            .is_some_and(|t| t.eq_ignore_ascii_case("Mouse"))
+            || page.name == "OptionsMousePage"
+            || page.pieces.iter().any(|(name, _)| invert(name))
+    }) else {
         return false;
     };
-    let Some(Element::Button(template)) = page
+    let template = page
         .pieces
         .iter()
         .find(|(name, _)| invert(name))
-        .map(|(_, element)| element)
-    else {
+        .and_then(|(_, e)| {
+            if let Element::Button(b) = e {
+                Some(b.clone())
+            } else {
+                None
+            }
+        })
+        .or(template);
+    let Some(mut button) = template else {
         return false;
     };
-    let mut button = template.clone();
     let bottom = page
         .pieces
         .iter()
@@ -487,7 +503,13 @@ impl Layout {
 
 /// Generated content needs its full bottom edge and margin in the scroll range.
 pub(super) fn content_height(page: &eq_client_assets::sidl::Page) -> Option<f32> {
-    (page.name == "EQC_QoLPage" || page.name == super::colors::PAGE).then(|| {
+    (page.name == "EQC_QoLPage"
+        || page.name == super::colors::PAGE
+        || page
+            .pieces
+            .iter()
+            .any(|(id, _)| id.starts_with("EQC_ExtraMark_")))
+    .then(|| {
         page.pieces
             .iter()
             .filter_map(|(_, element)| match element {
