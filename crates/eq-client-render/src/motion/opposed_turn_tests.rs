@@ -560,9 +560,20 @@ fn physical_continuous_rmb_strafe_keeps_swim_replay_after_unfocused_idle() {
         crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
         latency_tests::key(&mut f.app, side, true);
         let mut travel = Outcome::default();
+        let mut signed_turn = 0.;
         for tick in 90..690 {
+            let previous = session.position().heading;
             drive(&mut f, &mut session, &mut travel, &mut replies, tick, dx);
+            // EQ headings wrap at 512. Compare each accepted turn to its
+            // predecessor instead of interpreting the final wrapped chord.
+            let turn = arc(previous, session.position().heading);
+            assert!(
+                turn * dx <= 0.001,
+                "reversed while strafing: {turn} at {tick}"
+            );
+            signed_turn += turn;
         }
+        assert!(signed_turn.abs() > 128., "expected a continuous turn");
         assert!(
             travel.physical_proposals > 50 && travel.path_xy > 40.,
             "{travel:?}"
