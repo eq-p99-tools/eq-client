@@ -2,7 +2,7 @@
 
 Remaining differences from the installed Titanium Options window. Titanium default and Velious have the same seven stock tabs. Update these tables in the PR that implements each option. Remove completed rows and narrow partial rows to the behavior still missing.
 
-**Pending in-game checks.** On Titanium default and Velious, check picker dismissal, Colors row alignment, General markers after scrolling, QoL spacing and skin switching. On TAKP, check the numbered Colors controls with an installed skin.
+**Pending in-game checks.** On Titanium default and Velious, check picker dismissal, Colors row alignment, QoL spacing and skin switching. On TAKP, check the numbered Colors controls with an installed skin.
 
 **Trivial** means a local UI or binding change. **New feature** means the underlying behavior or service still needs work. **Skip** records a deliberate difference. For controls already supported and their placement, see [Settings](settings.md) and [Skin extensions](skin-extensions.md).
 
@@ -10,6 +10,7 @@ Remaining differences from the installed Titanium Options window. Titanium defau
 
 | Option | Remaining difference | Rating | Work or reason |
 | --- | --- | --- | --- |
+| Client-added option markers | No blue asterisks visible on General, Display or Mouse in default, or on General in Velious, in the latest in-game check | Trivial | The added rows should show a blue asterisk beside Ask Before Deleting Spells, Show Times in Chat, Flash on Tells and Show FPS. Red is reserved for unsafe additions. |
 | Receive Guild Invites | Missing binding | New feature | Receiving an invitation is separate from saving and honoring an invitation policy. Verify who enforces the preference. |
 | Allow Context Menus | Missing binding | New feature | Define which existing menus obey the switch and supply a common input gate across windows. |
 | Combat Music | Preference only | New feature | The option and slash command already exist. Encounter track selection and playback are missing. |
