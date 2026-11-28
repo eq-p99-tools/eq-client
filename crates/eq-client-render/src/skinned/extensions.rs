@@ -185,13 +185,12 @@ pub(super) fn relocate(pages: &mut [Page], width: f32) {
         if contains(pages, &id) {
             continue;
         }
-        if let Some(f) = qol_checkbox(&id) {
-            if let Some(dest) = target_page(pages, f)
-                && let Element::Button(b) = e
-            {
-                append_button(dest, id, b, f.is_unsafe(), width);
-                continue;
-            }
+        if let Some(f) = qol_checkbox(&id)
+            && let Some(dest) = target_page(pages, f)
+            && let Element::Button(b) = e
+        {
+            append_button(dest, id, b, f.is_unsafe(), width);
+            continue;
         }
         pages[q].pieces.push((id, e));
     }
