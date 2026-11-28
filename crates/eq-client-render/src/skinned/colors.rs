@@ -83,10 +83,10 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, width: f32) -> Cow<'_, [Pag
     Cow::Owned(result)
 }
 
-// The contiguous continuation of the installed color names after the slash help list.
-// The remaining configurable slots have no verified names here.
-const EXTRA_NAMES: [&str; 13] = [
-    "Unused",
+// User kinds 70–85 correspond to chat types 325–340. The installed table has an
+// unused caption at 70, but servers use this type for damage over time.
+const EXTRA_NAMES: [&str; 16] = [
+    "Damage over time",
     "Item links",
     "Raid chat",
     "Your pet",
@@ -99,6 +99,9 @@ const EXTRA_NAMES: [&str; 13] = [
     "System messages",
     "Pet spells",
     "Pet responses",
+    "Item speech",
+    "Strikethrough",
+    "Stuns",
 ];
 
 struct Rows<'a> {
@@ -187,7 +190,7 @@ mod tests {
             .iter()
             .filter(|(id, _)| binding(id).is_some())
             .collect();
-        assert_eq!(swatches.len(), 85); // 86 kinds minus three unused, plus two combat colors.
+        assert_eq!(swatches.len(), 86); // 86 kinds minus two unused, plus two combat colors.
         for id in [
             "EQC_ChatColor_1",
             "EQC_ChatColor_72",

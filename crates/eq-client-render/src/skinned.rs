@@ -2532,7 +2532,7 @@ fn plain_label(
     if owner == WindowId::Options
         && let Some(channels) = color_picker::binding(name)
     {
-        color_picker::draw_swatch(window, channels, node, font(label.font));
+        color_picker::draw_swatch(window, owner, channels, node, font(label.font));
         return;
     }
     match controls::value_label(name, owner) {

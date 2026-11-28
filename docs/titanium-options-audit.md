@@ -22,6 +22,10 @@
 | Video Modes dialog | Resolution list, refresh rate, bit depth, Accept | No opener on Display. A fullscreen shortcut covers only the mode switch. |
 | Advanced Display dialog | Shadows, water swap, shader controls, actor/shadow clipping, sky reflection/update, card features and advanced lighting | No opener on Display. Renderer capability and legacy hardware-specific controls require individual decisions. |
 
+### Colors change in this branch
+
+The authored Colors tab now opens a scrollable list with two floating combat text swatches and 84 chat swatches. Editing shares the existing character settings with the renderer and `/usercolor`. Types 325–340 supply the labels beyond the original slash help list, including damage over time and raid chat. The last configurable slot uses the neutral label “Chat color 86” pending identification. [EQEmu chat type definitions](https://github.com/EQEmu/EQEmu/blob/master/common/eq_constants.h)
+
 ### Reorganization priorities
 
 1. **Colors first.** Keep the floating-text enable switch with the feature. Put color editing, preview and reset on Colors. A small swatch can open the same picker for chat and damage colors.

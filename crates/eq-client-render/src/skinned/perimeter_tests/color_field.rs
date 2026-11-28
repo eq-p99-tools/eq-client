@@ -92,12 +92,14 @@ fn form() -> Form {
                 .with_children(|ui| {
                     color_picker::draw_swatch(
                         ui,
+                        WindowId::Options,
                         color_picker::Binding::Combat(COMBAT_COLORS[1].2),
                         super::super::at(0.0, 0.0, 18.0, 18.0),
                         theme::Size::Label,
                     );
                     color_picker::draw_swatch(
                         ui,
+                        WindowId::Options,
                         color_picker::Binding::Chat(2),
                         super::super::at(150.0, 0.0, 18.0, 18.0),
                         theme::Size::Label,

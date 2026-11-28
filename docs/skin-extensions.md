@@ -49,4 +49,4 @@ The client uses these control IDs in the Options window. Map controls appear und
 | `EQC_CombatOutgoingPicker` | “Other damage” color picker for combat text. |
 | `EQC_CombatIncomingPicker` | “Damage to you” color picker for combat text. |
 
-The color pickers save each RGB channel in one-percent increments.
+Combat text colors save each channel in one-percent increments. Chat swatches use the same picker and retain full byte precision.

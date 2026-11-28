@@ -80,7 +80,7 @@ merchant action.
 - `filter kind`: a Filters page row's button by its kind's stable name, such as `ooc` or `bard_songs`: a click steps the row to its next choice, as the player's does.
 - `slider name percent` sets a slider by its position from 0 to 100 percent. Names include `clip_plane`, `max_fps`, `mouse_sensitivity`, `ui_scale`, `run_boost`, `sound_volume`, and `quantity`. On the QoL page, `click("slider", "run_boost", 50)` selects 1.20x and `click("slider", "run_boost", 100)` selects 1.40x.
 
-  The QoL page also has RGB percentage sliders for floating combat text:
+  On Options → Colors, scripts can set the RGB channels of either floating combat text swatch:
   `combat_text_incoming_red`, `combat_text_incoming_green`, `combat_text_incoming_blue`
   (damage to you) and `combat_text_outgoing_red`, `combat_text_outgoing_green`,
   `combat_text_outgoing_blue` (damage to other known targets). For example,
