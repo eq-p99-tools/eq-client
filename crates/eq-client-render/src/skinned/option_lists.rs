@@ -81,7 +81,7 @@ pub(super) fn chat_rows(rows: &mut EntityCommands, columns: &[f32]) {
             .with_children(|ui| {
                 ui.spawn((
                     theme::text(name, theme::Size::Small, theme::INK_BRIGHT),
-                    TextLayout::new_with_no_wrap(),
+                    TextLayout::no_wrap(),
                     bevy::ui::FocusPolicy::Pass,
                     Node {
                         width: px(columns.first().copied().unwrap_or(150.0)),
