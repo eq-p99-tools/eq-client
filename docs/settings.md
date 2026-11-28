@@ -60,9 +60,15 @@ Map background opacity, plain/skin style and position lock use
 the [map's controls](controls.md#map); window coordinates remain in the normal
 window-layout file.
 
+## Options layouts
+
+General uses the existing autosplit and presence commands and displays the received state. Allow Auto-Duck controls automatic crouching for low passages. Fast Item Destroy starts off. Enabling it skips the cursor **item** question and keeps the current item and session checks. Coins still require confirmation. Item Dropping uses the same saved choice as `/fastdrop`.
+
+Display offers the mode switch for the current fullscreen state. Each global fade or opacity slider overrides that property once edited. Other properties still use the individual window's appearance settings. Keyboard → Reload Defaults restores the active generation's default key assignments.
+
 ## Colors
 
-Open Options → Colors, then click the square beside a chat or floating combat text category. Choose a hue and shade, or enter six hexadecimal digits and press Enter. Click outside the picker or press Escape to dismiss it. Chat colors use full RGB precision. Combat text colors use the same percentage channels as older profiles. Reset Default Colors clears chat overrides and restores both combat text defaults for the current profile.
+Open Options → Colors. In a Titanium skin, select a chat color and click Change Selected Color, or click its sample directly. TAKP skins can present numbered buttons for the same chat colors. Click the small swatch beside either floating combat text color to edit it. Choose a hue and shade, or enter six hexadecimal digits and press Enter. Click outside the picker or press Escape to dismiss it. Chat colors use full RGB precision. Combat text colors use the same percentage channels as older profiles. Reset Default Colors clears chat overrides and restores both combat text defaults for the current profile.
 
 ## Server filters
 
@@ -358,7 +364,7 @@ type offers them. They do not establish server acceptance, permission, or
 absence of detection. Movement identity, freshness,
 known-speed and finite-coordinate checks remain in effect.
 
-The Options window's Particles page contains Show Spell Effects. It starts from
+Display → Spell contains Show Spell Effects. Skins without a Spell page offer it under QoL. It starts from
 `eqclient.ini` (`ShowSpellEffects`, with `SpellParticleDensity` as a fallback)
 and is kept per character. It controls particle drawing, leaving spell sounds,
 chat and server outcomes unchanged. See the World Clearly controls weather

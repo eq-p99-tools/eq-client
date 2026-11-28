@@ -1,0 +1,1 @@
+Bind supported native Options controls, including item destruction, auto-duck, presence, fullscreen, window fading, key defaults, filters and colors. Add client settings to matching skin pages with colored asterisks.

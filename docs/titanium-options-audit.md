@@ -1,5 +1,8 @@
 # Titanium Options audit
 
+The tables record the differences found during the audit. The follow-up implements the **Trivial** rows. Display hosts the three lighting and water controls where the skin has no Advanced page. Map owns the tracked-name outline control. **New feature** and **Skip** retain their original classifications. See [Settings](settings.md) for the resulting behavior and [Skin extensions](skin-extensions.md) for placement rules.
+
+
 **Start with General and Keys.** Autosplit, Anonymous, Roleplaying, Environment Sounds, Item Dropping and Reload defaults can all reuse behavior the client already has. The largest structural difference is under Display, where Titanium has separate Spell, Env and Player particle pages. Our single Particles checkbox covers only part of the first page.
 
 This compares client main `f9091d1e` (#811) with the installed Titanium default skin. Velious declares the same seven top-level tabs in the same order. The rows below cover **differences**, including controls the skin draws but the client does not bind. Colors also shows what this PR changes. Ratings are implementation estimates from source inspection. The active server, graphics hardware and skin can affect availability.
