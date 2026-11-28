@@ -59,7 +59,7 @@ pub(crate) fn show_swatches(
     look: Option<Res<crate::chat::ChatLook>>,
     mut colors: Query<(&Swatch, &mut BackgroundColor)>,
 ) {
-    if reset.iter().next().is_some() {
+    if reset.any() {
         let defaults = eq_client_core::options::Options::default();
         state.options.user_colors.fill(None);
         state.options.combat_text_incoming = defaults.combat_text_incoming;
@@ -186,7 +186,7 @@ pub(crate) fn manage(
                     at(PAD, PAD, FIELD_WIDTH, height(FIELD_WIDTH)),
                     FIELD_WIDTH,
                     swatch.1,
-                )
+                );
             })
             .id();
         *open = Some(Open {

@@ -1,5 +1,4 @@
-//! A color field backed by three existing percentage options. The UI always
-//! previews the representable color that the options file will restore.
+//! Shared HSV and hex editor for byte-precision chat colors and percentage-based combat text.
 use super::{at, controls::SkinSlider};
 use crate::{
     keys::{Typing, search},
@@ -66,7 +65,7 @@ impl Binding {
             Self::Chat(kind) => {
                 let [r, g, b] = options.user_colors[usize::from(kind)]
                     .or_else(|| look.and_then(|l| l.message_color(255 + u32::from(kind))))
-                    .unwrap_or([255; 3]);
+                    .unwrap_or_else(|| crate::chat::user_color_fallback(kind));
                 Srgba::rgb_u8(r, g, b)
             }
         }
@@ -153,8 +152,7 @@ fn target(part: Part, node: Node) -> impl Bundle {
     (part, Button, node, RelativeCursorPosition::default())
 }
 
-/// Draw the same field for any binding. Semantic slider commands still aim
-/// at visible controls in the options page and inherit its scroll and occlusion.
+/// Draw the open editor for either storage format.
 pub(super) fn draw(
     parent: &mut ChildSpawnerCommands,
     binding: Binding,

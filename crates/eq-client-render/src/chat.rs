@@ -1633,6 +1633,19 @@ impl ChatLook {
     }
 }
 
+/// Display default for an editable chat kind when the installation supplies no color.
+pub(crate) fn user_color_fallback(kind: u8) -> [u8; 3] {
+    use ChannelName::{
+        Auction, Broadcast, Emote, Group, Guild, Ooc, Raid, Say, Shout, Tell, TellEcho,
+    };
+    [
+        Say, Tell, Group, Guild, Ooc, Auction, Shout, Emote, Broadcast, TellEcho, Raid,
+    ]
+    .into_iter()
+    .find(|&channel| eq_client_core::chat::color_kind(channel) == Some(u16::from(kind) + 255))
+    .map_or([255; 3], channel_rgb)
+}
+
 /// Titanium's fixed chat colors for the types used by consider summaries.
 /// `eqgame.exe` 0x491e30 converts native NPC categories to chat types.
 /// The fixed palette at 0x4f2bbe resolves those types and the gray extension.

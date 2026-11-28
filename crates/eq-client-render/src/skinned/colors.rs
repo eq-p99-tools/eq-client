@@ -1,4 +1,4 @@
-//! The Colors tab uses one compact swatch per setting. Page scrolling is shared with QoL.
+//! The Colors tab uses one compact swatch per setting. Page scrolling is shared with the quality-of-life tab.
 use super::color_picker::COMBAT_COLORS;
 use crate::windows::WindowId;
 use eq_client_assets::{
@@ -68,6 +68,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, width: f32) -> Cow<'_, [Pag
         let name = crate::local_settings::KIND_NAMES
             .get(kind - 1)
             .copied()
+            .or_else(|| EXTRA_NAMES.get(kind.checked_sub(70)?).copied())
             .unwrap_or(&fallback);
         if name != "Unused" {
             row.swatch(&format!("EQC_ChatColor_{kind}"), name);
@@ -81,6 +82,24 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, width: f32) -> Cow<'_, [Pag
     }
     Cow::Owned(result)
 }
+
+// The contiguous continuation of the installed color names after the slash help list.
+// The remaining configurable slots have no verified names here.
+const EXTRA_NAMES: [&str; 13] = [
+    "Unused",
+    "Item links",
+    "Raid chat",
+    "Your pet",
+    "Damage shields",
+    "Leadership",
+    "Pet rampages and flurries",
+    "Pet critical hits",
+    "Focus effects",
+    "Experience",
+    "System messages",
+    "Pet spells",
+    "Pet responses",
+];
 
 struct Rows<'a> {
     page: &'a mut Page,
@@ -142,5 +161,53 @@ impl Rows<'_> {
         };
         self.page.pieces.push((id.into(), Element::Button(button)));
         self.y += 30.0;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::skinned::color_picker::binding;
+
+    #[test]
+    fn empty_authored_colors_page_is_populated_in_place_with_unique_editable_rows() {
+        let general = crate::skinned::qol::tests::source();
+        let empty = Page {
+            name: "OptionsColorPage".into(),
+            title: Some("Colors".into()),
+            pieces: Vec::new(),
+            ..general.clone()
+        };
+        let skin = [general.clone(), empty];
+        let made = pages(&skin, WindowId::Options, 350.0);
+        assert_eq!(made.len(), 2);
+        assert_eq!(made[0], general);
+        let rows = &made[1].pieces;
+        let swatches: Vec<_> = rows
+            .iter()
+            .filter(|(id, _)| binding(id).is_some())
+            .collect();
+        assert_eq!(swatches.len(), 85); // 86 kinds minus three unused, plus two combat colors.
+        for id in [
+            "EQC_ChatColor_1",
+            "EQC_ChatColor_72",
+            "EQC_ChatColor_86",
+            COMBAT_COLORS[1].0,
+            COMBAT_COLORS[0].0,
+        ] {
+            let (_, Element::Label(field)) = rows.iter().find(|(name, _)| name == id).unwrap()
+            else {
+                panic!("swatch")
+            };
+            assert_eq!((field.area.width, field.area.height), (18.0, 18.0));
+        }
+        assert_eq!(
+            rows.iter()
+                .filter(|(id, _)| id == "OCP_UserColorDefault")
+                .count(),
+            1
+        );
+        assert_eq!(pages(&made, WindowId::Options, 350.0).len(), 2);
+        assert_eq!(pages(&skin[..1], WindowId::Options, 350.0)[1].name, PAGE);
     }
 }

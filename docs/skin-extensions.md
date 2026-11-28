@@ -40,7 +40,7 @@ a suitable fallback.
 
 ## Options controls
 
-The client uses these control IDs on the QoL page of the Options window.
+The client uses these control IDs in the Options window. Map controls appear under QoL and combat text colors under Colors.
 
 | Control ID | Purpose |
 | --- | --- |
