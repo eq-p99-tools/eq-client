@@ -147,7 +147,7 @@ impl TradeState {
                 .is_some_and(|loot| loot.items.contains_key(&place));
         if ready && !loot_clicks::cursor_empty(world) {
             chat.history.push(super::chat::system_line(
-                "Place the item on your cursor before looting.",
+                "Your cursor must be empty to loot.",
             ));
             return false;
         }

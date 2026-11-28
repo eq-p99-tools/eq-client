@@ -429,8 +429,9 @@ fn both_destinations_require_an_empty_cursor_even_after_confirmation() {
                 assert_eq!(
                     messages
                         .iter()
-                        .filter(|(_, line)| line.message.text
-                            == "Place the item on your cursor before looting.")
+                        .filter(
+                            |(_, line)| line.message.text == "Your cursor must be empty to loot."
+                        )
                         .count(),
                     1
                 );

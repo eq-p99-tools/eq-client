@@ -6613,6 +6613,49 @@ mod tests {
     }
 
     #[test]
+    fn script_loot_explains_an_occupied_cursor_for_both_buttons_on_a_listed_item() {
+        use eq_client_core::inventory::{InventorySlot, InventoryUpdate};
+        for click in ["click", "right_click"] {
+            let steps = parse::parse(
+                &format!("press(\"L\")\nwait(100)\n{click}(\"loot\", 0)\nwait(500)"),
+                Path::new("synthetic"),
+            )
+            .unwrap();
+            let (mut app, _) = background(steps);
+            let rx = scripted_loot_input(&mut app, scripted_loot_world(false));
+            frame_at(&mut app, 0);
+            assert!(matches!(
+                rx.try_recv(),
+                Ok(eq_client_core::ClientCommand::Loot { .. })
+            ));
+            scripted_loot_listing(&mut app, 0, false);
+            let mut held = crate::preview::items().remove(0);
+            held.slot = InventorySlot::CURSOR;
+            crate::online::testing::inventory(
+                &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+                InventoryUpdate::Snapshot(vec![held]),
+            );
+            for ms in (10..=1000).step_by(10) {
+                frame_at(&mut app, ms);
+            }
+            let lines = app
+                .world()
+                .resource::<crate::chat::ChatState>()
+                .history
+                .lines(eq_client_core::chat::ChatTab::System);
+            assert_eq!(
+                lines
+                    .iter()
+                    .filter(|(_, line)| line.message.text == "Your cursor must be empty to loot.")
+                    .count(),
+                1,
+                "{click}"
+            );
+            assert!(rx.try_recv().is_err());
+        }
+    }
+
+    #[test]
     fn script_right_click_on_row_one_ignores_an_empty_row_zero_hover() {
         for competing_hover in [false, true] {
             let steps = parse::parse(

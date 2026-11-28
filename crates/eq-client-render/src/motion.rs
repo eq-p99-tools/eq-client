@@ -3234,10 +3234,18 @@ pub(super) fn input(
         let between_frame_tap = movement_keys
             .iter()
             .any(|key| keyboard.just_pressed(*key) && !keyboard.pressed(*key));
+        // Losing keyboard ownership stops new input. The established wet
+        // controller still observes idle frames and the body's passive sink.
+        let passive = !detached
+            && !stunned
+            && controls.speed.is_some()
+            && controls.floor_swim.active()
+            && intent.direction == Vec3::ZERO
+            && intent.turn == 0.;
         let eligible = match online.world().generation() {
             eq_client_core::GameDialect::Titanium => true,
             eq_client_core::GameDialect::EqMac | eq_client_core::GameDialect::Rof2 => false,
-        } && focused
+        } && (focused || passive)
             && !between_frame_tap
             && !at_line
             && controls.jump.is_none()

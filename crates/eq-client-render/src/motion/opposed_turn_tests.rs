@@ -525,6 +525,53 @@ fn clear_water_unknown_basis_can_refuse_an_opposed_curve_without_a_ledger_error(
 }
 
 #[test]
+fn physical_continuous_rmb_strafe_keeps_swim_replay_after_unfocused_idle() {
+    for (side, dx) in [(KeyCode::KeyA, 4.), (KeyCode::KeyD, -4.)] {
+        let (mut f, mut session) = scene(false, 0.);
+        f.app
+            .world_mut()
+            .resource_mut::<Controls>()
+            .suppress_floor_swim = false;
+        let mut replies = Replies::new();
+        let mut idle = Outcome::default();
+        for tick in 0..60 {
+            drive(&mut f, &mut session, &mut idle, &mut replies, tick, 0.);
+        }
+        assert!(idle.physical_proposals > 0);
+        let set_focus = |app: &mut App, focused| {
+            let world = app.world_mut();
+            let (window, mut state) = world
+                .query_filtered::<(Entity, &mut Window), With<bevy::window::PrimaryWindow>>()
+                .single_mut(world)
+                .unwrap();
+            state.focused = focused;
+            world.write_message(bevy::window::WindowFocused { window, focused });
+        };
+        set_focus(&mut f.app, false);
+        let mut coast = Outcome::default();
+        for tick in 60..90 {
+            drive(&mut f, &mut session, &mut coast, &mut replies, tick, 0.);
+        }
+        assert!(
+            coast.physical_proposals > 0 && coast.path_xy < 0.001,
+            "{coast:?}"
+        );
+        set_focus(&mut f.app, true);
+        crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
+        latency_tests::key(&mut f.app, side, true);
+        let mut travel = Outcome::default();
+        for tick in 90..690 {
+            drive(&mut f, &mut session, &mut travel, &mut replies, tick, dx);
+        }
+        assert!(
+            travel.physical_proposals > 50 && travel.path_xy > 40.,
+            "{travel:?}"
+        );
+        assert_eq!(travel.refused + travel.replay_mismatches, 0, "{travel:?}");
+    }
+}
+
+#[test]
 fn a_short_underwater_rmb_drag_turns_the_accepted_body_toward_that_side_of_the_view() {
     for dx in [-4.0_f32, 4.0] {
         let (mut f, mut session) = scene(true, 0.);
