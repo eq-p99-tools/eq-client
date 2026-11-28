@@ -478,3 +478,55 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
         }
     }
 }
+
+#[test]
+fn general_scroll_reveals_the_three_client_markers_beside_their_options() {
+    use crate::windows::pointer::Wheel;
+    let options = two_row_options();
+    let (_, pixels) = fixture();
+    let mut app = app(1.0, pixels);
+    app.init_resource::<Tabs>()
+        .init_resource::<Wheel>()
+        .add_systems(Update, (tabs, controls::scroll_lists));
+    spawn_tab_box(
+        &mut app,
+        WindowId::Options,
+        options,
+        Vec2::new(395.0, 432.0),
+    );
+    app.update();
+    app.update();
+    let world = app.world_mut();
+    let page = world
+        .query::<(Entity, &SkinPage)>()
+        .iter(world)
+        .find(|(_, page)| page.0.index == 0 && page.0.depth == 0)
+        .unwrap()
+        .0;
+    *world.resource_mut::<Wheel>() = Wheel {
+        surface: Some(page),
+        pixels: -2000.0,
+        lines: 0.0,
+    };
+    app.update();
+    app.update();
+    let world = app.world_mut();
+    let blue = rgb([92, 174, 255]);
+    let mut found = 0;
+    for (id, text, color) in world.query::<(Entity, &Text, &TextColor)>().iter(world) {
+        if text.0 != "*" || color.0 != blue {
+            continue;
+        }
+        let mut ancestor = id;
+        while let Some(parent) = world.get::<ChildOf>(ancestor) {
+            ancestor = parent.parent();
+            if ancestor == page {
+                let visible = bounds(world, page);
+                assert!(visible.contains(bounds(world, id).center()));
+                found += 1;
+                break;
+            }
+        }
+    }
+    assert_eq!(found, 3);
+}
