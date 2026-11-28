@@ -4800,7 +4800,8 @@ pub(super) fn input(
         InstalledClient::EqMac => false,
         InstalledClient::Titanium | InstalledClient::Rof2 => true,
     };
-    if refused.is_some()
+    if options.options.allow_auto_duck
+        && refused.is_some()
         && (jumped
             || Vec3::new(delta.x, 0.0, delta.z) == Vec3::ZERO
             || !tests_duck_step

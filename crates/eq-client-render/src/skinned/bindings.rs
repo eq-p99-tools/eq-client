@@ -112,6 +112,8 @@ pub(super) enum Does {
     /// The Map preference for outlining tracked names.
     OutlineTracked,
     ResetColors,
+    ReloadKeys,
+    ScreenMode(bool),
     /// Steps the mode of one kind of server filter, on this client's
     /// Filters page.
     Filter(eq_client_core::filters::FilterCategory),
@@ -406,7 +408,12 @@ pub(super) fn character_button(id: &str) -> Does {
 fn options_button(id: &str) -> Option<Does> {
     match id {
         // The skin overlaps its two mode buttons; the keyboard action switches modes.
-        "ODP_SetWindowedButton" => None,
+        "ODP_SetWindowedButton" => Some(Does::ScreenMode(false)),
+        "ODP_SetFullscreenButton" => Some(Does::ScreenMode(true)),
+        "OKP_DefaultKeysButton" => Some(Does::ReloadKeys),
+        "OGP_LootAutosplitCheckbox" => Some(Does::Slash("/autosplit")),
+        "OGP_AnonymousCheckbox" => Some(Does::Slash("/anonymous")),
+        "OGP_RoleplayingCheckbox" => Some(Does::Slash("/roleplay")),
         "OCP_UserColorDefault" => Some(Does::ResetColors),
         super::qol::OUTLINE_TRACKED => Some(Does::OutlineTracked),
         _ => Some(super::filters::filter_button(id).map_or_else(
@@ -428,9 +435,12 @@ pub(super) fn hot_button(id: &str) -> Option<usize> {
 
 /// The skin's Options window checkboxes for the official client's options
 /// this client keeps, by screen ID.
-const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 11] = {
+const OPTION_CHECKBOXES: [(&str, eq_client_core::options::Toggle); 14] = {
     use eq_client_core::options::Toggle;
     [
+        ("OGP_AllowAutoDuckCheckbox", Toggle::AutoDuck),
+        ("OGP_FastItemDestroyCheckbox", Toggle::FastItemDestroy),
+        ("OGP_EnvSoundsCheckbox", Toggle::EnvironmentSounds),
         ("OGP_PetWindowPopupCheckbox", Toggle::PetWindowPopup),
         ("OGP_AllowAutoStandCheckbox", Toggle::AutoStand),
         ("ODP_ShowTargetRingCheckbox", Toggle::TargetRing),

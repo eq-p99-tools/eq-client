@@ -16,6 +16,32 @@ struct Placement {
 #[derive(Default, Resource)]
 pub(crate) struct Windowed(Option<Placement>);
 
+#[derive(Component)]
+pub(crate) struct SetFullscreen(pub(crate) bool);
+
+pub(crate) fn buttons(
+    clicks: crate::clicks::Clicks<SetFullscreen>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut windowed: ResMut<Windowed>,
+    mut buttons: Query<(&SetFullscreen, &mut Node)>,
+) {
+    let Ok(mut window) = windows.single_mut() else {
+        return;
+    };
+    if let Some(choice) = clicks.iter().next()
+        && choice.0 == (window.mode == WindowMode::Windowed)
+    {
+        windowed.toggle(&mut window);
+    }
+    for (choice, mut node) in &mut buttons {
+        node.display = if choice.0 == (window.mode == WindowMode::Windowed) {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+}
+
 impl Windowed {
     fn toggle(&mut self, window: &mut Window) {
         if window.mode == WindowMode::Windowed {

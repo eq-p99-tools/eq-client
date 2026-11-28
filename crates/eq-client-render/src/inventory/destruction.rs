@@ -364,6 +364,7 @@ pub(crate) fn input(
     shown: Res<crate::windows::Shown>,
     escape: Res<crate::escape::Escape>,
     keys: crate::keys::Keys,
+    options: Option<Res<crate::options::OptionsState>>,
     clicks: crate::clicks::Clicks<Action>,
     mut buttons: Query<(&Action, &mut Node)>,
 ) {
@@ -408,7 +409,18 @@ pub(crate) fn input(
         }
     }
     if !invalid && let Some(action) = action {
-        if let Err(error) = state.destroy_action(action, &online, &outbox, &mut asked) {
+        let result = state.destroy_action(action, &online, &outbox, &mut asked);
+        let fast_item = action == Action::Select
+            && options.is_some_and(|o| o.options.fast_item_destroy)
+            && state.destruction.selected.is_some();
+        let result = result.and_then(|()| {
+            if fast_item {
+                state.destroy_action(Action::Confirm, &online, &outbox, &mut asked)
+            } else {
+                Ok(())
+            }
+        });
+        if let Err(error) = result {
             state.refuse(crate::outbox::window_line(&error));
         }
         state.revision = state.revision.wrapping_add(1);
