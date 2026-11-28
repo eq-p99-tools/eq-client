@@ -21,7 +21,27 @@ pub(super) const RUN_SPEED_VALUE: &str = "EQC_QoL_RunSpeedValueLabel";
 
 /// The Options window's sliders this client keeps settings for, with the
 /// labels that show their values, by screen ID.
-const LEVEL_SLIDERS: [(&str, &str, Level); 7] = [
+const LEVEL_SLIDERS: [(&str, &str, Level); 11] = [
+    (
+        "ODP_FadeDelaySlider",
+        "ODP_FadeDelayValueLabel",
+        Level::FadeDelay,
+    ),
+    (
+        "ODP_FadeDurationSlider",
+        "ODP_FadeDurationValueLabel",
+        Level::FadeDuration,
+    ),
+    (
+        "ODP_WindowAlphaSlider",
+        "ODP_WindowAlphaValueLabel",
+        Level::WindowAlpha,
+    ),
+    (
+        "ODP_FadeToAlphaSlider",
+        "ODP_FadeToAlphaValueLabel",
+        Level::FadeToAlpha,
+    ),
     (
         "ODP_ClipPlaneSlider",
         "ODP_ClipPlaneValueLabel",
@@ -532,6 +552,8 @@ pub(crate) fn show_amount(
 pub(crate) enum Choosing {
     /// Which keys the Keyboard page lists.
     KeyFilter,
+    ItemDropping,
+    FilterMode(Option<eq_client_core::filters::FilterCategory>),
     /// The bug report's category.
     BugType,
 }
@@ -548,6 +570,7 @@ pub(crate) struct DropDown {
     choices: Vec<String>,
     /// How tall the open list may grow.
     list_height: f32,
+    filter_labels: Vec<String>,
     /// The open list.
     open: Option<Entity>,
     /// How the skin draws its box, which its open list is drawn in too.
@@ -578,7 +601,14 @@ impl DropDown {
 /// What a drop-down chooses, if the client keeps a choice for it.
 fn choosing(id: Option<&str>, owner: WindowId) -> Option<Choosing> {
     match (owner, id) {
+        (WindowId::Options, Some("OGP_ItemDroppingCombobox")) => Some(Choosing::ItemDropping),
+        (WindowId::Options, Some("FilterComboBox" | "OFP_FilterComboBox")) => {
+            Some(Choosing::FilterMode(None))
+        }
         (WindowId::Options, Some(KEY_FILTER)) => Some(Choosing::KeyFilter),
+        (WindowId::Options, Some(id)) => {
+            super::filters::authored(id).map(|c| Choosing::FilterMode(Some(c)))
+        }
         (WindowId::BugReport, Some("BugTypes")) => Some(Choosing::BugType),
         _ => None,
     }
@@ -611,9 +641,23 @@ pub(super) fn combobox(
                 // lists them in its own words.
                 choices: match choosing {
                     Choosing::KeyFilter => combobox.choices.clone(),
+                    Choosing::FilterMode(_) => Vec::new(),
+                    Choosing::ItemDropping if combobox.choices.len() == 3 => {
+                        combobox.choices.clone()
+                    }
+                    Choosing::ItemDropping => {
+                        ["With confirmation", "Without confirmation", "Never"]
+                            .map(str::to_owned)
+                            .into()
+                    }
                     Choosing::BugType => crate::report_windows::category_names(),
                 },
                 list_height: combobox.list_height,
+                filter_labels: if matches!(choosing, Choosing::FilterMode(Some(_))) {
+                    combobox.choices.clone()
+                } else {
+                    Vec::new()
+                },
                 open: None,
                 look: combobox.template.clone(),
             },
@@ -680,14 +724,41 @@ pub(crate) fn drop_downs(
     mut art: crate::sheets::Art,
     mut drop_downs: Query<(Entity, Ref<Interaction>, &mut DropDown, &ComputedNode)>,
     choices: Query<(&Interaction, &DropDownChoice), Changed<Interaction>>,
+    (options, selected, online): super::option_lists::ChoiceData,
     mut filter: ResMut<KeyFilter>,
     mut reports: ResMut<crate::report_windows::ReportWindows>,
 ) {
+    let mut options = options;
     for (interaction, choice) in &choices {
         if *interaction != Interaction::Pressed {
             continue;
         }
         match choice.choosing {
+            Choosing::FilterMode(category) => {
+                if let (Some(o), Some(selected), Some(online)) = (
+                    options.as_deref_mut(),
+                    selected.as_deref(),
+                    online.as_deref(),
+                ) {
+                    let c = category.unwrap_or(selected.filter);
+                    if let Some(mode) = c
+                        .modes(online.world().generation())
+                        .into_iter()
+                        .find(|m| super::filters::matches_mode(*m, &choice.choice))
+                    {
+                        o.options.chat_filters.set(c, mode);
+                    }
+                }
+            }
+            Choosing::ItemDropping => {
+                use eq_client_core::options::NoSafeDrop;
+                if let Some(options) = options.as_deref_mut()
+                    && let Some(mode) =
+                        [NoSafeDrop::Ask, NoSafeDrop::Fast, NoSafeDrop::Never].get(choice.index)
+                {
+                    options.options.no_safe_drop = *mode;
+                }
+            }
             Choosing::KeyFilter => filter.0 = Some(choice.choice.clone()),
             Choosing::BugType => reports.bug.category = choice.index,
         }
@@ -705,72 +776,100 @@ pub(crate) fn drop_downs(
             commands.entity(list).despawn();
             continue;
         }
-        let (width, height) = (node.size() * node.inverse_scale_factor()).into();
-        let rows = f32::from(u16::try_from(drop_down.choices.len()).unwrap_or(u16::MAX));
-        let list_height = (rows * ROW_HEIGHT + 4.0).min(drop_down.list_height);
-        let insets = drop_down
-            .look
-            .as_ref()
-            .map(|look| super::border_insets(&look.border));
-        let padding = insets.map_or(UiRect::all(px(2)), |insets| UiRect {
-            left: px(insets.left + 2.0),
-            right: px(insets.right + 2.0),
-            top: px(insets.top + 2.0),
-            bottom: px(insets.bottom + 2.0),
-        });
-        let mut list = commands.spawn((
-            Node {
-                position_type: PositionType::Absolute,
-                left: px(0),
-                top: px(height),
-                width: percent(100),
-                height: px(list_height),
-                flex_direction: FlexDirection::Column,
-                padding,
-                // Without the skin's box, the client's own edge.
-                border: if drop_down.look.is_none() {
-                    UiRect::all(px(1))
-                } else {
-                    UiRect::ZERO
-                },
-                overflow: Overflow::clip(),
-                ..default()
-            },
-            GlobalZIndex(100),
-            ChildOf(entity),
-        ));
-        dress(
-            &mut list,
-            &mut art,
-            drop_down.look.as_ref(),
-            (width, list_height),
-        );
-        let list = list.id();
-        for (index, choice) in drop_down.choices.iter().enumerate() {
-            commands.spawn((
-                Button,
-                DropDownChoice {
-                    drop_down: entity,
-                    choosing: drop_down.choosing,
-                    choice: choice.clone(),
-                    index,
-                },
-                Node {
-                    height: px(ROW_HEIGHT),
-                    flex_shrink: 0.0,
-                    padding: UiRect::horizontal(px(3)),
-                    ..default()
-                },
-                BackgroundColor(Color::NONE),
-                ChildOf(list),
-                children![(
-                    theme::text(choice.as_str(), Size::Small, theme::INK_BRIGHT),
-                    TextLayout::new(Justify::Left, LineBreak::NoWrap),
-                )],
-            ));
+        let mut chosen = drop_down.choosing;
+        if let Choosing::FilterMode(category) = chosen
+            && let Some((s, online)) = selected.as_deref().zip(online.as_deref())
+        {
+            let category = category.unwrap_or(s.filter);
+            chosen = Choosing::FilterMode(Some(category));
+            drop_down.choices = category
+                .modes(online.world().generation())
+                .into_iter()
+                .map(|mode| super::filters::mode_label(&drop_down.filter_labels, mode).to_owned())
+                .collect();
         }
+        let list = open_choices(
+            &mut commands,
+            &mut art,
+            entity,
+            (&drop_down, chosen),
+            (node.size() * node.inverse_scale_factor()).into(),
+        );
         drop_down.open = Some(list);
     }
+}
+
+fn open_choices(
+    commands: &mut Commands,
+    art: &mut crate::sheets::Art,
+    entity: Entity,
+    (drop_down, chosen): (&DropDown, Choosing),
+    (width, height): (f32, f32),
+) -> Entity {
+    let rows = f32::from(u16::try_from(drop_down.choices.len()).unwrap_or(u16::MAX));
+    let list_height = (rows * ROW_HEIGHT + 4.0).min(drop_down.list_height);
+    let insets = drop_down
+        .look
+        .as_ref()
+        .map(|look| super::border_insets(&look.border));
+    let padding = insets.map_or(UiRect::all(px(2)), |insets| UiRect {
+        left: px(insets.left + 2.0),
+        right: px(insets.right + 2.0),
+        top: px(insets.top + 2.0),
+        bottom: px(insets.bottom + 2.0),
+    });
+    let mut list = commands.spawn((
+        Node {
+            position_type: PositionType::Absolute,
+            left: px(0),
+            top: px(height),
+            width: percent(100),
+            height: px(list_height),
+            flex_direction: FlexDirection::Column,
+            padding,
+            // Without the skin's box, the client's own edge.
+            border: if drop_down.look.is_none() {
+                UiRect::all(px(1))
+            } else {
+                UiRect::ZERO
+            },
+            overflow: Overflow::clip(),
+            ..default()
+        },
+        GlobalZIndex(100),
+        ChildOf(entity),
+    ));
+    dress(
+        &mut list,
+        art,
+        drop_down.look.as_ref(),
+        (width, list_height),
+    );
+    let list = list.id();
+    for (index, choice) in drop_down.choices.iter().enumerate() {
+        commands.spawn((
+            Button,
+            DropDownChoice {
+                drop_down: entity,
+                choosing: chosen,
+                choice: choice.clone(),
+                index,
+            },
+            Node {
+                height: px(ROW_HEIGHT),
+                flex_shrink: 0.0,
+                padding: UiRect::horizontal(px(3)),
+                ..default()
+            },
+            BackgroundColor(Color::NONE),
+            ChildOf(list),
+            children![(
+                theme::text(choice.as_str(), Size::Small, theme::INK_BRIGHT),
+                TextLayout::new(Justify::Left, LineBreak::NoWrap),
+            )],
+        ));
+    }
+    list
 }
 
 /// Draws an open drop-down's list in its box's skin, background and
@@ -828,6 +927,10 @@ pub(crate) fn light_choices(
 /// choice, "All", until one is made.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show_choices(
+    (options, selected): (
+        Option<Res<OptionsState>>,
+        Option<Res<super::option_lists::Selection>>,
+    ),
     filter: Res<KeyFilter>,
     reports: Res<crate::report_windows::ReportWindows>,
     drop_downs: Query<(&DropDown, &Children)>,
@@ -835,6 +938,24 @@ pub(crate) fn show_choices(
 ) {
     for (drop_down, children) in &drop_downs {
         let shown = match drop_down.choosing {
+            Choosing::FilterMode(category) => {
+                selected.as_deref().zip(options.as_deref()).map(|(s, o)| {
+                    super::filters::mode_label(
+                        &drop_down.filter_labels,
+                        o.options.chat_filters.get(category.unwrap_or(s.filter)),
+                    )
+                    .to_owned()
+                })
+            }
+            Choosing::ItemDropping => options.as_deref().and_then(|s| {
+                use eq_client_core::options::NoSafeDrop;
+                let n = match s.options.no_safe_drop {
+                    NoSafeDrop::Ask => 0,
+                    NoSafeDrop::Fast => 1,
+                    NoSafeDrop::Never => 2,
+                };
+                drop_down.choices.get(n).cloned()
+            }),
             Choosing::KeyFilter => filter
                 .0
                 .clone()
@@ -855,6 +976,8 @@ pub(crate) fn show_choices(
 /// What a list shows, if the client fills it.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Listing {
+    FilterCategories,
+    ChatColors,
     /// The client's key assignments, as the key filter chooses.
     Keys,
     /// The skills a guildmaster teaches.
@@ -888,6 +1011,12 @@ pub(crate) struct ListRows {
 /// What a list shows, if the client fills it.
 fn listing(id: Option<&str>, owner: WindowId) -> Option<Listing> {
     match (owner, id) {
+        (WindowId::Options, Some("ColorChooseList" | "OCP_ColorChooseList")) => {
+            Some(Listing::ChatColors)
+        }
+        (WindowId::Options, Some("FilterList" | "OFP_FilterList")) => {
+            Some(Listing::FilterCategories)
+        }
         (WindowId::Options, Some(KEY_LIST)) => Some(Listing::Keys),
         (WindowId::Training, Some("SkillList")) => Some(Listing::Training),
         (WindowId::Tracking, Some("TRW_TrackingList")) => Some(Listing::Tracking),
@@ -1013,6 +1142,13 @@ pub(super) fn listbox(
 fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
     let wheel = crate::windows::pointer::TakesWheel;
     match listing {
+        Listing::FilterCategories => {
+            rows.insert((super::option_lists::FilterRows::new(&columns), wheel))
+        }
+        Listing::ChatColors => {
+            super::option_lists::chat_rows(rows, &columns);
+            rows.insert((super::option_lists::ColorRows, wheel))
+        }
         Listing::Keys => rows.insert((
             ListRows {
                 listing,
@@ -1103,7 +1239,9 @@ pub(crate) fn fill_lists(
             Listing::Keys => filter.0.clone(),
             // The Training, Skills, merchant, Raid and Guild windows' lists fill
             // themselves.
-            Listing::Training
+            Listing::ChatColors
+            | Listing::FilterCategories
+            | Listing::Training
             | Listing::Tracking
             | Listing::SkillSelect
             | Listing::Skills
@@ -1177,6 +1315,8 @@ pub(crate) fn fill_lists(
 /// The lists the wheel scrolls: those the client fills, and the text boxes.
 type ScrolledList = Or<(
     With<ListRows>,
+    With<super::option_lists::FilterRows>,
+    With<super::option_lists::ColorRows>,
     With<crate::training::SkillRows>,
     With<crate::skills::SkillsList>,
     With<crate::trade::MerchantRows>,
@@ -1583,7 +1723,11 @@ mod tests {
             listing(Some(KEY_LIST), WindowId::Options),
             Some(Listing::Keys)
         );
-        assert_eq!(listing(Some("OFP_FilterList"), WindowId::Options), None);
+        assert_eq!(
+            listing(Some("OFP_FilterList"), WindowId::Options),
+            Some(Listing::FilterCategories)
+        );
+        assert_eq!(listing(Some("FilterList"), WindowId::Inventory), None);
         assert_eq!(
             listing(Some("MemberList"), WindowId::Guild),
             Some(Listing::Guild)

@@ -1,12 +1,4 @@
-//! This client's Filters page in the Options window: one row per kind of
-//! message the server filters cover ([`eq_client_core::chat_filters`]),
-//! each a button that steps the kind's mode and a label that says it, cut
-//! from the skin's own controls.
-//!
-//! A skeleton: the official client's own filter controls on the skin are
-//! unread, as are the options behind each word (recording checklist
-//! 6.494b), so the rows are this client's own. Rows for a kind the
-//! generation's packet leaves out are hidden while that generation plays.
+//! Bind native filter widgets and append rows for categories the skin leaves out.
 use crate::windows::WindowId;
 use eq_client_assets::{
     sidl::{Align, Button, Element, Label, Page},
@@ -30,6 +22,31 @@ const GAP: f32 = 6.0;
 /// The note's screen ID; its words follow the session ([`crate::options::FilterNote`]).
 pub(super) const NOTE_ID: &str = "EQC_Filter_Note";
 
+const AUTHORED: &[(&str, FilterCategory)] = &[
+    ("Chat0", FilterCategory::GuildChat),
+    ("Chat1", FilterCategory::Socials),
+    ("Chat2", FilterCategory::GroupChat),
+    ("Chat3", FilterCategory::Shouts),
+    ("Chat4", FilterCategory::Auctions),
+    ("Chat5", FilterCategory::Ooc),
+    ("Chat6", FilterCategory::MyMisses),
+    ("Chat7", FilterCategory::OthersMisses),
+    ("Chat8", FilterCategory::OthersHits),
+    ("Chat9", FilterCategory::MissedMe),
+    ("DamageShields", FilterCategory::DamageShields),
+    ("NPCSpells", FilterCategory::NpcSpells),
+    ("PCSpellsComboBox", FilterCategory::PcSpells),
+    ("BardSongsComboBox", FilterCategory::BardSongs),
+    ("CriticalSpellsComboBox", FilterCategory::SpellCrits),
+    ("CriticalMeleeComboBox", FilterCategory::MeleeCrits),
+];
+pub(super) fn authored(id: &str) -> Option<FilterCategory> {
+    AUTHORED
+        .iter()
+        .find(|(name, _)| *name == id)
+        .map(|(_, c)| *c)
+}
+
 /// A row's button's screen ID.
 fn button_id(category: FilterCategory) -> String {
     format!("{BUTTON}{}", category.key())
@@ -42,9 +59,11 @@ fn value_id(category: FilterCategory) -> String {
 
 /// The kind a row's button steps, by its screen ID.
 pub(super) fn filter_button(id: &str) -> Option<FilterCategory> {
-    id.strip_prefix(BUTTON)
-        .filter(|rest| !rest.ends_with(VALUE))
-        .and_then(FilterCategory::from_key)
+    authored(id).or_else(|| {
+        id.strip_prefix(BUTTON)
+            .filter(|rest| !rest.ends_with(VALUE))
+            .and_then(FilterCategory::from_key)
+    })
 }
 
 /// The kind a row's label says the mode of, by its screen ID.
@@ -62,10 +81,7 @@ fn row_button(template: &Button, category: FilterCategory, area: Area) -> Button
     button.placed = true;
     button.checkbox = false;
     button.text = Some(kind_words(category).to_owned());
-    button.tooltip = Some(
-        "Click for the next mode the server takes for these. Which official option sets this is unread."
-            .to_owned(),
-    );
+    button.tooltip = Some("Click to select the next mode supported by this server.".to_owned());
     button.area = area;
     button
 }
@@ -80,17 +96,32 @@ fn skin_filters(page: &Page) -> bool {
             .is_some_and(|title| title.trim().eq_ignore_ascii_case("filters"))
 }
 
-/// The skin's pages, and for the Options window this client's Filters page,
-/// where the skin has a button to cut its rows from. The page takes the
-/// place of the skin's own filters page, whose controls are not wired, so
-/// the window keeps one Filters tab in the skin's place; a skin without one
-/// gets the page after its own. The page's note wraps within the page's
-/// width, `page_width`.
+pub(super) fn matches_mode(mode: eq_client_core::filters::FilterMode, label: &str) -> bool {
+    use eq_client_core::filters::FilterMode;
+    let alternate = match mode {
+        FilterMode::Show => "All",
+        FilterMode::Hide => "Off",
+        FilterMode::MineOnly => "Me",
+        FilterMode::GroupOnly => "Group",
+    };
+    label.eq_ignore_ascii_case(alternate)
+        || label.eq_ignore_ascii_case(eq_client_core::chat_filters::mode_words(mode))
+}
+
+pub(super) fn mode_label(labels: &[String], mode: eq_client_core::filters::FilterMode) -> &str {
+    labels.iter().find(|s| matches_mode(mode, s)).map_or(
+        eq_client_core::chat_filters::mode_words(mode),
+        String::as_str,
+    )
+}
+
+/// Preserve authored widgets and append the missing rows below them.
 pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_, [Page]> {
-    if owner != WindowId::Options || pages.iter().any(|page| page.name == PAGE) {
+    if owner != WindowId::Options || pages.is_empty() || pages.iter().any(|page| page.name == PAGE)
+    {
         return Cow::Borrowed(pages);
     }
-    if pages.is_empty() {
+    if pages.iter().any(|p| p.pieces.iter().any(|(_,e)| matches!(e, Element::Listbox(l) if matches!(l.id.as_deref(), Some("FilterList" | "OFP_FilterList"))))) {
         return Cow::Borrowed(pages);
     }
     let pieces = || pages.iter().flat_map(|page| &page.pieces);
@@ -154,6 +185,12 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
     )];
     let mut y = MARGIN + 3.0 * height + GAP;
     for category in eq_client_core::chat_filters::rows() {
+        if AUTHORED
+            .iter()
+            .any(|(name, c)| *c == category && super::extensions::contains(pages, name))
+        {
+            continue;
+        }
         let area = Area {
             x: MARGIN,
             y,
@@ -188,17 +225,34 @@ fn placed(pages: &[Page], rows: Vec<(String, Element)>) -> Vec<Page> {
     let mut all = pages.to_vec();
     let at = all.iter().position(skin_filters);
     let base = at.map_or(&pages[0], |at| &all[at]);
-    let page = Page {
+    let mut page = Page {
         name: PAGE.into(),
         title: base
             .title
             .clone()
             .filter(|_| at.is_some())
             .or_else(|| Some("Filters".into())),
-        pieces: rows,
+        pieces: if at.is_some() {
+            base.pieces.clone()
+        } else {
+            Vec::new()
+        },
         tooltip: Some("What the server sends of each kind of message".into()),
         ..base.clone()
     };
+    let bottom = super::extensions::bottom(&page);
+    super::extensions::begin(&mut page);
+    for (id, mut e) in rows {
+        if super::extensions::contains(pages, &id) {
+            continue;
+        }
+        match &mut e {
+            Element::Button(b) => b.area.y += bottom,
+            Element::Label(l) => l.area.y += bottom,
+            _ => {}
+        }
+        page.pieces.push((id, e));
+    }
     match at {
         Some(at) => all[at] = page,
         None => all.push(page),
@@ -221,6 +275,26 @@ pub(super) fn content_height(page: &Page) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_filter_menus_keep_their_authored_mode_words() {
+        use eq_client_core::filters::FilterMode;
+        let labels = ["All", "Me", "Group", "Off"].map(str::to_owned);
+        for (mode, label) in [
+            (FilterMode::Show, "All"),
+            (FilterMode::MineOnly, "Me"),
+            (FilterMode::GroupOnly, "Group"),
+            (FilterMode::Hide, "Off"),
+        ] {
+            assert_eq!(mode_label(&labels, mode), label);
+            assert!(matches_mode(mode, label));
+        }
+        assert_eq!(authored("Chat6"), Some(FilterCategory::MyMisses));
+        assert_eq!(
+            authored("BardSongsComboBox"),
+            Some(FilterCategory::BardSongs)
+        );
+    }
 
     #[test]
     fn the_page_has_a_row_for_every_kind_with_one_and_is_added_once() {

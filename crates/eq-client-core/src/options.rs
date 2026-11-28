@@ -85,6 +85,10 @@ pub enum Toggle {
     /// 0x4af32c, 0x4ae721); this client per character. Off, a sitting player
     /// stays put until they stand.
     AutoStand,
+    /// Automatically crouch when a standing step is blocked by a low ceiling.
+    AutoDuck,
+    /// Destroy an eligible held item immediately when Destroy is pressed.
+    FastItemDestroy,
     /// Draws a ring at the target's feet (the Display page's Show 3D Target
     /// Ring).
     TargetRing,
@@ -151,9 +155,11 @@ pub enum Toggle {
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them; a
     /// file is read back by name, so the order is only how it is written.
-    pub const OFFICIAL: [Self; 16] = [
+    pub const OFFICIAL: [Self; 18] = [
         Self::PetWindowPopup,
         Self::AutoStand,
+        Self::AutoDuck,
+        Self::FastItemDestroy,
         Self::TargetRing,
         Self::ShowHelm,
         Self::PcNames,
@@ -187,6 +193,8 @@ impl Toggle {
         match self {
             Self::PetWindowPopup => "pet_window_popup",
             Self::AutoStand => "allow_auto_stand",
+            Self::AutoDuck => "allow_auto_duck",
+            Self::FastItemDestroy => "fast_item_destroy",
             Self::TargetRing => "target_ring",
             Self::ShowHelm => "show_helm",
             Self::PcNames => "pc_names",
@@ -212,6 +220,8 @@ impl Toggle {
         match self {
             Self::PetWindowPopup
             | Self::AutoStand
+            | Self::AutoDuck
+            | Self::FastItemDestroy
             | Self::TargetRing
             | Self::ShowHelm
             | Self::PcNames
@@ -234,6 +244,15 @@ impl Toggle {
 /// An option the player sets along one of the Options window's sliders.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub enum Level {
+    /// Global window background override for fade delay ms.
+    FadeDelay,
+    /// Global window background override for fade duration ms.
+    FadeDuration,
+    /// Global window background override for window alpha.
+    WindowAlpha,
+    /// Global window background override for fade to alpha.
+    FadeToAlpha,
+
     /// How far away spawns are drawn, as a percentage of the farthest the
     /// zone and the client allow (the Display page's Far Clip Plane).
     ClipPlane,
@@ -292,7 +311,11 @@ const MAX_RUN_SPEED: u16 = RunSpeedMultiplier::MAX.percent();
 
 impl Level {
     /// Every level, in the order a file lists them.
-    pub const ALL: [Self; 13] = [
+    pub const ALL: [Self; 17] = [
+        Self::FadeDelay,
+        Self::FadeDuration,
+        Self::WindowAlpha,
+        Self::FadeToAlpha,
         Self::ClipPlane,
         Self::MaxFps,
         Self::MouseSensitivity,
@@ -312,6 +335,10 @@ impl Level {
     #[must_use]
     pub const fn key(self) -> &'static str {
         match self {
+            Self::FadeDelay => "fade_delay_ms",
+            Self::FadeDuration => "fade_duration_ms",
+            Self::WindowAlpha => "window_alpha",
+            Self::FadeToAlpha => "fade_to_alpha",
             Self::ClipPlane => "clip_plane",
             Self::MaxFps => "max_fps",
             Self::MouseSensitivity => "mouse_sensitivity",
@@ -349,6 +376,8 @@ impl Level {
     /// The values its slider stops at, from its left.
     fn stops(self) -> Vec<u16> {
         match self {
+            Self::FadeDelay | Self::FadeDuration => (0..=10000).step_by(100).collect(),
+            Self::WindowAlpha | Self::FadeToAlpha => (0..=255).rev().collect(),
             Self::ClipPlane
             | Self::MouseSensitivity
             | Self::SoundVolume
@@ -375,6 +404,10 @@ impl Level {
     #[must_use]
     pub fn fraction(self, value: u16) -> f32 {
         match self {
+            Self::FadeDelay | Self::FadeDuration => f32::from(value.min(10000)) / 10000.0,
+            Self::WindowAlpha | Self::FadeToAlpha => {
+                f32::from(255_u16.saturating_sub(value)) / 255.0
+            }
             Self::ClipPlane
             | Self::MouseSensitivity
             | Self::SoundVolume
@@ -426,6 +459,7 @@ impl Level {
     #[must_use]
     pub fn words(self, value: u16) -> String {
         match self {
+            Self::FadeDelay | Self::FadeDuration => format!("{:.1}", f32::from(value) / 1000.0),
             Self::MouseSensitivity => mouse_step(value).to_string(),
             Self::ClipPlane
             | Self::UiScale
@@ -440,6 +474,10 @@ impl Level {
                 format!("{value} %")
             }
             Self::MaxFps if value == 0 => "Display".to_owned(),
+            Self::WindowAlpha | Self::FadeToAlpha => format!(
+                "{} %",
+                (u32::from(255_u16.saturating_sub(value)) * 100 + 127) / 255
+            ),
             Self::MaxFps => value.to_string(),
             Self::RunSpeed => format!("{}.{:02}x", value / 100, value % 100),
         }
@@ -448,6 +486,8 @@ impl Level {
     /// Whether a file's value is one the option takes.
     fn takes(self, value: u16) -> bool {
         match self {
+            Self::FadeDelay | Self::FadeDuration => value <= 10000,
+            Self::WindowAlpha | Self::FadeToAlpha => value <= 255,
             Self::ClipPlane
             | Self::MouseSensitivity
             | Self::SoundVolume
@@ -518,10 +558,23 @@ impl AutoJoin {
     reason = "each is one of the Options window's checkboxes"
 )]
 pub struct Options {
+    /// Override of imported fade delay ms where explicitly set.
+    pub fade_delay_ms: Option<u16>,
+    /// Override of imported fade duration ms where explicitly set.
+    pub fade_duration_ms: Option<u16>,
+    /// Override of imported window alpha where explicitly set.
+    pub window_alpha: Option<u16>,
+    /// Override of imported fade to alpha where explicitly set.
+    pub fade_to_alpha: Option<u16>,
+
     /// See [`Toggle::PetWindowPopup`].
     pub pet_window_popup: bool,
     /// See [`Toggle::AutoStand`].
     pub allow_auto_stand: bool,
+    /// See [`Toggle::AutoDuck`].
+    pub allow_auto_duck: bool,
+    /// See [`Toggle::FastItemDestroy`].
+    pub fast_item_destroy: bool,
     /// See [`Toggle::TargetRing`].
     pub target_ring: bool,
     /// See [`Toggle::ShowHelm`].
@@ -653,6 +706,8 @@ impl Default for Options {
         Self {
             pet_window_popup: true,
             allow_auto_stand: true,
+            allow_auto_duck: true,
+            fast_item_destroy: false,
             target_ring: true,
             show_helm: true,
             pc_names: true,
@@ -681,6 +736,10 @@ impl Default for Options {
             // The program's default sensitivity, 4 (R49-24 d).
             mouse_sensitivity: 43,
             ui_scale: 100,
+            fade_delay_ms: None,
+            fade_duration_ms: None,
+            window_alpha: None,
+            fade_to_alpha: None,
             sound_volume: 100,
             chat_font_size: None,
             mouse_pointer_speed: None,
@@ -713,6 +772,8 @@ impl Options {
         match toggle {
             Toggle::PetWindowPopup => self.pet_window_popup,
             Toggle::AutoStand => self.allow_auto_stand,
+            Toggle::AutoDuck => self.allow_auto_duck,
+            Toggle::FastItemDestroy => self.fast_item_destroy,
             Toggle::TargetRing => self.target_ring,
             Toggle::ShowHelm => self.show_helm,
             Toggle::PcNames => self.pc_names,
@@ -736,6 +797,8 @@ impl Options {
         let option = match toggle {
             Toggle::PetWindowPopup => &mut self.pet_window_popup,
             Toggle::AutoStand => &mut self.allow_auto_stand,
+            Toggle::AutoDuck => &mut self.allow_auto_duck,
+            Toggle::FastItemDestroy => &mut self.fast_item_destroy,
             Toggle::TargetRing => &mut self.target_ring,
             Toggle::ShowHelm => &mut self.show_helm,
             Toggle::PcNames => &mut self.pc_names,
@@ -767,6 +830,22 @@ impl Options {
             Level::MouseSensitivity => self.mouse_sensitivity,
             Level::UiScale => self.ui_scale,
             Level::RunSpeed => self.qol.run_speed_multiplier.percent(),
+            Level::FadeDelay => match self.fade_delay_ms {
+                Some(n) => n,
+                None => 2000,
+            },
+            Level::FadeDuration => match self.fade_duration_ms {
+                Some(n) => n,
+                None => 500,
+            },
+            Level::WindowAlpha => match self.window_alpha {
+                Some(n) => n,
+                None => 255,
+            },
+            Level::FadeToAlpha => match self.fade_to_alpha {
+                Some(n) => n,
+                None => 255,
+            },
             Level::SoundVolume => self.sound_volume,
             Level::MusicVolume => self.music_volume,
             Level::CombatTextOutgoingRed => self.combat_text_outgoing[0],
@@ -789,6 +868,22 @@ impl Options {
                 if let Some(multiplier) = RunSpeedMultiplier::from_percent(value) {
                     self.qol.run_speed_multiplier = multiplier;
                 }
+                return;
+            }
+            Level::FadeDelay => {
+                self.fade_delay_ms = Some(value);
+                return;
+            }
+            Level::FadeDuration => {
+                self.fade_duration_ms = Some(value);
+                return;
+            }
+            Level::WindowAlpha => {
+                self.window_alpha = Some(value);
+                return;
+            }
+            Level::FadeToAlpha => {
+                self.fade_to_alpha = Some(value);
                 return;
             }
             Level::SoundVolume => &mut self.sound_volume,
@@ -1042,6 +1137,13 @@ impl Options {
             }
         }
         for level in Level::ALL {
+            if matches!(level, Level::FadeDelay if self.fade_delay_ms.is_none())
+                || matches!(level, Level::FadeDuration if self.fade_duration_ms.is_none())
+                || matches!(level, Level::WindowAlpha if self.window_alpha.is_none())
+                || matches!(level, Level::FadeToAlpha if self.fade_to_alpha.is_none())
+            {
+                continue;
+            }
             for part in [level.key(), " = ", &self.level(level).to_string(), "\n"] {
                 text.push_str(part);
             }
@@ -1392,6 +1494,28 @@ mod tests {
             );
         }
         assert_eq!(Options::read(&changed.text(), defaults), changed);
+    }
+
+    #[test]
+    fn window_appearance_overrides_only_round_trip_edited_properties() {
+        let defaults = Options::default();
+        for level in [
+            Level::FadeDelay,
+            Level::FadeDuration,
+            Level::WindowAlpha,
+            Level::FadeToAlpha,
+        ] {
+            assert!(!defaults.text().contains(level.key()));
+            let mut edited = defaults;
+            edited.set_level(level, level.at(0.5));
+            assert_eq!(Options::read(&edited.text(), defaults), edited);
+        }
+        assert_eq!(Level::WindowAlpha.at(0.0), 255);
+        assert_eq!(Level::WindowAlpha.words(255), "0 %");
+        assert_eq!(Level::FadeToAlpha.words(0), "100 %");
+        assert_eq!(Level::FadeDuration.words(500), "0.5");
+        assert!(defaults.allow_auto_duck);
+        assert!(!defaults.fast_item_destroy);
     }
 
     #[test]

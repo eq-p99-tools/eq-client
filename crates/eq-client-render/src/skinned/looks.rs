@@ -52,19 +52,37 @@ pub(crate) fn load(
 /// pointer is on the window; where it fades, the opacity it fades to,
 /// reached over its duration once the pointer has been away its delay.
 fn opacity(look: &WindowLook, away: Option<Duration>) -> u8 {
-    let Some(away) = away.filter(|_| look.fades) else {
-        return look.alpha;
+    opacity_with(
+        look.fades,
+        away,
+        look.delay_ms,
+        look.duration_ms,
+        look.alpha,
+        look.fade_to_alpha,
+    )
+}
+
+fn opacity_with(
+    fades: bool,
+    away: Option<Duration>,
+    delay: u32,
+    duration: u32,
+    alpha: u8,
+    target: u8,
+) -> u8 {
+    let Some(away) = away.filter(|_| fades) else {
+        return alpha;
     };
-    let Some(fading) = away.checked_sub(Duration::from_millis(look.delay_ms.into())) else {
-        return look.alpha;
+    let Some(fading) = away.checked_sub(Duration::from_millis(delay.into())) else {
+        return alpha;
     };
-    let duration = Duration::from_millis(look.duration_ms.into());
+    let duration = Duration::from_millis(duration.into());
     let done = if duration.is_zero() {
         1.0
     } else {
         (fading.as_secs_f32() / duration.as_secs_f32()).min(1.0)
     };
-    let (from, to) = (f32::from(look.alpha), f32::from(look.fade_to_alpha));
+    let (from, to) = (f32::from(alpha), f32::from(target));
     #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)] // Between two bytes.
     let alpha = (from + (to - from) * done).round().clamp(0.0, 255.0) as u8;
     alpha
@@ -75,6 +93,7 @@ fn opacity(look: &WindowLook, away: Option<Duration>) -> u8 {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn dress(
     (time, looks): (Res<Time<Real>>, Res<Looks>),
+    options: Option<Res<crate::options::OptionsState>>,
     windows: Query<&Window, With<PrimaryWindow>>,
     frames: Query<(&WindowId, &UiGlobalTransform, &ComputedNode), With<crate::windows::Frame>>,
     mut backdrops: Query<(&Backdrop, Option<&mut ImageNode>, &mut BackgroundColor)>,
@@ -85,8 +104,15 @@ pub(crate) fn dress(
         .single()
         .ok()
         .and_then(Window::physical_cursor_position);
+    let defaults = WindowLook::new("");
+    let overrides = options.as_deref().map(|s| &s.options).filter(|o| {
+        o.fade_delay_ms.is_some()
+            || o.fade_duration_ms.is_some()
+            || o.window_alpha.is_some()
+            || o.fade_to_alpha.is_some()
+    });
     for (Backdrop(id), image, mut background) in &mut backdrops {
-        let (texture, fill) = match looks.looks.get(id) {
+        let (texture, fill) = match looks.looks.get(id).or(overrides.map(|_| &defaults)) {
             Some(look) => {
                 let over = cursor.is_some_and(|cursor| {
                     frames.iter().any(|(frame, transform, node)| {
@@ -100,7 +126,22 @@ pub(crate) fn dress(
                 } else {
                     Some(now.saturating_sub(*left.entry(*id).or_insert(now)))
                 };
-                let alpha = opacity(look, away);
+                let alpha = if let Some(o) = overrides {
+                    opacity_with(
+                        look.fades,
+                        away,
+                        o.fade_delay_ms.map_or(look.delay_ms, u32::from),
+                        o.fade_duration_ms.map_or(look.duration_ms, u32::from),
+                        o.window_alpha
+                            .and_then(|v| u8::try_from(v).ok())
+                            .unwrap_or(look.alpha),
+                        o.fade_to_alpha
+                            .and_then(|v| u8::try_from(v).ok())
+                            .unwrap_or(look.fade_to_alpha),
+                    )
+                } else {
+                    opacity(look, away)
+                };
                 // The tint colours the flat fill. Whether it also colours the
                 // skin's texture is not known: two windows on the PC this was
                 // written on keep a tint with the texture (counted), so the

@@ -75,6 +75,7 @@ pub(super) fn init_presentation(app: &mut App) {
         .init_resource::<skinned::Tabs>()
         .init_resource::<skinned::looks::Looks>()
         .init_resource::<skinned::KeyFilter>()
+        .init_resource::<skinned::option_lists::Selection>()
         .init_resource::<chat::ChatState>()
         .init_resource::<chat::ChatLook>()
         .init_resource::<profile_files::Profile>()
@@ -186,8 +187,10 @@ pub(super) fn schedule(app: &mut App) {
             (
                 (
                     keys::bindings::persist,
+                    keys::bindings::reload,
                     keys::bindings::capture,
                     crate::window_mode::input,
+                    crate::window_mode::buttons,
                 )
                     .chain(),
                 login::claim,
@@ -527,7 +530,7 @@ pub(super) fn schedule(app: &mut App) {
                         options::show_filters,
                         skinned::show_amount,
                         skinned::show_choices,
-                        skinned::fill_lists,
+                        (skinned::fill_lists, skinned::option_lists::update).chain(),
                         (training::fill, tracking::fill, abilities::picker::fill),
                         skills::fill,
                         raid::fill,

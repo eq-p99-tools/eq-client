@@ -20,6 +20,23 @@ pub(crate) struct Swatch {
     owner: WindowId,
 }
 
+impl Swatch {
+    pub(crate) const fn selected() -> Self {
+        Self::chat(1)
+    }
+    pub(crate) const fn chat(kind: u8) -> Self {
+        Self {
+            binding: Binding::Chat(kind),
+            font: theme::Size::Small,
+            owner: WindowId::Options,
+        }
+    }
+
+    pub(crate) fn select(&mut self, binding: Binding) {
+        self.binding = binding;
+    }
+}
+
 pub(crate) fn draw_swatch(
     ui: &mut ChildSpawnerCommands,
     owner: WindowId,
@@ -66,7 +83,10 @@ pub(crate) fn show_swatches(
     reset: crate::clicks::Clicks<ResetColors>,
     mut state: ResMut<OptionsState>,
     look: Option<Res<crate::chat::ChatLook>>,
-    mut colors: Query<(&Swatch, &mut BackgroundColor)>,
+    mut colors: Query<
+        (&Swatch, &mut BackgroundColor),
+        Without<super::super::option_lists::ChangeColor>,
+    >,
 ) {
     if reset.any() {
         let defaults = eq_client_core::options::Options::default();

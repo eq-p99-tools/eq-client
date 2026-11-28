@@ -40,11 +40,12 @@ a suitable fallback.
 
 ## Options controls
 
-The client uses these control IDs in the Options window. Map controls appear under QoL and combat text colors under Colors.
+Use an original Titanium or TAKP skin as installed. The Options window reads native controls by their ScreenID. Moving a supported checkbox or changing its caption keeps its binding. A Titanium Colors list and TAKP's numbered color buttons both open the same picker. Unsupported native actions keep their authored placement.
+
+Client-added options appear after the skin's controls in the relevant tab. A blue asterisk marks an ordinary addition. A red asterisk marks a setting classified as unsafe in QoL. A skin can place an extension by ID to choose its location. Options without a matching native destination are available under QoL. The client builds these controls in memory each time it loads the skin.
 
 | Control ID | Purpose |
 | --- | --- |
-| `EQC_QoL_MapCaption` | Section heading labelled “Map”. |
 | `EQC_OutlineTrackedNames` | Checkbox for outlining tracked names on the map. |
 | `EQC_CombatOutgoingPicker` | “Other damage” color picker for combat text. |
 | `EQC_CombatIncomingPicker` | “Damage to you” color picker for combat text. |

@@ -16,6 +16,33 @@ struct Placement {
 #[derive(Default, Resource)]
 pub(crate) struct Windowed(Option<Placement>);
 
+#[derive(Component)]
+pub(crate) struct SetFullscreen(pub(crate) bool);
+
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+pub(crate) fn buttons(
+    clicks: crate::clicks::Clicks<SetFullscreen>,
+    mut windows: Query<&mut Window, With<PrimaryWindow>>,
+    mut windowed: ResMut<Windowed>,
+    mut buttons: Query<(&SetFullscreen, &mut Node)>,
+) {
+    let Ok(mut window) = windows.single_mut() else {
+        return;
+    };
+    if let Some(choice) = clicks.iter().next()
+        && choice.0 == (window.mode == WindowMode::Windowed)
+    {
+        windowed.toggle(&mut window);
+    }
+    for (choice, mut node) in &mut buttons {
+        node.display = if choice.0 == (window.mode == WindowMode::Windowed) {
+            Display::Flex
+        } else {
+            Display::None
+        };
+    }
+}
+
 impl Windowed {
     fn toggle(&mut self, window: &mut Window) {
         if window.mode == WindowMode::Windowed {
@@ -101,6 +128,33 @@ mod tests {
             ))
             .id();
         (app, window)
+    }
+
+    #[test]
+    fn overlapping_skin_buttons_offer_only_the_available_window_mode() {
+        let (mut app, window) = app();
+        crate::clicks::testing::install(&mut app);
+        app.add_systems(Update, buttons);
+        let [on, off] = [true, false].map(|full| {
+            app.world_mut()
+                .spawn((
+                    Button,
+                    Interaction::None,
+                    SetFullscreen(full),
+                    Node::default(),
+                ))
+                .id()
+        });
+        app.update();
+        assert_eq!(app.world().get::<Node>(off).unwrap().display, Display::None);
+        crate::clicks::testing::click(&mut app, on);
+        assert_eq!(app.world().get::<Node>(on).unwrap().display, Display::None);
+        assert_eq!(app.world().get::<Node>(off).unwrap().display, Display::Flex);
+        crate::clicks::testing::click(&mut app, off);
+        assert_eq!(
+            app.world().get::<Window>(window).unwrap().mode,
+            WindowMode::Windowed
+        );
     }
 
     fn event(key_code: KeyCode, logical_key: Key, repeat: bool) -> KeyboardInput {

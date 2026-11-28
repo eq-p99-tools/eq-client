@@ -21,6 +21,23 @@ pub(crate) struct Bindings {
     read_only: bool,
 }
 
+#[derive(Component)]
+pub(crate) struct ReloadDefaults;
+
+#[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
+pub(crate) fn reload(
+    clicks: crate::clicks::Clicks<ReloadDefaults>,
+    mut bindings: ResMut<Bindings>,
+    mut map: ResMut<KeyMap>,
+) {
+    if clicks.iter().next().is_some()
+        && let Some(installed) = &bindings.installed
+    {
+        *map = installed.clone();
+        bindings.active = None;
+    }
+}
+
 impl Bindings {
     pub(crate) fn with_installed(map: KeyMap) -> Self {
         Self {

@@ -699,15 +699,12 @@ pub(super) fn tabbed(
     inside: &Area,
     context: &Context,
 ) {
-    let particle_pages = super::particles::pages(&tabs.pages, context.id);
-    let filter_pages = super::filters::pages(&particle_pages, context.id, inside.width);
-    let colors = super::colors::pages(&filter_pages, context.id, inside.width);
-    let pages = super::qol::pages(
-        &colors,
-        context.id,
-        Vec2::new(inside.width, inside.height),
-        tabs.page_frame.as_ref(),
-    );
+    let pages = if context.id == WindowId::Options && context.depth == 0 {
+        let pages = super::extensions::options_pages(tabs, Vec2::new(inside.width, inside.height));
+        std::borrow::Cow::Owned(pages)
+    } else {
+        std::borrow::Cow::Borrowed(tabs.pages.as_slice())
+    };
     let pages = pages.as_ref();
     if context.id == WindowId::Options {
         // Added client pages can exceed the skin's single row. As with chat's
@@ -813,7 +810,7 @@ fn tabbed_pages(
                 ..node
             },
         ));
-        if page.name == super::filters::PAGE {
+        if page.name == super::filters::PAGE || page.pieces.iter().any(|(_,e)| matches!(e, Element::Listbox(l) if matches!(l.id.as_deref(),Some("FilterList" | "OFP_FilterList")))) {
             viewport.insert(super::filters::FiltersPage);
         }
         if wrapping {
@@ -838,6 +835,22 @@ fn tabbed_page_contents(
     area: Area,
     context: &Context,
 ) {
+    let original_height = area.height;
+    let extension = page
+        .pieces
+        .iter()
+        .position(|(id, _)| id == super::extensions::START);
+    let pad = tabs
+        .page_frame
+        .as_ref()
+        .map_or_else(frame::Insets::default, frame::insets);
+    let extra_y = extension.map_or(0.0, |cut| {
+        (original_height
+            - pad.top
+            - pad.bottom
+            - super::extensions::pieces_bottom(&page.pieces[..cut]))
+        .max(0.0)
+    });
     let generated =
         super::qol::content_height(page).or_else(|| super::filters::content_height(page));
     let area = if let Some(content) = generated {
@@ -846,7 +859,7 @@ fn tabbed_page_contents(
             .as_ref()
             .map_or_else(frame::Insets::default, frame::insets);
         Area {
-            height: insets.top + content + insets.bottom,
+            height: insets.top + content + insets.bottom + extra_y,
             ..area
         }
     } else {
@@ -864,7 +877,25 @@ fn tabbed_page_contents(
                 height: area.height - insets.top - insets.bottom,
             }
         });
-        pieces(page_area, art, &page.pieces, &inside, context);
+        if let Some(cut) = extension {
+            let authored = Area {
+                height: (original_height - pad.top - pad.bottom).max(0.0),
+                ..inside
+            };
+            pieces(page_area, art, &page.pieces[..cut], &authored, context);
+            pieces(
+                page_area,
+                art,
+                &page.pieces[cut + 1..],
+                &Area {
+                    y: inside.y + extra_y,
+                    ..inside
+                },
+                context,
+            );
+        } else {
+            pieces(page_area, art, &page.pieces, &inside, context);
+        }
     };
     if context.id == WindowId::Options {
         // A generated page fills the actual viewport and grows only when

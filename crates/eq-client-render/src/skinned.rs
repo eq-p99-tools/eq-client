@@ -4,10 +4,11 @@
 //! frame and pieces, and what each gauge and label shows follows the
 //! official client's numbering. A skin without the window, or a viewer
 //! without an installation, keeps the client's own chrome.
+mod extensions;
 mod filters;
 #[cfg(test)]
 mod hotbar_drag_tests;
-mod particles;
+pub(crate) mod option_lists;
 mod qol;
 mod tree;
 #[cfg(test)]
@@ -1245,6 +1246,17 @@ fn behave(
         Does::Filter(category) => {
             drawn.insert((Button, super::options::FilterButton(category), skin()))
         }
+        Does::ChatColor(kind) => drawn.insert((Button, color_picker::Swatch::chat(kind), skin())),
+        Does::ChangeColor => drawn.insert((
+            Button,
+            option_lists::ChangeColor,
+            color_picker::Swatch::selected(),
+            skin(),
+        )),
+        Does::ReloadKeys => drawn.insert((Button, crate::keys::bindings::ReloadDefaults, skin())),
+        Does::ScreenMode(full) => {
+            drawn.insert((Button, crate::window_mode::SetFullscreen(full), skin()))
+        }
         Does::ResetColors => drawn.insert((Button, color_picker::ResetColors, skin())),
         Does::OutlineTracked => drawn.insert((Button, crate::map::OutlineCheckbox, skin())),
         Does::Option(toggle) => {
@@ -1535,6 +1547,10 @@ fn caption(
         | Does::Raid(_)
         | Does::RaidAction(_)
         | Does::Unoffered(_)
+        | Does::ChatColor(_)
+        | Does::ChangeColor
+        | Does::ReloadKeys
+        | Does::ScreenMode(_)
         | Does::ResetColors
         | Does::OutlineTracked
         | Does::Option(_)
@@ -1639,6 +1655,8 @@ type Stateful<'w, 's> = Query<
         Option<&'static super::options::OptionCheckbox>,
         Has<crate::map::OutlineCheckbox>,
         (
+            Option<&'static SlashButton>,
+            Option<&'static crate::options::FilterButton>,
             Has<Greyed>,
             Has<crate::hud::hotbar::scripts::Latched>,
             Has<scrollbar::ScrollArrow>,
@@ -1679,7 +1697,7 @@ pub(crate) fn buttons(
         attack,
         checkbox,
         outline_checkbox,
-        (greyed, latched, arrow, character, report),
+        (slash, filter, greyed, latched, arrow, character, report),
         interaction,
         mut image,
     ) in &mut buttons
@@ -1687,6 +1705,25 @@ pub(crate) fn buttons(
         let on = match (selector, checkbox, character) {
             // The bug report's check boxes show what they carry.
             _ if let Some(report) = report => reports.checked(*report),
+            _ if let Some(on) = slash.and_then(|slash| match slash.0 {
+                "/autosplit" => online.world().auto_split(),
+                "/anonymous" => online
+                    .world()
+                    .player()
+                    .map(|p| p.listing.anonymity.wire() & 1 != 0),
+                "/roleplay" => online
+                    .world()
+                    .player()
+                    .map(|p| p.listing.anonymity.wire() & 2 != 0),
+                _ => None,
+            }) =>
+            {
+                on
+            }
+            _ if let Some(filter) = filter => {
+                options.options.chat_filters.get(filter.0)
+                    == eq_client_core::filters::FilterMode::Show
+            }
             _ if outline_checkbox => map.outlines(),
             (Some(selector), ..) => shown.displayed(selector.0),
             (None, Some(checkbox), _) => options.on(checkbox.0),
@@ -4344,7 +4381,10 @@ mod tests {
             does("ODP_LevelOfDetailCheckbox", WindowId::Options),
             Some(Does::Nothing)
         ));
-        assert!(does("ODP_SetWindowedButton", WindowId::Options).is_none());
+        assert!(matches!(
+            does("ODP_SetWindowedButton", WindowId::Options),
+            Some(Does::ScreenMode(false))
+        ));
         // The QoL page comes last, a checkbox for each quality-of-life
         // setting in the skin's own, one under another.
         let general = options_general_page();
