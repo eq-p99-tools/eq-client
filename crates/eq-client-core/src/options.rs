@@ -458,7 +458,6 @@ impl Level {
     pub fn words(self, value: u16) -> String {
         match self {
             Self::FadeDelay | Self::FadeDuration => format!("{value} ms"),
-            Self::WindowAlpha | Self::FadeToAlpha => value.to_string(),
             Self::MouseSensitivity => mouse_step(value).to_string(),
             Self::ClipPlane
             | Self::UiScale
@@ -473,7 +472,7 @@ impl Level {
                 format!("{value} %")
             }
             Self::MaxFps if value == 0 => "Display".to_owned(),
-            Self::MaxFps => value.to_string(),
+            Self::WindowAlpha | Self::FadeToAlpha | Self::MaxFps => value.to_string(),
             Self::RunSpeed => format!("{}.{:02}x", value / 100, value % 100),
         }
     }
