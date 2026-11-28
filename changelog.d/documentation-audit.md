@@ -1,0 +1,1 @@
+- Update the player and development guides for spell reuse, chat limits, skin controls and Windows validation.

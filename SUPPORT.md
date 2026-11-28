@@ -24,13 +24,13 @@ checking this application's behavior. **Yes means provided by that policy**,
 not a live certification, and individual operations still validate their
 prerequisites.
 
-The networking pin `f289c176` includes the EqMac level-rise handler. Character
+The networking library handles EqMac level-rise updates. Character
 level continues to govern AA and other eligibility checks; an own-spawn level
 appearance changes only the displayed level. Inventory level labels, local
 `/who` and the map's own-player details use that displayed value. Lifecycle
 reports name both values. See [EqMac levels](docs/eqmac-levels.md) for the consumer
 mapping and profile-reset behavior. The level path has offline synthetic
-regressions; this pin adds no capability or new live level-up certification.
+regressions. Live level-up coverage is tracked separately.
 
 | Area | P99 | EQEmu | Quarm | TAKP |
 | --- | --- | --- | --- | --- |
@@ -335,9 +335,8 @@ network README may describe work this client has not integrated. For an intentio
 update, review old/new revisions and lockfile changes, run local checks, then
 validate affected server scenarios with authorization.
 
-Automatic PR/main CI runs **formatting only**. The full CI workflow runs on demand
-and performs Linux Clippy/tests and native Windows tests without proprietary
-assets or live logins. Windows CI is not a GPU/desktop-input check. Ignored
-installation/render probes need separate opt-in execution. Rust 1.99 is the
-minimum supported compiler; CI uses stable rather than a dedicated minimum-version
-job. See [Development](docs/development.md) for commands and maintenance checks.
+Automatic Windows checks cover formatting and API documentation. The manual
+workflow runs strict Clippy and workspace tests on the selected platform and
+defaults to Windows with Rust 1.99.0. Desktop input, GPU rendering, installed
+assets and live servers require separate checks. See [Development](docs/development.md)
+for the local commands and workflow options.

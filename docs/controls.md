@@ -115,7 +115,11 @@ comes from your installed skin; a text button is used if it is unavailable.
 The button is semi-transparent and stays behind movable windows, so a window
 dragged over it receives the pointer instead. Its popup opens above the windows.
 
-In an attached Titanium or RoF2 session, pressing the right button over the
+While Stay in Melee Range has locked a target, hold the right mouse button to
+rotate the camera independently. The character keeps facing the target. The
+[settings guide](settings.md) lists the inputs that release the lock.
+
+Outside that lock, in an attached Titanium or RoF2 session, pressing the right button over the
 world faces the character along the camera's existing horizontal sightline,
 even without a drag; dragging then turns both together. The view keeps its
 pitch, and the completed turn uses the ordinary movement sample opportunity.

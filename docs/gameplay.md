@@ -536,11 +536,9 @@ blocks the request. If the server gives no matching cast update within one
 second, the client releases the tracked cast and reports that the stop is
 unconfirmed. When no cast is held, the client reports unconfirmed song state
 as soon as it submits the request. Song buffs and gem timers follow the
-server's updates. On P99 and Titanium EQEmu, when a song stops, the gems
-whose songs have no recast time are ready again at once, and so is the short
-wait before any spell, as in the official client. There, a Bard's songs also
-leave no such wait after they are sung, so the next song can follow at once.
-There, when the server interrupts a Bard's song or cast, its line shows in the
+server's updates. On P99 and Titanium EQEmu, a song with no recast time can
+be played again when it stops. Stock Titanium clears shared recovery for Bard
+songs. When either server interrupts a Bard's song or cast, its line shows in the
 song colour and follows the Bard songs filter, like the song stop line.
 
 On P99 and Titanium EQEmu, a bash from a player, or a kick from a Warrior above
@@ -615,12 +613,15 @@ matched to the server patch; the client does not receive a general era selector
 that chooses among arbitrary spell-file versions. Local spell information is an
 input to presentation and validation, not authority over the server.
 
-Titanium spell-bar refreshes drive local recovery/recast displays; admission can
-restore remaining per-gem timers. A refreshed gem is not proof that the spell
-landed. Missing timing data stays unavailable rather than inventing a countdown.
-Linked reuse groups remain incomplete. Quarm saved gem cooldowns are decoded.
-Duplicate-cast guards and item-use click guards are not a statement about
-server cooldown enforcement.
+On P99, a repeated spell can start when its cast time would carry it through the
+remaining recast. With a 10-second recast and a 4-second cast, the gem becomes
+available 6 seconds after the previous cast completes. Another slot containing
+the same spell shares that deadline. An unrelated gem has no global refresh
+delay. A pending or active cast and a received linked reuse timer can still
+prevent a new request. The server decides whether the cast succeeds.
+
+Stock Titanium uses its own gem and shared recovery clocks. Admission can
+restore per-gem timers. The client also decodes Quarm’s saved gem cooldowns.
 
 Buff icons and resource calculations share the core buff tracker: explicit slot
 updates/removals take priority over locally inferred unslotted effects. Known
@@ -899,9 +900,11 @@ link to it when the world offers one, and these commands go to it:
   sent. That includes the chat server's mail, friends and ignore words and
   `set`, which saves the channels joined at login.
 
-These commands work from the chat line, socials and hotbuttons alike, and
-they are as free as `/say`. There is no send limit for any chat yet. A script's
-`slash()` runs them as typing does (6.584).
+Typed lines, socials, hotbuttons and script `slash()` calls share the same
+send limits across zones. The client allows up to 10 chat sends in 5 seconds.
+Shouts, auctions, out-of-character chat, tells, channel messages and most
+channel commands also share a 12-send limit in 60 seconds. When a limit is
+reached, the client reports how long to wait. Retry the line after that wait.
 Channel and player names from the chat server print without control
 characters, so a name can't start an item link.
 
@@ -1064,8 +1067,6 @@ Combat page. Titanium dispatches the class ability at `eqgame.exe`
 0x41f4a0 and the named discipline through 0x46fc1b and 0x4bb39d.
 [EQEmu discipline timer](https://github.com/EQEmu/EQEmu/blob/4aceae18b94ffaafc08e2b17bc41cd72c77f795d/zone/effects.cpp#L856-L885)
 [Titanium buff slot limits](https://github.com/EQEmu/EQEmu/blob/master/common/patches/titanium_limits.h)
-Spell gems also respect received linked spell reuse when the installed spell
-definition identifies the group.
 
 For a single Titanium ranged attack, equip a bow and arrows or a throwing
 weapon and select a target. Click Ranged Attack in Actions or type `/ranged`.

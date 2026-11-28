@@ -17,14 +17,15 @@ cargo run -p eq-client --locked -- --help
 
 `Cargo.toml` pins the reviewed `eq-network` integration by Git revision;
 `Cargo.lock` resolves the same commit. [Support](../SUPPORT.md) identifies that
-revision and its server policies and validation coverage.
+dependency’s server policies and their validation coverage.
 The asset decoder uses a pinned fork of `libeq`. A normal build needs neither a
 sibling networking checkout nor unpublished local patches. Inspect resolved
 sources with `cargo metadata --locked --format-version 1`. `--offline` is useful
 only once all required dependencies have been fetched.
 
-Use separate worktrees and `CARGO_TARGET_DIR` directories for concurrent feature
-work. Do not reset or clean another session's worktree or build output.
+Concurrent builds should use separate worktrees and target directories. For
+successive checks in one checkout, reuse its target directory and build profile
+to keep compiled dependencies available.
 
 The application's `--version`, startup output and client log share a compile-time
 build identity: package version, full Git SHA and `tracked tree clean`, `dirty`
@@ -44,20 +45,21 @@ only the application receives the stamp, with no new library dependency.
 
 ## Validation
 
-```console
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
-cargo doc --workspace --no-deps --locked
+To run the default Windows checks locally with Rust 1.99.0, use PowerShell.
+
+```powershell
+cargo +1.99.0 fmt --all --check
+cargo +1.99.0 clippy --workspace --all-targets --locked -- -D warnings
+cargo +1.99.0 test --workspace --locked
+$env:RUSTDOCFLAGS = '-D warnings'
+cargo +1.99.0 doc --workspace --no-deps --locked
 ```
 
-The automatic [Lint workflow](../.github/workflows/lint.yml) runs formatting on
-PRs and pushes to main. The [CI workflow](../.github/workflows/ci.yml) is manual:
-Actions → CI → Run workflow, choosing Linux, Windows or both. It runs Linux
-Clippy/tests and native Windows tests. It does not log into public servers or
-exercise a physical desktop/GPU. Neither workflow currently tests Rust 1.99 as
-a separate minimum-version job; use that compiler explicitly when changing the
-MSRV or dependencies.
+The automatic [Lint workflow](../.github/workflows/lint.yml) checks formatting
+and builds the API documentation on Windows for PRs and pushes to main.
+For hosted Clippy and workspace tests, the manual [CI workflow](../.github/workflows/ci.yml)
+runs on one selected platform. Its defaults are Windows and Rust 1.99.0.
+Select Linux explicitly for a Linux run.
 
 Most tests use synthetic data. Ignored tests that need installed assets or a
 rendering environment are opt-in; read each test's prerequisites before running
@@ -105,7 +107,7 @@ When behavior changes, check:
    parsing, offered commands and actual scenario evidence.
 5. Relative links, anchors and examples after moving a section or renaming a file.
 
-The six `docs/scripts` pages are embedded by
+The in-game script Help page list is defined by
 [`script_workbench::help`](../crates/eq-client-render/src/script_workbench/help.rs).
 Its lightweight renderer supports headings, paragraphs, bullets, inline code,
 fences and standalone links to those help pages. Do not assume it is a full

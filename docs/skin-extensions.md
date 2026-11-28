@@ -37,3 +37,16 @@ Values at or beyond the full scale display 100.00%.
 Stock skins continue using their authored labels. No separate client option
 is needed. Other clients may ignore the attribute, so an empty Text provides
 a suitable fallback.
+
+## Options controls
+
+The client uses these control IDs on the QoL page of the Options window.
+
+| Control ID | Purpose |
+| --- | --- |
+| `EQC_QoL_MapCaption` | Section heading labelled “Map”. |
+| `EQC_OutlineTrackedNames` | Checkbox for outlining tracked names on the map. |
+| `EQC_CombatOutgoingPicker` | “Other damage” color picker for combat text. |
+| `EQC_CombatIncomingPicker` | “Damage to you” color picker for combat text. |
+
+The color pickers save each RGB channel in one-percent increments.
