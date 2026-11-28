@@ -109,7 +109,9 @@ fn append_button(
     risk: bool,
     width: f32,
 ) {
-    begin(page);
+    if page.name != "EQC_QoLPage" {
+        begin(page);
+    }
     let y = bottom(page) + 6.0;
     let status = if risk {
         "Unsafe client addition"
@@ -147,7 +149,7 @@ fn spell_page(pages: &mut [Page]) -> Option<&mut Page> {
 }
 
 pub(super) fn relocate(pages: &mut [Page], width: f32) {
-    let Some(q) = pages.iter().position(|p| p.name == "EQC_QoLPage") else {
+    let Some(q) = pages.iter().rposition(|p| p.name == "EQC_QoLPage") else {
         return;
     };
     let mut controls = std::mem::take(&mut pages[q].pieces);
@@ -163,10 +165,10 @@ pub(super) fn relocate(pages: &mut [Page], width: f32) {
         if id == super::qol::OUTLINE_TRACKED || id == "EQC_QoL_MapCaption" {
             continue;
         }
+        if contains(pages, &id) {
+            continue;
+        }
         if let Some(f) = qol_checkbox(&id) {
-            if contains(pages, &id) {
-                continue;
-            }
             if let Some(dest) =
                 destination(f).and_then(|name| pages.iter_mut().find(|p| page_is(p, name)))
                 && let Element::Button(b) = e
@@ -241,5 +243,242 @@ fn relocate_scale(pages: &mut [Page], controls: &mut Vec<Piece>, width: f32) {
             _ => {}
         }
         pages[d].pieces.push((id, e));
+    }
+}
+
+fn annotate(pieces: &mut Vec<Piece>) {
+    use eq_client_assets::sidl::{Anchor, Anchors};
+    let mut marks = Vec::new();
+    for (name, e) in pieces.iter_mut() {
+        let (id, area, anchors, font, risk) = match e {
+            Element::Tabs(t) => {
+                for p in &mut t.pages {
+                    annotate(&mut p.pieces);
+                }
+                continue;
+            }
+            Element::View(v) => {
+                annotate(&mut v.pieces);
+                continue;
+            }
+            Element::Button(b) => {
+                let id = b.id.as_deref().unwrap_or(name);
+                let risk = if let Some(f) = qol_checkbox(id) {
+                    f.is_unsafe()
+                } else if id == "EQC_SpellEffectsCheckbox" {
+                    false
+                } else {
+                    continue;
+                };
+                b.tooltip = Some(format!(
+                    "{}. {}",
+                    if risk {
+                        "Unsafe client addition"
+                    } else {
+                        "Safe client addition"
+                    },
+                    b.tooltip.as_deref().unwrap_or("")
+                ));
+                (id, b.area, b.anchors, b.font, risk)
+            }
+            Element::Slider(s) if s.id.as_deref() == Some(controls::UI_SCALE_SLIDER) => {
+                (controls::UI_SCALE_SLIDER, s.area, s.anchors, None, false)
+            }
+            Element::Label(l)
+                if super::color_picker::COMBAT_COLORS
+                    .iter()
+                    .any(|(id, ..)| *id == name) =>
+            {
+                (name.as_str(), l.area, l.anchors, l.font, false)
+            }
+            _ => continue,
+        };
+        let left = |edge| match edge {
+            Anchor::Start(x) => Anchor::Start((x - 10.0).max(0.0)),
+            Anchor::End(x) => Anchor::End(x + 10.0),
+        };
+        marks.push((
+            format!("EQC_ExtraMark_{id}"),
+            Element::Label(Label {
+                area: Area {
+                    x: (area.x - 10.0).max(0.0),
+                    y: area.y,
+                    width: 10.0,
+                    height: area.height,
+                },
+                anchors: anchors.map(|a| Anchors {
+                    left: left(a.left),
+                    right: a.left,
+                    top: a.top,
+                    bottom: a.bottom,
+                }),
+                text: "*".into(),
+                color: Some(if risk { [255, 92, 92] } else { [92, 174, 255] }),
+                font,
+                align: Align::Left,
+                wraps: false,
+                eq_type: None,
+                client_value: None,
+            }),
+        ));
+    }
+    pieces.extend(marks);
+}
+
+/// Bind the authored pages first, then append any missing client controls.
+pub(super) fn options_pages(
+    tabs: &eq_client_assets::sidl::TabBox,
+    size: bevy::prelude::Vec2,
+) -> Vec<Page> {
+    use crate::windows::WindowId::Options;
+    let mut authored = tabs.pages.clone();
+    for page in &mut authored {
+        if !page_is(page, "QoL") {
+            annotate(&mut page.pieces);
+        }
+    }
+    let original = &authored;
+    let filters = super::filters::pages(original, Options, size.x);
+    let colors = super::colors::pages(&filters, Options, size.x);
+    let fallback = colors.len() > filters.len();
+    let source = if fallback {
+        filters.as_ref()
+    } else {
+        colors.as_ref()
+    };
+    let mut pages = super::qol::pages(source, Options, size, tabs.page_frame.as_ref()).into_owned();
+    if pages.len() == source.len() {
+        return pages;
+    }
+    relocate(&mut pages, size.x);
+    if fallback
+        && let Some(p) = pages.last_mut()
+        && let Some(color_page) = colors.last()
+    {
+        let start = bottom(p) + 6.0;
+        for (id, elem) in &color_page.pieces {
+            if super::color_picker::COMBAT_COLORS
+                .iter()
+                .any(|(key, ..)| id.contains(key))
+                && let Element::Label(label) = elem
+            {
+                let mut label = label.clone();
+                label.area.y += start;
+                p.pieces.push((id.clone(), Element::Label(label)));
+            }
+        }
+    }
+    // If a skin provides its own QoL page, keep its position and append only missing controls.
+    if let Some(index) = original
+        .iter()
+        .position(|p| p.name == "EQC_QoLPage" || page_is(p, "QoL"))
+        && let Some(generated) = pages.pop()
+    {
+        let page = &mut pages[index];
+        let offset = bottom(page) + 6.0;
+        begin(page);
+        for (id, mut e) in generated.pieces {
+            match &mut e {
+                Element::Label(l) => l.area.y += offset,
+                Element::Button(b) => b.area.y += offset,
+                Element::Slider(s) => s.area.y += offset,
+                _ => continue,
+            }
+            page.pieces.push((id, e));
+        }
+    }
+    pages
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use bevy::prelude::Vec2;
+    use eq_client_assets::sidl::TabBox;
+    #[test]
+    fn authored_extension_keeps_its_anchor_and_appears_once() {
+        let mut page = super::super::qol::tests::source();
+        let fix = Fix::settings().find(|f| f.is_unsafe()).unwrap();
+        let id = super::super::bindings::qol_checkbox_id(fix);
+        let Element::Button(button) = &mut page.pieces[0].1 else {
+            panic!("fixture checkbox")
+        };
+        button.id = Some(id.clone());
+        let original = (button.area, button.anchors);
+        let tabs = TabBox {
+            name: "Custom".into(),
+            area: None,
+            pages: vec![page],
+            tab_frame: None,
+            page_frame: None,
+        };
+        let pages = options_pages(&tabs, Vec2::new(380.0, 400.0));
+        let mut hits = pages
+            .iter()
+            .flat_map(|p| &p.pieces)
+            .filter_map(|(_, e)| match e {
+                Element::Button(b) if b.id.as_ref() == Some(&id) => Some(b),
+                _ => None,
+            });
+        let kept = hits.next().unwrap();
+        assert_eq!((kept.area, kept.anchors), original);
+        assert!(hits.next().is_none());
+        assert!(
+            pages[0]
+                .pieces
+                .iter()
+                .any(|(n, e)| n == &format!("EQC_ExtraMark_{id}")
+                    && matches!(e,Element::Label(l) if l.color==Some([255,92,92])))
+        );
+        let qol = pages.last().unwrap();
+        for (key, ..) in super::super::color_picker::COMBAT_COLORS {
+            assert!(contains(std::slice::from_ref(qol), key));
+        }
+        assert!(!pages.iter().any(|p| p.title.as_deref() == Some("Colors")));
+    }
+
+    #[test]
+    #[ignore = "requires EQ_PROBE_TAKP with an installed TAKP default skin"]
+    fn installed_takp_authored_color_buttons_keep_their_binding_and_position() {
+        let dir = std::path::PathBuf::from(std::env::var_os("EQ_PROBE_TAKP").unwrap());
+        let skin = "default";
+        let library = eq_client_assets::sidl::Library::read(&dir, skin).unwrap();
+        let screen = library
+            .window(&dir, skin, "EQUI_OptionsWindow.xml", "OptionsWindow")
+            .unwrap();
+        let tabs = screen
+            .pieces
+            .iter()
+            .find_map(|(_, e)| {
+                if let Element::Tabs(t) = e {
+                    Some(t)
+                } else {
+                    None
+                }
+            })
+            .unwrap();
+        let pages = options_pages(tabs, Vec2::new(380.0, 400.0));
+        let colors = tabs
+            .pages
+            .iter()
+            .position(|p| page_is(p, "Colors"))
+            .unwrap();
+        let authored = &tabs.pages[colors];
+        let built = &pages[colors];
+        let mut count = 0;
+        for piece in &authored.pieces {
+            assert!(built.pieces.contains(piece));
+            if let Element::Button(b) = &piece.1
+                && let Some(kind) =
+                    b.id.as_deref()
+                        .and_then(super::super::colors::authored_kind)
+            {
+                count += 1;
+                assert!(!contains(&pages, &format!("EQC_ChatColor_{kind}")));
+            }
+        }
+        assert_eq!(count, 72);
+        assert!(contains(&pages, "PCSpellsComboBox"));
+        assert!(!contains(&pages, "EQC_Filter_pcspells"));
     }
 }

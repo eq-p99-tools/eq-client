@@ -25,10 +25,9 @@ const LOOK_SPRING_TOOLTIP: &str = "Bring the first-person view back level when n
 /// added under Invert Y Axis on the skin's Mouse page, or else a choice for
 /// this page.
 fn look_spring(pages: &mut [eq_client_assets::sidl::Page]) -> Option<Choice> {
-    let skin_has = pages
+    let skin_has = [LOOK_SPRING_CHECKBOX, LOOK_SPRING_FALLBACK]
         .iter()
-        .flat_map(|page| &page.pieces)
-        .any(|(name, _)| name == LOOK_SPRING_CHECKBOX);
+        .any(|id| super::extensions::contains(pages, id));
     (!skin_has && !add_look_spring(pages)).then_some(Choice::Official {
         id: LOOK_SPRING_FALLBACK,
         text: LOOK_SPRING_TEXT,
@@ -71,17 +70,8 @@ fn add_look_spring(pages: &mut [eq_client_assets::sidl::Page]) -> bool {
     let Some(mut button) = template else {
         return false;
     };
-    let bottom = page
-        .pieces
-        .iter()
-        .filter_map(|(_, element)| match element {
-            Element::Button(button) => Some(button.area),
-            Element::Label(label) => Some(label.area),
-            Element::Slider(slider) => Some(slider.area),
-            _ => None,
-        })
-        .map(|area| area.y + area.height)
-        .fold(0.0, f32::max);
+    let bottom = super::extensions::bottom(page);
+    super::extensions::begin(page);
     button.id = Some(LOOK_SPRING_FALLBACK.to_owned());
     button.anchors = None;
     button.placed = true;
@@ -508,7 +498,7 @@ pub(super) fn content_height(page: &eq_client_assets::sidl::Page) -> Option<f32>
         || page
             .pieces
             .iter()
-            .any(|(id, _)| id.starts_with("EQC_ExtraMark_")))
+            .any(|(id, _)| id == super::extensions::START || id.starts_with("EQC_ExtraMark_")))
     .then(|| {
         page.pieces
             .iter()

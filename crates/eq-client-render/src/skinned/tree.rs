@@ -700,16 +700,7 @@ pub(super) fn tabbed(
     context: &Context,
 ) {
     let pages = if context.id == WindowId::Options && context.depth == 0 {
-        let filter_pages = super::filters::pages(&tabs.pages, context.id, inside.width);
-        let colors = super::colors::pages(&filter_pages, context.id, inside.width);
-        let generated = super::qol::pages(
-            &colors,
-            context.id,
-            Vec2::new(inside.width, inside.height),
-            tabs.page_frame.as_ref(),
-        );
-        let mut pages = generated.into_owned();
-        super::extensions::relocate(&mut pages, inside.width);
+        let pages = super::extensions::options_pages(tabs, Vec2::new(inside.width, inside.height));
         std::borrow::Cow::Owned(pages)
     } else {
         std::borrow::Cow::Borrowed(tabs.pages.as_slice())
