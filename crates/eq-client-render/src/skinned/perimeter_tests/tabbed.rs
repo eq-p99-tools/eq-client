@@ -197,7 +197,11 @@ fn two_row_options() -> eq_client_assets::sidl::TabBox {
     for index in 1..7 {
         pages.push(Page {
             name: format!("page{index}"),
-            title: Some(format!("Tab{index}")),
+            title: Some(if index == 6 {
+                "Colors".into()
+            } else {
+                format!("Tab{index}")
+            }),
             pieces: Vec::new(),
             ..pages[0].clone()
         });
@@ -353,7 +357,9 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
             let pages = (0..8)
                 .map(|index| eq_client_assets::sidl::Page {
                     name: format!("page{index}"),
-                    title: Some(if index == 7 {
+                    title: Some(if index == 6 {
+                        "Colors".into()
+                    } else if index == 7 {
                         "Particles".into()
                     } else {
                         format!("Tab{index}")
@@ -432,21 +438,7 @@ fn qol_controls_fit_the_width_and_scroll_fully_below_wrapped_tabs() {
                     .parent();
                 vec![slider, value, caption]
             });
-            let mut fields = app
-                .world_mut()
-                .query::<(Entity, &super::super::color_picker::Part)>();
-            let mut pickers: Vec<_> = fields
-                .iter(app.world())
-                .map(|(entity, _)| vec![entity])
-                .collect();
-            assert_eq!(pickers.len(), 6);
-            pickers.sort_by(|a, b| {
-                bounds(app.world(), a[0])
-                    .max
-                    .y
-                    .total_cmp(&bounds(app.world(), b[0]).max.y)
-            });
-            for controls in ordinary.into_iter().chain(pickers) {
+            for controls in ordinary {
                 for &control in &controls {
                     let rect = bounds(app.world(), control);
                     assert!(rect.min.x >= viewport.min.x && rect.max.x <= viewport.max.x);

@@ -167,8 +167,6 @@ pub(super) fn pages<'a>(
             y + heading_height + GAP,
         ) + SECTION_GAP;
     }
-    // Append the palette after existing controls, preserving their column/row positions.
-    append_palette(&mut pieces, &layout, checkbox, caption, y);
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
 }
@@ -198,35 +196,6 @@ fn option_sliders<'a>(slider: &'a Slider, value: &'a Label) -> [Control<'a>; 2] 
             text: "Run a Little Faster",
         },
     ]
-}
-
-fn append_palette(
-    pieces: &mut Vec<(String, Element)>,
-    layout: &Layout,
-    checkbox: &Button,
-    caption: Option<&Label>,
-    mut y: f32,
-) {
-    let mut area = Area {
-        x: layout.margin,
-        y,
-        width: layout.available,
-        height: caption.map_or(checkbox.area.height, |label| label.area.height),
-    };
-    let (id, template) = Section::CombatText.caption(checkbox, caption, area);
-    pieces.push((id, Element::Label(template.clone())));
-    y += area.height + GAP;
-    for (id, title, _) in super::color_picker::COMBAT_COLORS {
-        area.y = y;
-        let mut label = template.clone();
-        label.area = area;
-        title.clone_into(&mut label.text);
-        pieces.push((format!("{id}Caption"), Element::Label(label.clone())));
-        label.area.y += area.height;
-        label.area.height = super::color_picker::height(area.width);
-        y = label.area.y + label.area.height + GAP;
-        pieces.push((id.to_owned(), Element::Label(label)));
-    }
 }
 
 /// Cuts a caption, slider and value label from the skin and returns their bottom edge.
@@ -305,7 +274,6 @@ enum Section {
     Ordinary,
     Dangerous,
     Map,
-    CombatText,
 }
 
 impl Section {
@@ -319,7 +287,6 @@ impl Section {
             Self::Ordinary => ("EQC_QoL_SettingsCaption", "Quality of Life"),
             Self::Dangerous => ("EQC_QoL_UnsafeCaption", "Dangerous"),
             Self::Map => ("EQC_QoL_MapCaption", "Map"),
-            Self::CombatText => ("EQC_QoL_CombatTextCaption", "Combat text colors"),
         };
         (
             id.to_owned(),
@@ -520,7 +487,7 @@ impl Layout {
 
 /// Generated content needs its full bottom edge and margin in the scroll range.
 pub(super) fn content_height(page: &eq_client_assets::sidl::Page) -> Option<f32> {
-    (page.name == "EQC_QoLPage").then(|| {
+    (page.name == "EQC_QoLPage" || page.name == super::colors::PAGE).then(|| {
         page.pieces
             .iter()
             .filter_map(|(_, element)| match element {

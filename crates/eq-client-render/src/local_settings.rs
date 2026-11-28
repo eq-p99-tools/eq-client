@@ -235,7 +235,7 @@ impl ParticleDensity {
 /// The colour kinds' names, 1 to 69, in this client's words: the
 /// installation's `User_<n>` is chat kind n + 255, named as `EQEmu` names
 /// its chat kinds.
-const KIND_NAMES: [&str; LISTED_KINDS as usize] = [
+pub(crate) const KIND_NAMES: [&str; LISTED_KINDS as usize] = [
     "Say",
     "Tell",
     "Group",

@@ -30,6 +30,7 @@ use bindings::{Does, buff_label, does, pet_posture_button};
 #[cfg(test)]
 use bindings::{GroupButton, RaidButton, effect_label, selector_button};
 pub(crate) mod color_picker;
+mod colors;
 mod controls;
 mod fit;
 mod frame;
@@ -1244,6 +1245,7 @@ fn behave(
         Does::Filter(category) => {
             drawn.insert((Button, super::options::FilterButton(category), skin()))
         }
+        Does::ResetColors => drawn.insert((Button, color_picker::ResetColors, skin())),
         Does::OutlineTracked => drawn.insert((Button, crate::map::OutlineCheckbox, skin())),
         Does::Option(toggle) => {
             drawn.insert((Button, super::options::OptionCheckbox(toggle), skin()));
@@ -1533,6 +1535,7 @@ fn caption(
         | Does::Raid(_)
         | Does::RaidAction(_)
         | Does::Unoffered(_)
+        | Does::ResetColors
         | Does::OutlineTracked
         | Does::Option(_)
         | Does::Filter(_)
@@ -2529,7 +2532,7 @@ fn plain_label(
     if owner == WindowId::Options
         && let Some(channels) = color_picker::binding(name)
     {
-        color_picker::draw(window, channels, node, label.area.width, font(label.font));
+        color_picker::draw_swatch(window, channels, node, font(label.font));
         return;
     }
     match controls::value_label(name, owner) {

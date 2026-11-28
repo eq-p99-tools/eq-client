@@ -88,7 +88,7 @@ fn form() -> Form {
                 .with_children(|ui| {
                     color_picker::draw(
                         ui,
-                        COMBAT_COLORS[1].2,
+                        color_picker::Binding::Combat(COMBAT_COLORS[1].2),
                         super::super::at(0.0, 0.0, 124.0, color_picker::height(124.0)),
                         124.0,
                         theme::Size::Label,
