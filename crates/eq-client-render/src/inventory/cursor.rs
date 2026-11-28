@@ -14,7 +14,8 @@ pub(super) fn spawn(commands: &mut Commands) {
     commands.spawn((
         Overlay,
         crate::hud::HudRoot,
-        GlobalZIndex(100),
+        // Carried inventory stays above tools and tooltips, beneath the script pointer (2000).
+        GlobalZIndex(1999),
         FocusPolicy::Pass,
         Node {
             position_type: PositionType::Absolute,
@@ -178,11 +179,13 @@ pub(crate) fn update(
         let count = item.map_or(coins.map(|(_, count)| count), |item| {
             item.stack_count.filter(|count| *count > 1)
         });
-        // A hotkey without a picture shows its words in the picture's place.
-        let words = riding
-            .3
-            .filter(|_| picture.is_none())
-            .map(|face| face.words);
+        let words = if picture.is_none() {
+            item.map(|item| item_caption(item, inventory.stale()))
+                .or_else(|| riding.3.map(|face| face.words))
+        } else {
+            None
+        };
+        let count = count.filter(|_| words.is_none());
         commands
             .entity(entity)
             .with_children(|parent| attachment(parent, place, picture, (count, words)));
@@ -224,15 +227,10 @@ fn own_box(
     art: &mut crate::sheets::Art,
 ) -> Option<(Option<ImageNode>, String)> {
     Some(if let Some(item) = item {
-        let mut text = item.details.name.clone();
-        if let Some(count) = item.stack_count {
-            use std::fmt::Write;
-            let _ = write!(text, " x{count}");
-        }
-        if stale {
-            text.push_str("\nAwaiting inventory update");
-        }
-        (item.details.icon.and_then(|icon| art.item(icon)), text)
+        (
+            item.details.icon.and_then(|icon| art.item(icon)),
+            item_caption(item, stale),
+        )
     } else if let Some((coin, count)) = coins {
         (None, format!("{count} {}", coin_name(coin)))
     } else if let Some(spell) = spell {
@@ -244,6 +242,18 @@ fn own_box(
             face.words,
         )
     })
+}
+
+fn item_caption(item: &eq_client_core::inventory::InventoryItem, stale: bool) -> String {
+    let mut text = item.details.name.clone();
+    if let Some(count) = item.stack_count {
+        use std::fmt::Write;
+        let _ = write!(text, " x{count}");
+    }
+    if stale {
+        text.push_str("\nAwaiting inventory update");
+    }
+    text
 }
 
 /// The picture of what rides the cursor, in the skin's attachment: the
@@ -407,7 +417,7 @@ mod tests {
     use super::*;
 
     #[test]
-    fn the_skins_attachment_hangs_from_the_pointer_with_the_stacks_count() {
+    fn the_skins_attachment_shows_the_held_stack_without_item_art() {
         let mut app = crate::testing::app();
         app.add_systems(Startup, |mut commands: Commands| spawn(&mut commands))
             .add_systems(Update, update);
@@ -436,6 +446,8 @@ mod tests {
         for item in &mut items {
             if item.slot == InventorySlot::CURSOR {
                 item.stack_count = Some(5);
+                item.details.icon = None;
+                item.details.name = "Held stack".into();
             }
         }
         crate::online::testing::inventory(
@@ -453,12 +465,11 @@ mod tests {
             (px(100), px(80), px(50), px(50), Display::Flex)
         );
         assert_eq!(background.0, Color::NONE);
-        // The stack's count shows as a slot shows it; the name does not.
+        // The stack stays identifiable even when its art is absent.
         let mut texts = world.query::<&Text>();
         let words: Vec<_> = texts.iter(world).map(|text| text.0.clone()).collect();
-        assert!(words.iter().any(|text| text == "5"), "{words:?}");
         assert!(
-            !words.iter().any(|text| text.contains("lantern")),
+            words.iter().any(|text| text.starts_with("Held stack x5")),
             "{words:?}"
         );
     }
