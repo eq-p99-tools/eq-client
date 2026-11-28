@@ -1010,49 +1010,39 @@ impl Controls {
         } else {
             ahead || behind
         };
-        if focused
-            && sideways != 0.0
-            && !longitudinal_key
-            && !(self.movement_options.fly
-                && (looking_ahead || self.autorun)
-                && intent.direction != Vec3::ZERO)
-        {
+        if focused && sideways != 0.0 {
             let radians = eq_client_core::render_heading(heading);
-            intent.preserve_facing = true;
-            if let Some(speed) = self.strafe_speed {
-                // Titanium strafes on the selected base speed (the R5
-                // audit's S1), and the sample names that pace, so the
-                // session bounds it by the same rate (6.540).
-                let (pace, rate) = if self.walking {
-                    (Pace::Walk, self.strafe_walk_speed.unwrap_or(speed))
+            let right = Vec3::new(radians.sin(), 0.0, radians.cos()).cross(Vec3::Y) * sideways;
+            let strafe = self.strafe_speed.map(|rate| {
+                if self.walking {
+                    self.strafe_walk_speed.unwrap_or(rate)
                 } else {
-                    (Pace::Run, speed)
-                };
-                intent.mode = MovementMode::Strafe(pace);
-                intent.speed = rate;
-                let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
-                intent.direction = facing.cross(Vec3::Y) * sideways;
-            } else {
-                intent.mode = MovementMode::Forward;
-                intent.direction = Vec3::ZERO;
+                    rate
+                }
+            });
+            if self.movement_options.fly
+                && intent.direction != Vec3::ZERO
+                && (longitudinal_key || looking_ahead || self.autorun)
+            {
+                if let Some(diagonal) = self.diagonal(&intent, heading, looking_ahead, sideways) {
+                    intent.direction = diagonal.velocity / diagonal.longitudinal;
+                } else if let Some(rate) = strafe
+                    && intent.speed > 0.0
+                {
+                    intent.direction += right * (rate / intent.speed);
+                }
+            } else if !longitudinal_key {
+                intent.preserve_facing = true;
+                if let Some(rate) = strafe {
+                    intent.mode =
+                        MovementMode::Strafe(if self.walking { Pace::Walk } else { Pace::Run });
+                    intent.speed = rate;
+                    intent.direction = right;
+                } else {
+                    intent.mode = MovementMode::Forward;
+                    intent.direction = Vec3::ZERO;
+                }
             }
-        }
-        if self.movement_options.fly
-            && focused
-            && intent.direction != Vec3::ZERO
-            && (longitudinal_key || looking_ahead || self.autorun)
-            && !matches!(intent.mode, MovementMode::Strafe(_))
-            && let Some(strafe) = if self.walking {
-                self.strafe_walk_speed.or(self.strafe_speed)
-            } else {
-                self.strafe_speed
-            }
-            && intent.speed > 0.0
-        {
-            let radians = eq_client_core::render_heading(heading);
-            let right = Vec3::new(-radians.cos(), 0.0, radians.sin());
-            intent.direction += right * sideways * (strafe / intent.speed);
-            intent.preserve_facing |= sideways != 0.0;
         }
         let run_factor = if intent.mode == MovementMode::Forward {
             self.movement_options.run_speed_multiplier.factor()
