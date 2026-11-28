@@ -266,15 +266,22 @@ mod tests {
                 .unwrap();
             let built = pages(&tabs.pages, WindowId::Options, 380.0);
             assert_eq!(built.len(), tabs.pages.len());
+            let page = &built[index];
+            assert!(page.pieces.iter().any(
+                |(_, e)| matches!(e,Element::Listbox(l) if l.id.as_deref()==Some("ColorChooseList"))
+            ));
             assert_eq!(
-                built[index]
-                    .pieces
+                page.pieces
                     .iter()
                     .filter(|(id, _)| binding(id).is_some())
                     .count(),
-                86,
+                2,
                 "{skin}"
             );
+            assert_eq!(chat_names().count(), 84);
+            for original in &tabs.pages[index].pieces {
+                assert!(page.pieces.contains(original), "{skin} lost {}", original.0);
+            }
         }
     }
 }

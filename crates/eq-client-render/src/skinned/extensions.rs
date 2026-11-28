@@ -44,7 +44,7 @@ pub(super) fn bottom(page: &Page) -> f32 {
         .fold(0.0, f32::max)
 }
 
-pub(super) fn mark(page: &mut Page, id: &str, risk: bool, x: f32, y: f32, font: Option<u32>) {
+pub(super) fn mark(page: &mut Page, id: &str, risk: bool, x: f32, y: f32, font: Option<u8>) {
     let key = format!("EQC_ExtraMark_{id}");
     if page.pieces.iter().any(|(n, _)| *n == key) {
         return;
