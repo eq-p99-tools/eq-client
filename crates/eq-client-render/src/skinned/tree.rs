@@ -844,6 +844,22 @@ fn tabbed_page_contents(
     area: Area,
     context: &Context,
 ) {
+    let original_height = area.height;
+    let extension = page
+        .pieces
+        .iter()
+        .position(|(id, _)| id == super::extensions::START);
+    let pad = tabs
+        .page_frame
+        .as_ref()
+        .map_or_else(frame::Insets::default, frame::insets);
+    let extra_y = extension.map_or(0.0, |cut| {
+        (original_height
+            - pad.top
+            - pad.bottom
+            - super::extensions::pieces_bottom(&page.pieces[..cut]))
+        .max(0.0)
+    });
     let generated =
         super::qol::content_height(page).or_else(|| super::filters::content_height(page));
     let area = if let Some(content) = generated {
@@ -852,7 +868,7 @@ fn tabbed_page_contents(
             .as_ref()
             .map_or_else(frame::Insets::default, frame::insets);
         Area {
-            height: insets.top + content + insets.bottom,
+            height: insets.top + content + insets.bottom + extra_y,
             ..area
         }
     } else {
@@ -870,7 +886,25 @@ fn tabbed_page_contents(
                 height: area.height - insets.top - insets.bottom,
             }
         });
-        pieces(page_area, art, &page.pieces, &inside, context);
+        if let Some(cut) = extension {
+            let authored = Area {
+                height: (original_height - pad.top - pad.bottom).max(0.0),
+                ..inside
+            };
+            pieces(page_area, art, &page.pieces[..cut], &authored, context);
+            pieces(
+                page_area,
+                art,
+                &page.pieces[cut + 1..],
+                &Area {
+                    y: inside.y + extra_y,
+                    ..inside
+                },
+                context,
+            );
+        } else {
+            pieces(page_area, art, &page.pieces, &inside, context);
+        }
     };
     if context.id == WindowId::Options {
         // A generated page fills the actual viewport and grows only when

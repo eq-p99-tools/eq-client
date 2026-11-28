@@ -1114,7 +1114,7 @@ fn filled_by(rows: &mut EntityCommands, listing: Listing, columns: Vec<f32>) {
             rows.insert((super::option_lists::FilterRows::default(), wheel))
         }
         Listing::ChatColors => {
-            super::option_lists::chat_rows(rows);
+            super::option_lists::chat_rows(rows, &columns);
             rows.insert((super::option_lists::ColorRows, wheel))
         }
         Listing::Keys => rows.insert((

@@ -191,17 +191,34 @@ fn placed(pages: &[Page], rows: Vec<(String, Element)>) -> Vec<Page> {
     let mut all = pages.to_vec();
     let at = all.iter().position(skin_filters);
     let base = at.map_or(&pages[0], |at| &all[at]);
-    let page = Page {
+    let mut page = Page {
         name: PAGE.into(),
         title: base
             .title
             .clone()
             .filter(|_| at.is_some())
             .or_else(|| Some("Filters".into())),
-        pieces: rows,
+        pieces: if at.is_some() {
+            base.pieces.clone()
+        } else {
+            Vec::new()
+        },
         tooltip: Some("What the server sends of each kind of message".into()),
         ..base.clone()
     };
+    let bottom = super::extensions::bottom(&page);
+    super::extensions::begin(&mut page);
+    for (id, mut e) in rows {
+        if super::extensions::contains(pages, &id) {
+            continue;
+        }
+        match &mut e {
+            Element::Button(b) => b.area.y += bottom,
+            Element::Label(l) => l.area.y += bottom,
+            _ => {}
+        }
+        page.pieces.push((id, e));
+    }
     match at {
         Some(at) => all[at] = page,
         None => all.push(page),

@@ -33,14 +33,14 @@ pub(super) type ChoiceData<'w> = (
 );
 
 #[derive(Component, Default)]
-pub(super) struct FilterRows(Option<GameDialect>);
+pub(crate) struct FilterRows(Option<GameDialect>);
 #[derive(Component)]
-pub(super) struct ColorRows;
+pub(crate) struct ColorRows;
 #[derive(Component)]
-pub(super) struct ChangeColor;
+pub(crate) struct ChangeColor;
 
 #[derive(Component, Clone, Copy)]
-enum Row {
+pub(crate) enum Row {
     Filter(FilterCategory),
     Color(u8),
 }
@@ -56,11 +56,19 @@ fn row() -> Node {
     }
 }
 
-pub(super) fn chat_rows(rows: &mut EntityCommands) {
+pub(super) fn chat_rows(rows: &mut EntityCommands, columns: &[f32]) {
     rows.with_children(|list| {
         for (kind, name) in colors::chat_names() {
             list.spawn((Button, Row::Color(kind), row()))
                 .with_children(|ui| {
+                    ui.spawn((
+                        theme::text(name, theme::Size::Small, theme::INK_BRIGHT),
+                        Node {
+                            width: px(columns.first().copied().unwrap_or(150.0)),
+                            flex_shrink: 0.0,
+                            ..default()
+                        },
+                    ));
                     draw_swatch(
                         ui,
                         WindowId::Options,
@@ -72,7 +80,6 @@ pub(super) fn chat_rows(rows: &mut EntityCommands) {
                         },
                         theme::Size::Small,
                     );
-                    ui.spawn(theme::text(name, theme::Size::Small, theme::INK_BRIGHT));
                 });
         }
     });
