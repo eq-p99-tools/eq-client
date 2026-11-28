@@ -34,7 +34,7 @@ Remaining differences from the installed Titanium Options window, checked agains
 | Level of Detail | Missing binding | New feature | Implement or identify a model-detail policy with a visible effect. |
 | LOD Bias | Missing slider | New feature | Needs the same working detail-selection policy. |
 | Gamma | Missing slider | New feature | Add calibrated output adjustment. Zone lighting math alone does not implement a user gamma control. |
-| Video Modes | Missing opener | New feature | Needs the actual selection and apply flow listed below. |
+| Video Modes | No exclusive display-mode dialog | Skip | Resizing the window sets its size. Borderless fullscreen follows the desktop mode. The in-game Max FPS control sets the frame cap independently. |
 | Advanced | Missing opener | New feature | Needs a useful set of supported renderer controls. |
 | Sky | Missing selector | New feature | Define and render the supported sky detail levels. |
 | Loading Screen | Missing selector | New feature | Implement the stock choices where corresponding loading presentations exist. |
@@ -69,10 +69,10 @@ Remaining differences from the installed Titanium Options window, checked agains
 
 | Option | Remaining difference | Rating | Work or reason |
 | --- | --- | --- | --- |
-| Video resolution | Missing in Options | New feature | Enumerate modes on the current monitor and apply a supported selection. |
-| Refresh rate | Missing in Options | New feature | Enumerate rates for the selected mode and monitor. |
+| Video resolution | Uses the window or desktop size | Skip | The player resizes the window or uses borderless fullscreen. |
+| Refresh rate | Set by Windows | Skip | Borderless fullscreen uses the monitor’s current desktop refresh rate. |
 | Bit depth | Missing | Skip | No user-selectable legacy display-depth path is exposed by the renderer. |
-| Accept | Missing | New feature | Apply the selected mode and recover from a failed switch. |
+| Accept | No exclusive mode to apply | Skip | Window resizing and the existing fullscreen switch take effect directly. |
 
 ### Display → Advanced dialog
 
