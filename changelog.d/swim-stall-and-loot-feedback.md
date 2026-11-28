@@ -1,0 +1,1 @@
+- Keep continuous underwater mouse turns and strafes working across an idle focus change or a long render frame. Explain why a listed corpse item cannot be looted while the cursor holds another item.
