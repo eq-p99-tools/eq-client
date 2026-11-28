@@ -142,6 +142,9 @@ pub(super) fn pages<'a>(
     if let Some((slider, value)) = slider.zip(value) {
         choices.extend(option_sliders(slider, value));
     }
+    let (moved, mut choices): (Vec<_>, Vec<_>) = choices
+        .into_iter()
+        .partition(|choice| choice.relocated(&all));
     // Use the height authored for the chosen heading font. Skins without
     // a usable label take both metrics and typography from the checkbox.
     let heading_height = caption.map_or(checkbox.area.height, |label| label.area.height);
@@ -173,6 +176,8 @@ pub(super) fn pages<'a>(
             y + heading_height + GAP,
         ) + SECTION_GAP;
     }
+    // Relocation reads the skin-styled controls from this page and sets their destination geometry.
+    layout.append_controls(&mut pieces, &moved, checkbox, y);
     all.push(eq_client_assets::sidl::Page { pieces, ..qol });
     std::borrow::Cow::Owned(all)
 }
@@ -353,6 +358,21 @@ enum Control<'a> {
 }
 
 impl Control<'_> {
+    /// Stock-page additions and controls supplied by a skin take no space on QoL.
+    fn relocated(self, pages: &[eq_client_assets::sidl::Page]) -> bool {
+        let tab = match self {
+            Self::Checkbox(Choice::Fix(fix)) => {
+                if super::extensions::contains(pages, &qol_checkbox_id(fix)) {
+                    return true;
+                }
+                super::extensions::destination(fix)
+            }
+            Self::Slider { ids, .. } if ids.1 == controls::UI_SCALE_SLIDER => Some("Display"),
+            _ => None,
+        };
+        tab.is_some_and(|title| pages.iter().any(|p| super::extensions::page_is(p, title)))
+    }
+
     fn section(self) -> Section {
         match self {
             Self::Checkbox(Choice::Fix(fix)) if fix.is_unsafe() => Section::Dangerous,

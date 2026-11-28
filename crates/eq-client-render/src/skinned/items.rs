@@ -306,6 +306,7 @@ pub(crate) const fn framed_while_open(id: WindowId) -> bool {
             | WindowId::Options
             | WindowId::Training
             | WindowId::Skills
+            | WindowId::LoadSkin
             | WindowId::Confirmation
             | WindowId::Note
             | WindowId::Book

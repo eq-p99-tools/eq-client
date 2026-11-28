@@ -197,7 +197,10 @@ fn dangerous_section_groups_the_existing_choices_and_run_speed() {
         Fix::ZoneAnywhere,
     ];
     for size in [Vec2::new(640.0, 220.0), Vec2::new(180.0, 100.0)] {
-        let skin = source();
+        let mut skin = source();
+        // Without destination tabs, every choice remains on the generated QoL page.
+        skin.name = "CustomPage".into();
+        skin.title = None;
         let made = pages(std::slice::from_ref(&skin), WindowId::Options, size, None);
         let page = made.last().unwrap();
         let ordinary = label(page, "EQC_QoL_SettingsCaption");

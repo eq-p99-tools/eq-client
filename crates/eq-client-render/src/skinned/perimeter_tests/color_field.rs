@@ -310,3 +310,14 @@ fn outside_click_dismisses_the_editor_and_chat_swatch_edits_byte_precision() {
     );
     assert_eq!(saved.combat_text_incoming, [20, 40, 60]);
 }
+
+#[test]
+fn clicking_another_options_control_dismisses_the_open_picker() {
+    let mut form = form();
+    press_at(&mut form.app, form.window, Vec2::new(159.0, 9.0));
+    form.app.update();
+    release(&mut form.app);
+    let world = form.app.world_mut();
+    assert_eq!(world.query::<&Part>().iter(world).count(), 0);
+    assert!(world.resource::<Shown>().displayed(WindowId::Options));
+}
