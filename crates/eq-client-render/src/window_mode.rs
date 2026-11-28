@@ -130,6 +130,33 @@ mod tests {
         (app, window)
     }
 
+    #[test]
+    fn overlapping_skin_buttons_offer_only_the_available_window_mode() {
+        let (mut app, window) = app();
+        crate::clicks::testing::install(&mut app);
+        app.add_systems(Update, buttons);
+        let [on, off] = [true, false].map(|full| {
+            app.world_mut()
+                .spawn((
+                    Button,
+                    Interaction::None,
+                    SetFullscreen(full),
+                    Node::default(),
+                ))
+                .id()
+        });
+        app.update();
+        assert_eq!(app.world().get::<Node>(off).unwrap().display, Display::None);
+        crate::clicks::testing::click(&mut app, on);
+        assert_eq!(app.world().get::<Node>(on).unwrap().display, Display::None);
+        assert_eq!(app.world().get::<Node>(off).unwrap().display, Display::Flex);
+        crate::clicks::testing::click(&mut app, off);
+        assert_eq!(
+            app.world().get::<Window>(window).unwrap().mode,
+            WindowMode::Windowed
+        );
+    }
+
     fn event(key_code: KeyCode, logical_key: Key, repeat: bool) -> KeyboardInput {
         KeyboardInput {
             key_code,

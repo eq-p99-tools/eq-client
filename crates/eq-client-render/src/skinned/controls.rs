@@ -570,6 +570,7 @@ pub(crate) struct DropDown {
     choices: Vec<String>,
     /// How tall the open list may grow.
     list_height: f32,
+    filter_labels: Vec<String>,
     /// The open list.
     open: Option<Entity>,
     /// How the skin draws its box, which its open list is drawn in too.
@@ -652,6 +653,11 @@ pub(super) fn combobox(
                     Choosing::BugType => crate::report_windows::category_names(),
                 },
                 list_height: combobox.list_height,
+                filter_labels: if matches!(choosing, Choosing::FilterMode(Some(_))) {
+                    combobox.choices.clone()
+                } else {
+                    Vec::new()
+                },
                 open: None,
                 look: combobox.template.clone(),
             },
@@ -738,7 +744,7 @@ pub(crate) fn drop_downs(
                     if let Some(mode) = c
                         .modes(online.world().generation())
                         .into_iter()
-                        .find(|m| eq_client_core::chat_filters::mode_words(*m) == choice.choice)
+                        .find(|m| super::filters::matches_mode(*m, &choice.choice))
                     {
                         o.options.chat_filters.set(c, mode);
                     }
@@ -779,7 +785,7 @@ pub(crate) fn drop_downs(
             drop_down.choices = category
                 .modes(online.world().generation())
                 .into_iter()
-                .map(|mode| eq_client_core::chat_filters::mode_words(mode).to_owned())
+                .map(|mode| super::filters::mode_label(&drop_down.filter_labels, mode).to_owned())
                 .collect();
         }
         let list = open_choices(
@@ -934,7 +940,8 @@ pub(crate) fn show_choices(
         let shown = match drop_down.choosing {
             Choosing::FilterMode(category) => {
                 selected.as_deref().zip(options.as_deref()).map(|(s, o)| {
-                    eq_client_core::chat_filters::mode_words(
+                    super::filters::mode_label(
+                        &drop_down.filter_labels,
                         o.options.chat_filters.get(category.unwrap_or(s.filter)),
                     )
                     .to_owned()
@@ -1716,7 +1723,11 @@ mod tests {
             listing(Some(KEY_LIST), WindowId::Options),
             Some(Listing::Keys)
         );
-        assert_eq!(listing(Some("OFP_FilterList"), WindowId::Options), None);
+        assert_eq!(
+            listing(Some("OFP_FilterList"), WindowId::Options),
+            Some(Listing::FilterCategories)
+        );
+        assert_eq!(listing(Some("FilterList"), WindowId::Inventory), None);
         assert_eq!(
             listing(Some("MemberList"), WindowId::Guild),
             Some(Listing::Guild)

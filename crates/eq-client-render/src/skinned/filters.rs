@@ -1,12 +1,4 @@
-//! This client's Filters page in the Options window: one row per kind of
-//! message the server filters cover ([`eq_client_core::chat_filters`]),
-//! each a button that steps the kind's mode and a label that says it, cut
-//! from the skin's own controls.
-//!
-//! A skeleton: the official client's own filter controls on the skin are
-//! unread, as are the options behind each word (recording checklist
-//! 6.494b), so the rows are this client's own. Rows for a kind the
-//! generation's packet leaves out are hidden while that generation plays.
+//! Bind native filter widgets and append rows for categories the skin leaves out.
 use crate::windows::WindowId;
 use eq_client_assets::{
     sidl::{Align, Button, Element, Label, Page},
@@ -89,10 +81,7 @@ fn row_button(template: &Button, category: FilterCategory, area: Area) -> Button
     button.placed = true;
     button.checkbox = false;
     button.text = Some(kind_words(category).to_owned());
-    button.tooltip = Some(
-        "Click for the next mode the server takes for these. Which official option sets this is unread."
-            .to_owned(),
-    );
+    button.tooltip = Some("Click to select the next mode supported by this server.".to_owned());
     button.area = area;
     button
 }
@@ -107,12 +96,26 @@ fn skin_filters(page: &Page) -> bool {
             .is_some_and(|title| title.trim().eq_ignore_ascii_case("filters"))
 }
 
-/// The skin's pages, and for the Options window this client's Filters page,
-/// where the skin has a button to cut its rows from. The page takes the
-/// place of the skin's own filters page, whose controls are not wired, so
-/// the window keeps one Filters tab in the skin's place; a skin without one
-/// gets the page after its own. The page's note wraps within the page's
-/// width, `page_width`.
+pub(super) fn matches_mode(mode: eq_client_core::filters::FilterMode, label: &str) -> bool {
+    use eq_client_core::filters::FilterMode;
+    let alternate = match mode {
+        FilterMode::Show => "All",
+        FilterMode::Hide => "Off",
+        FilterMode::MineOnly => "Me",
+        FilterMode::GroupOnly => "Group",
+    };
+    label.eq_ignore_ascii_case(alternate)
+        || label.eq_ignore_ascii_case(eq_client_core::chat_filters::mode_words(mode))
+}
+
+pub(super) fn mode_label(labels: &[String], mode: eq_client_core::filters::FilterMode) -> &str {
+    labels.iter().find(|s| matches_mode(mode, s)).map_or(
+        eq_client_core::chat_filters::mode_words(mode),
+        String::as_str,
+    )
+}
+
+/// Preserve authored widgets and append the missing rows below them.
 pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_, [Page]> {
     if owner != WindowId::Options || pages.is_empty() || pages.iter().any(|page| page.name == PAGE)
     {
@@ -272,6 +275,26 @@ pub(super) fn content_height(page: &Page) -> Option<f32> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn native_filter_menus_keep_their_authored_mode_words() {
+        use eq_client_core::filters::FilterMode;
+        let labels = ["All", "Me", "Group", "Off"].map(str::to_owned);
+        for (mode, label) in [
+            (FilterMode::Show, "All"),
+            (FilterMode::MineOnly, "Me"),
+            (FilterMode::GroupOnly, "Group"),
+            (FilterMode::Hide, "Off"),
+        ] {
+            assert_eq!(mode_label(&labels, mode), label);
+            assert!(matches_mode(mode, label));
+        }
+        assert_eq!(authored("Chat6"), Some(FilterCategory::MyMisses));
+        assert_eq!(
+            authored("BardSongsComboBox"),
+            Some(FilterCategory::BardSongs)
+        );
+    }
 
     #[test]
     fn the_page_has_a_row_for_every_kind_with_one_and_is_added_once() {

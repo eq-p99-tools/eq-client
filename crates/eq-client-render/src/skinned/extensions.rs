@@ -102,6 +102,23 @@ fn destination(f: Fix) -> Option<&'static str> {
     }
 }
 
+fn target_page(pages: &mut [Page], f: Fix) -> Option<&mut Page> {
+    let name = destination(f)?;
+    let page = pages.iter_mut().find(|p| page_is(p, name))?;
+    let advanced = matches!(f, Fix::RichLighting | Fix::TorchShadows | Fix::BetterWater);
+    let child = page.pieces.iter().position(|(_, e)| match e {
+        Element::Tabs(t) => t.pages.iter().any(|p| page_is(p, "Advanced")),
+        _ => false,
+    });
+    if advanced && let Some(index) = child {
+        let Element::Tabs(tabs) = &mut page.pieces[index].1 else {
+            unreachable!()
+        };
+        return tabs.pages.iter_mut().find(|p| page_is(p, "Advanced"));
+    }
+    Some(page)
+}
+
 fn append_button(
     page: &mut Page,
     id: String,
@@ -169,9 +186,7 @@ pub(super) fn relocate(pages: &mut [Page], width: f32) {
             continue;
         }
         if let Some(f) = qol_checkbox(&id) {
-            if let Some(dest) =
-                destination(f).and_then(|name| {let display=pages.iter_mut().find(|p|page_is(p,name))?;
- if matches!(f,Fix::RichLighting|Fix::TorchShadows|Fix::BetterWater) && let Some(idx)=display.pieces.iter().position(|(_,e)|matches!(e,Element::Tabs(t) if t.pages.iter().any(|p|page_is(p,"Advanced")))) {let Element::Tabs(t)=&mut display.pieces[idx].1 else {unreachable!()}; return t.pages.iter_mut().find(|p|page_is(p,"Advanced"));} Some(display) })
+            if let Some(dest) = target_page(pages, f)
                 && let Element::Button(b) = e
             {
                 append_button(dest, id, b, f.is_unsafe(), width);
@@ -481,5 +496,64 @@ mod tests {
         assert_eq!(count, 72);
         assert!(contains(&pages, "PCSpellsComboBox"));
         assert!(!contains(&pages, "EQC_Filter_pcspells"));
+    }
+    #[test]
+    fn spell_effects_uses_the_nested_spell_page_and_existing_saved_control() {
+        let general = super::super::qol::tests::source();
+        let spell = Page {
+            name: "SpellParticlesPage".into(),
+            title: Some("Spell".into()),
+            pieces: vec![],
+            ..general.clone()
+        };
+        let nested = TabBox {
+            name: "ParticleTabs".into(),
+            area: None,
+            pages: vec![spell],
+            tab_frame: None,
+            page_frame: None,
+        };
+        let display = Page {
+            name: "Display".into(),
+            title: Some("Display".into()),
+            pieces: vec![("ParticleTabs".into(), Element::Tabs(nested))],
+            ..general.clone()
+        };
+        let tabs = TabBox {
+            name: "OptionsTabs".into(),
+            area: None,
+            pages: vec![display, general],
+            tab_frame: None,
+            page_frame: None,
+        };
+        let pages = options_pages(&tabs, Vec2::new(380.0, 400.0));
+        let Element::Tabs(t) = &pages[0].pieces[0].1 else {
+            panic!("nested tabs")
+        };
+        assert_eq!(t.pages.len(), 1);
+        assert!(contains(&t.pages, "EQC_SpellEffectsCheckbox"));
+        assert!(!contains(&pages[1..], "EQC_SpellEffectsCheckbox"));
+        let mut app = crate::testing::app();
+        app.add_systems(bevy::prelude::Update, crate::options::toggle);
+        let control = app
+            .world_mut()
+            .spawn((
+                bevy::prelude::Interaction::None,
+                crate::options::OptionCheckbox(eq_client_core::options::Toggle::SpellEffects),
+            ))
+            .id();
+        crate::clicks::testing::click(&mut app, control);
+        let options = &app
+            .world()
+            .resource::<crate::options::OptionsState>()
+            .options;
+        assert!(!options.spell_effects);
+        assert!(
+            !eq_client_core::options::Options::read(
+                &options.text(),
+                eq_client_core::options::Options::default()
+            )
+            .spell_effects
+        );
     }
 }
