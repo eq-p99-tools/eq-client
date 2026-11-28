@@ -7619,6 +7619,8 @@ mod tests {
 
     #[test]
     fn regaining_focus_during_a_wait_preserves_a_requested_boundary_pause() {
+        use bevy::window::WindowFocused;
+
         let steps = vec![
             Step::Wait(Duration::from_secs(1)),
             Step::Press(vec![KeyCode::KeyA]),
