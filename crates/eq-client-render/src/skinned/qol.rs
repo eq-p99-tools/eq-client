@@ -358,7 +358,7 @@ enum Control<'a> {
 }
 
 impl Control<'_> {
-    /// Stock-page additions and controls supplied by a skin take no space on QoL.
+    /// Stock-page additions and controls supplied by a skin take no space on the quality-of-life page.
     fn relocated(self, pages: &[eq_client_assets::sidl::Page]) -> bool {
         let tab = match self {
             Self::Checkbox(Choice::Fix(fix)) => {

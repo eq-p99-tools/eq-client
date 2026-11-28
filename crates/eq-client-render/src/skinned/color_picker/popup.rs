@@ -78,18 +78,18 @@ pub(crate) fn draw_swatch(
 #[derive(Component)]
 pub(crate) struct ResetColors;
 
+// The Change button and selectable list rows keep their normal button backgrounds.
+type PaintedSwatch = (
+    Without<super::super::option_lists::ChangeColor>,
+    Without<super::super::option_lists::Row>,
+);
+
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn show_swatches(
     reset: crate::clicks::Clicks<ResetColors>,
     mut state: ResMut<OptionsState>,
     look: Option<Res<crate::chat::ChatLook>>,
-    mut colors: Query<
-        (&Swatch, &mut BackgroundColor),
-        (
-            Without<super::super::option_lists::ChangeColor>,
-            Without<super::super::option_lists::Row>,
-        ),
-    >,
+    mut colors: Query<(&Swatch, &mut BackgroundColor), PaintedSwatch>,
     mut samples: Query<
         (
             &super::super::option_lists::ColorSample,
