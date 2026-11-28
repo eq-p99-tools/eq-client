@@ -7043,6 +7043,48 @@ pub(super) mod tests {
     }
 
     #[test]
+    fn flight_sends_both_held_axes_and_drops_the_released_axis() {
+        let (mut app, rx) = app();
+        movement_choice(&mut app, Fix::Fly, true);
+        for (act, key) in [
+            (Act::Forward, KeyCode::KeyW),
+            (Act::StrafeRight, KeyCode::KeyD),
+        ] {
+            crate::keys::testing::bind(&mut app, act, crate::keys::Chord::key(key));
+        }
+        app.world_mut().resource_mut::<Controls>().diagonal_rates = DiagonalRates {
+            run: Some(3.0),
+            walk: Some(1.5),
+        };
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::KeyW);
+        keys.press(KeyCode::KeyD);
+        app.update();
+        let ClientCommand::Move(combined) = rx.try_recv().unwrap() else {
+            panic!("expected flight movement")
+        };
+        assert_eq!(combined.mode, MovementMode::Forward);
+        assert!(
+            combined.position.x.abs() > 0.01 && combined.position.y.abs() > 0.01,
+            "{:?}",
+            combined.position
+        );
+        accept(&mut app, &combined);
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.release(KeyCode::KeyD);
+        app.update();
+        let ClientCommand::Move(straight) = rx.try_recv().unwrap() else {
+            panic!("expected forward movement")
+        };
+        let dx = straight.position.x - combined.position.x;
+        let dy = straight.position.y - combined.position.y;
+        assert!(dx.abs().min(dy.abs()) < 0.001 && dx.abs().max(dy.abs()) > 0.01);
+        assert_eq!(straight.position.heading, combined.position.heading);
+    }
+
+    #[test]
     fn flight_ascends_hovers_and_descends_without_jump_notices_then_resumes_gravity() {
         let (mut app, receiver) = app();
         movement_choice(&mut app, Fix::Fly, true);
