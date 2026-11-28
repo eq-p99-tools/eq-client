@@ -188,6 +188,57 @@ fn run(slope: bool, pitch: f32, side: Option<KeyCode>, turn: f32) -> Outcome {
     run_with_receipt(slope, pitch, side, turn, true)
 }
 
+#[test]
+fn scripted_face_preserves_earned_floor_swim_for_the_next_rmb_strafe() {
+    let (mut f, mut session) = scene(true, 0.);
+    f.app
+        .world_mut()
+        .resource_mut::<Controls>()
+        .suppress_floor_swim = false;
+    let mut replies = Replies::new();
+    let mut settling = Outcome::default();
+    for tick in 0..180 {
+        drive(&mut f, &mut session, &mut settling, &mut replies, tick, 0.);
+    }
+    assert!(settling.physical_proposals > 0);
+    let start = session.position().heading;
+    let goal = (start + 64.).rem_euclid(512.);
+    f.app.insert_resource(
+        crate::script::Script::new(Vec::new()).holding_for_test(vec![], Some(goal)),
+    );
+    let mut turning = Outcome::default();
+    drive(&mut f, &mut session, &mut turning, &mut replies, 180, 0.);
+    let heading = f
+        .app
+        .world()
+        .resource::<Controls>()
+        .floor_swim
+        .heading()
+        .expect("script facing keeps the active wet controller");
+    assert!(arc(start, heading).abs() < 64.);
+    for tick in 181..300 {
+        drive(&mut f, &mut session, &mut turning, &mut replies, tick, 0.);
+    }
+    assert!(turning.physical_proposals > 0);
+    assert!(arc(session.position().heading, goal).abs() < 1.);
+    f.app.world_mut().remove_resource::<crate::script::Script>();
+    crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
+    latency_tests::key(&mut f.app, KeyCode::KeyA, true);
+    let mut strafing = Outcome::default();
+    for tick in 300..480 {
+        drive(&mut f, &mut session, &mut strafing, &mut replies, tick, 1.);
+    }
+    assert!(
+        strafing.physical_proposals > 0 && strafing.path_xy > 0.,
+        "{strafing:?}"
+    );
+    assert_eq!(
+        strafing.refused + strafing.replay_mismatches,
+        0,
+        "{strafing:?}"
+    );
+}
+
 fn run_with_receipt(
     slope: bool,
     pitch: f32,
