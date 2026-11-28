@@ -27,8 +27,19 @@ pub(super) fn contains(pages: &[Page], id: &str) -> bool {
         .any(|piece| named(piece, id))
 }
 
+pub(super) const START: &str = "EQC_ExtensionStart";
+pub(super) fn begin(page: &mut Page) {
+    if !page.pieces.is_empty() && !page.pieces.iter().any(|(id, _)| id == START) {
+        page.pieces
+            .push((START.into(), Element::Other(START.into())));
+    }
+}
 pub(super) fn bottom(page: &Page) -> f32 {
-    page.pieces
+    pieces_bottom(&page.pieces)
+}
+
+pub(super) fn pieces_bottom(pieces: &[Piece]) -> f32 {
+    pieces
         .iter()
         .filter_map(|(_, e)| match e {
             Element::Tabs(t) => t.area,
@@ -97,6 +108,7 @@ fn append_button(
     risk: bool,
     width: f32,
 ) {
+    begin(page);
     let y = bottom(page) + 6.0;
     let status = if risk {
         "Unsafe client addition"
@@ -147,6 +159,9 @@ pub(super) fn relocate(pages: &mut [Page], width: f32) {
     });
     relocate_scale(pages, &mut controls, width);
     for (id, e) in controls {
+        if id == super::qol::OUTLINE_TRACKED || id == "EQC_QoL_MapCaption" {
+            continue;
+        }
         if let Some(f) = qol_checkbox(&id) {
             if contains(pages, &id) {
                 continue;
@@ -195,6 +210,7 @@ fn relocate_scale(pages: &mut [Page], controls: &mut Vec<Piece>, width: f32) {
         controls.retain(|(id, _)| !ids.contains(&id.as_str()));
         return;
     }
+    begin(&mut pages[d]);
     let y = bottom(&pages[d]) + 6.0;
     let mut moved = Vec::new();
     for id in ids {

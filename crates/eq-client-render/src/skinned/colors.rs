@@ -57,6 +57,7 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, width: f32) -> Cow<'_, [Pag
     let width = (width - 28.0).max(18.0);
     let has_list = page.pieces.iter().any(|(_,e)| matches!(e,Element::Listbox(l) if matches!(l.id.as_deref(),Some("ColorChooseList" | "OCP_ColorChooseList"))));
     let has_reset=page.pieces.iter().any(|(_,e)| matches!(e,Element::Button(b) if matches!(b.id.as_deref(),Some("OCP_UserColorDefault" | "UserColorDefault"))));
+    super::extensions::begin(&mut page);
     let start = super::extensions::bottom(&page);
     let mut row = Rows {
         page: &mut page,
