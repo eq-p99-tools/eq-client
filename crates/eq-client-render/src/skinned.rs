@@ -1658,6 +1658,7 @@ type Stateful<'w, 's> = Query<
         Has<crate::map::OutlineCheckbox>,
         (
             Option<&'static SlashButton>,
+            Option<&'static crate::options::FilterButton>,
             Has<Greyed>,
             Has<crate::hud::hotbar::scripts::Latched>,
             Has<scrollbar::ScrollArrow>,
@@ -1698,7 +1699,7 @@ pub(crate) fn buttons(
         attack,
         checkbox,
         outline_checkbox,
-        (slash, greyed, latched, arrow, character, report),
+        (slash, filter, greyed, latched, arrow, character, report),
         interaction,
         mut image,
     ) in &mut buttons
@@ -1720,6 +1721,10 @@ pub(crate) fn buttons(
             }) =>
             {
                 on
+            }
+            _ if let Some(filter) = filter => {
+                options.options.chat_filters.get(filter.0)
+                    == eq_client_core::filters::FilterMode::Show
             }
             _ if outline_checkbox => map.outlines(),
             (Some(selector), ..) => shown.displayed(selector.0),

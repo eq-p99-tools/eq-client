@@ -114,10 +114,8 @@ fn skin_filters(page: &Page) -> bool {
 /// gets the page after its own. The page's note wraps within the page's
 /// width, `page_width`.
 pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_, [Page]> {
-    if owner != WindowId::Options || pages.iter().any(|page| page.name == PAGE) {
-        return Cow::Borrowed(pages);
-    }
-    if pages.is_empty() {
+    if owner != WindowId::Options || pages.is_empty() || pages.iter().any(|page| page.name == PAGE)
+    {
         return Cow::Borrowed(pages);
     }
     if pages.iter().any(|p| p.pieces.iter().any(|(_,e)| matches!(e, Element::Listbox(l) if matches!(l.id.as_deref(), Some("FilterList" | "OFP_FilterList"))))) {

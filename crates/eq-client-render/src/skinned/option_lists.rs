@@ -100,12 +100,11 @@ pub(super) fn chat_rows(rows: &mut EntityCommands, columns: &[f32]) {
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(crate) fn update(
     mut commands: Commands,
-    online: Res<OnlineState>,
+    (online, options): (Res<OnlineState>, Res<OptionsState>),
     mut selected: ResMut<Selection>,
     mut lists: Query<(Entity, &mut FilterRows)>,
     mut rows: Query<(&Row, &Interaction, &mut BackgroundColor)>,
     mut change: Query<&mut Swatch, With<ChangeColor>>,
-    options: Res<OptionsState>,
     mut values: Query<(&FilterValue, &mut Text)>,
 ) {
     let dialect = online.world().generation();

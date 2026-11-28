@@ -244,8 +244,7 @@ fn default_size_wrapped_qol_reaches_speed(wheel_lines: Option<f32>) {
         let size = Vec2::new(395.0, height);
         let tab_box = two_row_options();
         let page_frame = tab_box.page_frame.as_ref();
-        let particles = super::super::particles::pages(&tab_box.pages, WindowId::Options);
-        let pages = super::super::qol::pages(&particles, WindowId::Options, size, page_frame);
+        let pages = super::super::extensions::options_pages(&tab_box, size);
         let content = super::super::qol::content_height(pages.last().unwrap()).unwrap();
         let insets = frame::insets(page_frame.unwrap());
         let (_, pixels) = fixture();
@@ -263,18 +262,18 @@ fn default_size_wrapped_qol_reaches_speed(wheel_lines: Option<f32>) {
         app.update();
         app.update();
         // The Filters page (6.494b) comes before QoL, which stays last.
-        assert_eq!(controls.len(), 10);
+        assert_eq!(controls.len(), 9);
         let first_tab = bounds(app.world(), controls[0].1);
-        let particles_tab = bounds(app.world(), controls[7].1);
-        let qol_tab = bounds(app.world(), controls[9].1);
-        assert!((particles_tab.min.y - first_tab.min.y).abs() < f32::EPSILON);
+        let filters_tab = bounds(app.world(), controls[7].1);
+        let qol_tab = bounds(app.world(), controls[8].1);
+        assert!((filters_tab.min.y - first_tab.min.y).abs() < f32::EPSILON);
         assert!(qol_tab.min.y >= first_tab.max.y);
-        crate::clicks::testing::click(&mut app, controls[9].1);
+        crate::clicks::testing::click(&mut app, controls[8].1);
         let page = app
             .world_mut()
             .query::<(Entity, &SkinPage)>()
             .iter(app.world())
-            .find(|(_, page)| page.0.index == 9)
+            .find(|(_, page)| page.0.index == 8)
             .unwrap()
             .0;
         let view = bounds(app.world(), page);
