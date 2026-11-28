@@ -481,7 +481,6 @@ pub fn run(
     }
     let screenshot = config.screenshot.clone();
     let steps = config.script.clone();
-    let arrow = !config.hide_script_pointer;
     let follow = config.script_follow.clone();
     let script_input_mode = config.script_input_mode;
     let installed_client = config.installed_client;
@@ -601,7 +600,7 @@ pub fn run(
     loading::install(&mut app);
     device_pixels::install(&mut app);
     install_overlays(&mut app);
-    install_script(&mut app, (steps, follow), online, arrow, script_input_mode);
+    install_script(&mut app, (steps, follow), online, script_input_mode);
     if let Err(error) = script::control::install(&mut app) {
         error!(%error, "Cannot create script control directory; use a new directory");
         return 2;
@@ -747,12 +746,11 @@ fn exit_status(exit: &AppExit) -> i32 {
 /// Drives a script after UI focus, optionally following its file; it is
 /// attended unless background mode, a local session or an offline preview
 /// explicitly permits unfocused input.
-/// The script pointer's arrow is drawn while it runs, unless `arrow` is false.
+/// The pointer art is shared by scripts and the unfocused game window.
 fn install_script(
     app: &mut App,
     (program, follow): (Option<script::Program>, Option<(PathBuf, usize)>),
     online: bool,
-    arrow: bool,
     input_mode: script::InputMode,
 ) {
     script::install_input(app, input_mode);
@@ -799,14 +797,16 @@ fn install_script(
                 .in_set(Stage::Typing),
         ),
     );
-    if arrow {
-        app.init_resource::<script::pointer::SkinArrow>()
-            .add_systems(Startup, script::pointer::spawn)
-            .add_systems(
-                Update,
-                script::pointer::read_arrow.before(script::pointer::draw),
-            );
-    }
+    app.init_resource::<script::pointer::SkinArrow>()
+        .init_resource::<script::pointer::LastPointer>()
+        .add_systems(Startup, script::pointer::spawn)
+        .add_systems(PreUpdate, script::pointer::remember_pointer)
+        .add_systems(
+            Update,
+            script::pointer::read_arrow
+                .before(script::pointer::draw)
+                .before(inventory::cursor::update),
+        );
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.

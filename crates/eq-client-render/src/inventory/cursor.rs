@@ -57,6 +57,22 @@ type Scripted<'w> = (
     Option<Res<'w, crate::script::ScriptPointer>>,
 );
 
+#[derive(bevy::ecs::system::SystemParam)]
+pub(crate) struct CursorWindow<'w, 's> {
+    primary: Query<
+        'w,
+        's,
+        (
+            Entity,
+            &'static Window,
+            Option<&'static bevy::window::CursorIcon>,
+        ),
+        With<PrimaryWindow>,
+    >,
+    last: Option<Res<'w, crate::script::pointer::LastPointer>>,
+    arrow: Option<Res<'w, crate::script::pointer::SkinArrow>>,
+}
+
 /// Follows the pointer using confirmed/predicted inventory state, never a
 /// selected slot; while a script runs, it follows the script pointer.
 #[allow(clippy::too_many_arguments, clippy::needless_pass_by_value)]
@@ -68,7 +84,7 @@ pub(crate) fn update(
     mut commands: Commands,
     state: Res<InventoryState>,
     online: Res<crate::online::OnlineState>,
-    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
+    window: CursorWindow,
     (scale, look, scripted): (
         Option<Res<UiScale>>,
         Res<crate::skinned::CursorLook>,
@@ -84,7 +100,6 @@ pub(crate) fn update(
     mut stamp: Local<Option<Drawn>>,
     mut art: crate::sheets::Art,
     drag: Res<crate::windows::DragState>,
-    mut resize_cursor: Local<Option<bevy::window::SystemCursorIcon>>,
 ) {
     let Ok((entity, mut node, mut background)) = root.single_mut() else {
         return;
@@ -124,28 +139,33 @@ pub(crate) fn update(
                 .is_some_and(|script| script.pointer_owned())
         })
         .map(|pointer| pointer.0 / factor);
-    let pointer = windows.single().ok().and_then(|(_, window)| {
-        let pointer = match (script_pointer, window.cursor_position()) {
-            (Some(pointer), _) => Some(pointer),
-            (None, Some(pointer)) => window.focused.then_some(pointer / factor),
-            (None, None) => hovered(),
-        }?;
-        Some((pointer, window.size() / factor))
+    let primary = window.primary.single().ok();
+    let pointer = primary.and_then(|(entity, win, _)| {
+        let pointer = script_pointer.or_else(|| {
+            if win.focused {
+                win.cursor_position().map(|at| at / factor).or_else(hovered)
+            } else {
+                window
+                    .last
+                    .as_ref()?
+                    .parked(entity, win)
+                    .map(|at| at / factor)
+            }
+        })?;
+        Some((pointer, win.size() / factor))
     });
     let carried = !state.cursor_drop_hidden(online.world())
         && (item.is_some() || coins.is_some() || spell.is_some() || hotkey.is_some());
-    if let Ok((entity, window)) = windows.single() {
-        let icon = (!carried && window.focused)
+    if let Some((entity, win, current)) = primary {
+        let icon = (!carried && win.focused)
             .then(|| drag.resize_cursor())
-            .flatten();
-        if icon != *resize_cursor {
-            commands
-                .entity(entity)
-                .insert(bevy::window::CursorIcon::System(
-                    icon.unwrap_or(bevy::window::SystemCursorIcon::Default),
-                ));
+            .flatten()
+            .map(bevy::window::CursorIcon::System)
+            .or_else(|| window.arrow.as_ref()?.native_icon())
+            .unwrap_or_default();
+        if current != Some(&icon) {
+            commands.entity(entity).insert(icon);
         }
-        *resize_cursor = icon;
     }
     node.display = if carried && pointer.is_some() {
         Display::Flex
@@ -472,6 +492,93 @@ mod tests {
             words.iter().any(|text| text.starts_with("Held stack x5")),
             "{words:?}"
         );
+    }
+
+    #[test]
+    fn focus_loss_parks_the_arrow_and_item_through_mouse_exit_and_refocus() {
+        use crate::script::pointer::{self, LastPointer, PointerArt};
+        use bevy::window::{CursorMoved, WindowEvent, WindowFocused};
+        let mut app = crate::testing::app();
+        app.init_resource::<LastPointer>()
+            .add_message::<WindowEvent>()
+            .add_systems(
+                Startup,
+                (
+                    |mut commands: Commands| spawn(&mut commands),
+                    pointer::spawn,
+                ),
+            )
+            .add_systems(PreUpdate, pointer::remember_pointer)
+            .add_systems(Update, (update, pointer::draw));
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        let position = |app: &mut App, focused, at| {
+            let mut win = app.world_mut().get_mut::<Window>(window).unwrap();
+            win.focused = focused;
+            win.set_cursor_position(at);
+        };
+        let shown = |app: &mut App| {
+            let world = app.world_mut();
+            let pair = |n: &Node| (n.display, n.left, n.top);
+            (
+                pair(
+                    world
+                        .query_filtered::<&Node, With<PointerArt>>()
+                        .single(world)
+                        .unwrap(),
+                ),
+                pair(
+                    world
+                        .query_filtered::<&Node, With<Overlay>>()
+                        .single(world)
+                        .unwrap(),
+                ),
+            )
+        };
+        crate::online::testing::inventory(
+            &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+            eq_client_core::inventory::InventoryUpdate::Snapshot(crate::preview::items()),
+        );
+        position(&mut app, false, None);
+        app.update();
+        assert_eq!(shown(&mut app).0.0, Display::None);
+        assert_eq!(shown(&mut app).1.0, Display::None);
+        position(&mut app, true, Some(Vec2::new(60., 20.)));
+        app.update();
+        assert_eq!(shown(&mut app).0.0, Display::None);
+        let moved = |x, y| {
+            WindowEvent::CursorMoved(CursorMoved {
+                window,
+                position: Vec2::new(x, y),
+                delta: None,
+            })
+        };
+        app.world_mut().write_message(moved(110., 80.));
+        app.world_mut()
+            .write_message(WindowEvent::WindowFocused(WindowFocused {
+                window,
+                focused: false,
+            }));
+        app.world_mut().write_message(moved(20., 10.));
+        position(&mut app, false, None);
+        app.update();
+        assert_eq!(
+            shown(&mut app),
+            (
+                (Display::Flex, px(110), px(80)),
+                (Display::Flex, px(126), px(96))
+            )
+        );
+        position(&mut app, false, Some(Vec2::new(9., 3.)));
+        app.update();
+        assert_eq!(shown(&mut app).1, (Display::Flex, px(126), px(96)));
+        position(&mut app, true, Some(Vec2::new(30., 15.)));
+        app.update();
+        assert_eq!(shown(&mut app).0.0, Display::None);
+        assert_eq!(shown(&mut app).1, (Display::Flex, px(46), px(31)));
     }
 
     #[test]

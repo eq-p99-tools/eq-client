@@ -31,6 +31,7 @@ bevy = { version = "0.19.1", default-features = false, features = [
   "bevy_ui_render",
   "bevy_ui_widgets",
   "bevy_winit",
+  "custom_cursor",
   "default_font",
   "multi_threaded",
   "mp3",
