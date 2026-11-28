@@ -12,7 +12,7 @@ Remaining differences from the installed Titanium Options window, checked agains
 | Receive Guild Invites | Missing binding | New feature | Receiving an invitation is separate from saving and honoring an invitation policy. Verify who enforces the preference. |
 | Allow Context Menus | Missing binding | New feature | Define which existing menus obey the switch and supply a common input gate across windows. |
 | Combat Music | Preference only | New feature | The option and slash command already exist. Encounter track selection and playback are missing. |
-| Load UI Skin | Command only | New feature | `/loadskin` already switches skins. The button needs a skin browser, selection and error feedback. |
+| Keep Your Layout in Load UI Skin | The browser always preserves window placements | New feature | Verify the native reset scope before supporting the unchecked state. |
 | Allow SysInfo Send | Missing | Skip | The historical vendor reporting service has no destination in this client. |
 | Target Click Shows Help | Missing binding | New feature | Implement the target-specific help and when it appears before exposing a switch. |
 | Use Tell Windows | Missing binding | New feature | Detachable chat tabs exist. Automatically routing tells into individual conversations requires additional behavior. |
