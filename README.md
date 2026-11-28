@@ -9,10 +9,9 @@ EverQuest installation you supply. Networking comes from the
 [`eq-network`](https://github.com/eq-p99-tools/eq-network) libraries. No game
 assets are included in this repository or its builds.
 
-The rule throughout is parity: the client answers each server the way that
-server's original client does, from the same signals, with no per-server
-special cases. Anything that departs from the original client is a
-quality-of-life choice you turn on yourself.
+The client uses the original client for each generation as its reference. The
+network session selects the server policy and advertises the actions available.
+The [settings guide](docs/settings.md) lists optional helpers and their defaults.
 
 The project is under active development. Each feature is described in three
 stages: implemented in code, offered by a server's policy, and verified live on
@@ -218,18 +217,10 @@ Wire formats and server policies live in
 dependency by Git revision in the committed lockfile, so no sibling checkout is
 needed.
 
-Read the [architecture contracts](ARCHITECTURE.md) and the
-[development guide](docs/development.md) before extending a feature. Checks to
-run locally:
-
-```console
-cargo fmt --all --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
-```
-
-Pull requests run the Format check automatically. The full Linux and Windows
-workflow runs on demand, so a green Format check is not a full test run.
+See the [architecture contracts](ARCHITECTURE.md) for module ownership and the
+[development guide](docs/development.md) for local Windows validation commands.
+Pull requests run Format and Docs automatically. The manual CI workflow runs
+strict Clippy and workspace tests on the selected platform.
 
 ## License
 

@@ -1,13 +1,10 @@
 # EQMac ability menus and recovery
 
-The client pins networking commit
-[`ba81b4216195851a53cbb8b729f3037172edcb31`](https://github.com/eq-p99-tools/eq-network/pull/182),
-which carries the abilities change of
-[#180](https://github.com/eq-p99-tools/eq-network/pull/180).
-It includes the 15 supported TAKP/Quarm abilities introduced in
-[#176](https://github.com/eq-p99-tools/eq-network/pull/176), the prior spell
-and movement work, and the idle world-session reliability fix in
-[#179](https://github.com/eq-p99-tools/eq-network/pull/179).
+The EQMac ability menu uses the network library’s supported TAKP and Quarm
+abilities. The [original ability set](https://github.com/eq-p99-tools/eq-network/pull/176)
+and [recovery changes](https://github.com/eq-p99-tools/eq-network/pull/180)
+document their introduction. The current network revision is recorded in
+[Cargo.lock](../Cargo.lock).
 
 The profile decoder now supplies the 100 raw EQMac skill words that were
 previously absent at admission. This lets the existing Skills window and
