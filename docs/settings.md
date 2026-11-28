@@ -125,7 +125,7 @@ and step it with `click("filter", "<kind>")`, by the kind's stable name
 
 ## Display and audio
 
-Options provides Max FPS, Far Clip Plane and Mouselook Sensitivity controls.
+Display → Max FPS changes the in-game frame cap in both a resizable window and borderless fullscreen. Windows supplies the display resolution and refresh rate. Options also provides Far Clip Plane and Mouselook Sensitivity.
 The frame cap starts from the installed `eqclient.ini` `MaxFPS`, or 60 if absent;
 `--max-fps` overrides it, and the character's saved Options choice takes priority.
 Zero leaves pacing to vsync. `--camera-distance` sets the initial distance;
@@ -134,6 +134,8 @@ Zero leaves pacing to vsync. `--camera-distance` sets the initial distance;
 `--ui-skin <name>` selects a skin under the installation's `uifiles`, otherwise
 the character's compatible installed skin/settings can be used. Missing or
 unsupported controls may use this client's own presentation.
+
+In General, choose **Load UI Skin**, select an installed folder, then press **Load Skin**. Closing the dialog keeps the current skin. The browser and the slash command both keep saved window placements.
 
 `/loadskin <name>` switches to another skin under `uifiles` in game, as the
 official client's command does, and the windows redraw at once. The trailing

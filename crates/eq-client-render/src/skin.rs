@@ -82,11 +82,8 @@ fn read_saved(text: &str) -> Option<String> {
 /// to letter case as the official client's file system matches it.
 fn installed_skin(eq_directory: &std::path::Path, name: &str) -> Option<String> {
     eq_client_assets::ui::skin_file(eq_directory, name, "EQUI.xml").ok()?;
-    std::fs::read_dir(eq_directory.join("uifiles"))
-        .ok()?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| entry.file_name().into_string().ok())
+    browser::folders(eq_directory)
+        .into_iter()
         .find(|folder| folder.eq_ignore_ascii_case(name))
 }
 

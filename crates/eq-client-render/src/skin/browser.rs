@@ -24,7 +24,7 @@ pub(crate) struct Folder(pub(super) String);
 #[derive(Resource, Default)]
 pub(crate) struct Selection(Option<String>);
 
-fn folders(root: &std::path::Path) -> Vec<String> {
+pub(super) fn folders(root: &std::path::Path) -> Vec<String> {
     let Ok(entries) = std::fs::read_dir(root.join("uifiles")) else {
         return Vec::new();
     };
