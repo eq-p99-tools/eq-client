@@ -1379,7 +1379,9 @@ impl Controls {
             // It arrives after the session's stamp, so this is never faster.
             let lower = lower_speeds(self.speeds(), grant);
             self.set_speeds(lower);
-            self.straddle = Some((Instant::now(), grant));
+            // On the controller's clock, which a span's start is measured
+            // on (`settle`).
+            self.straddle = Some((self.now(), grant));
             if let (Some(airborne), Some(speed)) = (self.airborne.as_mut(), lower.units_per_second)
             {
                 airborne.limit_drift(speed);
@@ -15081,6 +15083,34 @@ pub(super) mod tests {
         controls.settle(next);
         assert_eq!(controls.speed, Some(20.0), "the span straddles the grant");
         assert!(controls.straddle.is_some());
+        controls.last_sent = Some(next);
+        controls.last_accepted = next;
+        controls.settle(next + Duration::from_millis(100));
+        assert_eq!(controls.speed, Some(30.0), "the next span uses the raise");
+        assert!(controls.straddle.is_none());
+    }
+
+    #[test]
+    fn a_grant_arrives_and_settles_on_the_controllers_own_clock() {
+        // A controller whose clock runs behind the wall clock, as a test's
+        // stepped clock does when a loaded machine is slow to build its
+        // scene. The grant's arrival is on that clock, so the next span
+        // settles it; on the wall clock it never would.
+        let titanium = eq_client_core::GameDialect::Titanium.root();
+        let behind = Instant::now()
+            .checked_sub(Duration::from_secs(10))
+            .expect("a clock ten seconds in");
+        let mut controls = Controls {
+            speed: Some(20.0),
+            moving: true,
+            test_now: Some(behind),
+            last_accepted: behind,
+            last_sent: Some(behind),
+            ..Default::default()
+        };
+        controls.grant(speeds_grant(30.0, None), titanium);
+        assert_eq!(controls.straddle.unwrap().0, behind);
+        let next = behind + Duration::from_millis(250);
         controls.last_sent = Some(next);
         controls.last_accepted = next;
         controls.settle(next + Duration::from_millis(100));
