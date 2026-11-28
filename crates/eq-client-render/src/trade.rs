@@ -131,16 +131,27 @@ impl TradeState {
     }
 
     /// Both buttons and a delayed confirmation use the same current request gates.
-    fn can_take_loot(&self, world: &ClientWorld, place: u16) -> bool {
-        !self.range.closing(world)
+    fn can_take_loot(
+        &self,
+        world: &ClientWorld,
+        place: u16,
+        chat: &mut super::chat::ChatState,
+    ) -> bool {
+        let ready = !self.range.closing(world)
             && self
                 .loot
                 .as_ref()
                 .is_some_and(|window| window.pending.is_none())
             && world
                 .loot()
-                .is_some_and(|loot| loot.items.contains_key(&place))
-            && loot_clicks::cursor_empty(world)
+                .is_some_and(|loot| loot.items.contains_key(&place));
+        if ready && !loot_clicks::cursor_empty(world) {
+            chat.history.push(super::chat::system_line(
+                "Place the item on your cursor before looting.",
+            ));
+            return false;
+        }
+        ready
     }
 
     /// The spawn a scene click or the Use key asked to use, until taken.
@@ -816,7 +827,8 @@ pub(super) fn input(
         };
         match action {
             Action::Take { place, auto } => {
-                if !trade.can_take_loot(online.world(), place) || trade.no_drop.active() {
+                if trade.no_drop.active() || !trade.can_take_loot(online.world(), place, &mut chat)
+                {
                     continue;
                 }
                 if let Some(question) =

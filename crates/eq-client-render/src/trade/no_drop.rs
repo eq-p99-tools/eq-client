@@ -135,6 +135,7 @@ pub(crate) fn confirm(
     outbox: Res<Outbox>,
     mut trade: ResMut<TradeState>,
     mut asked: ResMut<Asked>,
+    mut chat: ResMut<crate::chat::ChatState>,
 ) {
     let world = online.world();
     if let Some((question, since)) = trade.no_drop.asking {
@@ -142,7 +143,7 @@ pub(crate) fn confirm(
         let still = asked_item(world, question).is_some() && trade.loot.is_some();
         if answer == Some(true) && still {
             trade.no_drop.asking = None;
-            take(&mut trade, world, &outbox, question);
+            take(&mut trade, world, &outbox, question, &mut chat);
         } else if answer.is_some() {
             trade.no_drop.asking = None;
         } else if !still || since.elapsed() >= WAIT || asked.question() != Some(question) {
@@ -161,7 +162,13 @@ pub(crate) fn confirm(
 }
 
 /// Loots the item the question named, as the click would have.
-fn take(trade: &mut TradeState, world: &ClientWorld, outbox: &Outbox, question: Question) {
+fn take(
+    trade: &mut TradeState,
+    world: &ClientWorld,
+    outbox: &Outbox,
+    question: Question,
+    chat: &mut crate::chat::ChatState,
+) {
     if trade.range.closing(world) {
         return;
     }
@@ -174,7 +181,7 @@ fn take(trade: &mut TradeState, world: &ClientWorld, outbox: &Outbox, question: 
     else {
         return;
     };
-    if !trade.can_take_loot(world, place) {
+    if !trade.can_take_loot(world, place, chat) {
         return;
     }
     let (Some(stamp), Some(own_id)) = (
