@@ -88,13 +88,7 @@ fn setup(fixture: &mut Fixture, directory: &Directory, source: &str) -> Action {
     app.world_mut()
         .run_system_once(crate::profile_files::follow)
         .unwrap();
-    crate::install_script(
-        app,
-        (None, None),
-        true,
-        false,
-        crate::script::InputMode::Attended,
-    );
+    crate::install_script(app, (None, None), true, crate::script::InputMode::Attended);
     let window = app
         .world_mut()
         .query_filtered::<Entity, With<bevy::window::PrimaryWindow>>()

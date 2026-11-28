@@ -7124,7 +7124,7 @@ mod tests {
                     .in_set(bevy::input::InputSystems),
             )
             .add_systems(Update, collect_keys);
-        crate::install_script(&mut app, (None, None), true, false, InputMode::Background);
+        crate::install_script(&mut app, (None, None), true, InputMode::Background);
         app.insert_resource(Script::new(steps).input_mode(InputMode::Background));
         let window = app
             .world_mut()

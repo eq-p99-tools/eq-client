@@ -332,7 +332,7 @@ pub(crate) fn remember_pointer(
     for event in events.read() {
         match event {
             WindowEvent::WindowFocused(focus) if focus.window == entity => {
-                last.focused = focus.focused
+                last.focused = focus.focused;
             }
             WindowEvent::CursorMoved(moved)
                 if moved.window == entity
@@ -430,45 +430,57 @@ pub(crate) fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     ));
 }
 
-/// Draws the arrow at the script pointer while a script runs and hides it
-/// otherwise, and forgets the script pointer once the script ends, so the
-/// next starts at the window's middle. The skin's cursor is drawn at its own
-/// pixels' size, as the system draws a pointer, with its hotspot on the
-/// script pointer; this client's own arrow is drawn in its stead when the
-/// skin has none.
+pub(crate) fn install(app: &mut App) {
+    app.init_resource::<SkinArrow>()
+        .init_resource::<LastPointer>()
+        .add_systems(Startup, spawn)
+        .add_systems(PreUpdate, remember_pointer)
+        .add_systems(
+            Update,
+            read_arrow
+                .before(draw)
+                .before(crate::inventory::cursor::update),
+        );
+}
+
+#[derive(SystemParam)]
+pub(crate) struct PointerView<'w, 's> {
+    windows: Query<'w, 's, (Entity, &'static Window), With<PrimaryWindow>>,
+    scale: Option<Res<'w, UiScale>>,
+    settings: Res<'w, crate::ViewerSettings>,
+    last: Option<Res<'w, LastPointer>>,
+    skin: Option<Res<'w, SkinArrow>>,
+}
+
+/// Draw the scripted or parked arrow at its hotspot. The focused native
+/// pointer is presented by the window system.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn draw(
     mut commands: Commands,
     script: Option<Res<super::Script>>,
     pointer: Option<Res<ScriptPointer>>,
-    (scale, windows): (
-        Option<Res<UiScale>>,
-        Query<(Entity, &Window), With<PrimaryWindow>>,
-    ),
-    settings: Res<crate::ViewerSettings>,
-    last: Option<Res<LastPointer>>,
-    skin: Option<Res<SkinArrow>>,
+    view: PointerView,
     mut arrows: Query<(&mut Node, &mut ImageNode, &PointerArt)>,
 ) {
     if script.is_none() && pointer.is_some() {
         commands.remove_resource::<ScriptPointer>();
     }
-    let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
-    let window = windows.single().ok();
+    let factor = view.scale.as_ref().map_or(1.0, |scale| scale.0);
+    let window = view.windows.single().ok();
     let scripted =
         script.as_ref().is_some_and(|script| script.pointer_owned()) && pointer.is_some();
     let at = if scripted {
         pointer
-            .filter(|_| !settings.0.hide_script_pointer)
+            .filter(|_| !view.settings.0.hide_script_pointer)
             .map(|pointer| pointer.0)
     } else {
-        window.and_then(|(entity, win)| last.as_ref()?.parked(entity, win))
+        window.and_then(|(entity, win)| view.last.as_ref()?.parked(entity, win))
     }
     .map(|position| position / factor);
     // The skin's cursor in the UI's pixels: its own pixels are the
     // display's, not the window's logical ones.
     let pixel = 1.0 / (window.map_or(1.0, |(_, win)| win.scale_factor()) * factor);
-    let cursor = skin.as_ref().and_then(|skin| skin.0.as_ref());
+    let cursor = view.skin.as_ref().and_then(|skin| skin.0.as_ref());
     for (mut node, mut picture, art) in &mut arrows {
         let (image, size, hotspot) = cursor.map_or((&art.own, ARROW, Vec2::ZERO), |cursor| {
             let (x, y) = cursor.hotspot;
