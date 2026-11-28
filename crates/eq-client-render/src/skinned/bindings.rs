@@ -111,6 +111,7 @@ pub(super) enum Does {
     Option(eq_client_core::options::Toggle),
     /// The Map preference for outlining tracked names.
     OutlineTracked,
+    ResetColors,
     /// Steps the mode of one kind of server filter, on this client's
     /// Filters page.
     Filter(eq_client_core::filters::FilterCategory),
@@ -406,6 +407,7 @@ fn options_button(id: &str) -> Option<Does> {
     match id {
         // The skin overlaps its two mode buttons; the keyboard action switches modes.
         "ODP_SetWindowedButton" => None,
+        "OCP_UserColorDefault" => Some(Does::ResetColors),
         super::qol::OUTLINE_TRACKED => Some(Does::OutlineTracked),
         _ => Some(super::filters::filter_button(id).map_or_else(
             || option_checkbox(id).map_or(Does::Nothing, Does::Option),
