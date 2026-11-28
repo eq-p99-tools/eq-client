@@ -41,6 +41,32 @@ fn stack(world: &World, id: Entity, ordered: &mut Vec<Entity>) {
     }
 }
 
+fn draw_color_fields(app: &mut App) -> Entity {
+    app.world_mut()
+        .run_system_once(|mut commands: Commands| {
+            commands
+                .spawn(super::super::at(0.0, 0.0, 128.0, 128.0))
+                .with_children(|ui| {
+                    color_picker::draw_swatch(
+                        ui,
+                        WindowId::Options,
+                        color_picker::Binding::Combat(COMBAT_COLORS[1].2),
+                        super::super::at(0.0, 0.0, 18.0, 18.0),
+                        theme::Size::Label,
+                    );
+                    color_picker::draw_swatch(
+                        ui,
+                        WindowId::Options,
+                        color_picker::Binding::Chat(2),
+                        super::super::at(150.0, 0.0, 18.0, 18.0),
+                        theme::Size::Label,
+                    );
+                })
+                .id()
+        })
+        .unwrap()
+}
+
 fn form() -> Form {
     let mut app = app(1.0, fixture().1);
     let options = Options::read(
@@ -84,30 +110,7 @@ fn form() -> Form {
             PrimaryWindow,
         ))
         .id();
-    let root = app
-        .world_mut()
-        .run_system_once(|mut commands: Commands| {
-            commands
-                .spawn(super::super::at(0.0, 0.0, 128.0, 128.0))
-                .with_children(|ui| {
-                    color_picker::draw_swatch(
-                        ui,
-                        WindowId::Options,
-                        color_picker::Binding::Combat(COMBAT_COLORS[1].2),
-                        super::super::at(0.0, 0.0, 18.0, 18.0),
-                        theme::Size::Label,
-                    );
-                    color_picker::draw_swatch(
-                        ui,
-                        WindowId::Options,
-                        color_picker::Binding::Chat(2),
-                        super::super::at(150.0, 0.0, 18.0, 18.0),
-                        theme::Size::Label,
-                    );
-                })
-                .id()
-        })
-        .unwrap();
+    let root = draw_color_fields(&mut app);
     app.update();
     let anchor = app.world().get::<Children>(root).unwrap()[0];
     assert_eq!(
