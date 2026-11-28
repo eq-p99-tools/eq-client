@@ -226,7 +226,7 @@ mod tests {
         let mut app = App::new();
         crate::clicks::testing::install(&mut app);
         let defaults = eq_client_core::options::Options::default();
-        let mut custom = defaults.clone();
+        let mut custom = defaults;
         custom.user_colors[2] = Some([18, 64, 221]);
         custom.combat_text_outgoing = [0, 60, 15];
         custom.combat_text_incoming = [80, 0, 0];
