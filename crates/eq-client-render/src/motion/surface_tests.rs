@@ -1311,3 +1311,36 @@ fn surface_retake_uses_first_actual_wet_boundary_inside_the_request() {
         ordinary.app.world().resource::<Controls>().wet
     );
 }
+
+#[test]
+fn surface_clock_holds_at_a_slight_uptilt_while_a_mob_nearby_moves() {
+    use eq_client_core::movement::{CollisionInstance, CollisionMesh};
+    let mesh = std::sync::Arc::new(
+        CollisionMesh::new([[[-2., -2., 0.], [2., -2., 0.], [-2., 2., 0.]]]).unwrap(),
+    );
+    let mut f = Native::new(10.7_f32.to_radians(), -0.1, false, Instant::now());
+    let start = f.session.position();
+    for i in 0..60_u16 {
+        {
+            // The mob swims a unit a frame, well clear of the swimmer.
+            let mut collision = f.app.world_mut().resource_mut::<Collision>();
+            let world = collision.0.as_mut().unwrap();
+            let at = Vec3::new(60. - f32::from(i), -3., 60.);
+            world.set_door_obstacles(Vec::new());
+            world.set_spawn_instances(vec![(
+                8,
+                CollisionInstance::new(std::sync::Arc::clone(&mesh), at, Quat::IDENTITY).unwrap(),
+            )]);
+        }
+        let ms = [100_u64, 117, 133, 150][usize::from(i) % 4];
+        let (request, _) = f.step(ms);
+        let c = f.app.world().resource::<Controls>();
+        assert!(c.surface.pending(), "row {i}: {}", c.surface_report());
+        f.accept(&request);
+    }
+    // About 7.5 s at the surface: the clock's travel, not the ordinary
+    // path's crossing-cut strokes (about 3 units a second).
+    let end = f.session.position();
+    let travel = (end.x - start.x).hypot(end.y - start.y);
+    assert!(travel > 70., "{travel}");
+}
