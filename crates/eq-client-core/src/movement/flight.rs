@@ -15,7 +15,8 @@ use std::cell::RefCell;
 
 impl CollisionWorld {
     /// Sweeps a flying character through solid geometry without requiring ground
-    /// support. Floors, ceilings and walls still stop the body. Liquids are
+    /// support. Horizontal flight follows rising walkable ground while walls and
+    /// ceilings still stop the body. Liquids are
     /// observed separately at accepted positions. The caller grants and
     /// bounds the displacement.
     #[must_use]
@@ -335,6 +336,32 @@ mod tests {
             edge.z > 20.0,
             "a closing edge contact remains solid: {edge:?}"
         );
+    }
+
+    #[test]
+    fn uphill_flight_stops_below_a_ceiling_and_cannot_climb_a_steep_face() {
+        for (rise, ceiling) in [(6.0, true), (24.0, false)] {
+            let mut triangles = vec![
+                [[0., 0., -10.], [12., rise, 10.], [12., rise, -10.]],
+                [[0., 0., -10.], [0., 0., 10.], [12., rise, 10.]],
+            ];
+            if ceiling {
+                triangles.extend([
+                    [[-10., 8.5, -10.], [15., 8.5, -10.], [15., 8.5, 10.]],
+                    [[-10., 8.5, -10.], [15., 8.5, 10.], [-10., 8.5, 10.]],
+                ]);
+            }
+            let world = CollisionWorld::new(triangles).unwrap();
+            let mut feet = Vec3::new(-1., 0., 1.);
+            for _ in 0..100 {
+                feet = world.fly_step(feet, Vec3::X * 0.2, 6.);
+            }
+            if ceiling {
+                assert!(feet.x > 2. && feet.y > 1. && feet.y <= 2.51, "{feet:?}");
+            } else {
+                assert!(feet.x < 1. && feet.y.abs() < 0.001, "{feet:?}");
+            }
+        }
     }
 
     #[test]
