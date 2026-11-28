@@ -9,8 +9,6 @@ mod filters;
 #[cfg(test)]
 mod hotbar_drag_tests;
 pub(crate) mod option_lists;
-#[cfg(test)]
-mod particles;
 mod qol;
 mod tree;
 #[cfg(test)]

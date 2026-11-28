@@ -377,7 +377,7 @@ impl Level {
     fn stops(self) -> Vec<u16> {
         match self {
             Self::FadeDelay | Self::FadeDuration => (0..=10000).step_by(100).collect(),
-            Self::WindowAlpha | Self::FadeToAlpha => (0..=255).collect(),
+            Self::WindowAlpha | Self::FadeToAlpha => (0..=255).rev().collect(),
             Self::ClipPlane
             | Self::MouseSensitivity
             | Self::SoundVolume
@@ -405,7 +405,9 @@ impl Level {
     pub fn fraction(self, value: u16) -> f32 {
         match self {
             Self::FadeDelay | Self::FadeDuration => f32::from(value.min(10000)) / 10000.0,
-            Self::WindowAlpha | Self::FadeToAlpha => f32::from(value.min(255)) / 255.0,
+            Self::WindowAlpha | Self::FadeToAlpha => {
+                f32::from(255_u16.saturating_sub(value)) / 255.0
+            }
             Self::ClipPlane
             | Self::MouseSensitivity
             | Self::SoundVolume
@@ -457,7 +459,7 @@ impl Level {
     #[must_use]
     pub fn words(self, value: u16) -> String {
         match self {
-            Self::FadeDelay | Self::FadeDuration => format!("{value} ms"),
+            Self::FadeDelay | Self::FadeDuration => format!("{:.1}", f32::from(value) / 1000.0),
             Self::MouseSensitivity => mouse_step(value).to_string(),
             Self::ClipPlane
             | Self::UiScale
@@ -472,7 +474,11 @@ impl Level {
                 format!("{value} %")
             }
             Self::MaxFps if value == 0 => "Display".to_owned(),
-            Self::WindowAlpha | Self::FadeToAlpha | Self::MaxFps => value.to_string(),
+            Self::WindowAlpha | Self::FadeToAlpha => format!(
+                "{} %",
+                (u32::from(255_u16.saturating_sub(value)) * 100 + 127) / 255
+            ),
+            Self::MaxFps => value.to_string(),
             Self::RunSpeed => format!("{}.{:02}x", value / 100, value % 100),
         }
     }
@@ -1488,6 +1494,28 @@ mod tests {
             );
         }
         assert_eq!(Options::read(&changed.text(), defaults), changed);
+    }
+
+    #[test]
+    fn window_appearance_overrides_only_round_trip_edited_properties() {
+        let defaults = Options::default();
+        for level in [
+            Level::FadeDelay,
+            Level::FadeDuration,
+            Level::WindowAlpha,
+            Level::FadeToAlpha,
+        ] {
+            assert!(!defaults.text().contains(level.key()));
+            let mut edited = defaults;
+            edited.set_level(level, level.at(0.5));
+            assert_eq!(Options::read(&edited.text(), defaults), edited);
+        }
+        assert_eq!(Level::WindowAlpha.at(0.0), 255);
+        assert_eq!(Level::WindowAlpha.words(255), "0 %");
+        assert_eq!(Level::FadeToAlpha.words(0), "100 %");
+        assert_eq!(Level::FadeDuration.words(500), "0.5");
+        assert!(defaults.allow_auto_duck);
+        assert!(!defaults.fast_item_destroy);
     }
 
     #[test]
