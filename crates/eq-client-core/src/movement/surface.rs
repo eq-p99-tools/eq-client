@@ -95,6 +95,23 @@ impl SurfaceClock {
     pub const fn active(&self) -> bool {
         self.crossed
     }
+    /// Why a plan from this clock would decline as
+    /// [`SurfaceDecline::Context`] for this world, feet, body height and
+    /// water set, for diagnostics; none when it may continue.
+    #[must_use]
+    pub fn context_change(
+        &self,
+        world: &CollisionWorld,
+        feet: Vec3,
+        height: f32,
+        set: WetCoefficients,
+    ) -> Option<&'static str> {
+        self.world
+            .surface_context_change(world)
+            .or_else(|| (self.feet != feet).then_some("feet moved"))
+            .or_else(|| (self.height.to_bits() != height.to_bits()).then_some("height"))
+            .or_else(|| (self.set != set).then_some("water set"))
+    }
     /// Full velocity updates since this known tracking epoch began.
     #[must_use]
     pub const fn updates(&self) -> u64 {
@@ -466,31 +483,48 @@ fn api_medium(
 
 impl CollisionWorld {
     fn same_surface_context(&self, other: &Self) -> bool {
+        self.surface_context_change(other).is_none()
+    }
+
+    /// The first part of the collision context that differs from `other`,
+    /// for diagnostics; none when a clock may continue across them.
+    fn surface_context_change(&self, other: &Self) -> Option<&'static str> {
         let same_liquids = match (&self.liquids, &other.liquids) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
             _ => false,
         };
-        Arc::ptr_eq(&self.terrain, &other.terrain)
-            && (Arc::ptr_eq(&self.obstacles, &other.obstacles)
-                || self.obstacles.len() == other.obstacles.len()
-                    && self.obstacles.iter().zip(other.obstacles.iter()).all(
-                        |((id, a, rule), (other_id, b, other_rule))| {
-                            id == other_id && rule == other_rule && Arc::ptr_eq(a, b)
-                        },
-                    ))
-            && (Arc::ptr_eq(&self.spawn_obstacles, &other.spawn_obstacles)
-                || self.spawn_obstacles.len() == other.spawn_obstacles.len()
-                    && self
-                        .spawn_obstacles
-                        .iter()
-                        .zip(other.spawn_obstacles.iter())
-                        .all(|((id, a), (other_id, b))| id == other_id && a.same_placement(b)))
-            && same_liquids
-            && self.swim_origin == other.swim_origin
-            && self.collision_height == other.collision_height
-            && self.liquid_support == other.liquid_support
-            && self.titanium_walking_origin == other.titanium_walking_origin
+        if !Arc::ptr_eq(&self.terrain, &other.terrain) {
+            Some("terrain")
+        } else if !(Arc::ptr_eq(&self.obstacles, &other.obstacles)
+            || self.obstacles.len() == other.obstacles.len()
+                && self.obstacles.iter().zip(other.obstacles.iter()).all(
+                    |((id, a, rule), (other_id, b, other_rule))| {
+                        id == other_id && rule == other_rule && Arc::ptr_eq(a, b)
+                    },
+                ))
+        {
+            Some("obstacles")
+        } else if !(Arc::ptr_eq(&self.spawn_obstacles, &other.spawn_obstacles)
+            || self.spawn_obstacles.len() == other.spawn_obstacles.len()
+                && self
+                    .spawn_obstacles
+                    .iter()
+                    .zip(other.spawn_obstacles.iter())
+                    .all(|((id, a), (other_id, b))| id == other_id && a.same_placement(b)))
+        {
+            Some("spawn obstacles")
+        } else if !same_liquids {
+            Some("liquids")
+        } else if self.swim_origin != other.swim_origin
+            || self.collision_height != other.collision_height
+            || self.liquid_support != other.liquid_support
+            || self.titanium_walking_origin != other.titanium_walking_origin
+        {
+            Some("body")
+        } else {
+            None
+        }
     }
 }
 

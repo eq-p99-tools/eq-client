@@ -311,14 +311,15 @@ impl CollisionWorld {
         } else {
             return Ok(position);
         };
-        // A slide redirects what the stroke had left; it never adds ground
-        // travel. Projected along a slope, a blocked downward share would
-        // otherwise come out as sideways speed the stroke never had, past
-        // the swimmer's horizontal cap.
+        // A stroke's slide redirects what the stroke had left; it never adds
+        // ground travel. Projected along a slope, a blocked downward share
+        // would otherwise come out as sideways speed the stroke never had,
+        // past the swimmer's horizontal cap. A body with no ground travel of
+        // its own, only sinking, still slides down the slope it settles on.
         let left = Vec2::new(remaining.x, remaining.z).length();
         let across = Vec2::new(slide.x, slide.z).length();
         // Scale the whole slide, so it stays along the surface it follows.
-        let slide = if across > left {
+        let slide = if left > 1e-6 && across > left {
             slide * (left / across)
         } else {
             slide
@@ -616,6 +617,21 @@ mod tests {
                     feet = next;
                 }
             }
+        }
+    }
+
+    #[test]
+    fn a_body_only_sinking_still_slides_down_a_sloped_bottom() {
+        // No ground travel of its own: the slide is not scaled away, so a
+        // sinking swimmer settles down the slope, downhill.
+        let height = 6.677_319_5;
+        for slope in [-0.2_f32, 0.2] {
+            let world = submerged_bottom(sloping_bottom(slope, Vec3::ZERO), Vec3::ZERO);
+            let feet = Vec3::new(0.0, -11.97, 0.0);
+            let next = world.wet_step(feet, Vec3::new(0.0, -1.0, 0.0), height);
+            let downhill = -(next.x - feet.x) * slope.signum();
+            assert!(downhill > 0.01, "slope {slope}: {next:?}");
+            assert!(next.y >= -12.0 + next.x * slope - 0.002, "{next:?}");
         }
     }
 

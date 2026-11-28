@@ -381,19 +381,19 @@ fn unverified_floor_clipping_cannot_silently_gain_owned_replay_credit() {
                 (side == KeyCode::KeyA && turn > 0.) || (side == KeyCode::KeyD && turn < 0.);
             if opposed {
                 assert!(
-                    row.replay_mismatches > 0 && row.backing_refusals > 0,
+                    row.replay_mismatches > 0,
                     "both opposed signs must exercise the fallback: {row:?}"
                 );
-            } else {
-                assert_eq!(row.refused, 0, "co-direction control: {row:?}");
             }
+            // The ordinary guard the fallback hands to counts the water's
+            // momentum behind a turning heading (eq-network 6.673), so an
+            // opposed strafe-turn is no longer refused as backing up, and
+            // the co-direction control still passes.
+            assert_eq!(row.refused, 0, "{row:?}");
             assert!(f64::from(row.net_xy) <= row.path_xy + 0.001);
         }
     }
-    assert!(
-        refused > 0,
-        "this is the conservative fallback reproduction, not a repair"
-    );
+    assert_eq!(refused, 0, "the fallback now carries the opposed curve");
 }
 
 #[test]
@@ -504,7 +504,7 @@ fn idle_floor_clipping_can_retire_replay_before_strafe() {
 }
 
 #[test]
-fn clear_water_unknown_basis_can_refuse_an_opposed_curve_without_a_ledger_error() {
+fn clear_water_unknown_basis_takes_an_opposed_curve_on_the_ordinary_guard_without_a_ledger_error() {
     for (side, turn) in [(KeyCode::KeyA, 40.), (KeyCode::KeyD, -40.)] {
         let qualified = run_with_receipt(false, 0., Some(side), turn, true);
         let unknown = run_with_receipt(false, 0., Some(side), turn, false);
@@ -524,7 +524,11 @@ fn clear_water_unknown_basis_can_refuse_an_opposed_curve_without_a_ledger_error(
             unknown.replay_mismatches, 0,
             "no heading ledger was submitted"
         );
-        assert!(unknown.backing_refusals > 0, "{unknown:?}");
+        // With no receipt the ordinary guard decides, and it counts the
+        // water's momentum behind the turning heading (eq-network 6.673):
+        // the opposed curve is accepted, not refused as backing up.
+        assert_eq!(unknown.refused, 0, "{unknown:?}");
+        assert!(unknown.accepted > 50, "{unknown:?}");
         assert_eq!(co_direction.owned_proposals, 0);
         assert_eq!(
             co_direction.refused, 0,
@@ -758,7 +762,10 @@ fn physical_clear_water_retains_normal_sink_and_unknown_basis_uses_old_guard() {
         assert!((row.dz - idle.dz).abs() < 0.1, "{row:?}");
         let unknown = run_selected(false, 0.0, Some(key), turn, false, true);
         assert_eq!(unknown.owned_proposals, 0, "{unknown:?}");
-        assert!(unknown.backing_refusals > 0, "{unknown:?}");
+        // The old guard now counts the water's momentum behind a turning
+        // heading (eq-network 6.673), so the ordinary curve is accepted.
+        assert_eq!(unknown.refused, 0, "{unknown:?}");
+        assert!(unknown.accepted > 50, "{unknown:?}");
     }
 }
 
