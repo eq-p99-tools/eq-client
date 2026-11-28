@@ -865,10 +865,22 @@ impl Options {
                 }
                 return;
             }
-            Level::FadeDelay => self.fade_delay_ms.insert(value),
-            Level::FadeDuration => self.fade_duration_ms.insert(value),
-            Level::WindowAlpha => self.window_alpha.insert(value),
-            Level::FadeToAlpha => self.fade_to_alpha.insert(value),
+            Level::FadeDelay => {
+                self.fade_delay_ms = Some(value);
+                return;
+            }
+            Level::FadeDuration => {
+                self.fade_duration_ms = Some(value);
+                return;
+            }
+            Level::WindowAlpha => {
+                self.window_alpha = Some(value);
+                return;
+            }
+            Level::FadeToAlpha => {
+                self.fade_to_alpha = Some(value);
+                return;
+            }
             Level::SoundVolume => &mut self.sound_volume,
             Level::MusicVolume => &mut self.music_volume,
             Level::CombatTextOutgoingRed => &mut self.combat_text_outgoing[0],
