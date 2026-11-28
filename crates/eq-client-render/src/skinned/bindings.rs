@@ -113,6 +113,7 @@ pub(super) enum Does {
     OutlineTracked,
     ResetColors,
     ChangeColor,
+    ChatColor(u8),
     ReloadKeys,
     ScreenMode(bool),
     /// Steps the mode of one kind of server filter, on this client's
@@ -407,6 +408,9 @@ pub(super) fn character_button(id: &str) -> Does {
 }
 
 fn options_button(id: &str) -> Does {
+    if let Some(kind) = super::colors::authored_kind(id) {
+        return Does::ChatColor(kind);
+    }
     match id {
         "ODP_SetWindowedButton" => Does::ScreenMode(false),
         "ODP_SetFullscreenButton" => Does::ScreenMode(true),
