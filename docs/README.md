@@ -14,6 +14,7 @@
 | [Guild roster](guild-roster.md) | Roster data and available guild actions |
 | [Terrain materials](terrain-materials.md) | Material sidedness and animated textures |
 | [Settings](settings.md) | Per-character files, display options and quality-of-life choices |
+| [Titanium Options audit](titanium-options-audit.md) | Native tabs, working controls, missing bindings and placement differences |
 | [Zone lighting](zone-lighting.md) | How zones without a sky are lit, as the original's engine lights them |
 | [Assets and offline previews](assets.md) | Installed assets, rendering limits, synthetic demos and screenshots |
 | [Script workbench](scripts/README.md) | In-game editing, examples, language, UI targets and execution controls |

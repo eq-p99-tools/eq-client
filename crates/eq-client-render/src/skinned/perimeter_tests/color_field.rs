@@ -28,6 +28,7 @@ struct Form {
     hue: Entity,
     hex: Entity,
     swatch: Entity,
+    anchor: Entity,
     label: Entity,
 }
 
@@ -38,6 +39,32 @@ fn stack(world: &World, id: Entity, ordered: &mut Vec<Entity>) {
             stack(world, *child, ordered);
         }
     }
+}
+
+fn draw_color_fields(app: &mut App) -> Entity {
+    app.world_mut()
+        .run_system_once(|mut commands: Commands| {
+            commands
+                .spawn(super::super::at(0.0, 0.0, 128.0, 128.0))
+                .with_children(|ui| {
+                    color_picker::draw_swatch(
+                        ui,
+                        WindowId::Options,
+                        color_picker::Binding::Combat(COMBAT_COLORS[1].2),
+                        super::super::at(0.0, 0.0, 18.0, 18.0),
+                        theme::Size::Label,
+                    );
+                    color_picker::draw_swatch(
+                        ui,
+                        WindowId::Options,
+                        color_picker::Binding::Chat(2),
+                        super::super::at(150.0, 0.0, 18.0, 18.0),
+                        theme::Size::Label,
+                    );
+                })
+                .id()
+        })
+        .unwrap()
 }
 
 fn form() -> Form {
@@ -51,6 +78,7 @@ fn form() -> Form {
         .init_resource::<UiStack>()
         .init_resource::<ButtonInput<MouseButton>>()
         .init_resource::<ButtonInput<Key>>()
+        .init_resource::<ButtonInput<KeyCode>>()
         .init_resource::<Shown>()
         .init_resource::<Typing>()
         .init_resource::<Profile>()
@@ -60,10 +88,12 @@ fn form() -> Form {
         .add_systems(
             Update,
             (
+                color_picker::manage,
                 color_picker::focus,
                 color_picker::edit_hex,
                 color_picker::pick,
                 color_picker::present,
+                color_picker::show_swatches,
             )
                 .chain(),
         );
@@ -80,34 +110,20 @@ fn form() -> Form {
             PrimaryWindow,
         ))
         .id();
-    let root = app
-        .world_mut()
-        .run_system_once(|mut commands: Commands| {
-            commands
-                .spawn(super::super::at(0.0, 0.0, 128.0, 128.0))
-                .with_children(|ui| {
-                    color_picker::draw(
-                        ui,
-                        COMBAT_COLORS[1].2,
-                        super::super::at(0.0, 0.0, 124.0, color_picker::height(124.0)),
-                        124.0,
-                        theme::Size::Label,
-                    );
-                })
-                .id()
-        })
-        .unwrap();
+    let root = draw_color_fields(&mut app);
     app.update();
+    let anchor = app.world().get::<Children>(root).unwrap()[0];
+    assert_eq!(
+        app.world_mut().query::<&Part>().iter(app.world()).count(),
+        0
+    );
+    focus_stack(&mut app);
+    let pos = bounds(app.world(), anchor).center();
+    press_at(&mut app, window, pos);
+    app.update();
+    release(&mut app);
+    focus_stack(&mut app);
     let world = app.world_mut();
-    let mut ordered = Vec::new();
-    stack(world, root, &mut ordered);
-    for &id in &ordered {
-        world.entity_mut(id).insert(InheritedVisibility::VISIBLE);
-    }
-    *world.resource_mut::<UiStack>() = UiStack {
-        partition: std::iter::once(0..ordered.len()).collect(),
-        uinodes: ordered,
-    };
     let (mut sq, mut hue, mut hex) = (None, None, None);
     for (id, part) in world.query::<(Entity, &Part)>().iter(world) {
         match part {
@@ -135,8 +151,47 @@ fn form() -> Form {
         hue: hue.unwrap(),
         hex: hex.unwrap(),
         swatch,
+        anchor,
         label,
     }
+}
+
+fn focus_stack(app: &mut App) {
+    let world = app.world_mut();
+    let mut ordered = Vec::new();
+    for root in world
+        .query_filtered::<Entity, (With<Node>, Without<ChildOf>)>()
+        .iter(world)
+    {
+        stack(world, root, &mut ordered);
+    }
+    for &id in &ordered {
+        world.entity_mut(id).insert(InheritedVisibility::VISIBLE);
+    }
+    *world.resource_mut::<UiStack>() = UiStack {
+        partition: std::iter::once(0..ordered.len()).collect(),
+        uinodes: ordered,
+    };
+}
+
+fn press_at(app: &mut App, window: Entity, pos: Vec2) {
+    app.world_mut()
+        .get_mut::<Window>(window)
+        .unwrap()
+        .set_physical_cursor_position(Some(pos.as_dvec2()));
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .press(MouseButton::Left);
+}
+
+fn release(app: &mut App) {
+    let mut mouse = app.world_mut().resource_mut::<ButtonInput<MouseButton>>();
+    mouse.clear();
+    mouse.release(MouseButton::Left);
+    app.update();
+    app.world_mut()
+        .resource_mut::<ButtonInput<MouseButton>>()
+        .clear();
 }
 
 impl Form {
@@ -144,30 +199,13 @@ impl Form {
         let rect = bounds(self.app.world(), id);
         assert!(rect.size().cmpgt(Vec2::ZERO).all());
         let pos = rect.min + rect.size() * fraction;
-        let world = self.app.world_mut();
-        world
-            .get_mut::<Window>(self.window)
-            .unwrap()
-            .set_physical_cursor_position(Some(pos.as_dvec2()));
-        world
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
+        press_at(&mut self.app, self.window, pos);
         self.app.update();
         assert_eq!(
             self.app.world().get::<Interaction>(id),
             Some(&Interaction::Pressed)
         );
-        let mut mouse = self
-            .app
-            .world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>();
-        mouse.clear();
-        mouse.release(MouseButton::Left);
-        self.app.update();
-        self.app
-            .world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .clear();
+        release(&mut self.app);
     }
 
     fn keys(&mut self, text: &str, finish: Key) {
@@ -235,4 +273,40 @@ fn entering_hex_updates_the_same_swatch_and_escape_discards_an_invalid_edit() {
     form.keys("", Key::Escape);
     assert!(form.app.world().resource::<Typing>().escape_consumed);
     form.assert_color([80, 20, 100], "#CC33FF");
+}
+
+#[test]
+fn outside_click_dismisses_the_editor_and_chat_swatch_edits_byte_precision() {
+    let mut form = form();
+    let window = form.window;
+    let app = &mut form.app;
+    let count = |app: &mut App| app.world_mut().query::<&Part>().iter(app.world()).count();
+    assert_eq!(count(app), 3);
+    assert_eq!(bounds(app.world(), form.anchor).size(), Vec2::splat(18.0));
+    press_at(app, window, Vec2::new(300.0, 180.0));
+    app.update();
+    release(app);
+    assert_eq!(count(app), 0);
+    focus_stack(app);
+    press_at(app, window, Vec2::new(159.0, 9.0));
+    app.update();
+    release(app);
+    assert_eq!(count(app), 3);
+    focus_stack(app);
+    let hex = app
+        .world_mut()
+        .query::<(Entity, &Part)>()
+        .iter(app.world())
+        .find(|(_, p)| matches!(p, Part::Hex(_)))
+        .unwrap()
+        .0;
+    form.click(hex, Vec2::splat(0.5));
+    form.keys("#0123FE", Key::Enter);
+    let saved = &form.app.world().resource::<OptionsState>().options;
+    assert_eq!(saved.user_colors[2], Some([1, 35, 254]));
+    assert_eq!(
+        Options::read(&saved.text(), Options::default()).user_colors[2],
+        Some([1, 35, 254])
+    );
+    assert_eq!(saved.combat_text_incoming, [20, 40, 60]);
 }

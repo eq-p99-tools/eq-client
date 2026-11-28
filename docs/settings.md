@@ -60,6 +60,10 @@ Map background opacity, plain/skin style and position lock use
 the [map's controls](controls.md#map); window coordinates remain in the normal
 window-layout file.
 
+## Colors
+
+Open Options → Colors, then click the square beside a chat or floating combat text category. Choose a hue and shade, or enter six hexadecimal digits and press Enter. Click outside the picker or press Escape to dismiss it. Chat colors use full RGB precision. Combat text colors use the same percentage channels as older profiles. Reset Default Colors clears chat overrides and restores both combat text defaults for the current profile.
+
 ## Server filters
 
 Options → Filters lists the original Titanium client's filter rows, in its

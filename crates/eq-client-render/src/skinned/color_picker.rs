@@ -1,11 +1,9 @@
-//! A color field backed by three existing percentage options. The UI always
-//! previews the representable color that the options file will restore.
+//! Shared HSV and hex editor for byte-precision chat colors and percentage-based combat text.
 use super::{at, controls::SkinSlider};
 use crate::{
     keys::{Typing, search},
     options::OptionsState,
     theme,
-    windows::{Shown, WindowId},
 };
 use bevy::{
     clipboard::{Clipboard, ClipboardRead},
@@ -37,11 +35,54 @@ pub(super) const COMBAT_COLORS: [(&str, &str, [Level; 3]); 2] = [
     ),
 ];
 
-pub(super) fn binding(name: &str) -> Option<[Level; 3]> {
+mod popup;
+pub(crate) use popup::{ResetColors, draw_swatch};
+pub(crate) use popup::{manage, show_swatches};
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Binding {
+    Combat([Level; 3]),
+    Chat(u8),
+}
+
+pub(super) fn binding(name: &str) -> Option<Binding> {
+    if let Some(kind) = name.strip_prefix("EQC_ChatColor_") {
+        let kind: u8 = kind.parse().ok()?;
+        return (kind > 0 && usize::from(kind) < eq_client_core::options::USER_COLOR_KINDS)
+            .then_some(Binding::Chat(kind));
+    }
     COMBAT_COLORS
         .iter()
         .find(|(id, ..)| *id == name)
-        .map(|(_, _, levels)| *levels)
+        .map(|(_, _, levels)| Binding::Combat(*levels))
+}
+
+impl Binding {
+    fn read(self, options: &Options, look: Option<&crate::chat::ChatLook>) -> Srgba {
+        match self {
+            Self::Combat(levels) => color(levels.map(|level| options.level(level))),
+            Self::Chat(kind) => {
+                let [r, g, b] = options.user_colors[usize::from(kind)]
+                    .or_else(|| look.and_then(|l| l.message_color(255 + u32::from(kind))))
+                    .unwrap_or_else(|| crate::chat::user_color_fallback(kind));
+                Srgba::rgb_u8(r, g, b)
+            }
+        }
+    }
+
+    fn write(self, options: &mut Options, rgb: Srgba) {
+        match self {
+            Self::Combat(levels) => {
+                for (level, fraction) in levels.into_iter().zip([rgb.red, rgb.green, rgb.blue]) {
+                    options.set_level(level, level.at(fraction));
+                }
+            }
+            Self::Chat(kind) => {
+                let [r, g, b, _] = rgb.to_u8_array();
+                options.user_colors[usize::from(kind)] = Some([r, g, b]);
+            }
+        }
+    }
 }
 
 const GAP: f32 = 4.0;
@@ -57,28 +98,23 @@ pub(super) fn height(width: f32) -> f32 {
 
 #[derive(Component)]
 pub(crate) struct Picker {
-    channels: [Level; 3],
+    binding: Binding,
     hsv: Hsva,
-    saved: Option<[u16; 3]>,
+    saved: Option<Srgba>,
 }
 
 impl Picker {
-    fn load(&mut self, options: &Options) {
-        let levels = self.channels.map(|level| options.level(level));
-        if self.saved != Some(levels) {
-            self.hsv = Hsva::from(color(levels));
-            self.saved = Some(levels);
+    fn load(&mut self, options: &Options, look: Option<&crate::chat::ChatLook>) {
+        let rgb = self.binding.read(options, look);
+        if self.saved != Some(rgb) {
+            self.hsv = Hsva::from(rgb);
+            self.saved = Some(rgb);
         }
     }
 
     fn store(&mut self, state: &mut ResMut<OptionsState>, rgb: Srgba) {
-        let levels = [0, 1, 2].map(|i| self.channels[i].at([rgb.red, rgb.green, rgb.blue][i]));
-        for (channel, value) in self.channels.into_iter().zip(levels) {
-            if state.options.level(channel) != value {
-                state.options.set_level(channel, value);
-            }
-        }
-        self.saved = Some(levels);
+        self.binding.write(&mut state.options, rgb);
+        self.saved = Some(self.binding.read(&state.options, None));
     }
 }
 
@@ -115,11 +151,10 @@ fn target(part: Part, node: Node) -> impl Bundle {
     (part, Button, node, RelativeCursorPosition::default())
 }
 
-/// Draw the same field for any binding. Semantic slider commands still aim
-/// at visible controls in the options page and inherit its scroll and occlusion.
+/// Draw the open editor for either storage format.
 pub(super) fn draw(
     parent: &mut ChildSpawnerCommands,
-    channels: [Level; 3],
+    binding: Binding,
     node: Node,
     width: f32,
     font: theme::Size,
@@ -127,7 +162,7 @@ pub(super) fn draw(
     let mut root = parent.spawn((
         node,
         Picker {
-            channels,
+            binding,
             hsv: Hsva::default(),
             saved: None,
         },
@@ -175,7 +210,7 @@ pub(super) fn draw(
         ))
         .with_child((Paint::HueMark(id), marker(15.0, 3.0, 0.0)));
         hex_field(ui, id, side + GAP, field_width, font);
-        swatch(ui, id, channels, width, field_width, side + GAP);
+        swatch(ui, id, width, field_width, side + GAP);
     });
 }
 
@@ -208,14 +243,7 @@ fn hex_field(
     ));
 }
 
-fn swatch(
-    ui: &mut ChildSpawnerCommands,
-    id: Entity,
-    channels: [Level; 3],
-    width: f32,
-    field_width: f32,
-    y: f32,
-) {
+fn swatch(ui: &mut ChildSpawnerCommands, id: Entity, width: f32, field_width: f32, y: f32) {
     let swatch_width = (width - field_width - GAP).clamp(0.0, FOOT);
     ui.spawn((
         Paint::Swatch(id),
@@ -225,21 +253,7 @@ fn swatch(
         },
         BorderColor::all(theme::EDGE_LIGHT),
         BackgroundColor(Color::BLACK),
-    ))
-    .with_children(|swatch| {
-        // Each legacy selector has a reachable, short target inside the
-        // real swatch, even when the page scrolls in a compact window.
-        let third = (swatch_width - 2.0).max(0.0) / 3.0;
-        for (offset, level) in [0.0, third, 2.0 * third].into_iter().zip(channels) {
-            swatch.spawn((
-                ScriptChannel,
-                Button,
-                at(offset, 0.0, third, FOOT - 2.0),
-                SkinSlider::channel(level),
-                RelativeCursorPosition::default(),
-            ));
-        }
-    });
+    ));
 }
 
 /// A legacy script channel's pointer target inside the preview swatch.
@@ -273,9 +287,8 @@ pub(crate) struct HexEdit {
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(crate) fn focus(
-    (mouse, shown, profile): (
+    (mouse, profile): (
         Res<ButtonInput<MouseButton>>,
-        Res<Shown>,
         Res<crate::profile_files::Profile>,
     ),
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -285,9 +298,7 @@ pub(crate) fn focus(
 ) {
     let old = edit.field;
     let clicked = mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]);
-    let field = if shown.displayed(WindowId::Options)
-        && windows.single().is_ok_and(|window| window.focused)
-    {
+    let field = if windows.single().is_ok_and(|window| window.focused) {
         fields
             .iter()
             .find_map(|(part, interaction, visible, node)| match part {
@@ -366,6 +377,7 @@ pub(crate) fn edit_hex(
 
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn pick(
+    look: Option<Res<crate::chat::ChatLook>>,
     inputs: Query<(&Part, &Interaction, &RelativeCursorPosition)>,
     mut pickers: Query<&mut Picker>,
     mut options: ResMut<OptionsState>,
@@ -386,7 +398,7 @@ pub(crate) fn pick(
         let Ok(mut picker) = pickers.get_mut(id) else {
             continue;
         };
-        picker.load(&options.options);
+        picker.load(&options.options, look.as_deref());
         match part {
             Part::Square(_) => {
                 picker.hsv.saturation = at.x;
@@ -413,13 +425,14 @@ type PaintedParts<'w, 's> = Query<
 
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn present(
+    look: Option<Res<crate::chat::ChatLook>>,
     options: Res<OptionsState>,
     edit: Res<HexEdit>,
     mut pickers: Query<&mut Picker>,
     mut parts: PaintedParts,
 ) {
     for mut picker in &mut pickers {
-        picker.load(&options.options);
+        picker.load(&options.options, look.as_deref());
     }
     for (paint, background, node, text) in &mut parts {
         let id = match *paint {
@@ -432,7 +445,7 @@ pub(crate) fn present(
         let Ok(picker) = pickers.get(id) else {
             continue;
         };
-        let rgb = color(picker.channels.map(|c| options.options.level(c)));
+        let rgb = picker.binding.read(&options.options, look.as_deref());
         match (paint, background, node, text) {
             (Paint::Square(_), Some(mut bg), ..) => {
                 bg.set_if_neq(BackgroundColor(hue_color(picker.hsv.hue)));

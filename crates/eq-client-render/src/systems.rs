@@ -196,7 +196,12 @@ pub(super) fn schedule(app: &mut App) {
                 windows::pointer::wheel,
                 // A scrollbar's press scrolls its box as the wheel does.
                 skinned::scrollbar::scroll,
-                (map::search_focus, skinned::color_picker::focus).chain(),
+                (
+                    map::search_focus,
+                    skinned::color_picker::manage,
+                    skinned::color_picker::focus,
+                )
+                    .chain(),
                 spellbook::sets::follow,
                 spellbook::search::focus,
                 spellbook::search::capture,
@@ -509,7 +514,11 @@ pub(super) fn schedule(app: &mut App) {
                         (
                             skinned::slide,
                             skinned::color_picker::pick,
-                            skinned::color_picker::present,
+                            (
+                                skinned::color_picker::present,
+                                skinned::color_picker::show_swatches,
+                            )
+                                .chain(),
                         )
                             .chain(),
                         skinned::drop_downs,

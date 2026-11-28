@@ -701,8 +701,9 @@ pub(super) fn tabbed(
 ) {
     let particle_pages = super::particles::pages(&tabs.pages, context.id);
     let filter_pages = super::filters::pages(&particle_pages, context.id, inside.width);
+    let colors = super::colors::pages(&filter_pages, context.id, inside.width);
     let pages = super::qol::pages(
-        &filter_pages,
+        &colors,
         context.id,
         Vec2::new(inside.width, inside.height),
         tabs.page_frame.as_ref(),
