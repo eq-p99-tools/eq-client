@@ -281,12 +281,84 @@ const ARROW_DENSITY: u8 = 2;
 #[derive(Resource, Default)]
 pub(crate) struct SkinArrow(Option<SkinCursor>);
 
+impl SkinArrow {
+    pub(crate) fn native_icon(&self) -> Option<bevy::window::CursorIcon> {
+        let cursor = self.0.as_ref()?;
+        Some(
+            bevy::window::CustomCursor::Image(bevy::window::CustomCursorImage {
+                handle: cursor.image.clone(),
+                hotspot: cursor.hotspot,
+                ..default()
+            })
+            .into(),
+        )
+    }
+}
+
+/// Last observed in-window position in logical pixels. Used only for drawing.
+#[derive(Resource, Default)]
+pub(crate) struct LastPointer {
+    window: Option<Entity>,
+    position: Option<Vec2>,
+    focused: bool,
+}
+
+impl LastPointer {
+    pub(crate) fn parked(&self, window: Entity, state: &Window) -> Option<Vec2> {
+        self.position
+            .filter(|_| !state.focused && self.window == Some(window))
+            .map(|at| at.clamp(Vec2::ZERO, state.size()))
+    }
+}
+
+/// Consume movement and focus events in order so a final move and Alt-Tab
+/// in the same frame preserve the last position before focus changed.
+pub(crate) fn remember_pointer(
+    windows: Query<(Entity, &Window), With<PrimaryWindow>>,
+    mut events: MessageReader<bevy::window::WindowEvent>,
+    mut last: ResMut<LastPointer>,
+) {
+    use bevy::window::WindowEvent;
+    let Ok((entity, window)) = windows.single() else {
+        return;
+    };
+    if last.window != Some(entity) {
+        *last = LastPointer {
+            window: Some(entity),
+            focused: window.focused,
+            position: None,
+        };
+    }
+    for event in events.read() {
+        match event {
+            WindowEvent::WindowFocused(focus) if focus.window == entity => {
+                last.focused = focus.focused;
+            }
+            WindowEvent::CursorMoved(moved)
+                if moved.window == entity
+                    && last.focused
+                    && moved.position.cmpge(Vec2::ZERO).all()
+                    && moved.position.cmplt(window.size()).all() =>
+            {
+                last.position = Some(moved.position);
+            }
+            _ => (),
+        }
+    }
+    last.focused = window.focused;
+    if window.focused
+        && let Some(at) = window.cursor_position()
+    {
+        last.position = Some(at);
+    }
+}
+
 /// A cursor's picture, its size in its own pixels and the pixel in it that
 /// points.
 pub(crate) struct SkinCursor {
     image: Handle<Image>,
     size: Vec2,
-    hotspot: Vec2,
+    hotspot: (u16, u16),
 }
 
 /// Reads the skin's `arrow.cur` again when the skin changes.
@@ -306,13 +378,19 @@ pub(crate) fn read_arrow(
         .as_deref()
         .map(|directory| eq_client_assets::ui::cursor(directory, &skin.0, "arrow.cur"));
     arrow.0 = match read {
-        Some(Ok(cursor)) => {
+        Some(Ok(cursor))
+            if u32::from(cursor.hotspot.0) < cursor.pixels.width()
+                && u32::from(cursor.hotspot.1) < cursor.pixels.height() =>
+        {
             let (width, height) = cursor.pixels.dimensions();
+            let mut image = crate::sheets::image(cursor.pixels);
+            // Winit reads the pixels on the CPU to install the native cursor.
+            image.asset_usage |= bevy::asset::RenderAssetUsages::MAIN_WORLD;
             Some(SkinCursor {
-                image: images.add(crate::sheets::image(cursor.pixels)),
+                image: images.add(image),
                 #[allow(clippy::cast_precision_loss, reason = "a cursor is small")]
                 size: Vec2::new(width as f32, height as f32),
-                hotspot: Vec2::new(f32::from(cursor.hotspot.0), f32::from(cursor.hotspot.1)),
+                hotspot: cursor.hotspot,
             })
         }
         Some(Err(eq_client_assets::ui::UiLayoutError::Read { .. })) | None => {
@@ -322,7 +400,7 @@ pub(crate) fn read_arrow(
             );
             None
         }
-        Some(Err(_)) => {
+        Some(Err(_) | Ok(_)) => {
             info!(
                 "UI skin {}'s arrow.cur does not decode; the script pointer is this client's own arrow",
                 skin.0
@@ -352,35 +430,65 @@ pub(crate) fn spawn(mut commands: Commands, mut images: ResMut<Assets<Image>>) {
     ));
 }
 
-/// Draws the arrow at the script pointer while a script runs and hides it
-/// otherwise, and forgets the script pointer once the script ends, so the
-/// next starts at the window's middle. The skin's cursor is drawn at its own
-/// pixels' size, as the system draws a pointer, with its hotspot on the
-/// script pointer; this client's own arrow is drawn in its stead when the
-/// skin has none.
+pub(crate) fn install(app: &mut App) {
+    app.init_resource::<SkinArrow>()
+        .init_resource::<LastPointer>()
+        .add_systems(Startup, spawn)
+        .add_systems(PreUpdate, remember_pointer)
+        .add_systems(
+            Update,
+            read_arrow
+                .before(draw)
+                .before(crate::inventory::cursor::update),
+        );
+}
+
+#[derive(SystemParam)]
+pub(crate) struct PointerView<'w, 's> {
+    windows: Query<'w, 's, (Entity, &'static Window), With<PrimaryWindow>>,
+    scale: Option<Res<'w, UiScale>>,
+    settings: Res<'w, crate::ViewerSettings>,
+    last: Option<Res<'w, LastPointer>>,
+    skin: Option<Res<'w, SkinArrow>>,
+}
+
+/// Draw the scripted or parked arrow at its hotspot. The focused native
+/// pointer is presented by the window system.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn draw(
     mut commands: Commands,
     script: Option<Res<super::Script>>,
     pointer: Option<Res<ScriptPointer>>,
-    (scale, windows): (Option<Res<UiScale>>, Query<&Window, With<PrimaryWindow>>),
-    skin: Option<Res<SkinArrow>>,
+    view: PointerView,
     mut arrows: Query<(&mut Node, &mut ImageNode, &PointerArt)>,
 ) {
     if script.is_none() && pointer.is_some() {
         commands.remove_resource::<ScriptPointer>();
     }
-    let factor = scale.as_ref().map_or(1.0, |scale| scale.0);
-    let at = pointer
-        .filter(|_| script.as_ref().is_some_and(|script| script.pointer_owned()))
-        .map(|pointer| pointer.0 / factor);
+    let factor = view.scale.as_ref().map_or(1.0, |scale| scale.0);
+    let window = view.windows.single().ok();
+    let scripted =
+        script.as_ref().is_some_and(|script| script.pointer_owned()) && pointer.is_some();
+    let at = if scripted {
+        pointer
+            .filter(|_| !view.settings.0.hide_script_pointer)
+            .map(|pointer| pointer.0)
+    } else {
+        window.and_then(|(entity, win)| view.last.as_ref()?.parked(entity, win))
+    }
+    .map(|position| position / factor);
     // The skin's cursor in the UI's pixels: its own pixels are the
     // display's, not the window's logical ones.
-    let pixel = 1.0 / (windows.single().map_or(1.0, Window::scale_factor) * factor);
-    let cursor = skin.as_ref().and_then(|skin| skin.0.as_ref());
+    let pixel = 1.0 / (window.map_or(1.0, |(_, win)| win.scale_factor()) * factor);
+    let cursor = view.skin.as_ref().and_then(|skin| skin.0.as_ref());
     for (mut node, mut picture, art) in &mut arrows {
         let (image, size, hotspot) = cursor.map_or((&art.own, ARROW, Vec2::ZERO), |cursor| {
-            (&cursor.image, cursor.size * pixel, cursor.hotspot * pixel)
+            let (x, y) = cursor.hotspot;
+            (
+                &cursor.image,
+                cursor.size * pixel,
+                Vec2::new(f32::from(x), f32::from(y)) * pixel,
+            )
         });
         if picture.image != *image {
             picture.image = image.clone();
@@ -514,7 +622,7 @@ mod tests {
         app.world_mut().resource_mut::<SkinArrow>().0 = Some(SkinCursor {
             image: skin.clone(),
             size: Vec2::splat(32.0),
-            hotspot: Vec2::new(3.0, 5.0),
+            hotspot: (3, 5),
         });
         let arrow = |app: &mut App| {
             let world = app.world_mut();
@@ -530,6 +638,10 @@ mod tests {
         let (placed, image, _) = arrow(&mut app);
         assert_eq!(placed, (Display::Flex, px(97), px(45), px(32), px(32)));
         assert_eq!(image, skin);
+        let icon = app.world().resource::<SkinArrow>().native_icon();
+        assert!(matches!(icon, Some(bevy::window::CursorIcon::Custom(
+            bevy::window::CustomCursor::Image(cursor)
+        )) if cursor.handle == skin && cursor.hotspot == (3, 5)));
         // Without the skin's cursor, this client's own arrow points with its
         // tip at the top left.
         app.world_mut().resource_mut::<SkinArrow>().0 = None;
