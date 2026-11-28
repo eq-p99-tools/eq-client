@@ -16,6 +16,7 @@ use eq_client_core::{
 #[derive(Clone)]
 struct Frame {
     at: Instant,
+    stall: Option<(Instant, Instant)>,
     motion: SwimSceneMotion,
     position: WorldPosition,
     input: SwimInput,
@@ -44,6 +45,7 @@ pub(super) struct Control {
     collision: Option<SwimCollision>,
     rates: Option<(SwimCalibration, Option<f32>, Option<f32>)>,
     last_observed: Option<Instant>,
+    stall: Option<(Instant, Instant)>,
     epoch: Option<Instant>,
     result: Option<(u64, Instant, bool)>,
     invalidated: bool,
@@ -120,6 +122,7 @@ impl Control {
         self.rates = None;
         self.reset = None;
         self.epoch = None;
+        self.stall = None;
         self.invalidated = false;
         self.awaiting_basis = false;
     }
@@ -299,6 +302,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
             };
             let rest = Frame {
                 at: basis.started_at(),
+                stall: None,
                 motion,
                 position: at,
                 input: SwimInput::Idle,
@@ -324,12 +328,13 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
         let last = owner.last_observed.replace(now).unwrap_or(now);
         let seconds = now.saturating_duration_since(last).as_secs_f32();
         // Freeze a stalled prefix. Never catch up the unobserved time later.
+        if seconds > 0.15 {
+            let stopped = owner.stall.map_or(last, |(start, _)| start);
+            owner.stall = Some((stopped, now));
+            return true;
+        }
         let consumed: f32 = owner.frames.iter().map(|f| f.seconds).sum();
-        if seconds > 1e-5
-            && seconds <= 0.15
-            && consumed + seconds <= 0.24
-            && owner.frames.len() < 64
-        {
+        if seconds > 1e-5 && consumed + seconds <= 0.24 && owner.frames.len() < 64 {
             let current = owner.current.as_ref().expect("started swim");
             let Ok(kind) = current.motion.kind() else {
                 if owner.pending() {
@@ -391,6 +396,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
                 mode="physical_floor_swim",verdict="completed_unaccepted", "Actual held-input frame; no presentation credit");
             let next = Frame {
                 at: now,
+                stall: owner.stall.take(),
                 motion,
                 position,
                 input,
@@ -401,7 +407,7 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
             };
             owner.current = Some(next.clone());
             owner.frames.push(next);
-        } else if seconds > 0.15 || consumed + seconds > 0.24 || owner.frames.len() >= 64 {
+        } else if consumed + seconds > 0.24 || owner.frames.len() >= 64 {
             owner.invalidated = true;
             if owner.pending() {
                 return true;
@@ -427,7 +433,13 @@ pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: Motio
             .iter()
             .map(|f| {
                 until += Duration::from_secs_f32(f.seconds);
-                SwimControl::physical(until, f.heading, f.kind, f.input, f.seconds, f.pitch, f.at)
+                let piece = SwimControl::physical(
+                    until, f.heading, f.kind, f.input, f.seconds, f.pitch, f.at,
+                )?;
+                match f.stall {
+                    Some((stopped, resumed)) => piece.after_stall(stopped, resumed),
+                    None => Ok(piece),
+                }
             })
             .collect();
         let Ok(pieces) = pieces else {
