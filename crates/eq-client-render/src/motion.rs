@@ -1003,14 +1003,20 @@ impl Controls {
                 self.diagonal(&intent, heading, looking_ahead, sideways(looking.is_some()));
         }
         // Retain the existing cardinal choice as the collision/fall fallback.
-        let sideways = sideways(looking.is_some() && !looking_ahead);
+        let sideways = sideways(looking.is_some() && (!looking_ahead || self.movement_options.fly));
         let (ahead, behind) = (held.held(Act::Forward), held.held(Act::Back));
         let longitudinal_key = if diagonal_available {
             ahead != behind
         } else {
             ahead || behind
         };
-        if focused && sideways != 0.0 && !longitudinal_key {
+        if focused
+            && sideways != 0.0
+            && !longitudinal_key
+            && !(self.movement_options.fly
+                && (looking_ahead || self.autorun)
+                && intent.direction != Vec3::ZERO)
+        {
             let radians = eq_client_core::render_heading(heading);
             intent.preserve_facing = true;
             if let Some(speed) = self.strafe_speed {
@@ -1030,6 +1036,23 @@ impl Controls {
                 intent.mode = MovementMode::Forward;
                 intent.direction = Vec3::ZERO;
             }
+        }
+        if self.movement_options.fly
+            && focused
+            && intent.direction != Vec3::ZERO
+            && (longitudinal_key || looking_ahead || self.autorun)
+            && !matches!(intent.mode, MovementMode::Strafe(_))
+            && let Some(strafe) = if self.walking {
+                self.strafe_walk_speed.or(self.strafe_speed)
+            } else {
+                self.strafe_speed
+            }
+            && intent.speed > 0.0
+        {
+            let radians = eq_client_core::render_heading(heading);
+            let right = Vec3::new(-radians.cos(), 0.0, radians.sin());
+            intent.direction += right * sideways * (strafe / intent.speed);
+            intent.preserve_facing |= sideways != 0.0;
         }
         let run_factor = if intent.mode == MovementMode::Forward {
             self.movement_options.run_speed_multiplier.factor()
@@ -6992,6 +7015,40 @@ pub(super) mod tests {
         assert!(
             (boosted.direction.y * boosted.speed - intent.direction.y * intent.speed).abs() < 0.001
         );
+    }
+
+    #[test]
+    fn flight_combines_forward_and_either_strafe_without_turning_the_body() {
+        let controls = Controls {
+            speed: Some(6.0),
+            strafe_speed: Some(3.0),
+            movement_options: eq_client_core::movement::MovementOptions {
+                fly: true,
+                ..Default::default()
+            },
+            ..Controls::default()
+        };
+        let map = KeyMap::for_client(InstalledClient::Titanium);
+        for (act, side) in [(Act::StrafeLeft, 1.0), (Act::StrafeRight, -1.0)] {
+            let input = controls.intent(
+                &ButtonInput::default(),
+                &map,
+                &[Act::Forward, act],
+                true,
+                (0.0, 0.0),
+                None,
+            );
+            let h = eq_client_core::render_heading(0.0);
+            let f = Vec3::new(h.sin(), 0.0, h.cos());
+            let expected = (f + f.cross(Vec3::Y) * (-side * 0.5)).normalize();
+            assert!(
+                input.direction.abs_diff_eq(expected, 1e-5),
+                "{:?} vs {expected:?}",
+                input.direction
+            );
+            assert!(input.preserve_facing);
+            assert_eq!(input.mode, MovementMode::Forward);
+        }
     }
 
     #[test]
