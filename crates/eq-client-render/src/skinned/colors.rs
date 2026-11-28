@@ -213,4 +213,40 @@ mod tests {
         assert_eq!(pages(&made, WindowId::Options, 350.0).len(), 2);
         assert_eq!(pages(&skin[..1], WindowId::Options, 350.0)[1].name, PAGE);
     }
+
+    #[test]
+    #[ignore = "requires EQ_PROBE_INSTALL with the default and Velious Titanium skins"]
+    fn installed_colors_tabs_contain_the_editable_rows() {
+        let directory = std::path::PathBuf::from(std::env::var_os("EQ_PROBE_INSTALL").unwrap());
+        for skin in ["default", "velious"] {
+            let library = eq_client_assets::sidl::Library::read(&directory, skin).unwrap();
+            let screen = library
+                .window(&directory, skin, "EQUI_OptionsWindow.xml", "OptionsWindow")
+                .unwrap();
+            let tabs = screen
+                .pieces
+                .iter()
+                .find_map(|(_, e)| match e {
+                    Element::Tabs(tabs) => Some(tabs),
+                    _ => None,
+                })
+                .unwrap();
+            let index = tabs
+                .pages
+                .iter()
+                .position(|p| p.title.as_deref() == Some("Colors"))
+                .unwrap();
+            let built = pages(&tabs.pages, WindowId::Options, 380.0);
+            assert_eq!(built.len(), tabs.pages.len());
+            assert_eq!(
+                built[index]
+                    .pieces
+                    .iter()
+                    .filter(|(id, _)| binding(id).is_some())
+                    .count(),
+                86,
+                "{skin}"
+            );
+        }
+    }
 }
