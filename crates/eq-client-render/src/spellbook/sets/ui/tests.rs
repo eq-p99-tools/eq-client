@@ -195,13 +195,7 @@ fn install_background_book_script(app: &mut App, source: &str) -> (Entity, Entit
                 .chain()
                 .after(search::input),
         );
-    crate::install_script(
-        app,
-        (Some(program), None),
-        true,
-        false,
-        InputMode::Background,
-    );
+    crate::install_script(app, (Some(program), None), true, InputMode::Background);
     (window, field)
 }
 

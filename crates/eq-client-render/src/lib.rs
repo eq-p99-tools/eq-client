@@ -601,6 +601,7 @@ pub fn run(
     device_pixels::install(&mut app);
     install_overlays(&mut app);
     install_script(&mut app, (steps, follow), online, script_input_mode);
+    script::pointer::install(&mut app);
     if let Err(error) = script::control::install(&mut app) {
         error!(%error, "Cannot create script control directory; use a new directory");
         return 2;
@@ -797,16 +798,6 @@ fn install_script(
                 .in_set(Stage::Typing),
         ),
     );
-    app.init_resource::<script::pointer::SkinArrow>()
-        .init_resource::<script::pointer::LastPointer>()
-        .add_systems(Startup, script::pointer::spawn)
-        .add_systems(PreUpdate, script::pointer::remember_pointer)
-        .add_systems(
-            Update,
-            script::pointer::read_arrow
-                .before(script::pointer::draw)
-                .before(inventory::cursor::update),
-        );
 }
 
 /// Configures the live or offline window, hiding one-shot screenshot previews.
