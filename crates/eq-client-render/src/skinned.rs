@@ -4390,7 +4390,10 @@ mod tests {
         ));
         // The QoL page comes last, a checkbox for each quality-of-life
         // setting in the skin's own, one under another.
-        let general = options_general_page();
+        let mut general = options_general_page();
+        // A custom page with no stock destination keeps all choices on the fallback page.
+        general.name = "Custom".into();
+        general.title = Some("Custom".into());
         let mut settings: Vec<_> = Fix::settings().collect();
         settings.sort_by_key(|fix| fix.is_unsafe());
         // A tall page holds every setting in one column, with room for both
