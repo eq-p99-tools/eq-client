@@ -15,7 +15,8 @@ use std::cell::RefCell;
 
 impl CollisionWorld {
     /// Sweeps a flying character through solid geometry without requiring ground
-    /// support. Floors, ceilings and walls still stop the body. Liquids are
+    /// support. Horizontal flight follows rising walkable ground while walls and
+    /// ceilings still stop the body. Liquids are
     /// observed separately at accepted positions. The caller grants and
     /// bounds the displacement.
     #[must_use]
@@ -26,15 +27,31 @@ impl CollisionWorld {
         if displacement.length_squared() < 0.000_001 {
             return feet;
         }
-        // Stop on contact: projecting onto a slope could otherwise invent a
-        // height change when the player only asked to move horizontally.
-        match self.flight_sweep(feet, displacement, height) {
-            Ok(None) => feet + displacement,
-            Ok(Some(hit)) => {
-                let fraction = (hit.time_of_impact - 0.005 / displacement.length()).clamp(0.0, 1.0);
-                feet + displacement * fraction
-            }
-            Err(_) => feet,
+        let collision = self.flight_contact(feet, displacement, height);
+        self.observe_sweep(&collision);
+        let (hit, slope) = match collision {
+            Ok(Some(contact)) => contact,
+            Ok(None) => return feet + displacement,
+            Err(_) => return feet,
+        };
+        let travel = clear_fraction(&hit, displacement);
+        let contact = feet + displacement * travel;
+        let Some(normal) = slope else { return contact };
+        let remaining = displacement * (1.0 - travel);
+        // Spend only the remaining travel on the rising face. A separate
+        // sweep still clips that motion against ceilings and other solids.
+        let along = remaining - normal * remaining.dot(normal);
+        if displacement.y < 0.0
+            || along.y <= 0.0
+            || along.y <= remaining.y
+            || along.length_squared() < 1e-6
+        {
+            return contact;
+        }
+        match self.flight_sweep(contact, along, height) {
+            Ok(None) => contact + along,
+            Ok(Some(next)) => contact + along * clear_fraction(&next, along),
+            Err(_) => contact,
         }
     }
 
@@ -47,111 +64,123 @@ impl CollisionWorld {
         delta: Vec3,
         height: f32,
     ) -> Result<Option<ShapeCastHit>, Unsupported> {
-        let result = self.flight_sweep_inner(feet, delta, height);
+        let result = self
+            .flight_contact(feet, delta, height)
+            .map(|contact| contact.map(|(hit, _)| hit));
         self.observe_sweep(&result);
         result
     }
 
-    pub(super) fn flight_sweep_inner(
+    fn flight_contact(
         &self,
         feet: Vec3,
         delta: Vec3,
         height: f32,
-    ) -> Result<Option<ShapeCastHit>, Unsupported> {
+    ) -> Result<Option<(ShapeCastHit, Option<Vec3>)>, Unsupported> {
         let (pose, capsule) = body(feet - Vec3::Y * LIFT, height);
         let bounds = capsule.compute_aabb(&pose);
         let shift = -bounds.center();
         let margin = bounds.half_extents() + Vector::splat(SKIN);
         let velocity = Vector::from_array(delta.to_array());
         let ray = Ray::new(Vector::ZERO, velocity);
-        let mut nearest: Option<ShapeCastHit> = None;
+        let mut nearest: Option<(ShapeCastHit, Option<Vec3>)> = None;
         for mesh in self.wall_meshes() {
             let unsupported = RefCell::new(None);
-            let hit = mesh
-                .mesh
-                .bvh()
-                .find_best(
-                    1.0,
-                    |node, best| {
-                        let node = Aabb {
-                            mins: node.mins(),
-                            maxs: node.maxs(),
+            let hit = mesh.mesh.bvh().find_best(
+                1.0,
+                |node, best| {
+                    let node = Aabb {
+                        mins: node.mins(),
+                        maxs: node.maxs(),
+                    }
+                    .transform_by(&mesh.pose);
+                    Aabb {
+                        mins: node.mins + shift - margin,
+                        maxs: node.maxs + shift + margin,
+                    }
+                    .cast_local_ray(&ray, best, true)
+                    .unwrap_or(f32::MAX)
+                },
+                |index, best| {
+                    let triangle = mesh.mesh.triangle(index).transformed(&mesh.pose);
+                    if let Some(mut face) = triangle.normal() {
+                        let mut distance = (pose.translation - triangle.a).dot(face);
+                        if distance < 0.0 {
+                            face = -face;
+                            distance = -distance;
                         }
-                        .transform_by(&mesh.pose);
-                        Aabb {
-                            mins: node.mins + shift - margin,
-                            maxs: node.maxs + shift + margin,
-                        }
-                        .cast_local_ray(&ray, best, true)
-                        .unwrap_or(f32::MAX)
-                    },
-                    |index, best| {
-                        let triangle = mesh.mesh.triangle(index).transformed(&mesh.pose);
-                        if let Some(mut face) = triangle.normal() {
-                            let mut distance = (pose.translation - triangle.a).dot(face);
-                            if distance < 0.0 {
-                                face = -face;
-                                distance = -distance;
-                            }
-                            let extent =
-                                CAPSULE_RADIUS + (height * 0.5 - CAPSULE_RADIUS) * face.y.abs();
-                            // A geometric separating plane remains separating
-                            // for this whole linear move when it is nonclosing.
-                            // This also handles an exactly touching floor whose
-                            // zero-distance GJK normal is numerically unstable.
-                            // A capsule overlapping the plane can still meet a
-                            // triangle edge, so keep its ordinary shape cast.
-                            let roundoff = height * f32::EPSILON * 4.0;
-                            if distance - extent >= -roundoff && velocity.dot(face) >= 0.0 {
-                                return None;
-                            }
-                        }
-                        if nonclosing_cap(&triangle, &pose, velocity, height) {
+                        let extent =
+                            CAPSULE_RADIUS + (height * 0.5 - CAPSULE_RADIUS) * face.y.abs();
+                        // A geometric separating plane remains separating
+                        // for this whole linear move when it is nonclosing.
+                        // This also handles an exactly touching floor whose
+                        // zero-distance GJK normal is numerically unstable.
+                        // A capsule overlapping the plane can still meet a
+                        // triangle edge, so keep its ordinary shape cast.
+                        let roundoff = height * f32::EPSILON * 4.0;
+                        if distance - extent >= -roundoff && velocity.dot(face) >= 0.0 {
                             return None;
                         }
-                        match face_sweep(&triangle, &pose, velocity, height, best) {
-                            FaceSweep::Clear => return None,
-                            FaceSweep::Hit(hit) => return Some(hit),
-                            FaceSweep::Cast => {}
+                    }
+                    if nonclosing_cap(&triangle, &pose, velocity, height) {
+                        return None;
+                    }
+                    match face_sweep(&triangle, &pose, velocity, height, best) {
+                        FaceSweep::Clear => return None,
+                        FaceSweep::Hit(hit) => return Some(hit),
+                        FaceSweep::Cast => {}
+                    }
+                    let options = ShapeCastOptions {
+                        max_time_of_impact: best,
+                        target_distance: SKIN,
+                        stop_at_penetration: false,
+                        compute_impact_geometry_on_penetration: true,
+                    };
+                    let hit = match cast_shapes(
+                        &pose,
+                        velocity,
+                        &capsule,
+                        &Pose::IDENTITY,
+                        Vector::ZERO,
+                        &triangle,
+                        options,
+                    ) {
+                        Ok(hit) => hit?,
+                        Err(error) => {
+                            *unsupported.borrow_mut() = Some(error);
+                            return None;
                         }
-                        let options = ShapeCastOptions {
-                            max_time_of_impact: best,
-                            target_distance: SKIN,
-                            stop_at_penetration: false,
-                            compute_impact_geometry_on_penetration: true,
-                        };
-                        let hit = match cast_shapes(
-                            &pose,
-                            velocity,
-                            &capsule,
-                            &Pose::IDENTITY,
-                            Vector::ZERO,
-                            &triangle,
-                            options,
-                        ) {
-                            Ok(hit) => hit?,
-                            Err(error) => {
-                                *unsupported.borrow_mut() = Some(error);
-                                return None;
-                            }
-                        };
-                        Some(hit)
-                    },
-                )
-                .map(|(_, hit)| hit);
+                    };
+                    Some(hit)
+                },
+            );
             if let Some(error) = unsupported.into_inner() {
                 return Err(error);
             }
-            if let Some(hit) = hit
+            if let Some((index, hit)) = hit
                 && nearest
                     .as_ref()
-                    .is_none_or(|previous| hit.time_of_impact < previous.time_of_impact)
+                    .is_none_or(|(previous, _)| hit.time_of_impact < previous.time_of_impact)
             {
-                nearest = Some(hit);
+                // An edge of a vertical wall can have an upward capsule normal.
+                // Only an actual walkable triangle face can lift a flyer.
+                let slope = mesh
+                    .mesh
+                    .triangle(index)
+                    .transformed(&mesh.pose)
+                    .normal()
+                    .map(|n| if n.y < 0.0 { -n } else { n })
+                    .filter(|n| n.y >= 0.7 && n.dot(hit.normal2) > 0.999)
+                    .map(|n| Vec3::from_array(n.to_array()));
+                nearest = Some((hit, slope));
             }
         }
         Ok(nearest)
     }
+}
+
+fn clear_fraction(hit: &ShapeCastHit, delta: Vec3) -> f32 {
+    (hit.time_of_impact - 0.005 / delta.length()).clamp(0.0, 1.0)
 }
 
 /// At a capsule end, a triangle's exact closest point also gives the whole
@@ -287,12 +316,16 @@ mod tests {
             [[3.0, 0.0, -20.0], [3.0, 0.0, 20.0], [13.0, 10.0, 20.0]],
         ])
         .unwrap();
-        let stopped = slope.fly_step(feet, Vec3::X * 10.0, 6.0);
-        assert!(stopped.x < 6.0, "{stopped:?}");
+        let climbed = slope.fly_step(feet, Vec3::X * 10.0, 6.0);
+        assert!(climbed.x > 6.0 && climbed.y > feet.y + 1.0, "{climbed:?}");
+        assert!(climbed.distance(feet) <= 10.001);
+        let farther = slope.fly_step(climbed, Vec3::X, 6.0);
         assert!(
-            (stopped.y - feet.y).abs() < 0.001,
-            "horizontal input cannot climb a slope"
+            farther.x > climbed.x && farther.y > climbed.y,
+            "{farther:?}"
         );
+        let away = slope.fly_step(farther, Vec3::NEG_X * 4.0, 6.0);
+        assert!((away.y - farther.y).abs() < 0.001 && away.x < farther.x - 3.99);
         let along = world.fly_step(Vec3::new(4.6, 0.0, 0.0), Vec3::Z, 6.0);
         assert!(
             (along.z - 1.0).abs() < 0.001,
@@ -303,6 +336,32 @@ mod tests {
             edge.z > 20.0,
             "a closing edge contact remains solid: {edge:?}"
         );
+    }
+
+    #[test]
+    fn uphill_flight_stops_below_a_ceiling_and_cannot_climb_a_steep_face() {
+        for (rise, ceiling) in [(6.0, true), (24.0, false)] {
+            let mut triangles = vec![
+                [[0., 0., -10.], [12., rise, 10.], [12., rise, -10.]],
+                [[0., 0., -10.], [0., 0., 10.], [12., rise, 10.]],
+            ];
+            if ceiling {
+                triangles.extend([
+                    [[-10., 8.5, -10.], [15., 8.5, -10.], [15., 8.5, 10.]],
+                    [[-10., 8.5, -10.], [15., 8.5, 10.], [-10., 8.5, 10.]],
+                ]);
+            }
+            let world = CollisionWorld::new(triangles).unwrap();
+            let mut feet = Vec3::new(-1., 0., 1.);
+            for _ in 0..100 {
+                feet = world.fly_step(feet, Vec3::X * 0.2, 6.);
+            }
+            if ceiling {
+                assert!(feet.x > 2. && feet.y > 1. && feet.y <= 2.51, "{feet:?}");
+            } else {
+                assert!(feet.x < 1. && feet.y.abs() < 0.001, "{feet:?}");
+            }
+        }
     }
 
     #[test]

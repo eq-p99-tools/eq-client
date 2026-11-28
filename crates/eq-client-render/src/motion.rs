@@ -1003,32 +1003,45 @@ impl Controls {
                 self.diagonal(&intent, heading, looking_ahead, sideways(looking.is_some()));
         }
         // Retain the existing cardinal choice as the collision/fall fallback.
-        let sideways = sideways(looking.is_some() && !looking_ahead);
+        let sideways = sideways(looking.is_some() && (!looking_ahead || self.movement_options.fly));
         let (ahead, behind) = (held.held(Act::Forward), held.held(Act::Back));
         let longitudinal_key = if diagonal_available {
             ahead != behind
         } else {
             ahead || behind
         };
-        if focused && sideways != 0.0 && !longitudinal_key {
+        if focused && sideways != 0.0 {
             let radians = eq_client_core::render_heading(heading);
-            intent.preserve_facing = true;
-            if let Some(speed) = self.strafe_speed {
-                // Titanium strafes on the selected base speed (the R5
-                // audit's S1), and the sample names that pace, so the
-                // session bounds it by the same rate (6.540).
-                let (pace, rate) = if self.walking {
-                    (Pace::Walk, self.strafe_walk_speed.unwrap_or(speed))
+            let right = Vec3::new(radians.sin(), 0.0, radians.cos()).cross(Vec3::Y) * sideways;
+            let strafe = self.strafe_speed.map(|rate| {
+                if self.walking {
+                    self.strafe_walk_speed.unwrap_or(rate)
                 } else {
-                    (Pace::Run, speed)
-                };
-                intent.mode = MovementMode::Strafe(pace);
-                intent.speed = rate;
-                let facing = Vec3::new(radians.sin(), 0.0, radians.cos());
-                intent.direction = facing.cross(Vec3::Y) * sideways;
-            } else {
-                intent.mode = MovementMode::Forward;
-                intent.direction = Vec3::ZERO;
+                    rate
+                }
+            });
+            if self.movement_options.fly
+                && intent.direction != Vec3::ZERO
+                && (longitudinal_key || looking_ahead || self.autorun)
+            {
+                if let Some(diagonal) = self.diagonal(&intent, heading, looking_ahead, sideways) {
+                    intent.direction = diagonal.velocity / diagonal.longitudinal;
+                } else if let Some(rate) = strafe
+                    && intent.speed > 0.0
+                {
+                    intent.direction += right * (rate / intent.speed);
+                }
+            } else if !longitudinal_key {
+                intent.preserve_facing = true;
+                if let Some(rate) = strafe {
+                    intent.mode =
+                        MovementMode::Strafe(if self.walking { Pace::Walk } else { Pace::Run });
+                    intent.speed = rate;
+                    intent.direction = right;
+                } else {
+                    intent.mode = MovementMode::Forward;
+                    intent.direction = Vec3::ZERO;
+                }
             }
         }
         let run_factor = if intent.mode == MovementMode::Forward {
@@ -6993,6 +7006,82 @@ pub(super) mod tests {
         assert!(
             (boosted.direction.y * boosted.speed - intent.direction.y * intent.speed).abs() < 0.001
         );
+    }
+
+    #[test]
+    fn flight_combines_forward_and_either_strafe_without_turning_the_body() {
+        let controls = Controls {
+            speed: Some(6.0),
+            strafe_speed: Some(3.0),
+            movement_options: eq_client_core::movement::MovementOptions {
+                fly: true,
+                ..Default::default()
+            },
+            ..Controls::default()
+        };
+        let map = KeyMap::for_client(InstalledClient::Titanium);
+        for (act, side) in [(Act::StrafeLeft, 1.0), (Act::StrafeRight, -1.0)] {
+            let input = controls.intent(
+                &ButtonInput::default(),
+                &map,
+                &[Act::Forward, act],
+                true,
+                (0.0, 0.0),
+                None,
+            );
+            let h = eq_client_core::render_heading(0.0);
+            let f = Vec3::new(h.sin(), 0.0, h.cos());
+            let expected = (f + f.cross(Vec3::Y) * (-side * 0.5)).normalize();
+            assert!(
+                input.direction.abs_diff_eq(expected, 1e-5),
+                "{:?} vs {expected:?}",
+                input.direction
+            );
+            assert!(input.preserve_facing);
+            assert_eq!(input.mode, MovementMode::Forward);
+        }
+    }
+
+    #[test]
+    fn flight_sends_both_held_axes_and_drops_the_released_axis() {
+        let (mut app, rx) = app();
+        movement_choice(&mut app, Fix::Fly, true);
+        for (act, key) in [
+            (Act::Forward, KeyCode::KeyW),
+            (Act::StrafeRight, KeyCode::KeyD),
+        ] {
+            crate::keys::testing::bind(&mut app, act, crate::keys::Chord::key(key));
+        }
+        app.world_mut().resource_mut::<Controls>().diagonal_rates = DiagonalRates {
+            run: Some(3.0),
+            walk: Some(1.5),
+        };
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.reset_all();
+        keys.press(KeyCode::KeyW);
+        keys.press(KeyCode::KeyD);
+        app.update();
+        let ClientCommand::Move(combined) = rx.try_recv().unwrap() else {
+            panic!("expected flight movement")
+        };
+        assert_eq!(combined.mode, MovementMode::Forward);
+        assert!(
+            combined.position.x.abs() > 0.01 && combined.position.y.abs() > 0.01,
+            "{:?}",
+            combined.position
+        );
+        accept(&mut app, &combined);
+        let mut keys = app.world_mut().resource_mut::<ButtonInput<KeyCode>>();
+        keys.clear();
+        keys.release(KeyCode::KeyD);
+        app.update();
+        let ClientCommand::Move(straight) = rx.try_recv().unwrap() else {
+            panic!("expected forward movement")
+        };
+        let dx = straight.position.x - combined.position.x;
+        let dy = straight.position.y - combined.position.y;
+        assert!(dx.abs().min(dy.abs()) < 0.001 && dx.abs().max(dy.abs()) > 0.01);
+        assert_eq!(straight.position.heading, combined.position.heading);
     }
 
     #[test]
