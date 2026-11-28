@@ -4,7 +4,6 @@ use crate::{
     keys::{Typing, search},
     options::OptionsState,
     theme,
-    windows::{Shown, WindowId},
 };
 use bevy::{
     clipboard::{Clipboard, ClipboardRead},
@@ -37,11 +36,11 @@ pub(super) const COMBAT_COLORS: [(&str, &str, [Level; 3]); 2] = [
 ];
 
 mod popup;
-pub(super) use popup::{ResetColors, draw_swatch};
+pub(crate) use popup::{ResetColors, draw_swatch};
 pub(crate) use popup::{manage, show_swatches};
 
 #[derive(Clone, Copy, PartialEq, Eq)]
-pub(super) enum Binding {
+pub(crate) enum Binding {
     Combat([Level; 3]),
     Chat(u8),
 }
@@ -288,9 +287,8 @@ pub(crate) struct HexEdit {
 
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters.
 pub(crate) fn focus(
-    (mouse, shown, profile): (
+    (mouse, profile): (
         Res<ButtonInput<MouseButton>>,
-        Res<Shown>,
         Res<crate::profile_files::Profile>,
     ),
     windows: Query<&Window, With<PrimaryWindow>>,
@@ -300,9 +298,7 @@ pub(crate) fn focus(
 ) {
     let old = edit.field;
     let clicked = mouse.any_just_pressed([MouseButton::Left, MouseButton::Right]);
-    let field = if shown.displayed(WindowId::Options)
-        && windows.single().is_ok_and(|window| window.focused)
-    {
+    let field = if windows.single().is_ok_and(|window| window.focused) {
         fields
             .iter()
             .find_map(|(part, interaction, visible, node)| match part {

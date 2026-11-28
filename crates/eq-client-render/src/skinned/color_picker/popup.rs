@@ -14,17 +14,26 @@ use bevy::{
 };
 
 #[derive(Component)]
-pub(crate) struct Swatch(Binding, theme::Size);
+pub(crate) struct Swatch {
+    binding: Binding,
+    font: theme::Size,
+    owner: WindowId,
+}
 
-pub(in crate::skinned) fn draw_swatch(
+pub(crate) fn draw_swatch(
     ui: &mut ChildSpawnerCommands,
+    owner: WindowId,
     binding: Binding,
     node: Node,
     font: theme::Size,
 ) {
     let mut field = ui.spawn((
         Button,
-        Swatch(binding, font),
+        Swatch {
+            binding,
+            font,
+            owner,
+        },
         Node {
             border: UiRect::all(px(1)),
             ..node
@@ -67,7 +76,7 @@ pub(crate) fn show_swatches(
     }
     for (swatch, mut bg) in &mut colors {
         bg.set_if_neq(BackgroundColor(
-            swatch.0.read(&state.options, look.as_deref()).into(),
+            swatch.binding.read(&state.options, look.as_deref()).into(),
         ));
     }
 }
@@ -113,19 +122,14 @@ pub(crate) fn manage(
     mut typing: ResMut<crate::keys::Typing>,
     mut panels: Query<(&mut Node, &ComputedNode, &UiGlobalTransform), Without<Swatch>>,
 ) {
-    let window = input
-        .windows
-        .single()
-        .ok()
-        .filter(|w| w.focused && input.shown.displayed(WindowId::Options));
+    let window = input.windows.single().ok().filter(|w| w.focused);
     let left = input.mouse.just_pressed(MouseButton::Left);
     let clicked = left || input.mouse.just_pressed(MouseButton::Right);
     let trigger = window.and_then(|_| {
         left.then(|| {
-            input
-                .anchors
-                .iter()
-                .find(|(_, _, i, ..)| **i == Interaction::Pressed)
+            input.anchors.iter().find(|(_, swatch, i, ..)| {
+                input.shown.displayed(swatch.owner) && **i == Interaction::Pressed
+            })
         })
         .flatten()
     });
@@ -134,13 +138,17 @@ pub(crate) fn manage(
         let anchor = input.anchors.get(active.anchor).ok();
         let escaped = input.keys.just_pressed(KeyCode::Escape);
         let mut keep = false;
-        if let (Some(w), Some((_, _, _, node, transform, vis, clip)), Ok((mut panel, pn, pt))) =
-            (window, anchor, panels.get_mut(active.panel))
+        if let (
+            Some(w),
+            Some((_, swatch, _, node, transform, vis, clip)),
+            Ok((mut panel, pn, pt)),
+        ) = (window, anchor, panels.get_mut(active.panel))
         {
             let inside = w
                 .physical_cursor_position()
                 .is_some_and(|p| crate::windows::contains(p, pt, pn));
-            keep = vis.get()
+            keep = input.shown.displayed(swatch.owner)
+                && vis.get()
                 && node.size().min_element() > 0.0
                 && clip.is_none_or(|c| c.clip.contains(transform.translation))
                 && active.profile.as_ref() == input.profile.key_ref()
@@ -182,10 +190,10 @@ pub(crate) fn manage(
             .with_children(|ui| {
                 draw(
                     ui,
-                    swatch.0,
+                    swatch.binding,
                     at(PAD, PAD, FIELD_WIDTH, height(FIELD_WIDTH)),
                     FIELD_WIDTH,
-                    swatch.1,
+                    swatch.font,
                 );
             })
             .id();
@@ -207,4 +215,30 @@ fn position(window: &Window, node: &ComputedNode, transform: &UiGlobalTransform)
         rect.min.y - size.y
     };
     Vec2::new(rect.min.x, y).clamp(Vec2::ZERO, (screen - size).max(Vec2::ZERO))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reset_restores_combat_defaults_and_removes_only_the_chat_overrides() {
+        let mut app = crate::testing::app();
+        crate::clicks::testing::install(&mut app);
+        let defaults = eq_client_core::options::Options::default();
+        let mut custom = defaults.clone();
+        custom.user_colors[2] = Some([18, 64, 221]);
+        custom.combat_text_outgoing = [0, 60, 15];
+        custom.combat_text_incoming = [80, 0, 0];
+        custom.chat_font_size = Some(7);
+        app.insert_resource(OptionsState::new(&custom))
+            .add_systems(Update, show_swatches);
+        let button = app.world_mut().spawn((ResetColors, Interaction::None)).id();
+        crate::clicks::testing::click(&mut app, button);
+        let saved = &app.world().resource::<OptionsState>().options;
+        assert_eq!(saved.user_colors, defaults.user_colors);
+        assert_eq!(saved.combat_text_outgoing, defaults.combat_text_outgoing);
+        assert_eq!(saved.combat_text_incoming, defaults.combat_text_incoming);
+        assert_eq!(saved.chat_font_size, Some(7));
+    }
 }
