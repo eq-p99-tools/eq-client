@@ -615,6 +615,46 @@ fn a_short_underwater_rmb_drag_turns_the_accepted_body_toward_that_side_of_the_v
 }
 
 #[test]
+fn bottom_strafe_resumes_after_one_long_render_frame() {
+    let (mut f, mut session) = scene(true, 0.);
+    f.app
+        .world_mut()
+        .resource_mut::<Controls>()
+        .suppress_floor_swim = false;
+    let mut replies = Replies::new();
+    let mut before = Outcome::default();
+    for tick in 0..180 {
+        drive(&mut f, &mut session, &mut before, &mut replies, tick, 0.);
+    }
+    crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
+    latency_tests::key(&mut f.app, KeyCode::KeyD, true);
+    for tick in 180..300 {
+        drive(&mut f, &mut session, &mut before, &mut replies, tick, -2.);
+    }
+    assert!(before.physical_proposals > 0 && before.path_xy > 1.);
+    assert_eq!(before.refused, 0);
+
+    // One observed stall with no intervening input or physics updates.
+    // Continue from the same admission, geometry, body and held key.
+    let mut stalled = Outcome::default();
+    for command in frame_for(&mut f, &mut session, Duration::from_micros(231_838)) {
+        let events = answer(&f, &mut session, command, &mut stalled);
+        replies.push_back((303, events));
+    }
+    let mut after = Outcome::default();
+    for tick in 301..901 {
+        drive(&mut f, &mut session, &mut after, &mut replies, tick, -2.);
+    }
+    assert_eq!(
+        stalled.refused + after.refused,
+        0,
+        "{stalled:?} / {after:?}"
+    );
+    assert_eq!(after.replay_mismatches, 0);
+    assert!(after.path_xy > 40., "{after:?}");
+}
+
+#[test]
 fn physical_floor_strafe_and_turn_preserve_all_four_signs_and_pitch_controls() {
     for side in [KeyCode::KeyA, KeyCode::KeyD] {
         for turn in [-40.0_f32, -4.0, 0.0, 4.0, 40.0] {
