@@ -525,6 +525,38 @@ fn clear_water_unknown_basis_can_refuse_an_opposed_curve_without_a_ledger_error(
 }
 
 #[test]
+fn a_short_underwater_rmb_drag_turns_the_accepted_body_toward_that_side_of_the_view() {
+    for dx in [-4.0_f32, 4.0] {
+        let (mut f, mut session) = scene(true, 0.);
+        f.app
+            .world_mut()
+            .resource_mut::<Controls>()
+            .suppress_floor_swim = false;
+        let mut replies = Replies::new();
+        let mut out = Outcome::default();
+        for tick in 0..180 {
+            drive(&mut f, &mut session, &mut out, &mut replies, tick, 0.);
+        }
+        let ahead =
+            |heading| Quat::from_rotation_y(eq_client_core::render_heading(heading)) * Vec3::Z;
+        let start = ahead(session.position().heading);
+        let screen_right = start.cross(Vec3::Y);
+        crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
+        for tick in 180..240 {
+            let drag = if tick == 185 { dx } else { 0. };
+            drive(&mut f, &mut session, &mut out, &mut replies, tick, drag);
+        }
+        let end = ahead(session.position().heading);
+        assert!(end.dot(start) > 0.99, "a short drag must not wrap around");
+        assert!(
+            end.dot(screen_right) * dx > 0.,
+            "wrong side for dx={dx}: {out:?}"
+        );
+        assert_eq!(out.refused, 0);
+    }
+}
+
+#[test]
 fn physical_floor_strafe_and_turn_preserve_all_four_signs_and_pitch_controls() {
     for side in [KeyCode::KeyA, KeyCode::KeyD] {
         for turn in [-40.0_f32, -4.0, 0.0, 4.0, 40.0] {
