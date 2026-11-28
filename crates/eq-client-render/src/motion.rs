@@ -2916,6 +2916,7 @@ pub(super) fn input(
     };
     #[cfg(test)]
     let frame_turns = frame_turns && !controls.suppress_key_facing;
+    let mut guided_script_turn = false;
     if let (true, Some(player), Ok((_, drawn)), Ok((camera, _))) = (
         frame_turns || guidance.is_some(),
         online.world().player(),
@@ -2990,6 +2991,7 @@ pub(super) fn input(
                 *goal,
                 cap,
             );
+            guided_script_turn = matches!(source, key_turn::Source::Script(_));
             controls.facing = None;
             controls.released_turn = 0.;
         } else if own {
@@ -3256,7 +3258,9 @@ pub(super) fn input(
                 .is_none_or(|(_, latest)| controls.speeds() == latest)
             && controls.following.is_none()
             && !keys.script_routing()
-            && scripted_facing.is_none()
+            // A scripted face uses the achieved, rate-limited heading above.
+            // Keep replaying those frames from the established wet state.
+            && (scripted_facing.is_none() || (controls.floor_swim.active() && guided_script_turn))
             && !held.held(Act::Jump)
             && !held.held(Act::Duck)
             && controls.water_jump.is_none()

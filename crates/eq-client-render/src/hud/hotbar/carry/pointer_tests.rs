@@ -305,6 +305,29 @@ fn ordinary_buttons_pick_up_show_swap_and_remove_shortcuts() {
     pickup_move_remove(ordinary());
 }
 
+pub(crate) fn place_script_on_occupied_slot(mut fixture: Fixture) {
+    let script = fixture
+        .app
+        .world_mut()
+        .resource_mut::<Bindings>()
+        .script_binding(std::path::PathBuf::from(
+            "C:/fixture/Scripts/example.eqscript",
+        ))
+        .unwrap();
+    let previous = fixture.binding(0).expect("occupied hotbar slot");
+    fixture.app.world_mut().resource_mut::<Carry>().put(script);
+    fixture.press(0);
+    fixture.release(0);
+    assert_eq!(fixture.binding(0), Some(script));
+    assert_eq!(fixture.carry(), Some(previous));
+    assert_eq!(fixture.requests(), []);
+}
+
+#[test]
+fn ordinary_occupied_slot_swaps_a_carried_script_without_activation() {
+    place_script_on_occupied_slot(ordinary());
+}
+
 #[test]
 fn native_hold_boundary_is_strict_and_a_slow_release_never_activates() {
     let since = Instant::now();

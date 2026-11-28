@@ -421,6 +421,19 @@ fn both_destinations_require_an_empty_cursor_even_after_confirmation() {
                     crate::clicks::testing::click(&mut app, cells[0]);
                 }
                 assert!(rx.try_recv().is_err());
+                let messages = app
+                    .world()
+                    .resource::<crate::chat::ChatState>()
+                    .history
+                    .lines(eq_client_core::chat::ChatTab::System);
+                assert_eq!(
+                    messages
+                        .iter()
+                        .filter(|(_, line)| line.message.text
+                            == "Place the item on your cursor before looting.")
+                        .count(),
+                    1
+                );
                 assert!(
                     app.world()
                         .resource::<TradeState>()

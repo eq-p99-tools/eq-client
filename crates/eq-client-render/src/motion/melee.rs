@@ -88,6 +88,28 @@ struct Scope {
 struct TargetSample {
     position: Vec3,
     at: Instant,
+    interval: Duration,
+    velocity: Vec3,
+}
+
+impl TargetSample {
+    fn observe(&mut self, position: Vec3, now: Instant) -> Vec3 {
+        let elapsed = now.saturating_duration_since(self.at);
+        if self.position != position {
+            self.velocity = if elapsed.is_zero() {
+                Vec3::ZERO
+            } else {
+                (position - self.position) / elapsed.as_secs_f32()
+            };
+            self.position = position;
+            self.at = now;
+            self.interval = elapsed;
+        } else if elapsed > self.interval {
+            // A late or stopped target provides no fresh speed estimate.
+            return Vec3::ZERO;
+        }
+        self.velocity
+    }
 }
 
 struct StandOff {
@@ -252,22 +274,16 @@ impl Assist {
         let from = Vec3::from_array(eq_client_core::render_position(body.position));
         let same = self.scope == Some(scope);
         let direction = (to - from).with_y(0.).normalize_or_zero();
-        let receding_speed = self
-            .target_sample
-            .as_ref()
-            .filter(|_| same)
-            .map_or(0., |last| {
-                let elapsed = now.saturating_duration_since(last.at).as_secs_f32();
-                if elapsed > 0. {
-                    ((to - last.position).dot(direction) / elapsed).max(0.)
-                } else {
-                    0.
-                }
-            });
-        self.target_sample = Some(TargetSample {
+        if !same {
+            self.target_sample = None;
+        }
+        let sample = self.target_sample.get_or_insert(TargetSample {
             position: to,
             at: now,
+            interval: Duration::ZERO,
+            velocity: Vec3::ZERO,
         });
+        let receding_speed = sample.observe(to, now).dot(direction).max(0.);
         // Reserve one planning interval of ordinary run travel plus observed
         // target recession. This is a local planning allowance, not measured
         // server latency or extra reach. Keep the old minimum and cap the

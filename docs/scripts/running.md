@@ -25,10 +25,10 @@ The sample in a new editor buffer does not run until you choose Run.
 ## Saved script hotbuttons
 
 While playing a character, save an `.eqscript` in the installation's `Scripts`
-folder, then choose **Hotbutton** beside Save. Empty the item cursor and click
-an empty hotbar slot to place it. A held item can block placement even when
-the pointer looks empty. Clicking an occupied slot can activate its existing
-action. Bindings are saved with the character's hotbar.
+folder. Clear the item cursor, choose **Hotbutton** beside Save, then click
+the hotbar slot where you want the script. Placing it over an existing
+shortcut puts that shortcut on the hotkey cursor. Bindings are saved with
+the character's hotbar.
 
 Click the slot or press its assigned hotbar key to start the saved file. The
 button stays latched with a green outline and says **Running** while its run is

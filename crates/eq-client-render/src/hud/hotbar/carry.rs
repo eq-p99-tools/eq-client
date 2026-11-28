@@ -224,6 +224,16 @@ impl Presses {
 #[derive(Resource, Default, Debug)]
 pub(crate) struct Carry(Option<Action>);
 
+/// The game cursor takes priority over an editable hotbar shortcut.
+pub(crate) fn cursor_busy(world: &ClientWorld, hand: &crate::spellbook::BookHand) -> bool {
+    world
+        .inventory()
+        .items()
+        .contains_key(&InventorySlot::CURSOR)
+        || crate::coins::on_cursor(world).is_some()
+        || hand.held.is_some()
+}
+
 impl Carry {
     /// The hotkey on the cursor, if one is.
     pub(crate) const fn hotkey(&self) -> Option<Action> {
@@ -361,12 +371,7 @@ pub(crate) fn route(
     presses.taken = false;
     let world = online.world();
     let active = carry.0.is_some() || presses.pending();
-    let busy = world
-        .inventory()
-        .items()
-        .contains_key(&InventorySlot::CURSOR)
-        || crate::coins::on_cursor(world).is_some()
-        || hand.held.is_some();
+    let busy = cursor_busy(world, &hand);
     let replaced = presses
         .editing
         .as_ref()

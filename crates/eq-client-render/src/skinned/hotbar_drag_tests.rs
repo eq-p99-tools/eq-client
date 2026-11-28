@@ -120,6 +120,11 @@ fn skinned_hotbuttons_pick_up_show_swap_and_remove_shortcuts() {
 }
 
 #[test]
+fn skinned_occupied_slot_swaps_a_carried_script_without_activation() {
+    pointer_tests::place_script_on_occupied_slot(fixture());
+}
+
+#[test]
 fn skinned_controls_select_wrap_activate_bind_and_clear_the_current_page() {
     page::tests::controls(fixture());
 }

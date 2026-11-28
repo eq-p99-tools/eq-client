@@ -890,6 +890,7 @@ impl Script {
                 *started += now.saturating_sub(since);
             }
             self.progress.event("Resumed");
+            info!("Script resumed");
         }
         self.mode = mode;
         self.progress.phase = Phase::Running;
@@ -1518,9 +1519,10 @@ pub(super) fn drive(
                 return;
             }
             Request::Pause => {
-                if !matches!(script.mode, RunMode::Paused(_)) {
+                if !matches!(script.mode, RunMode::Paused(_) | RunMode::PauseRequested) {
                     script.mode = RunMode::PauseRequested;
                     script.progress.phase = Phase::Pausing;
+                    info!("Script pause requested");
                 }
             }
             Request::Resume => script.resume(now, RunMode::Continuous),
@@ -1686,8 +1688,8 @@ pub(super) fn drive(
         return;
     }
     if std::mem::take(&mut script.paused) {
-        script.progress.phase = Phase::Running;
-        info!("Script resumed");
+        // Regaining focus or input does not cancel a requested boundary pause.
+        info!("Script input available again");
     }
     // The focus system clears a hover no pointer is over; a hovered control
     // stays hovered.
@@ -7613,6 +7615,44 @@ mod tests {
         let startup = time.startup();
         time.update_with_instant(startup + Duration::from_millis(ms));
         app.update();
+    }
+
+    #[test]
+    fn regaining_focus_during_a_wait_preserves_a_requested_boundary_pause() {
+        use bevy::window::WindowFocused;
+
+        let steps = vec![
+            Step::Wait(Duration::from_secs(1)),
+            Step::Press(vec![KeyCode::KeyA]),
+        ];
+        let mut app = pointing(Vec::new());
+        app.insert_resource(Script::new(steps))
+            .init_resource::<RunControl>();
+        let window = app
+            .world_mut()
+            .query_filtered::<Entity, With<PrimaryWindow>>()
+            .single(app.world())
+            .unwrap();
+        for (ms, focused, expected) in [
+            (0, true, Phase::Running),
+            (10, false, Phase::WaitingForFocus),
+            (20, true, Phase::Pausing),
+        ] {
+            if expected == Phase::Pausing {
+                app.world_mut()
+                    .resource_mut::<RunControl>()
+                    .request(Request::Pause);
+            }
+            app.world_mut()
+                .write_message(WindowFocused { window, focused });
+            frame_at(&mut app, ms);
+            assert_eq!(app.world().resource::<Script>().status().phase(), expected);
+        }
+        frame_at(&mut app, 1_000);
+        assert_eq!(
+            app.world().resource::<Script>().status().phase(),
+            Phase::Paused
+        );
     }
 
     #[test]
