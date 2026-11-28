@@ -89,13 +89,16 @@ impl Control {
             && basis.is_some_and(SwimBasis::is_reset)
         {
             self.basis = basis.map(|basis| (session, at, basis));
-        } else if let Some(created) = created
-            && self.result == Some((session, created, true))
+        } else if let Some((owner, stamp, accepted)) = self.result
+            && owner == session
+            && created == Some(stamp)
         {
-            self.result = None;
-            self.awaiting_basis = false;
-            self.basis = basis.map(|basis| (session, at, basis));
-            if self.basis.is_none() {
+            let confirmed = basis.map(|basis| (session, at, basis));
+            if confirmed.is_some() && (accepted || confirmed == self.basis) {
+                self.result = None;
+                self.awaiting_basis = false;
+                self.basis = confirmed;
+            } else {
                 self.retire();
             }
         }
@@ -122,6 +125,7 @@ impl Control {
         self.rates = None;
         self.reset = None;
         self.epoch = None;
+        self.result = None;
         self.stall = None;
         self.invalidated = false;
         self.awaiting_basis = false;
@@ -157,7 +161,17 @@ impl Control {
             let velocity = self.accepted.as_ref().map_or(WetVelocity::default(), |f| {
                 f.motion.velocity().quarter_turn(true)
             });
-            self.retire();
+            // A failed local send can leave the worker's accepted scene intact.
+            // Keep the observed frames only until the matching worker receipt
+            // confirms that exact scene. The ordinary prefix limits still apply.
+            if refused
+                && !self.invalidated
+                && self.basis.is_some_and(|(_, position, _)| position == at)
+            {
+                self.awaiting_basis = true;
+            } else {
+                self.retire();
+            }
             velocity
         };
         trace!(target:"eq_client_render::motion::swim", basis=?self.basis, proposed=?p.request.position,
@@ -220,7 +234,7 @@ pub(super) fn supports(controls: &Controls, intent: &MotionInput, facing: f32, p
 
 /// Collects one actual physical frame before report/pending gates. A pending
 /// prefix may have future completed frames, but only its matching acceptance
-/// enters presentation. Refusal discards that entire unaccepted suffix.
+/// enters presentation. Retry requires a matching unchanged worker receipt.
 #[allow(clippy::too_many_lines)]
 pub(super) fn input(controls: &mut Controls, context: Context<'_>, intent: MotionInput) -> bool {
     let Context {
