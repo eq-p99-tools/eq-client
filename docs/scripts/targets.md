@@ -84,7 +84,7 @@ merchant action.
   `combat_text_incoming_red`, `combat_text_incoming_green`, `combat_text_incoming_blue`
   (damage to you) and `combat_text_outgoing_red`, `combat_text_outgoing_green`,
   `combat_text_outgoing_blue` (damage to other known targets). For example,
-  `click("slider", "combat_text_incoming_blue", 75)` sets the blue channel to 75%. These original channel selectors operate on the corresponding visible color picker. In Options, click its hex field, enter six hex digits and press Enter. The preview shows the color saved at the existing one-percent channel precision.
+  `click("slider", "combat_text_incoming_blue", 75)` sets the blue channel to 75%. These original channel selectors operate on the corresponding visible color picker. In Options → Colors, open its swatch, click its hex field, enter six hex digits and press Enter. The preview shows the color saved at the existing one-percent channel precision.
   These use ordinary slider input and save per character. Defaults remain red
   (100/30/25) and gold (100/90/30); floating combat text starts off.
 - `dropdown key_filter`: the options key-binding filter.
