@@ -310,3 +310,68 @@ fn outside_click_dismisses_the_editor_and_chat_swatch_edits_byte_precision() {
     );
     assert_eq!(saved.combat_text_incoming, [20, 40, 60]);
 }
+
+#[test]
+fn clicking_another_options_control_dismisses_the_open_picker() {
+    let mut form = form();
+    press_at(&mut form.app, form.window, Vec2::new(159.0, 9.0));
+    form.app.update();
+    release(&mut form.app);
+    let world = form.app.world_mut();
+    assert_eq!(world.query::<&Part>().iter(world).count(), 0);
+    assert!(world.resource::<Shown>().displayed(WindowId::Options));
+}
+
+#[test]
+fn physical_click_on_a_stock_list_sample_edits_its_own_chat_color() {
+    use crate::skinned::option_lists::{ColorSample, chat_rows};
+    let mut form = form();
+    let app = &mut form.app;
+    let window = form.window;
+    // Close the independent fixture popup and create the same list as the Titanium Colors page.
+    press_at(app, window, Vec2::new(350.0, 350.0));
+    app.update();
+    release(app);
+    app.world_mut()
+        .run_system_once(|mut commands: Commands| {
+            let mut list = commands.spawn(Node {
+                flex_direction: FlexDirection::Column,
+                ..super::super::at(220.0, 0.0, 220.0, 300.0)
+            });
+            chat_rows(&mut list, &[150.0]);
+        })
+        .unwrap();
+    app.update();
+    focus_stack(app);
+    let world = app.world_mut();
+    let (chip, row) = world
+        .query::<(Entity, &ColorSample, &ChildOf)>()
+        .iter(world)
+        .find(|(_, kind, _)| kind.0 == 5)
+        .map(|(id, _, parent)| (id, parent.parent()))
+        .unwrap();
+    let caption = world.get::<Children>(row).unwrap()[0];
+    let middle = bounds(world, chip).center();
+    assert!((middle.y - bounds(world, caption).center().y).abs() <= 1.0);
+    press_at(app, window, middle);
+    app.update();
+    release(app);
+    let world = app.world_mut();
+    let hex = world
+        .query::<(Entity, &Part)>()
+        .iter(world)
+        .find(|(_, part)| matches!(part, Part::Hex(_)))
+        .unwrap()
+        .0;
+    focus_stack(app);
+    form.click(hex, Vec2::splat(0.5));
+    form.keys("#2468AC", Key::Enter);
+    assert_eq!(
+        form.app
+            .world()
+            .resource::<OptionsState>()
+            .options
+            .user_colors[5],
+        Some([0x24, 0x68, 0xac])
+    );
+}

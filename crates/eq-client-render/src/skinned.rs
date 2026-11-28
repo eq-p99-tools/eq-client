@@ -113,6 +113,7 @@ fn source(id: WindowId) -> Option<(&'static str, &'static str)> {
         WindowId::Tracking => "EQUI_TrackingWnd.xml",
         WindowId::SkillSelect => "EQUI_SkillsSelectWindow.xml",
         WindowId::Skills => "EQUI_SkillsWindow.xml",
+        WindowId::LoadSkin => "EQUI_LoadskinWnd.xml",
         WindowId::Confirmation => "EQUI_ConfirmationDialog.xml",
         WindowId::Note => "EQUI_NoteWindow.xml",
         WindowId::BugReport => "EQUI_BugReportWnd.xml",
@@ -1253,6 +1254,7 @@ fn behave(
             color_picker::Swatch::selected(),
             skin(),
         )),
+        Does::SkinBrowser(action) => drawn.insert((Button, action, skin())),
         Does::ReloadKeys => drawn.insert((Button, crate::keys::bindings::ReloadDefaults, skin())),
         Does::ScreenMode(full) => {
             drawn.insert((Button, crate::window_mode::SetFullscreen(full), skin()))
@@ -1549,6 +1551,7 @@ fn caption(
         | Does::Unoffered(_)
         | Does::ChatColor(_)
         | Does::ChangeColor
+        | Does::SkinBrowser(_)
         | Does::ReloadKeys
         | Does::ScreenMode(_)
         | Does::ResetColors
@@ -4387,7 +4390,10 @@ mod tests {
         ));
         // The QoL page comes last, a checkbox for each quality-of-life
         // setting in the skin's own, one under another.
-        let general = options_general_page();
+        let mut general = options_general_page();
+        // A custom page with no stock destination keeps all choices on the fallback page.
+        general.name = "Custom".into();
+        general.title = Some("Custom".into());
         let mut settings: Vec<_> = Fix::settings().collect();
         settings.sort_by_key(|fix| fix.is_unsafe());
         // A tall page holds every setting in one column, with room for both

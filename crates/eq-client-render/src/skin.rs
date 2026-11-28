@@ -2,6 +2,8 @@
 //! `/loadskin` this session, else the one named on the command line, else
 //! the one the character last loaded here, else the one the character last
 //! chose in the official client, else the default skin.
+pub(crate) mod browser;
+
 use bevy::prelude::*;
 use eq_client_assets::ui::DEFAULT_SKIN;
 
@@ -80,18 +82,21 @@ fn read_saved(text: &str) -> Option<String> {
 /// to letter case as the official client's file system matches it.
 fn installed_skin(eq_directory: &std::path::Path, name: &str) -> Option<String> {
     eq_client_assets::ui::skin_file(eq_directory, name, "EQUI.xml").ok()?;
-    std::fs::read_dir(eq_directory.join("uifiles"))
-        .ok()?
-        .filter_map(Result::ok)
-        .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
-        .filter_map(|entry| entry.file_name().into_string().ok())
+    browser::folders(eq_directory)
+        .into_iter()
         .find(|folder| folder.eq_ignore_ascii_case(name))
 }
 
 /// Keeps [`UiSkin`] current, before the windows that draw with it.
 pub(super) fn register(app: &mut App) {
     app.init_resource::<Loaded>()
-        .add_systems(Update, (load, follow).chain().in_set(super::Stage::Scene));
+        .init_resource::<browser::Selection>()
+        .add_systems(
+            Update,
+            (browser::input, load, follow, browser::fill)
+                .chain()
+                .in_set(super::Stage::Scene),
+        );
 }
 
 /// Runs a typed `/loadskin`: the skin loads at once and stays the
@@ -325,6 +330,65 @@ mod tests {
             .iter()
             .map(|(_, line)| line.message.text.clone())
             .collect()
+    }
+
+    #[test]
+    fn options_skin_browser_lists_selects_and_loads_through_the_session_loader() {
+        use crate::{
+            clicks::testing,
+            windows::{Shown, WindowId},
+        };
+
+        let root =
+            std::env::temp_dir().join(format!("eq-options-skin-browser-{}", std::process::id()));
+        let ui = root.join("uifiles");
+        for name in ["velious", "default"] {
+            std::fs::create_dir_all(ui.join(name)).unwrap();
+        }
+        std::fs::write(ui.join("unrelated.txt"), "").unwrap();
+        let mut app = app(&root, None);
+        testing::install(&mut app);
+        app.init_resource::<Shown>()
+            .init_resource::<browser::Selection>()
+            .add_systems(Update, browser::input.before(load))
+            .add_systems(Update, browser::fill.after(follow));
+        let open = app
+            .world_mut()
+            .spawn((browser::Action::Open, Interaction::None))
+            .id();
+        let apply = app
+            .world_mut()
+            .spawn((browser::Action::Apply, Interaction::None))
+            .id();
+        testing::click(&mut app, open);
+        assert!(
+            app.world()
+                .resource::<Shown>()
+                .displayed(WindowId::LoadSkin)
+        );
+        app.world_mut().spawn(browser::List);
+        app.update();
+        let mut q = app.world_mut().query::<(Entity, &browser::Folder)>();
+        let rows: Vec<_> = q
+            .iter(app.world())
+            .map(|(e, row)| (e, row.0.clone()))
+            .collect();
+        assert_eq!(
+            rows.iter()
+                .map(|(_, name)| name.as_str())
+                .collect::<Vec<_>>(),
+            ["default", "velious"]
+        );
+        testing::click(&mut app, rows[1].0);
+        assert_eq!(skin(&app), "default");
+        testing::click(&mut app, apply);
+        assert_eq!(skin(&app), "velious");
+        assert!(
+            !app.world()
+                .resource::<Shown>()
+                .displayed(WindowId::LoadSkin)
+        );
+        std::fs::remove_dir_all(root).unwrap();
     }
 
     #[test]

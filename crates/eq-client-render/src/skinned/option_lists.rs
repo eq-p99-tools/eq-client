@@ -1,9 +1,9 @@
 //! The stock Options lists retain the coordinates, columns and scrollbar supplied by the skin.
 use super::{
-    color_picker::{Binding, Swatch, draw_swatch},
+    color_picker::{Binding, Swatch},
     colors,
 };
-use crate::{online::OnlineState, options::OptionsState, theme, windows::WindowId};
+use crate::{online::OnlineState, options::OptionsState, theme};
 use bevy::prelude::*;
 use eq_client_core::{
     GameDialect,
@@ -44,6 +44,8 @@ pub(crate) struct FilterValue(FilterCategory);
 #[derive(Component)]
 pub(crate) struct ColorRows;
 #[derive(Component)]
+pub(crate) struct ColorSample(pub(super) u8);
+#[derive(Component)]
 pub(crate) struct ChangeColor;
 
 #[derive(Component, Clone, Copy)]
@@ -69,29 +71,37 @@ pub(super) fn chat_rows(rows: &mut EntityCommands, columns: &[f32]) {
             list.spawn((
                 Button,
                 Row::Color(kind),
-                row(),
+                Swatch::chat(kind),
+                Node {
+                    height: px(21),
+                    ..row()
+                },
                 BackgroundColor(Color::NONE),
             ))
             .with_children(|ui| {
                 ui.spawn((
                     theme::text(name, theme::Size::Small, theme::INK_BRIGHT),
+                    TextLayout::no_wrap(),
+                    bevy::ui::FocusPolicy::Pass,
                     Node {
                         width: px(columns.first().copied().unwrap_or(150.0)),
                         flex_shrink: 0.0,
                         ..default()
                     },
                 ));
-                draw_swatch(
-                    ui,
-                    WindowId::Options,
-                    Binding::Chat(kind),
+                ui.spawn((
+                    ColorSample(kind),
+                    bevy::ui::FocusPolicy::Pass,
                     Node {
                         width: px(18),
                         height: px(18),
+                        flex_shrink: 0.0,
+                        border: UiRect::all(px(1)),
                         ..default()
                     },
-                    theme::Size::Small,
-                );
+                    BorderColor::all(theme::EDGE_LIGHT),
+                    BackgroundColor(Color::BLACK),
+                ));
             });
         }
     });

@@ -78,14 +78,24 @@ pub(crate) fn draw_swatch(
 #[derive(Component)]
 pub(crate) struct ResetColors;
 
+// The Change button and selectable list rows keep their normal button backgrounds.
+type PaintedSwatch = (
+    Without<super::super::option_lists::ChangeColor>,
+    Without<super::super::option_lists::Row>,
+);
+
 #[allow(clippy::needless_pass_by_value)]
 pub(crate) fn show_swatches(
     reset: crate::clicks::Clicks<ResetColors>,
     mut state: ResMut<OptionsState>,
     look: Option<Res<crate::chat::ChatLook>>,
-    mut colors: Query<
-        (&Swatch, &mut BackgroundColor),
-        Without<super::super::option_lists::ChangeColor>,
+    mut colors: Query<(&Swatch, &mut BackgroundColor), PaintedSwatch>,
+    mut samples: Query<
+        (
+            &super::super::option_lists::ColorSample,
+            &mut BackgroundColor,
+        ),
+        Without<Swatch>,
     >,
 ) {
     if reset.any() {
@@ -93,6 +103,13 @@ pub(crate) fn show_swatches(
         state.options.user_colors.fill(None);
         state.options.combat_text_incoming = defaults.combat_text_incoming;
         state.options.combat_text_outgoing = defaults.combat_text_outgoing;
+    }
+    for (kind, mut bg) in &mut samples {
+        bg.set_if_neq(BackgroundColor(
+            Binding::Chat(kind.0)
+                .read(&state.options, look.as_deref())
+                .into(),
+        ));
     }
     for (swatch, mut bg) in &mut colors {
         bg.set_if_neq(BackgroundColor(
@@ -190,6 +207,10 @@ pub(crate) fn manage(
         }
         commands.entity(active.panel).try_despawn();
         *open = None;
+        // A press outside the open dropdown dismisses it, including over another Options row.
+        if clicked || escaped {
+            return;
+        }
     }
     if let (Some(w), Some((id, swatch, _, node, transform, ..))) = (window, trigger)
         && Some(id) != previous

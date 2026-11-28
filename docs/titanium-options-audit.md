@@ -1,6 +1,8 @@
 # Titanium Options audit
 
-Remaining differences from the installed Titanium Options window, checked against client main `b8813eb4`. Titanium default and Velious have the same seven stock tabs. The picker and layout findings below come from in-game checks. TAKP’s Colors layout still needs an attended check.
+Remaining differences from the installed Titanium Options window. Titanium default and Velious have the same seven stock tabs. Update these tables in the PR that implements each option. Remove completed rows and narrow partial rows to the behavior still missing.
+
+**Pending in-game checks.** On Titanium default and Velious, check picker dismissal, Colors row alignment, QoL spacing and skin switching. On TAKP, check the numbered Colors controls with an installed skin.
 
 **Trivial** means a local UI or binding change. **New feature** means the underlying behavior or service still needs work. **Skip** records a deliberate difference. For controls already supported and their placement, see [Settings](settings.md) and [Skin extensions](skin-extensions.md).
 
@@ -8,11 +10,11 @@ Remaining differences from the installed Titanium Options window, checked agains
 
 | Option | Remaining difference | Rating | Work or reason |
 | --- | --- | --- | --- |
-| Client-added option markers | No asterisks visible in the Titanium General tab during the live check | Trivial | The three added rows should show a blue asterisk beside Ask Before Deleting Spells, Show Times in Chat and Flash on Tells. Check visibility after scrolling to them. Red is reserved for unsafe additions. |
+| Client-added option markers | No blue asterisks visible on General, Display or Mouse in default, or on General in Velious, in the latest in-game check | Trivial | The added rows should show a blue asterisk beside Ask Before Deleting Spells, Show Times in Chat, Flash on Tells and Show FPS. Red is reserved for unsafe additions. |
 | Receive Guild Invites | Missing binding | New feature | Receiving an invitation is separate from saving and honoring an invitation policy. Verify who enforces the preference. |
 | Allow Context Menus | Missing binding | New feature | Define which existing menus obey the switch and supply a common input gate across windows. |
 | Combat Music | Preference only | New feature | The option and slash command already exist. Encounter track selection and playback are missing. |
-| Load UI Skin | Command only | New feature | `/loadskin` already switches skins. The button needs a skin browser, selection and error feedback. |
+| Keep Your Layout in Load UI Skin | The browser always preserves window placements | New feature | Verify the native reset scope before supporting the unchecked state. |
 | Allow SysInfo Send | Missing | Skip | The historical vendor reporting service has no destination in this client. |
 | Target Click Shows Help | Missing binding | New feature | Implement the target-specific help and when it appears before exposing a switch. |
 | Use Tell Windows | Missing binding | New feature | Detachable chat tabs exist. Automatically routing tells into individual conversations requires additional behavior. |
@@ -34,7 +36,7 @@ Remaining differences from the installed Titanium Options window, checked agains
 | Level of Detail | Missing binding | New feature | Implement or identify a model-detail policy with a visible effect. |
 | LOD Bias | Missing slider | New feature | Needs the same working detail-selection policy. |
 | Gamma | Missing slider | New feature | Add calibrated output adjustment. Zone lighting math alone does not implement a user gamma control. |
-| Video Modes | Missing opener | New feature | Needs the actual selection and apply flow listed below. |
+| Video Modes | No exclusive display-mode dialog | Skip | Resizing the window sets its size. Borderless fullscreen follows the desktop mode. The in-game Max FPS control sets the frame cap independently. |
 | Advanced | Missing opener | New feature | Needs a useful set of supported renderer controls. |
 | Sky | Missing selector | New feature | Define and render the supported sky detail levels. |
 | Loading Screen | Missing selector | New feature | Implement the stock choices where corresponding loading presentations exist. |
@@ -69,10 +71,10 @@ Remaining differences from the installed Titanium Options window, checked agains
 
 | Option | Remaining difference | Rating | Work or reason |
 | --- | --- | --- | --- |
-| Video resolution | Missing in Options | New feature | Enumerate modes on the current monitor and apply a supported selection. |
-| Refresh rate | Missing in Options | New feature | Enumerate rates for the selected mode and monitor. |
+| Video resolution | Uses the window or desktop size | Skip | The player resizes the window or uses borderless fullscreen. |
+| Refresh rate | Set by Windows | Skip | Borderless fullscreen uses the monitor’s current desktop refresh rate. |
 | Bit depth | Missing | Skip | No user-selectable legacy display-depth path is exposed by the renderer. |
-| Accept | Missing | New feature | Apply the selected mode and recover from a failed switch. |
+| Accept | No exclusive mode to apply | Skip | Window resizing and the existing fullscreen switch take effect directly. |
 
 ### Display → Advanced dialog
 
@@ -114,10 +116,6 @@ Remaining differences from the installed Titanium Options window, checked agains
 
 | Option | Remaining difference | Rating | Work or reason |
 | --- | --- | --- | --- |
-| Click the swatch | Clicking the colored square does nothing | Trivial | Open the same picker that already opens from the label or Change Selected Color. |
-| Escape | Closes the entire Options window | Trivial | Dismiss the picker first and keep Options open. |
-| Click elsewhere in Options | The picker stays open | Trivial | Dismiss it when clicking another part of Options, as already happens when clicking the world. |
-| Swatch alignment | Four samples sit one line below their labels in default and Velious | Trivial | Align OOC, You hit others, Others hit you and You miss others with their samples. |
 | Chat color 86 | The row still has a numeric label | Trivial | Identify its message category before assigning a name. |
 
 ## Mail
@@ -134,5 +132,4 @@ Remaining differences from the installed Titanium Options window, checked agains
 
 | Option | Remaining difference | Rating | Work or reason |
 | --- | --- | --- | --- |
-| Button row spacing | Large empty gaps remain between rows on Titanium | Trivial | Lay out the controls that remain on this page after moving additions to their destination tabs. |
 | Dedicated QoL tab | Titanium has no equivalent tab | Skip | Keep client-only settings here when they have no native destination. The Ordinary and Dangerous headings distinguish these settings. Individual risk markers are intended for additions placed on stock tabs. |

@@ -115,6 +115,7 @@ pub(super) enum Does {
     ChangeColor,
     ChatColor(u8),
     ReloadKeys,
+    SkinBrowser(crate::skin::browser::Action),
     ScreenMode(bool),
     /// Steps the mode of one kind of server filter, on this client's
     /// Filters page.
@@ -284,6 +285,9 @@ pub(super) fn does(id: &str, owner: WindowId) -> Option<Does> {
         });
     }
     match (owner, id) {
+        (WindowId::LoadSkin, "LoadButton") => {
+            return Some(Does::SkinBrowser(crate::skin::browser::Action::Apply));
+        }
         (WindowId::Book, "LeftButton") => return Some(Does::TurnsPage(false)),
         (WindowId::Book, "RightButton") => return Some(Does::TurnsPage(true)),
         // Both bank windows name it so (skin reads R10, R10b).
@@ -414,6 +418,7 @@ fn options_button(id: &str) -> Does {
     match id {
         "ODP_SetWindowedButton" => Does::ScreenMode(false),
         "ODP_SetFullscreenButton" => Does::ScreenMode(true),
+        "OGP_LoadSkinButton" => Does::SkinBrowser(crate::skin::browser::Action::Open),
         "OKP_DefaultKeysButton" => Does::ReloadKeys,
         "OGP_LootAutosplitCheckbox" => Does::Slash("/autosplit"),
         "OGP_AnonymousCheckbox" => Does::Slash("/anonymous"),
