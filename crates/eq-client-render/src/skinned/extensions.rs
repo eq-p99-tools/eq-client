@@ -13,6 +13,7 @@ fn named((name, e): &Piece, id: &str) -> bool {
         || match e {
             Element::Button(b) => b.id.as_deref() == Some(id),
             Element::Slider(s) => s.id.as_deref() == Some(id),
+            Element::Combobox(c) => c.id.as_deref() == Some(id),
             Element::Listbox(l) => l.id.as_deref() == Some(id),
             Element::Tabs(t) => contains(&t.pages, id),
             Element::View(v) => v.pieces.iter().any(|piece| named(piece, id)),

@@ -7,7 +7,7 @@ use crate::{online::OnlineState, options::OptionsState, theme, windows::WindowId
 use bevy::prelude::*;
 use eq_client_core::{
     GameDialect,
-    chat_filters::{has_row, kind_words},
+    chat_filters::{ChatFilters, kind_words, mode_words},
     filters::FilterCategory,
 };
 
@@ -33,7 +33,14 @@ pub(super) type ChoiceData<'w> = (
 );
 
 #[derive(Component, Default)]
-pub(crate) struct FilterRows(Option<GameDialect>);
+pub(crate) struct FilterRows(Option<GameDialect>, f32);
+impl FilterRows {
+    pub(super) fn new(columns: &[f32]) -> Self {
+        Self(None, columns.first().copied().unwrap_or(150.0))
+    }
+}
+#[derive(Component)]
+pub(crate) struct FilterValue(FilterCategory);
 #[derive(Component)]
 pub(crate) struct ColorRows;
 #[derive(Component)]
@@ -59,28 +66,33 @@ fn row() -> Node {
 pub(super) fn chat_rows(rows: &mut EntityCommands, columns: &[f32]) {
     rows.with_children(|list| {
         for (kind, name) in colors::chat_names() {
-            list.spawn((Button, Row::Color(kind), row()))
-                .with_children(|ui| {
-                    ui.spawn((
-                        theme::text(name, theme::Size::Small, theme::INK_BRIGHT),
-                        Node {
-                            width: px(columns.first().copied().unwrap_or(150.0)),
-                            flex_shrink: 0.0,
-                            ..default()
-                        },
-                    ));
-                    draw_swatch(
-                        ui,
-                        WindowId::Options,
-                        Binding::Chat(kind),
-                        Node {
-                            width: px(18),
-                            height: px(18),
-                            ..default()
-                        },
-                        theme::Size::Small,
-                    );
-                });
+            list.spawn((
+                Button,
+                Row::Color(kind),
+                row(),
+                BackgroundColor(Color::NONE),
+            ))
+            .with_children(|ui| {
+                ui.spawn((
+                    theme::text(name, theme::Size::Small, theme::INK_BRIGHT),
+                    Node {
+                        width: px(columns.first().copied().unwrap_or(150.0)),
+                        flex_shrink: 0.0,
+                        ..default()
+                    },
+                ));
+                draw_swatch(
+                    ui,
+                    WindowId::Options,
+                    Binding::Chat(kind),
+                    Node {
+                        width: px(18),
+                        height: px(18),
+                        ..default()
+                    },
+                    theme::Size::Small,
+                );
+            });
         }
     });
 }
@@ -93,6 +105,8 @@ pub(crate) fn update(
     mut lists: Query<(Entity, &mut FilterRows)>,
     mut rows: Query<(&Row, &Interaction, &mut BackgroundColor)>,
     mut change: Query<&mut Swatch, With<ChangeColor>>,
+    options: Res<OptionsState>,
+    mut values: Query<(&FilterValue, &mut Text)>,
 ) {
     let dialect = online.world().generation();
     for (entity, mut last) in &mut lists {
@@ -103,20 +117,27 @@ pub(crate) fn update(
         let mut list = commands.entity(entity);
         list.despawn_children();
         list.with_children(|list| {
-            for category in FilterCategory::ALL
-                .into_iter()
-                .filter(|c| has_row(*c) && !c.modes(dialect).is_empty())
-            {
+            for (category, _) in ChatFilters::kinds(dialect) {
                 list.spawn((
                     Button,
                     Row::Filter(category),
                     row(),
-                    children![theme::text(
-                        kind_words(category),
-                        theme::Size::Small,
-                        theme::INK_BRIGHT
-                    )],
-                ));
+                    BackgroundColor(Color::NONE),
+                ))
+                .with_children(|ui| {
+                    ui.spawn((
+                        theme::text(kind_words(category), theme::Size::Small, theme::INK_BRIGHT),
+                        Node {
+                            width: px(last.1),
+                            flex_shrink: 0.0,
+                            ..default()
+                        },
+                    ));
+                    ui.spawn((
+                        FilterValue(category),
+                        theme::text("", theme::Size::Small, theme::INK_BRIGHT),
+                    ));
+                });
             }
         });
     }
@@ -134,6 +155,12 @@ pub(crate) fn update(
             Row::Filter(c) => selected.filter == *c,
         };
         bg.set_if_neq(BackgroundColor(if on { theme::INSET } else { Color::NONE }));
+    }
+    for (category, mut text) in &mut values {
+        let label = mode_words(options.options.chat_filters.get(category.0));
+        if text.0 != label {
+            label.clone_into(&mut text.0);
+        }
     }
     for mut field in &mut change {
         field.select(Binding::Chat(selected.color));

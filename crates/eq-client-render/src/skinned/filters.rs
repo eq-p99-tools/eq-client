@@ -30,6 +30,31 @@ const GAP: f32 = 6.0;
 /// The note's screen ID; its words follow the session ([`crate::options::FilterNote`]).
 pub(super) const NOTE_ID: &str = "EQC_Filter_Note";
 
+const AUTHORED: &[(&str, FilterCategory)] = &[
+    ("Chat0", FilterCategory::GuildChat),
+    ("Chat1", FilterCategory::Socials),
+    ("Chat2", FilterCategory::GroupChat),
+    ("Chat3", FilterCategory::Shouts),
+    ("Chat4", FilterCategory::Auctions),
+    ("Chat5", FilterCategory::Ooc),
+    ("Chat6", FilterCategory::MyMisses),
+    ("Chat7", FilterCategory::OthersMisses),
+    ("Chat8", FilterCategory::OthersHits),
+    ("Chat9", FilterCategory::MissedMe),
+    ("DamageShields", FilterCategory::DamageShields),
+    ("NPCSpells", FilterCategory::NpcSpells),
+    ("PCSpellsComboBox", FilterCategory::PcSpells),
+    ("BardSongsComboBox", FilterCategory::BardSongs),
+    ("CriticalSpellsComboBox", FilterCategory::SpellCrits),
+    ("CriticalMeleeComboBox", FilterCategory::MeleeCrits),
+];
+pub(super) fn authored(id: &str) -> Option<FilterCategory> {
+    AUTHORED
+        .iter()
+        .find(|(name, _)| *name == id)
+        .map(|(_, c)| *c)
+}
+
 /// A row's button's screen ID.
 fn button_id(category: FilterCategory) -> String {
     format!("{BUTTON}{}", category.key())
@@ -42,9 +67,11 @@ fn value_id(category: FilterCategory) -> String {
 
 /// The kind a row's button steps, by its screen ID.
 pub(super) fn filter_button(id: &str) -> Option<FilterCategory> {
-    id.strip_prefix(BUTTON)
-        .filter(|rest| !rest.ends_with(VALUE))
-        .and_then(FilterCategory::from_key)
+    authored(id).or_else(|| {
+        id.strip_prefix(BUTTON)
+            .filter(|rest| !rest.ends_with(VALUE))
+            .and_then(FilterCategory::from_key)
+    })
 }
 
 /// The kind a row's label says the mode of, by its screen ID.
@@ -157,6 +184,12 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, page_width: f32) -> Cow<'_,
     )];
     let mut y = MARGIN + 3.0 * height + GAP;
     for category in eq_client_core::chat_filters::rows() {
+        if AUTHORED
+            .iter()
+            .any(|(name, c)| *c == category && super::extensions::contains(pages, name))
+        {
+            continue;
+        }
         let area = Area {
             x: MARGIN,
             y,

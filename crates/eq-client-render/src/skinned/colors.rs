@@ -77,7 +77,10 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, width: f32) -> Cow<'_, [Pag
         row.label("EQC_ChatColors", "Chat colors", false);
         for (kind, name) in chat_names() {
             let id = format!("EQC_ChatColor_{kind}");
-            if !super::extensions::contains(pages, &id) {
+            if !super::extensions::contains(pages, &id)
+                && !super::extensions::contains(pages, &format!("UserColor{}", kind - 1))
+                && !super::extensions::contains(pages, &format!("OCP_UserColor{}", kind - 1))
+            {
                 row.swatch(&id, &name);
             }
         }
@@ -89,6 +92,18 @@ pub(super) fn pages(pages: &[Page], owner: WindowId, width: f32) -> Cow<'_, [Pag
         result.push(page);
     }
     Cow::Owned(result)
+}
+
+/// TAKP numbers its individual authored buttons from zero.
+pub(super) fn authored_kind(id: &str) -> Option<u8> {
+    let index = id
+        .strip_prefix("OCP_")
+        .unwrap_or(id)
+        .strip_prefix("UserColor")?
+        .parse::<u8>()
+        .ok()?;
+    let kind = index.checked_add(1)?;
+    (usize::from(kind) < eq_client_core::options::USER_COLOR_KINDS).then_some(kind)
 }
 
 pub(super) fn chat_names() -> impl Iterator<Item = (u8, String)> {

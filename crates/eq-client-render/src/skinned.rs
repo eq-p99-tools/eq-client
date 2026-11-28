@@ -1248,6 +1248,7 @@ fn behave(
         Does::Filter(category) => {
             drawn.insert((Button, super::options::FilterButton(category), skin()))
         }
+        Does::ChatColor(kind) => drawn.insert((Button, color_picker::Swatch::chat(kind), skin())),
         Does::ChangeColor => drawn.insert((
             Button,
             option_lists::ChangeColor,
@@ -1548,6 +1549,7 @@ fn caption(
         | Does::Raid(_)
         | Does::RaidAction(_)
         | Does::Unoffered(_)
+        | Does::ChatColor(_)
         | Does::ChangeColor
         | Does::ReloadKeys
         | Does::ScreenMode(_)
