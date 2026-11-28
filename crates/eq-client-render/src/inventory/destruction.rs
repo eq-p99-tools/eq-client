@@ -1,12 +1,12 @@
-//! One explicit confirmation for one exact cursor instance. Scripts click these
-//! same controls and answer the ordinary confirmation dialog.
+//! Destruction captures one exact cursor instance. Fast Item Destroy skips the item
+//! question. Scripts and physical clicks use the same validation and submission path.
 //!
 //! With coins on the cursor and no item, the same control destroys the coins
 //! (checklist 6.512), as the Titanium program's Destroy button does
 //! (`eqgame.exe` 0x517dc3 and 0x4be5fe, read R49-11):
 //! - It asks first, with the installation's string 0x80d, for 10 s; no
 //!   answer in that time is a No. The program skips the question when its
-//!   ini `Destroy` key is set; that key's option is row 6.512b, not built.
+//!   ini `Destroy` key is set; this client keeps the coin question separate from Fast Item Destroy.
 //! - On Yes it destroys the first kind on the cursor, in the order platinum,
 //!   gold, silver, copper, whole: one command, as the program sends one move.
 //! - Departure, labelled (6.512c): the program then clears every kind on its
@@ -847,6 +847,43 @@ mod tests {
             rx.try_recv().unwrap(),
             ClientCommand::DestroyItem(_)
         ));
+        app.update();
+        assert!(rx.try_recv().is_err());
+    }
+
+    #[test]
+    fn fast_item_destroy_submits_the_current_item_once_without_opening_the_question() {
+        let (tx, rx) = std::sync::mpsc::sync_channel(4);
+        let mut app = crate::testing::app();
+        app.insert_resource(online())
+            .insert_resource(Outbox::new(Some(tx)))
+            .insert_resource(crate::options::OptionsState::new(
+                &eq_client_core::options::Options {
+                    fast_item_destroy: true,
+                    ..Default::default()
+                },
+            ))
+            .init_resource::<InventoryState>()
+            .init_resource::<Asked>()
+            .add_systems(Update, input);
+        app.world_mut()
+            .resource_mut::<crate::windows::Shown>()
+            .open(crate::windows::WindowId::Inventory);
+        let select = app
+            .world_mut()
+            .spawn((Button, Interaction::None, Node::default(), Action::Select))
+            .id();
+        crate::clicks::testing::click(&mut app, select);
+        assert!(matches!(
+            rx.try_recv().unwrap(),
+            ClientCommand::DestroyItem(_)
+        ));
+        assert!(
+            !app.world()
+                .resource::<InventoryState>()
+                .destruction
+                .selecting()
+        );
         app.update();
         assert!(rx.try_recv().is_err());
     }

@@ -132,14 +132,14 @@ fn append_button(
     page.pieces.push((id, Element::Button(button)));
 }
 
-fn spell_page(pages: &mut [Page]) -> Option<&mut Page> {
+fn nested_page<'a>(pages: &'a mut [Page], title: &str) -> Option<&'a mut Page> {
     for page in pages {
-        if page.name == "SpellParticlesPage" || page_is(page, "Spell") {
+        if page_is(page, title) || (title == "Spell" && page.name == "SpellParticlesPage") {
             return Some(page);
         }
         for (_, piece) in &mut page.pieces {
             if let Element::Tabs(t) = piece
-                && let Some(found) = spell_page(&mut t.pages)
+                && let Some(found) = nested_page(&mut t.pages, title)
             {
                 return Some(found);
             }
@@ -170,7 +170,8 @@ pub(super) fn relocate(pages: &mut [Page], width: f32) {
         }
         if let Some(f) = qol_checkbox(&id) {
             if let Some(dest) =
-                destination(f).and_then(|name| pages.iter_mut().find(|p| page_is(p, name)))
+                destination(f).and_then(|name| {let display=pages.iter_mut().find(|p|page_is(p,name))?;
+ if matches!(f,Fix::RichLighting|Fix::TorchShadows|Fix::BetterWater) && let Some(idx)=display.pieces.iter().position(|(_,e)|matches!(e,Element::Tabs(t) if t.pages.iter().any(|p|page_is(p,"Advanced")))) {let Element::Tabs(t)=&mut display.pieces[idx].1 else {unreachable!()}; return t.pages.iter_mut().find(|p|page_is(p,"Advanced"));} Some(display) })
                 && let Element::Button(b) = e
             {
                 append_button(dest, id, b, f.is_unsafe(), width);
@@ -186,7 +187,7 @@ pub(super) fn relocate(pages: &mut [Page], width: f32) {
         b.id = Some(id.to_owned());
         b.text = Some("Show Spell Effects".into());
         b.tooltip = Some("Draw spell effects.".into());
-        if let Some(page) = spell_page(pages) {
+        if let Some(page) = nested_page(pages, "Spell") {
             append_button(
                 page,
                 id.into(),
@@ -282,7 +283,7 @@ fn annotate(pieces: &mut Vec<Piece>) {
                 (id, b.area, b.anchors, b.font, risk)
             }
             Element::Slider(s) if s.id.as_deref() == Some(controls::UI_SCALE_SLIDER) => {
-                (controls::UI_SCALE_SLIDER, s.area, s.anchors, None, false)
+                (controls::UI_SCALE_SLIDER, s.area, None, None, false)
             }
             Element::Label(l)
                 if super::color_picker::COMBAT_COLORS
