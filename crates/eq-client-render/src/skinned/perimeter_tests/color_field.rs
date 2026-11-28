@@ -196,30 +196,13 @@ impl Form {
         let rect = bounds(self.app.world(), id);
         assert!(rect.size().cmpgt(Vec2::ZERO).all());
         let pos = rect.min + rect.size() * fraction;
-        let world = self.app.world_mut();
-        world
-            .get_mut::<Window>(self.window)
-            .unwrap()
-            .set_physical_cursor_position(Some(pos.as_dvec2()));
-        world
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .press(MouseButton::Left);
+        press_at(&mut self.app, self.window, pos);
         self.app.update();
         assert_eq!(
             self.app.world().get::<Interaction>(id),
             Some(&Interaction::Pressed)
         );
-        let mut mouse = self
-            .app
-            .world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>();
-        mouse.clear();
-        mouse.release(MouseButton::Left);
-        self.app.update();
-        self.app
-            .world_mut()
-            .resource_mut::<ButtonInput<MouseButton>>()
-            .clear();
+        release(&mut self.app);
     }
 
     fn keys(&mut self, text: &str, finish: Key) {

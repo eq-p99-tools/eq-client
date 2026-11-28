@@ -223,7 +223,7 @@ mod tests {
 
     #[test]
     fn reset_restores_combat_defaults_and_removes_only_the_chat_overrides() {
-        let mut app = crate::testing::app();
+        let mut app = App::new();
         crate::clicks::testing::install(&mut app);
         let defaults = eq_client_core::options::Options::default();
         let mut custom = defaults.clone();
