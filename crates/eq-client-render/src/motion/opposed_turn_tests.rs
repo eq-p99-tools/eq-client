@@ -5,6 +5,7 @@ use eq_network_game::movement::{SwimControl, SwimControls, SwimInput, water};
 
 #[derive(Default, Debug)]
 struct Outcome {
+    refuse_next_send: bool,
     accepted: usize,
     refused: usize,
     replay_mismatches: usize,
@@ -117,7 +118,22 @@ fn answer(
                 out.replay_mismatches += 1;
                 out.first_mismatch.get_or_insert_with(|| reason.to_string());
             }
-            let result = session.send_swim_sample(&request, Some(&controls), now, |_| Ok(()));
+            let prior_basis = session.swim_basis();
+            let result = session.send_swim_sample(&request, Some(&controls), now, |_| {
+                if std::mem::take(&mut out.refuse_next_send) {
+                    anyhow::bail!("transient failure during local send");
+                }
+                Ok(())
+            });
+            if result.is_err()
+                && result
+                    .as_ref()
+                    .unwrap_err()
+                    .to_string()
+                    .contains("transient failure")
+            {
+                assert_eq!(session.swim_basis(), prior_basis);
+            }
             (request, result)
         }
         ClientCommand::Move(request) => {
@@ -678,6 +694,39 @@ fn physical_floor_strafe_and_turn_preserve_all_four_signs_and_pitch_controls() {
             }
         }
     }
+}
+
+#[test]
+fn held_strafe_recovers_from_one_refused_send_with_unchanged_swim_basis() {
+    let (mut f, mut session) = scene(true, 0.);
+    f.app
+        .world_mut()
+        .resource_mut::<Controls>()
+        .suppress_floor_swim = false;
+    let mut replies = Replies::new();
+    let mut before = Outcome::default();
+    for tick in 0..180 {
+        drive(&mut f, &mut session, &mut before, &mut replies, tick, 0.);
+    }
+    crate::camera::testing::button(&mut f.app, MouseButton::Right, true);
+    latency_tests::key(&mut f.app, KeyCode::KeyD, true);
+    for tick in 180..300 {
+        drive(&mut f, &mut session, &mut before, &mut replies, tick, -4.);
+    }
+    assert!(before.path_xy > 1. && before.refused == 0);
+    let mut after = Outcome {
+        refuse_next_send: true,
+        ..Outcome::default()
+    };
+    for tick in 300..900 {
+        drive(&mut f, &mut session, &mut after, &mut replies, tick, -4.);
+    }
+    assert!(!after.refuse_next_send);
+    assert_eq!(after.refused, 1, "{after:?}");
+    assert!(
+        after.physical_proposals > 50 && after.path_xy > 40.,
+        "{after:?}"
+    );
 }
 
 #[test]
