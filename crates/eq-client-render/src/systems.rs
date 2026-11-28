@@ -186,8 +186,10 @@ pub(super) fn schedule(app: &mut App) {
             (
                 (
                     keys::bindings::persist,
+                    keys::bindings::reload,
                     keys::bindings::capture,
                     crate::window_mode::input,
+                    crate::window_mode::buttons,
                 )
                     .chain(),
                 login::claim,

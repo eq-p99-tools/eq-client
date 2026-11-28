@@ -532,6 +532,7 @@ pub(crate) fn show_amount(
 pub(crate) enum Choosing {
     /// Which keys the Keyboard page lists.
     KeyFilter,
+    ItemDropping,
     /// The bug report's category.
     BugType,
 }
@@ -578,6 +579,7 @@ impl DropDown {
 /// What a drop-down chooses, if the client keeps a choice for it.
 fn choosing(id: Option<&str>, owner: WindowId) -> Option<Choosing> {
     match (owner, id) {
+        (WindowId::Options, Some("OGP_ItemDroppingCombobox")) => Some(Choosing::ItemDropping),
         (WindowId::Options, Some(KEY_FILTER)) => Some(Choosing::KeyFilter),
         (WindowId::BugReport, Some("BugTypes")) => Some(Choosing::BugType),
         _ => None,
@@ -611,6 +613,7 @@ pub(super) fn combobox(
                 // lists them in its own words.
                 choices: match choosing {
                     Choosing::KeyFilter => combobox.choices.clone(),
+                    Choosing::ItemDropping => ["Ask", "Fast", "Never"].map(str::to_owned).into(),
                     Choosing::BugType => crate::report_windows::category_names(),
                 },
                 list_height: combobox.list_height,
@@ -680,14 +683,25 @@ pub(crate) fn drop_downs(
     mut art: crate::sheets::Art,
     mut drop_downs: Query<(Entity, Ref<Interaction>, &mut DropDown, &ComputedNode)>,
     choices: Query<(&Interaction, &DropDownChoice), Changed<Interaction>>,
+    options: Option<ResMut<OptionsState>>,
     mut filter: ResMut<KeyFilter>,
     mut reports: ResMut<crate::report_windows::ReportWindows>,
 ) {
+    let mut options = options;
     for (interaction, choice) in &choices {
         if *interaction != Interaction::Pressed {
             continue;
         }
         match choice.choosing {
+            Choosing::ItemDropping => {
+                use eq_client_core::options::NoSafeDrop;
+                if let Some(options) = options.as_deref_mut()
+                    && let Some(mode) =
+                        [NoSafeDrop::Ask, NoSafeDrop::Fast, NoSafeDrop::Never].get(choice.index)
+                {
+                    options.options.no_safe_drop = *mode;
+                }
+            }
             Choosing::KeyFilter => filter.0 = Some(choice.choice.clone()),
             Choosing::BugType => reports.bug.category = choice.index,
         }
@@ -828,6 +842,7 @@ pub(crate) fn light_choices(
 /// choice, "All", until one is made.
 #[allow(clippy::needless_pass_by_value)] // Bevy system parameters are value wrappers.
 pub(crate) fn show_choices(
+    options: Option<Res<OptionsState>>,
     filter: Res<KeyFilter>,
     reports: Res<crate::report_windows::ReportWindows>,
     drop_downs: Query<(&DropDown, &Children)>,
@@ -835,6 +850,15 @@ pub(crate) fn show_choices(
 ) {
     for (drop_down, children) in &drop_downs {
         let shown = match drop_down.choosing {
+            Choosing::ItemDropping => options.as_deref().map(|s| {
+                use eq_client_core::options::NoSafeDrop;
+                match s.options.no_safe_drop {
+                    NoSafeDrop::Ask => "Ask",
+                    NoSafeDrop::Fast => "Fast",
+                    NoSafeDrop::Never => "Never",
+                }
+                .to_owned()
+            }),
             Choosing::KeyFilter => filter
                 .0
                 .clone()

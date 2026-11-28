@@ -85,6 +85,10 @@ pub enum Toggle {
     /// 0x4af32c, 0x4ae721); this client per character. Off, a sitting player
     /// stays put until they stand.
     AutoStand,
+    /// Automatically crouch when a standing step is blocked by a low ceiling.
+    AutoDuck,
+    /// Destroy an eligible held item immediately when Destroy is pressed.
+    FastItemDestroy,
     /// Draws a ring at the target's feet (the Display page's Show 3D Target
     /// Ring).
     TargetRing,
@@ -151,9 +155,11 @@ pub enum Toggle {
 impl Toggle {
     /// The official client's own toggles, in the order a file lists them; a
     /// file is read back by name, so the order is only how it is written.
-    pub const OFFICIAL: [Self; 16] = [
+    pub const OFFICIAL: [Self; 18] = [
         Self::PetWindowPopup,
         Self::AutoStand,
+        Self::AutoDuck,
+        Self::FastItemDestroy,
         Self::TargetRing,
         Self::ShowHelm,
         Self::PcNames,
@@ -187,6 +193,8 @@ impl Toggle {
         match self {
             Self::PetWindowPopup => "pet_window_popup",
             Self::AutoStand => "allow_auto_stand",
+            Self::AutoDuck => "allow_auto_duck",
+            Self::FastItemDestroy => "fast_item_destroy",
             Self::TargetRing => "target_ring",
             Self::ShowHelm => "show_helm",
             Self::PcNames => "pc_names",
@@ -212,6 +220,8 @@ impl Toggle {
         match self {
             Self::PetWindowPopup
             | Self::AutoStand
+            | Self::AutoDuck
+            | Self::FastItemDestroy
             | Self::TargetRing
             | Self::ShowHelm
             | Self::PcNames
@@ -522,6 +532,10 @@ pub struct Options {
     pub pet_window_popup: bool,
     /// See [`Toggle::AutoStand`].
     pub allow_auto_stand: bool,
+    /// See [`Toggle::AutoDuck`].
+    pub allow_auto_duck: bool,
+    /// See [`Toggle::FastItemDestroy`].
+    pub fast_item_destroy: bool,
     /// See [`Toggle::TargetRing`].
     pub target_ring: bool,
     /// See [`Toggle::ShowHelm`].
@@ -653,6 +667,8 @@ impl Default for Options {
         Self {
             pet_window_popup: true,
             allow_auto_stand: true,
+            allow_auto_duck: true,
+            fast_item_destroy: false,
             target_ring: true,
             show_helm: true,
             pc_names: true,
@@ -713,6 +729,8 @@ impl Options {
         match toggle {
             Toggle::PetWindowPopup => self.pet_window_popup,
             Toggle::AutoStand => self.allow_auto_stand,
+            Toggle::AutoDuck => self.allow_auto_duck,
+            Toggle::FastItemDestroy => self.fast_item_destroy,
             Toggle::TargetRing => self.target_ring,
             Toggle::ShowHelm => self.show_helm,
             Toggle::PcNames => self.pc_names,
@@ -736,6 +754,8 @@ impl Options {
         let option = match toggle {
             Toggle::PetWindowPopup => &mut self.pet_window_popup,
             Toggle::AutoStand => &mut self.allow_auto_stand,
+            Toggle::AutoDuck => &mut self.allow_auto_duck,
+            Toggle::FastItemDestroy => &mut self.fast_item_destroy,
             Toggle::TargetRing => &mut self.target_ring,
             Toggle::ShowHelm => &mut self.show_helm,
             Toggle::PcNames => &mut self.pc_names,
