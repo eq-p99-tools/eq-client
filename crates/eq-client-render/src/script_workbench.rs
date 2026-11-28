@@ -351,7 +351,10 @@ fn controls(
     (status, mut control): (Res<RunStatus>, ResMut<RunControl>),
     script: Option<Res<Script>>,
     settings: Res<crate::ViewerSettings>,
-    online: Res<crate::online::OnlineState>,
+    (online, book_hand): (
+        Res<crate::online::OnlineState>,
+        Res<crate::spellbook::BookHand>,
+    ),
     mut focus: ResMut<InputFocus>,
     (mut bindings, mut carry, profile): (
         ResMut<crate::hud::hotbar::Bindings>,
@@ -427,6 +430,8 @@ fn controls(
             Action::Hotbutton if script.is_none() && !state.busy() => {
                 if profile.key_ref().is_none() {
                     state.message = "Enter a character before making a script hotbutton.".into();
+                } else if crate::hud::hotbar::carry::cursor_busy(online.world(), &book_hand) {
+                    state.message = "Clear your cursor before making a script hotbutton.".into();
                 } else {
                     match state.hotbutton(&mut bindings) {
                         Ok(binding) => {

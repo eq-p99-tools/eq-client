@@ -35,6 +35,22 @@ fn the_scripts_hotbutton_control_carries_only_a_saved_clean_file() {
         .iter(app.world())
         .find_map(|(entity, action)| matches!(action, view::Action::Hotbutton).then_some(entity))
         .unwrap();
+    let mut item = crate::preview::items().remove(0);
+    item.slot = eq_client_core::inventory::InventorySlot::CURSOR;
+    crate::online::testing::inventory(
+        &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+        eq_client_core::inventory::InventoryUpdate::Snapshot(vec![item]),
+    );
+    crate::clicks::testing::click(&mut app, button);
+    assert_eq!(app.world().resource::<Carry>().hotkey(), None);
+    assert_eq!(
+        app.world().resource::<Workbench>().message,
+        "Clear your cursor before making a script hotbutton."
+    );
+    crate::online::testing::inventory(
+        &mut app.world_mut().resource_mut::<crate::online::OnlineState>(),
+        eq_client_core::inventory::InventoryUpdate::Snapshot(vec![]),
+    );
     crate::clicks::testing::click(&mut app, button);
     let Some(binding @ Action::Script(id)) = app.world().resource::<Carry>().hotkey() else {
         panic!("script shortcut")
