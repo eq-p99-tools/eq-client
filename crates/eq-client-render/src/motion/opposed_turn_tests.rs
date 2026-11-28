@@ -119,19 +119,15 @@ fn answer(
                 out.first_mismatch.get_or_insert_with(|| reason.to_string());
             }
             let prior_basis = session.swim_basis();
+            let inject_failure = out.refuse_next_send;
             let result = session.send_swim_sample(&request, Some(&controls), now, |_| {
                 if std::mem::take(&mut out.refuse_next_send) {
                     anyhow::bail!("transient failure during local send");
                 }
                 Ok(())
             });
-            if result.is_err()
-                && result
-                    .as_ref()
-                    .unwrap_err()
-                    .to_string()
-                    .contains("transient failure")
-            {
+            if inject_failure && !out.refuse_next_send {
+                assert!(result.is_err());
                 assert_eq!(session.swim_basis(), prior_basis);
             }
             (request, result)

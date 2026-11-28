@@ -1620,8 +1620,9 @@ impl Controls {
         self.moving = horizontal[0].hypot(horizontal[1]) > 0.001;
         if refused.is_some() {
             self.sample_pose = None;
+        } else {
+            self.last_accepted = self.now();
         }
-        self.last_accepted = self.now();
         self.last_answer = Some(self.now());
         self.refused = refused.map(str::to_owned);
         true
