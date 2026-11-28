@@ -95,6 +95,23 @@ impl SurfaceClock {
     pub const fn active(&self) -> bool {
         self.crossed
     }
+    /// Why a plan from this clock would decline as
+    /// [`SurfaceDecline::Context`] for this world, feet, body height and
+    /// water set, for diagnostics; none when it may continue.
+    #[must_use]
+    pub fn context_change(
+        &self,
+        world: &CollisionWorld,
+        feet: Vec3,
+        height: f32,
+        set: WetCoefficients,
+    ) -> Option<&'static str> {
+        self.world
+            .surface_context_change(world)
+            .or_else(|| (self.feet != feet).then_some("feet moved"))
+            .or_else(|| (self.height.to_bits() != height.to_bits()).then_some("height"))
+            .or_else(|| (self.set != set).then_some("water set"))
+    }
     /// Full velocity updates since this known tracking epoch began.
     #[must_use]
     pub const fn updates(&self) -> u64 {
@@ -176,7 +193,10 @@ impl SurfaceClock {
             {
                 return Err(SurfaceDecline::Context);
             }
-            old.clone()
+            // Keep the current placements for later region and feet checks.
+            let mut clock = old.clone();
+            clock.world = world.clone();
+            clock
         } else {
             if ordinary.frame_phase().is_none() {
                 return Err(SurfaceDecline::Phase);
@@ -466,31 +486,47 @@ fn api_medium(
 
 impl CollisionWorld {
     fn same_surface_context(&self, other: &Self) -> bool {
+        self.surface_context_change(other).is_none()
+    }
+
+    /// The first part of the collision context that differs from `other`,
+    /// for diagnostics; none when a clock may continue across them.
+    ///
+    /// Spawn placements are left out. Every plan resolves each physical
+    /// piece against the current world and declines any contact at all
+    /// ([`SurfaceClock::plan`]), so a spawn that moves elsewhere cannot
+    /// change a stroke, and one that reaches the body declines it as
+    /// [`SurfaceDecline::Contact`]. Counting them stopped the clock each
+    /// time a mob nearby moved, and the ordinary path's surface crossing
+    /// then lost most of the swimmer's forward travel (6.673).
+    fn surface_context_change(&self, other: &Self) -> Option<&'static str> {
         let same_liquids = match (&self.liquids, &other.liquids) {
             (Some(a), Some(b)) => Arc::ptr_eq(a, b),
             (None, None) => true,
             _ => false,
         };
-        Arc::ptr_eq(&self.terrain, &other.terrain)
-            && (Arc::ptr_eq(&self.obstacles, &other.obstacles)
-                || self.obstacles.len() == other.obstacles.len()
-                    && self.obstacles.iter().zip(other.obstacles.iter()).all(
-                        |((id, a, rule), (other_id, b, other_rule))| {
-                            id == other_id && rule == other_rule && Arc::ptr_eq(a, b)
-                        },
-                    ))
-            && (Arc::ptr_eq(&self.spawn_obstacles, &other.spawn_obstacles)
-                || self.spawn_obstacles.len() == other.spawn_obstacles.len()
-                    && self
-                        .spawn_obstacles
-                        .iter()
-                        .zip(other.spawn_obstacles.iter())
-                        .all(|((id, a), (other_id, b))| id == other_id && a.same_placement(b)))
-            && same_liquids
-            && self.swim_origin == other.swim_origin
-            && self.collision_height == other.collision_height
-            && self.liquid_support == other.liquid_support
-            && self.titanium_walking_origin == other.titanium_walking_origin
+        if !Arc::ptr_eq(&self.terrain, &other.terrain) {
+            Some("terrain")
+        } else if !(Arc::ptr_eq(&self.obstacles, &other.obstacles)
+            || self.obstacles.len() == other.obstacles.len()
+                && self.obstacles.iter().zip(other.obstacles.iter()).all(
+                    |((id, a, rule), (other_id, b, other_rule))| {
+                        id == other_id && rule == other_rule && Arc::ptr_eq(a, b)
+                    },
+                ))
+        {
+            Some("obstacles")
+        } else if !same_liquids {
+            Some("liquids")
+        } else if self.swim_origin != other.swim_origin
+            || self.collision_height != other.collision_height
+            || self.liquid_support != other.liquid_support
+            || self.titanium_walking_origin != other.titanium_walking_origin
+        {
+            Some("body")
+        } else {
+            None
+        }
     }
 }
 
@@ -750,6 +786,62 @@ mod tests {
     }
 
     #[test]
+    fn a_spawn_moving_nearby_keeps_the_clock_and_one_reaching_the_body_declines() {
+        use super::super::{CollisionInstance, CollisionMesh};
+        use glam::Quat;
+        let mesh = Arc::new(
+            // A wall square to the swimmer's +x stroke.
+            CollisionMesh::new([
+                [[0., -5., -5.], [0., 5., -5.], [0., -5., 5.]],
+                [[0., 5., -5.], [0., 5., 5.], [0., -5., 5.]],
+            ])
+            .unwrap(),
+        );
+        let base = pool(-1000.);
+        let spawn = |at| {
+            let mut world = base.clone();
+            world.set_spawn_instances(vec![(
+                8,
+                CollisionInstance::new(Arc::clone(&mesh), at, Quat::IDENTITY).unwrap(),
+            )]);
+            world
+        };
+        let first = SurfaceClock::plan(
+            None,
+            &spawn(Vec3::new(50., -4., 50.)),
+            Vec3::Y * -3.85,
+            WetVelocity::default(),
+            stroke(15., 100),
+        )
+        .unwrap();
+        // The mob swims on: every plan continues the same clock.
+        let mut plan = first;
+        for step in 1..20_u8 {
+            let at = Vec3::new(50. - f32::from(step), -4., 50.);
+            plan = SurfaceClock::plan(
+                Some(&plan.clock),
+                &spawn(at),
+                plan.feet,
+                plan.clock.velocity(),
+                stroke(15., 100),
+            )
+            .unwrap_or_else(|reason| panic!("step {step}: {reason:?}"));
+        }
+        // A mob across the swimmer's next stroke declines it.
+        let ahead = plan.feet + Vec3::new(0.8, 3., 0.);
+        assert!(matches!(
+            SurfaceClock::plan(
+                Some(&plan.clock),
+                &spawn(ahead),
+                plan.feet,
+                plan.clock.velocity(),
+                stroke(15., 100),
+            ),
+            Err(SurfaceDecline::Contact | SurfaceDecline::Shortened)
+        ));
+    }
+
+    #[test]
     fn surface_changed_stroke_is_latched_only_at_the_existing_frame_boundary() {
         let world = pool(-1000.);
         let first = SurfaceClock::plan(
@@ -778,7 +870,7 @@ mod tests {
     }
 
     #[test]
-    fn surface_context_uses_exact_geometry_and_placements_not_list_allocations() {
+    fn surface_context_uses_exact_geometry_and_door_placements_not_list_allocations() {
         use super::super::{CollisionInstance, CollisionMesh};
         use glam::Quat;
         let mut world = pool(-1000.);
@@ -793,11 +885,12 @@ mod tests {
         world.set_door_obstacles(vec![(4, Arc::clone(&mesh))]);
         world.set_spawn_instances(vec![(8, make(Vec3::ZERO))]);
         assert!(before.same_surface_context(&world));
-        world.set_spawn_instances(vec![(8, make(Vec3::X * f32::EPSILON))]);
-        assert!(
-            !before.same_surface_context(&world),
-            "no placement tolerance"
-        );
+        // A spawn moving, arriving or leaving keeps the clock: each plan
+        // resolves its pieces against the current placements.
+        world.set_spawn_instances(vec![(8, make(Vec3::X * 5.))]);
+        assert!(before.same_surface_context(&world), "a spawn moved");
+        world.set_spawn_instances(vec![(8, make(Vec3::ZERO)), (9, make(Vec3::Y))]);
+        assert!(before.same_surface_context(&world), "a spawn arrived");
         world.set_spawn_instances(vec![(8, make(Vec3::ZERO))]);
         world.set_door_obstacles(vec![(5, Arc::clone(&mesh))]);
         assert!(

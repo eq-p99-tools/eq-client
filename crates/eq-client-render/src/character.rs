@@ -1480,6 +1480,10 @@ const TREAD_CLIP: &str = "L09";
 /// 0x18, 0x3d and 0x4a; read R43).
 const STILL_IN_WATER: [u32; 3] = [0x18, 0x3d, 0x4a];
 
+/// How near the soles, above or below, a floor makes a body with its origin
+/// out of the water a walker rather than a swimmer (inferred).
+const WADING_FLOOR: f32 = 1.0;
+
 /// How far under the soles the floor probe looks for liquid, in world
 /// units (0x48b52c's probe just below the soles, read R43; the distance is
 /// inferred).
@@ -1490,7 +1494,8 @@ const SOLE_PROBE: f32 = 0.1;
 enum Water {
     /// Neither its origin nor the floor under its soles is in liquid.
     Dry,
-    /// Its origin is dry, but the floor under its soles is in liquid.
+    /// Its origin is dry and its soles hang in liquid over no floor near
+    /// them, as a swimmer bobbing at the surface does.
     Wading,
     /// Its origin is in liquid (the program's level 5 or more at +0xad).
     Swimming,
@@ -1504,11 +1509,15 @@ fn water_at(
     origin: Vec3,
     feet: f32,
 ) -> Water {
+    let soles = origin - Vec3::Y * feet;
     if collision.liquid_at(origin).is_some() {
         Water::Swimming
-    } else if collision
-        .liquid_at(origin - Vec3::Y * (feet + SOLE_PROBE))
-        .is_some()
+    } else if collision.liquid_at(soles - Vec3::Y * SOLE_PROBE).is_some()
+        // Walking out on the bottom walks. The program lets a playing swim
+        // or tread go on while any liquid is under the soles (read R43 c),
+        // so the swim lasted to the waterline; Adam treats that as a bug
+        // (6.673). Only soles hanging free keep it.
+        && collision.ground(soles, WADING_FLOOR, WADING_FLOOR).is_none()
     {
         Water::Wading
     } else {
@@ -1554,8 +1563,9 @@ fn swim_rate(speed: f32) -> f32 {
 ///   ducked body ducks (the program ducks on the bottom and treads ducked
 ///   mid-water; here a ducked body still in water ducks anywhere,
 ///   inferred, 6.485);
-/// - origin dry with wet soles (wading): a swim or tread already playing
-///   goes on, else the dry choice;
+/// - origin dry with the soles hanging free in liquid (bobbing at the
+///   surface): a swim or tread already playing goes on, else the dry
+///   choice. Walking out on the bottom is dry ([`water_at`]);
 /// - dry: the dry choice.
 ///
 /// Only the stance and moving clips give way; sitting, lying, looting,
@@ -2655,8 +2665,8 @@ mod tests {
                 stand
             );
         }
-        // Wading with the origin out: a swim or tread playing goes on, a
-        // walk stays a walk.
+        // Bobbing with the origin out and no floor under the soles: a swim
+        // or tread playing goes on, a walk stays a walk.
         let wading = (Water::Wading, 13.0, Some(1));
         assert_eq!(
             wet_clip(walk, wading, (SWIM_CLIP, false), all),
@@ -2733,6 +2743,10 @@ mod tests {
             Water::Wading
         );
         assert_eq!(water_at(&pool, Vec3::new(0.0, 4.0, 0.0), 3.0), Water::Dry);
+        // Walking out on the bottom (the floor is at -12): the origin is out
+        // and the soles are on the floor under the water, so it walks.
+        assert_eq!(water_at(&pool, Vec3::new(0.0, 0.5, 0.0), 12.5), Water::Dry);
+        assert_eq!(water_at(&pool, Vec3::new(0.0, 0.5, 0.0), 11.7), Water::Dry);
         let lava = crate::motion::tests::liquid_pool(Liquid::Lava);
         assert_eq!(
             water_at(&lava, Vec3::new(0.0, -0.5, 0.0), 3.0),

@@ -4002,6 +4002,7 @@ pub(super) fn input(
             ordinary_seed.clamp(swim.caps());
             // Take the actual snapshot as is. If ordinary ownership still
             // owes its next-stroke clamp, let that unchanged path do it.
+            let set = swim.set_for(world.wet_kind(feet, body.height));
             let trial = if controls.surface.prior().is_none() && ordinary_seed != seed {
                 Err(eq_client_core::movement::SurfaceDecline::Context)
             } else {
@@ -4011,7 +4012,7 @@ pub(super) fn input(
                     feet,
                     seed,
                     eq_client_core::movement::SurfaceStroke {
-                        set: swim.set_for(world.wet_kind(feet, body.height)),
+                        set,
                         input: eq_client_core::movement::water::WetInput {
                             horizontal: [flat.x, flat.y],
                             vertical: rate * pitch.sin(),
@@ -4035,7 +4036,20 @@ pub(super) fn input(
                     }
                     surface_plan = Some(plan);
                 }
-                Err(reason) => controls.surface.declined(reason),
+                Err(reason) => {
+                    if reason == eq_client_core::movement::SurfaceDecline::Context {
+                        let change = controls.surface.prior().map_or(
+                            Some("the ordinary velocity still owes its water clamp"),
+                            |prior| prior.context_change(world, feet, body.height, set),
+                        );
+                        debug!(
+                            target: "eq_client_render::motion::swim",
+                            ?change,
+                            "Surface clock declined a stroke for its context"
+                        );
+                    }
+                    controls.surface.declined(reason);
+                }
             }
         }
     } else {
@@ -5187,6 +5201,10 @@ pub(super) fn input(
                 surface_selected,
             );
         } else {
+            debug!(
+                target: "eq_client_render::motion::swim",
+                "Surface clock declined: the ordinary wet velocity left its passive track"
+            );
             controls
                 .surface
                 .declined(eq_client_core::movement::SurfaceDecline::Context);
